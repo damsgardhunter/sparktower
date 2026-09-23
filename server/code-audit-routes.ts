@@ -14,7 +14,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { codeAuditRuns } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -30,8 +30,9 @@ import {
 } from "./code-ingest";
 import { buildCodeDigest, type CodeDigest } from "./code-digest";
 import { summarizeWebScreens } from "./audit-evidence";
-import { buildClaimIndex, verifyFindings, correct, sanitizeRisks, sanitizeMissing, flagUnreadFiles } from "./audit-claims";
+import { buildClaimIndex, verifyFindings, correct, sanitizeRisks, sanitizeMissing, flagUnreadFiles, downgradeUnreadCapabilities, noteUnreadRecommendations } from "./audit-claims";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
+import { describeProvenance, isPartialView, type AuditProvenance } from "@shared/audit-provenance";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
 import { probeRuntime } from "./runtime-probe";
@@ -45,6 +46,7 @@ import {
 import { fetchCommitsSince } from "./code-ingest";
 import { sanitizeLoopClosures } from "@shared/phase-trees";
 import { rereadOpenLoops } from "./audit-loop-reads";
+import { withProjectLock } from "./project-lock";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -150,11 +152,13 @@ Judging progress:
 - A capability in the plan with no matching file, route, model or dependency is missing.
 - Something substantial in the code that the plan never mentions is worth flagging: it's either scope the builder forgot to write down, or work that isn't serving the goal.
 
-THE CAPABILITY INVENTORY comes first and matters most. One entry for EVERY area listed below, no area skipped. "built" needs at least one file that is really in the digest's file tree and that you can see does the thing; "partial" says what exists and what is missing; "missing" means no file, route, model or dependency for it. Never cite a path that is not in the file tree, and never cite a route that is not in the route list — the inventory is validated against both and unsupported claims are downgraded. This is what every later plan reads to avoid re-proposing what exists, so it must be exact.
+ABSENCE OF EVIDENCE IN THIS DIGEST IS NOT EVIDENCE OF ABSENCE. The digest is a view of the repository, not the repository: lists are clipped, most files appear as excerpts, and a large archive is cut to a budget (HOW TO READ THIS in the digest says which). Anything you did not read is UNKNOWN, never missing. Grading something you could not see as a gap is a failed audit — it has told builders to rebuild features they had already shipped and tested. When you have not read the files that would settle a question, say so in those words rather than guessing downwards.
+
+THE CAPABILITY INVENTORY comes first and matters most. One entry for EVERY area listed below, no area skipped. "built" needs at least one file that is really in the digest's file tree and that you can see does the thing; "partial" says what exists and what is missing; "missing" means you read the places it would live and there is no file, route, model or dependency for it — never "I did not come across it". If the digest is a partial view, or the area's files are not among what you read, say so in the summary; a "missing" verdict on a partial read is downgraded to UNKNOWN afterwards and the audit is worse for having guessed. Never cite a path that is not in the file tree, and never cite a route that is not in the route list — the inventory is validated against both and unsupported claims are downgraded. This is what every later plan reads to avoid re-proposing what exists, so it must be exact.
 Areas and what counts:
 ${CAPABILITY_AREAS.map((a) => `- ${a.id} (${a.label}): ${a.counts}`).join("\n")}
 
-THE LOOPS CHECK. If THE BUSINESS'S LOOPS are listed, report on EVERY one by its key (an empty "loops" array when none are listed). A loop is CLOSED only when the code carries a user through every step AND something in the code returns them — or the person they brought in — to the first step again: a notification or email that fires on the step's output, a feed that surfaces it, a share or invite link that lands a new user at the start, a subscription that renews on use. A sequence that works but ends is OPEN, and "breaksAt" names the step after which nothing brings anyone back. Judge each stage from the files: a route, a page and a table that really do the step is built; a UI with no write behind it is partial. Cite only paths in the file tree; "closed" without a cited file for every stage and for the return path will be downgraded to open. For every open or not-built loop, also propose one create-task operation titled "Close the <loop title> loop: <what's missing>".
+THE LOOPS CHECK. If THE BUSINESS'S LOOPS are listed, report on EVERY one by its key (an empty "loops" array when none are listed). A loop is CLOSED only when the code carries a user through every step AND something in the code returns them — or the person they brought in — to the first step again: a notification or email that fires on the step's output, a feed that surfaces it, a share or invite link that lands a new user at the start, a subscription that renews on use. A sequence that works but ends is OPEN, and "breaksAt" names the step after which nothing brings anyone back. Judge each stage from the files: a route, a page and a table that really do the step is built; a UI with no write behind it is partial. A step whose files you did not read is not "missing" — say in "breaksAt" that you could not read it. Four partial stages on a loop whose every route, page and test exists is the exact false negative this rule is here to stop. Cite only paths in the file tree; "closed" without a cited file for every stage and for the return path will be downgraded to open. For every open or not-built loop, also propose one create-task operation titled "Close the <loop title> loop: <what's missing>".
 
 CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing tasks, change direction without touching the brief, finish work without moving the card. "operations" is the set of edits that brings the WHOLE project up to date with where the code shows it is and where it's heading — as briefly as possible:
 - Start from WHAT CHANGED SINCE THE LAST AUDIT and THE COMMITS. That is what's new; the rest of the repo was already reconciled last time. On a first audit, work from the whole codebase.
@@ -164,7 +168,10 @@ CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing
 - The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
 - The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
 - THE BOARD MUST NOT CONTRADICT THE CODE OR THE BUILDER'S STANDING NOTES. When a task or loop build step is for something the code has removed or the standing notes say is retired, propose retire_task for it with the reason (for a whole loop, retire_loop). When a task is marked done but the code has no trace of it, propose update_task back to "todo" and list it under taskReconciliation.notStarted. These wait for the builder's OK, so propose them whenever the evidence is clear — naming the drift in a risk or note without these operations is a failed audit. Never retire a path milestone (a backbone: task).
+- TAKING WORK AWAY NEEDS EVIDENCE OF REMOVAL, NOT AN ABSENCE OF EVIDENCE. This digest is a view of the repository: lists are clipped, most files appear as excerpts, and the archive may predate work finished this week. So "I cannot see it" is a fact about the digest, not about the product. Only propose retire_task, retire_loop, or reopening a card the builder marked done when one of these is true, and say which in the reason: the STANDING NOTES say it is retired; a commit in WHAT CHANGED shows it deleted; or the code shows the thing that replaced it, cited by path. Otherwise leave it alone — and if it matters, put it in "questions" for the builder rather than in operations. A builder who has shipped a wedge into the product and is told to cancel it has been failed by the audit, however tidy the board looks afterwards.
+- WHEN THE CODE IS AHEAD OF THE PLAN, MOVE THE PLAN. That is the ordinary case, not a problem: builders build faster than they write things down. A whole cycle working in the code that no written loop describes is a create_loop with its steps, the built ones marked done — never a reason to retire the loop that is written. A feature the brief doesn't mention is an update_project and a create_task with "status": "done". A milestone the code has reached is a complete_path_milestone. The plan is a description of the product, and when they disagree and the code is real, the description is what changes.
 - SECURITY BEFORE RELEASE. SECURITY CHECKS lists what the deterministic checklist found missing or partial. "securityPlan" is up to 8 fixes in priority order for THIS codebase: every release blocker (a missing high-severity check) first, then the rest that matter, then anything the checks can't see that the code shows (an unguarded admin route, a secret logged, a token in a URL) — each with the exact file and package to change. Never list a check that passed. For each release blocker also propose ONE create_task titled "Security: <what to fix>" with "priority": "high" and "tags": ["security"], unless the board already has it.
+- NEVER RECOMMEND BUILDING WHAT YOU COULD NOT READ. Where an area is unknown to you rather than absent from the code, the recommendation is "confirm whether X exists; this audit could not read it", not "build X".
 - What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
 - A note that names a problem with no operation for it is a failed audit. If catchUpNote says the direction needs reconciling — a loop that contradicts THE BUILDER'S STANDING NOTES, two loops that are the same loop (see POSSIBLE DUPLICATE LOOPS), a brief that describes a product the code has moved away from — operations must contain the edits that reconcile it: update_loop to rewrite, retire_loop to drop a duplicate or a dead loop, update_project for the brief.
 - If nothing changed, return no operations. Never re-propose anything in DECLINED LAST TIME unless the code has changed in that exact area since.
@@ -228,6 +235,19 @@ export async function auditRunStatus(projectId: string) {
   }).from(codeAuditRuns).where(eq(codeAuditRuns.projectId, projectId)).orderBy(desc(codeAuditRuns.startedAt)).limit(5);
   const runningRow = rows.find((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 < AUDIT_RUN_STALE_MS) ?? null;
   const running = runningRow?.run ?? null;
+  /*
+   * A run that died mid-flight — a restart, a crash, a dropped connection —
+   * never got its finishedAt, so it was neither "running" (too old) nor "last"
+   * (never finished): the card went quiet and nothing ever told the builder to
+   * try again. Stamping it here, on the read that notices, closes it as the
+   * failure it was, so the status shows "the last audit didn't finish".
+   */
+  const stale = rows.filter((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 >= AUDIT_RUN_STALE_MS);
+  for (const r of stale) {
+    const error = "The audit stopped before it finished — the server restarted or the connection dropped. Run it again.";
+    await db.update(codeAuditRuns).set({ finishedAt: new Date(), error }).where(and(eq(codeAuditRuns.id, r.run.id), isNull(codeAuditRuns.finishedAt))).catch(() => {});
+    r.run = { ...r.run, finishedAt: new Date(), error } as typeof r.run;
+  }
   const last = rows.find((r) => r.run.finishedAt)?.run ?? null;
   const starter = running ? await storage.getUser(running.startedById).catch(() => undefined) : undefined;
   return {
@@ -270,6 +290,34 @@ export async function runCodeAudit(opts: {
 async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { onSaved: (auditId: string) => void; onStage: (s: AuditRunStage) => Promise<void> }): Promise<Response | void> {
   const { projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta } = opts;
   const digest = buildCodeDigest(snapshot);
+  /*
+   * What this audit is actually about, recorded before anything is judged.
+   *
+   * A verdict without its provenance is unfalsifiable: "62% built, payments
+   * missing" reads the same whether it came from today's working tree or a zip
+   * uploaded last Tuesday, and three times this week it was the zip. The header
+   * prints this line so the reader can tell in a glance, and the partial flag
+   * below is what stops a partial read grading anything as absent.
+   */
+  const provenance: AuditProvenance = {
+    kind: sourceKind,
+    source: snapshot.source,
+    name: snapshot.source.includes(":") ? snapshot.source.slice(snapshot.source.indexOf(":") + 1).split("@")[0] : snapshot.source,
+    ref: sourceKind === "github" ? (snapshot.source.split("@")[1] ?? repoMeta?.defaultBranch ?? null) : null,
+    commit: snapshot.commit ?? null,
+    capturedAt: snapshot.capturedAt ?? new Date().toISOString(),
+    contentAt: snapshot.contentAt ?? null,
+    fileCount: digest.signals.fileCount,
+    readCount: digest.signals.readCount,
+    // Source files listed and not read. A skipped lockfile or PNG is not one.
+    unreadSource: snapshot.unreadSource ?? 0,
+    partial: isPartialView({
+      truncated: snapshot.truncated,
+      fileCount: digest.signals.fileCount,
+      readCount: digest.signals.readCount,
+      unreadSource: snapshot.unreadSource ?? 0,
+    }),
+  };
   // What's new since last time, from the code itself: fingerprints, and the builder's commit messages.
   const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
   const fileChanges = diffFileIndex((previous?.signals as any)?.fileIndex, digest.signals.fileIndex ?? {});
@@ -355,7 +403,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   // the full text of its evidence files and the exact route coverage.
   // Independent and fault-tolerant; a failed read leaves the first-pass
   // verdict, which is honest.
-  const capabilities = await deepReadAll(
+  const firstPass = await deepReadAll(
     ent,
     sanitizeCapabilities(parsed.capabilities, {
       files: new Set(snapshot.files.map((f) => f.path)),
@@ -365,10 +413,24 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     digest.signals.routeCoverage,
     dataShape,
   );
+  /*
+   * The deterministic half of "don't grade what you didn't read".
+   *
+   * The prompt asks the model not to call an unread area missing; this makes
+   * sure of it, the way the claim verifier makes sure of absence sentences. On
+   * a partial read every "missing" becomes "unknown" with the reason attached,
+   * so a builder sees a question rather than a gap — and so nothing downstream
+   * (counts, recommendations, risks) can spend their afternoon on it.
+   */
+  const { capabilities, downgraded } = downgradeUnreadCapabilities(firstPass, provenance);
+  if (downgraded.length) {
+    console.warn(`[audit] partial read (${provenance.readCount}/${provenance.fileCount} files): ${downgraded.length} "missing" verdict(s) held as unknown:`,
+      downgraded.map((d) => d.area).join(", "));
+  }
+
   /** One answer to "is this path in the repository", for every list that cites one. */
   const realFiles = new Set(snapshot.files.map((f) => f.path));
   const isRealFile = (path: string) => realFiles.has(path);
-
   const findings = {
     stackSummary: str(parsed.stackSummary, 400),
     capabilities,
@@ -448,6 +510,9 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       dependencyCount: digest.signals.dependencyCount,
       truncated: snapshot.truncated,
       skipped: snapshot.skipped,
+      /** Where this code came from, which commit, and when — see shared/audit-provenance.ts. */
+      provenance,
+      provenanceLine: describeProvenance(provenance),
     },
     repo: repoMeta,
   };
@@ -466,6 +531,14 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
    * that was right there. The claim is kept and the fact is attached to it,
    * because the model may have meant something true and said it badly.
    */
+  /*
+   * A recommendation must not be to build what already exists. Where the work
+   * proposed is in an area this audit could not read, the sentence is kept and
+   * the doubt is attached to it — the builder can settle in a minute what the
+   * audit could not settle at all.
+   */
+  const unreadNotes = noteUnreadRecommendations(findings, capabilities.filter((c) => c.status === "unknown").map((c) => c.area));
+
   const claimIndex = buildClaimIndex(snapshot.files, digest.signals.routeCoverage.rows);
   const claims = verifyFindings(findings, claimIndex);
   /*
@@ -495,6 +568,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   // Counted where the builder can see it: an audit that had to correct itself
   // five times is telling you something about the audit.
   (findings.scan as any).claimsContradicted = claims.corrections.length;
+  (findings.scan as any).unreadRecommendations = unreadNotes;
 
   // The catch-up: the audit's edits, down to what's new and worth doing.
   const board = await storage.getProjectKanbanTasks(projectId).catch(() => []);
@@ -505,6 +579,17 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     rejectedLoops: project.rejectedLoops ?? [],
     pathDone: new Set(board.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[]),
     declined,
+    /*
+     * Did this audit see the whole codebase?
+     *
+     * The archive can be cut to a budget, and files can be skipped for being
+     * large or binary. Either way the digest is a view, and a view is a poor
+     * basis for telling somebody to cancel their work — see the removal rule
+     * in tidyCatchUp. Half the files read is generous rather than strict: an
+     * audit that saw most of the repository can still be wrong about the part
+     * it didn't, so anything that takes work away waits for a full reading.
+     */
+    partialView: provenance.partial,
   });
   (findings as any).catchUp = {
     // Written after the check above ran, so it is checked here rather than shipped unread.
@@ -576,12 +661,41 @@ export async function applyAuditSections(
   auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
   sections: readonly string[], opts: { declineOthers: boolean },
 ) {
+  /*
+   * Serialized, and each edit's outcome written as it happens.
+   *
+   * The whole run used to mark operations applied in memory and save the array
+   * once at the end. A double click, a client retry on a slow apply, or a crash
+   * part-way through left every operation still reading "pending" — so the
+   * second run applied the lot again, and a thirty-operation catch-up produced
+   * thirty duplicate tasks and milestones. Now the second caller waits for the
+   * first, re-reads inside the lock, finds nothing pending and is told so (409),
+   * and a crash mid-run loses at most the one operation in flight.
+   */
+  return withProjectLock("audit-apply", auditId, () => applyAuditSectionsLocked(auditId, userId, ent, sections, opts));
+}
+
+async function applyAuditSectionsLocked(
+  auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
+  sections: readonly string[], opts: { declineOthers: boolean },
+) {
+  // Read inside the lock: whatever the caller checked before it queued may have been applied by then.
   const audit = await storage.getCodeAudit(auditId);
   if (!audit) throw Object.assign(new Error("Audit not found"), { status: 404 });
   const ops = ((audit.operations as any[]) ?? []).map((o) => ({ ...o }));
   const pending = (o: any) => !o._status || o._status === "pending";
+  const mine = (o: any) => pending(o) && sections.includes(o._section ?? "plan");
+  if (!ops.some(mine)) {
+    throw Object.assign(
+      new Error("Nothing from this audit is waiting — it has already been applied. Run a new audit to pick up changes since."),
+      { status: 409, code: "already_applied" },
+    );
+  }
   const changes: Awaited<ReturnType<typeof applyProjectOperations>>["changes"] = [];
   const skipped: string[] = [];
+  /** The operation statuses, saved as they are decided, so a crash can't replay what already ran. */
+  const persist = () => storage.updateCodeAudit(audit.id, { operations: ops } as any)
+    .catch((e) => console.error("[audit] couldn't record an operation's outcome:", e));
   /*
    * One edit at a time, so each is marked with what really happened to it. As
    * a batch, an edit the engine skipped (a loop kind already written, a task
@@ -591,16 +705,25 @@ export async function applyAuditSections(
   for (const o of ops) {
     if (!pending(o)) continue;
     if (!sections.includes(o._section ?? "plan")) {
-      if (opts.declineOthers) o._status = "declined";
+      if (opts.declineOthers) { o._status = "declined"; await persist(); }
       continue;
     }
     const { _section, _status, _label, _reason, ...op } = o;
+    /*
+     * Claimed before it runs. If the process dies between the apply and the
+     * save, the operation is left "applying" rather than "pending", so the
+     * next run reports it instead of doing it a second time — a duplicate is
+     * worse than a line saying an edit needs checking.
+     */
+    o._status = "applying";
+    await persist();
     const r = await applyProjectOperations(audit.projectId, userId, [op], {
       canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 1, source: "audit",
-    });
-    changes.push(...r.changes);
-    if (r.changes.length) o._status = "applied";
-    else { o._status = "skipped"; o._reason = r.skipped[0] ?? "Nothing changed."; skipped.push(`${o._label ?? op.op}: ${o._reason}`); }
+    }).catch((e) => { console.error("[audit] operation failed:", e); return null; });
+    changes.push(...(r?.changes ?? []));
+    if (r?.changes.length) o._status = "applied";
+    else { o._status = "skipped"; o._reason = r?.skipped[0] ?? "Nothing changed."; skipped.push(`${_label ?? op.op}: ${o._reason}`); }
+    await persist();
   }
   const findings = (audit.findings as any) ?? {};
   if (findings.catchUp) {

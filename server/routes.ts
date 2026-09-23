@@ -1,7 +1,7 @@
 import { productNameNote } from "@shared/project-draft";
-import { tierForPrice, PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
+import { PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
 import { liveSubscriptions, settleTier } from "./subscription-state";
-import { paidSubscription } from "@shared/subscriptions";
+import { ensureStripeCustomer } from "./stripe-customer";
 import { registerStripeHealthRoutes } from "./stripe-health";
 import { registerDeploymentRoutes } from "./deployment-info";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
@@ -9,10 +9,12 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts } from "@shared/schema";
+import { notTakenDown } from "./visibility";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
+import { registerWebHandoffRoutes } from "./web-handoff";
 import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError } from "./replit_integrations/object_storage";
 import { registerStartupGameRoutes } from "./startup-game-routes";
 import { registerGameIdeaRoutes } from "./game-ideas";
@@ -20,15 +22,19 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
 import { registerPromotionRoutes } from "./promotion-routes";
+import { registerAdminContestRoutes } from "./admin-contest-routes";
 import { registerInviteRoutes } from "./invite-routes";
 import { registerMfaRoutes } from "./mfa";
 import { registerAccountRoutes } from "./account-routes";
 import { registerSitemapRoutes } from "./sitemap";
 import { registerDiscoverSearchRoutes } from "./discover-search";
 import { ensureCreatorBadges } from "./backer-badges";
+import { award } from "./badges";
+import { BADGE, BADGE_CATALOG } from "@shared/badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { scoreMatch, isMatchable, defaultMatchReasons, MATCH_FLOOR, type MatchContext } from "@shared/matching";
 import { registerProfileRoutes } from "./profile-routes";
@@ -55,16 +61,19 @@ import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
+import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
 import { recordView, countViews } from "./views";
+import { publicProject, isOnTeam } from "./project-visibility";
 import { registerAdminSecurityRoutes } from "./admin-security-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
 import { registerSimulationProfileRoutes } from "./simulation-profile-routes";
+import { registerCompanyFeatures } from "./company-features";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -84,7 +93,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
-import { isValidSubcategory, PROJECT_GOALS, isProjectGoal } from "@shared/goals";
+import { isValidSubcategory, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
@@ -92,14 +101,14 @@ import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
 import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
+  collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, unmarkMilestones, PATH_MARK_LIMIT, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
   setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState, renderPathForAudit,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
-import { applyTier, billingIssueFor } from "./billing-credits";
+import { billingIssueFor } from "./billing-credits";
 import { parseModelJson, answerUnreadable, ModelResponseError, respondToAiError } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -112,6 +121,7 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
+import { notifyWatchersOfNewProject } from "./scouting-alerts";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -380,6 +390,8 @@ export async function registerRoutes(
   registerAnalyticsRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
+  // The app's way into web pages it doesn't have yet, signed in (server/web-handoff.ts).
+  registerWebHandoffRoutes(app);
   registerObjectStorageRoutes(app);
   registerStartupGameRoutes(app);
   registerGameIdeaRoutes(app);
@@ -389,6 +401,7 @@ export async function registerRoutes(
   registerProjectDiscussionRoutes(app);
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
+  registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);
   // The starter communities exist before anyone can open the page. Non-fatal: the list is just shorter without them.
@@ -396,6 +409,7 @@ export async function registerRoutes(
   registerArtifactRoutes(app);
   registerAdminSecurityRoutes(app);
   registerPromotionRoutes(app);
+  registerAdminContestRoutes(app);
   registerInviteRoutes(app);
   // Your data: export it, or close the account (server/account-data.ts).
   registerAccountRoutes(app);
@@ -435,6 +449,7 @@ export async function registerRoutes(
   // Buying, selling, and the moves a company makes in trouble.
   registerSimulationMarketRoutes(app);
   registerSimulationProfileRoutes(app);
+  registerCompanyFeatures(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
@@ -534,6 +549,12 @@ export async function registerRoutes(
 
   app.post("/api/profile/complete-onboarding", isAuthenticated, async (req: any, res) => {
     await storage.completeOnboarding((req.user as any).id);
+    // Finishing the profile is what makes someone matchable at all, so it is
+    // worth marking. Awarded, not checked-then-awarded: the unique index on
+    // user_badges makes a repeat a no-op. Awaited — it is one insert, and a
+    // fire-and-forget award is a badge that may or may not exist by the time
+    // the screen that asked for it re-reads the profile.
+    await award((req.user as any).id, BADGE.profileComplete);
     res.json({ success: true });
   });
 
@@ -608,7 +629,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, raise→startup_equity|local_community|loan_grant|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "run_company", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, run→restaurant|service|retail|agency|software|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -689,12 +710,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   app.get("/api/projects", async (req: any, res) => {
     const { category, status } = req.query;
     const projects = await storage.getProjects({
-      category: category as string,
-      status: status as string,
+      // A repeated ?category= arrives as an array; only a single value is a filter.
+      category: typeof category === "string" ? category : undefined,
+      status: typeof status === "string" ? status : undefined,
       // Owners still see their own private projects in listings.
       includePrivateOwnedBy: req.user?.id,
     });
-    res.json(projects);
+    // A listing is a public view: the team's working state (server/project-visibility.ts) only on your own rows.
+    res.json(projects.map((p) => (req.user?.id && p.ownerId === req.user.id ? p : publicProject(p))));
   });
 
   /**
@@ -732,8 +755,20 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     await instantiatePathTree(project.id, validated.goal, validated.subcategory)
       .catch((err) => console.error("[phase-trees] Failed to instantiate path:", err));
 
+    /*
+     * The catalog badge for shipping something, as opposed to the per-project
+     * founder badge below. Awarded on every project and deduplicated by the
+     * unique index on `user_badges`, so there is nothing here that has to know
+     * whether this was their first — a "have you got it already" read would be
+     * a check-then-act race between two projects created at once.
+     *
+     * Private projects count: you built the thing either way.
+     */
+    await award(ownerId, BADGE.firstProject);
+
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
+      void notifyWatchersOfNewProject(project.id);
       // The founder badge: a profile says "I built this" the moment the project exists.
       void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
@@ -808,10 +843,20 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         userAgent: req.headers["user-agent"] ?? null,
         path: req.originalUrl,
         referrer: req.headers.referer ?? null,
+        // The per-address cap on recording views: a GET carries no write-floor limit.
+        address: req.ip ?? null,
       },
     });
     if (outcome === "counted") await storage.incrementProjectViews(req.params.id);
-    res.json(project);
+    /*
+     * The team gets the row; everyone else the public projection. The members
+     * are already loaded for the view count, so being on the team costs no
+     * extra query. The manage screens that read novaNotes, auditAutoApply and
+     * the rest are only reachable by the team.
+     */
+    const viewerId = req.user?.id as string | undefined;
+    const onTeam = !!viewerId && (viewerId === project.ownerId || members.some((m: any) => m.userId === viewerId));
+    res.json(onTeam ? project : publicProject(project));
   });
 
   app.get("/api/projects/:id/members", async (req: any, res) => {
@@ -834,13 +879,21 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const projectId = req.params.id;
       const { resumeUrl, answers, message } = req.body;
       const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
+      // A private project isn't there to anyone off its team — the same 404 as one that doesn't exist.
+      if (!project || project.isPrivate) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId === userId) return res.status(400).json({ message: "Cannot apply to your own project" });
       const members = await storage.getProjectMembers(projectId);
       if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
       const existing = await storage.getUserApplications(userId);
       if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
       const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      /*
+       * The owner hears about it. An application used to land in a table that
+       * only the manage page's Team tab read, and nothing pointed there — so
+       * the one person who could say yes found out whenever they next happened
+       * to open that tab, and the applicant waited on silence.
+       */
+      void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_application", targetId: app.id, projectId, excerpt: typeof message === "string" ? message : null });
       res.json(app);
     } catch (error) {
       console.error("Apply error:", error);
@@ -878,10 +931,39 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const project = await storage.getProject(application.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can accept applications" });
-      if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
-      const updated = await storage.updateApplicationStatus(req.params.id, "accepted");
-      await db.insert(projectMembers).values({ projectId: application.projectId, userId: application.userId, role: req.body.role || "member" });
-      res.json(updated);
+      const role = typeof req.body?.role === "string" && req.body.role.trim() ? req.body.role.trim().slice(0, 60) : "member";
+      /*
+       * One transaction, and idempotent.
+       *
+       * This used to flip the status and then insert the member as two
+       * separate writes, so anything that made the insert fail — most often
+       * the applicant having joined another way in the meantime, through an
+       * invite — left an application marked accepted, a 500 in the owner's
+       * face, and a retry that said "not pending". Now the row is locked, the
+       * member is added only if they aren't one already (the unique index on
+       * project_members backs that up against a concurrent invite), and a
+       * second click on an application that's already accepted is a success
+       * that changes nothing.
+       */
+      const outcome = await db.transaction(async (tx) => {
+        const [row] = await tx.select().from(projectApplications).where(eq(projectApplications.id, application.id)).for("update");
+        if (!row) return { status: 404 as const };
+        if (row.status === "rejected") return { status: 400 as const };
+        const updated = row.status === "accepted"
+          ? row
+          : (await tx.update(projectApplications).set({ status: "accepted" }).where(eq(projectApplications.id, row.id)).returning())[0];
+        const joined = await tx.insert(projectMembers)
+          .values({ projectId: row.projectId, userId: row.userId, role })
+          .onConflictDoNothing()
+          .returning({ id: projectMembers.id });
+        return { status: 200 as const, updated, newlyAccepted: row.status === "pending", joined: joined.length > 0 };
+      });
+      if (outcome.status === 404) return res.status(404).json({ message: "Application not found" });
+      if (outcome.status === 400) return res.status(400).json({ message: "Application is not pending" });
+      if (outcome.newlyAccepted) {
+        void notify({ recipients: [application.userId], actorId: project.ownerId, kind: "application_accepted", targetId: application.id, projectId: project.id, excerpt: project.title });
+      }
+      res.json(outcome.updated);
     } catch (error) {
       console.error("Accept application error:", error);
       res.status(500).json({ message: "Failed to accept application" });
@@ -897,6 +979,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can reject applications" });
       if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
       const updated = await storage.updateApplicationStatus(req.params.id, "rejected");
+      // Told either way: a no is an answer, and silence reads as still pending.
+      void notify({ recipients: [application.userId], actorId: project.ownerId, kind: "application_rejected", targetId: application.id, projectId: project.id, excerpt: project.title });
       res.json(updated);
     } catch (error) {
       console.error("Reject application error:", error);
@@ -909,16 +993,28 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
+      /*
+       * The project has to exist, and a new follow has to be of something the
+       * follower can see. This took any id: following a private project's id
+       * put it in the follower's Following list, which served the whole row —
+       * brief, notes to Nova and all. A private project is a 404 to anyone off
+       * its team, as on every other route. Unfollowing is always allowed, so
+       * someone following a project that has since gone private can let go.
+       */
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
       const following = await storage.isFollowing(userId, projectId);
       // An explicit `following` sets the state, so a retry or a double tap
       // can't undo itself; without one it toggles, as older clients expect.
       const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
+      if (want && !following && project.isPrivate && !(await isOnTeam(userId, project))) {
+        return res.status(404).json({ message: "Project not found" });
+      }
       if (want && !following) {
         await storage.followProject(userId, projectId);
         // Only a new follow is the loop's action — not a repeat, not an unfollow.
         recordExploreAction(req, EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId });
-        const project = await storage.getProject(projectId);
-        if (project) void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_follow", targetId: projectId, projectId });
+        void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_follow", targetId: projectId, projectId });
       }
       if (!want && following) {
         await storage.unfollowProject(userId, projectId);
@@ -1492,16 +1588,24 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
         return res.status(400).json({ message: "There's no plan to apply." });
       }
 
-      const { changes, skipped } = await applyProjectOperations(projectId, userId, operations, {
-        canEditMilestones: ent.aiMilestones,
-        canEditRoadmap: ent.roadmapUpdates,
+      /*
+       * Applied once. The same plan arriving twice — a double click, a retry
+       * after a slow apply — used to write every task and milestone in it
+       * again, which is exactly the mess the plan was meant to avoid.
+       */
+      const result = await applyOperationsOnce({
+        projectId, userId, operations, source: "task-planner",
+        key: idempotencyKeyFor(req, operations),
         // A milestone-by-milestone plan is legitimately dozens of operations.
-        maxOperations: 120,
+        apply: { canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 120 },
       });
-      if (!changes.length) {
-        return res.status(422).json({ message: "None of that plan could be applied.", skipped });
+      if (result.replayed) {
+        return res.status(409).json({ message: "That plan was already applied.", changes: result.changes, skipped: result.skipped, replayed: true });
       }
-      res.json({ changes, skipped });
+      if (!result.changes.length) {
+        return res.status(422).json({ message: "None of that plan could be applied.", skipped: result.skipped });
+      }
+      res.json({ changes: result.changes, skipped: result.skipped });
     } catch (error) {
       console.error("Task assist apply error:", error);
       res.status(500).json({ message: "Couldn't apply that plan" });
@@ -1802,10 +1906,11 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
        * section's own path milestones, steps and loops — clearing a board
        * shouldn't take the path with it.
        */
-      const track = req.query.track;
-      if (track != null && !isProjectGoal(track)) return res.status(400).json({ message: "Unknown section", code: "invalid_input", field: "track" });
+      // An old link naming the retired funding section means Systemize, which holds it now.
+      const track = req.query.track == null ? null : normaliseGoal(req.query.track);
+      if (req.query.track != null && !track) return res.status(400).json({ message: "Unknown section", code: "invalid_input", field: "track" });
       let removed: number;
-      if (isProjectGoal(track)) {
+      if (track) {
         const onPath = (tags: string[] | null) => (tags ?? []).some((x) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:") || x === "kind:loop");
         const ids = (tasks as any[]).filter((t) => (t.tags ?? []).includes(`track:${track}`) && !onPath(t.tags) && (!onlyStatus || t.status === onlyStatus)).map((t) => t.id as string);
         removed = ids.length ? (await db.delete(projectKanbanTasks).where(and(eq(projectKanbanTasks.projectId, projectId), inArray(projectKanbanTasks.id, ids))).returning({ id: projectKanbanTasks.id })).length : 0;
@@ -2235,7 +2340,15 @@ ${PLAIN_LANGUAGE_RULES}`;
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
     
-    const validated = normalizeSoloMode(insertProjectBase.partial().parse(req.body));
+    /*
+     * The same fields a create may set — which excludes `ownerId`. The patch
+     * used to parse the whole body against the insert schema, owner included,
+     * so a project's owner could hand it to any account id with one request:
+     * no consent from the recipient, and the previous owner's membership row
+     * left saying "Owner". Transferring a project, if it's ever a feature,
+     * wants its own route with the other side agreeing.
+     */
+    const validated = normalizeSoloMode(insertProjectBase.partial().parse(pickFields(req.body ?? {}, PROJECT_CREATE_FIELDS)));
     /*
      * The pair is checked against what the row will be, not against the
      * patch alone: a patch that changes only the goal would otherwise leave
@@ -2293,8 +2406,8 @@ ${PLAIN_LANGUAGE_RULES}`;
       if (!ent) return;
 
       const { message, currentTab } = req.body;
-      // The section the builder is in (Ship / Systemize / Raise): Nova answers about that path.
-      const section = isProjectGoal(req.body?.section) ? req.body.section : null;
+      // The section the builder is in (Ship / Systemize / Run): Nova answers about that path.
+      const section = normaliseGoal(req.body?.section);
       if (!message || typeof message !== "string") return res.status(400).json({ message: "Message is required" });
       if (message.length > 5000) return res.status(400).json({ message: "Message too long (max 5000 chars)" });
 
@@ -2455,7 +2568,7 @@ Available actions:
    <nova_action>{"type": "complete_onboarding", "data": {}}</nova_action>
 
 7. remember: Save something the builder told you that should hold from now on — a correction to the brief, something being removed, what the loops or the wedge really are. It goes to the top of every future Nova prompt and outranks the brief and the board. Send the FULL updated note (it replaces the previous one); keep it under 1500 characters, one line per fact.
-   <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Raise funding."}}</nova_action>
+   <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Run a company."}}</nova_action>
 
 8. write_loops: Write the builder's business loops for them, when they ask you to (or say yes to your offer). Each loop is 3–5 steps in their product's own words, ending with the step that sends the user back to the start, plus what closes it. Send one entry per loop you're writing; an unwritten loop of that kind is filled in, a kind the project doesn't have yet is added, and a loop that's already written is left alone (to change one of those, use edit_project on its task). Product loops can be several; the other four kinds are one each.
    <nova_action>{"type": "write_loops", "data": {"loops": [{"type": "product|growth|retention|revenue|referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1"}]}}</nova_action>
@@ -2896,12 +3009,13 @@ RULES:
   const sectionOf = (req: any, res: any): { ok: true; goal: any } | { ok: false } => {
     const raw = req.query?.goal ?? req.body?.goal;
     if (raw == null || raw === "") return { ok: true, goal: null };
-    if (!isProjectGoal(raw)) { res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" }); return { ok: false }; }
-    return { ok: true, goal: raw };
+    const goal = normaliseGoal(raw);
+    if (!goal) { res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" }); return { ok: false }; }
+    return { ok: true, goal };
   };
 
   /**
-   * The three sections — Ship, Systemize, Raise — each with whether it's
+   * The three sections — Ship, Systemize, Run — each with whether it's
    * started and how far along it is. Cheap: nothing is synced, so the
    * manager can poll it to keep the section buttons live.
    */
@@ -2921,9 +3035,15 @@ RULES:
   app.post("/api/projects/:id/tracks", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const goal = req.body?.goal;
+      /*
+       * Normalised, like `sectionOf` above and every other read of a goal: a
+       * client still holding `raise_funding` — an open tab, the phone, a
+       * bookmarked link — starts Systemize rather than being told to pick one
+       * of three sections it is already naming one of.
+       */
+      const goal = normaliseGoal(req.body?.goal);
       const subcategory = String(req.body?.subcategory ?? "");
-      if (!isProjectGoal(goal)) return res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" });
+      if (!goal) return res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" });
       if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch", field: "subcategory" });
       const result = await startTrack(req.params.id, goal, subcategory);
       void recordActivity({
@@ -3021,18 +3141,50 @@ RULES:
     }
   });
 
-  /** The builder marking a milestone done from the map — quick catch-up, no AI. */
+  /**
+   * The builder marking a milestone done from the map — quick catch-up, no AI.
+   *
+   * Capped and evidenced, like its twin on the MCP bridge. Unbounded, one call
+   * could tick a whole path done in a single request; with the canned default
+   * evidence it also filled the map with "already done before this path
+   * existed" against milestones nobody could afterwards account for. A line
+   * saying what makes it done is the least that keeps the map honest — and
+   * whatever is marked here can be taken back, through /path/unmark.
+   */
   app.post("/api/projects/:id/path/mark", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      const ids: string[] = [...new Set<string>((Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x)).filter(Boolean))].slice(0, PATH_MARK_LIMIT);
       if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
-      const { marked } = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence: String(req.body?.evidence ?? "already done before this path existed") })), "builder");
-      res.json({ marked });
+      if ((Array.isArray(req.body?.ids) ? req.body.ids.length : 0) > PATH_MARK_LIMIT) {
+        return res.status(400).json({ message: `Mark at most ${PATH_MARK_LIMIT} milestones at a time.`, code: "invalid_input", field: "ids" });
+      }
+      const evidence = String(req.body?.evidence ?? "").trim().slice(0, 600);
+      if (evidence.length < 10) {
+        return res.status(400).json({ message: "Say in a line what shows these are done.", code: "invalid_input", field: "evidence" });
+      }
+      const { marked } = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence })), "builder");
+      res.json({ marked, ignored: ids.filter((id) => !marked.includes(id)) });
     } catch (error) {
       console.error("Path mark error:", error);
       res.status(500).json({ message: "Couldn't mark that" });
+    }
+  });
+
+  /** Taking a mark back: the counterpart to /path/mark, for the one ticked by mistake. */
+  app.post("/api/projects/:id/path/unmark", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const ids: string[] = [...new Set<string>((Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x)).filter(Boolean))].slice(0, PATH_MARK_LIMIT);
+      if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
+      const { unmarked } = await unmarkMilestones(req.params.id, ids);
+      // Anything not in `unmarked` was really finished, not merely claimed, and stays done.
+      res.json({ unmarked, ignored: ids.filter((id) => !unmarked.includes(id)) });
+    } catch (error) {
+      console.error("Path unmark error:", error);
+      res.status(500).json({ message: "Couldn't undo that" });
     }
   });
 
@@ -3529,7 +3681,7 @@ RULES:
   app.post("/api/projects/:id/analytics-events", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertAnalyticsEventSchema.parse({ ...pickFields(req.body, WRITABLE.analyticsEvents), track: isProjectGoal(req.body?.track) ? req.body.track : null, projectId: req.params.id });
+      const data = insertAnalyticsEventSchema.parse({ ...pickFields(req.body, WRITABLE.analyticsEvents), track: normaliseGoal(req.body?.track), projectId: req.params.id });
       res.json(await storage.createAnalyticsEvent(data));
     } catch (e) { res.status(500).json({ message: "Failed to create analytics event" }); }
   });
@@ -3689,7 +3841,18 @@ RULES:
    * an amount, a message and a date. So the shape is written out here rather
    * than handing over the row.
    */
-  app.get("/api/projects/:id/donations", async (req, res) => {
+  app.get("/api/projects/:id/donations", async (req: any, res) => {
+    /*
+     * Gated like milestones: readable by anyone who can see the project. A
+     * private project's backers, and what they said, are the team's — this
+     * used to answer for any id, signed out, which also confirmed the private
+     * project existed.
+     */
+    const project = await storage.getProject(req.params.id);
+    const viewerId = req.user?.id as string | undefined;
+    if (!project || (project.isPrivate && !(await isOnTeam(viewerId, project)))) {
+      return res.status(404).json({ message: "Project not found" });
+    }
     const donations = await storage.getProjectDonations(req.params.id);
     res.json(donations.map((d) => ({
       id: d.id,
@@ -3800,10 +3963,31 @@ RULES:
        * recommending people you'd already connected with: the old code read
        * your connections into a set and then never consulted it.
        */
+      /*
+       * The pool is cut in SQL, by shared skills and interests.
+       *
+       * This used to be `storage.searchUsers("")`, whose limit is a hard 500
+       * ordered by join date. That is fine on a small site and quietly wrong
+       * on a large one: member 501 onwards is invisible to matching forever,
+       * and — since the same 500 rows are everyone's pool — the oldest members
+       * are matchable by nobody at all. `matchCandidates` ranks by overlap
+       * first and join date only as a tiebreaker, so who you can be matched
+       * with stops depending on when you signed up.
+       */
       const related = await relatedUserIds(userId);
-      const allProfiles = await storage.searchUsers("");
-      const eligible = allProfiles.filter((p) =>
-        isMatchable(p.id, { viewerId: userId, isOnboarded: !!p.profile?.isOnboarded, relatedUserIds: related })
+      const candidates = await storage.matchCandidates(userId, {
+        skills: userProfile.skills,
+        interests: userProfile.interests,
+      });
+      /*
+       * Blocks, in both directions. Matching is the one surface that puts a
+       * stranger's face in front of you unasked, so it's the one that most
+       * needs to know: a match is how a blocked account would otherwise walk
+       * straight back into view, with a "Connect" button attached.
+       */
+      const blocked = await blockedIdsFor(userId);
+      const eligible = candidates.filter((p) =>
+        isMatchable(p.id, { viewerId: userId, isOnboarded: !!p.profile?.isOnboarded, relatedUserIds: related, blockedIds: blocked })
       );
 
       /*
@@ -3836,19 +4020,36 @@ RULES:
 
       const scoredMatches: { id: string; score: number; factors: ReturnType<typeof scoreMatch>["factors"] }[] = [];
 
+      /*
+       * Read once for the whole pool, not three queries per candidate.
+       *
+       * The loop below used to run `getUserProjects`, `getMutualConnections`
+       * (itself four queries and two profile fan-outs) and `getUserReputation`
+       * for every single candidate — on the order of fifteen hundred queries
+       * for one press of "generate matches", with nothing rate-limiting the
+       * press. Three bulk reads answer exactly the same questions.
+       */
+      const candidateIds = otherProfiles.map((p) => p.id);
+      const [projectsByUser, reputationByUser, connectionsByUser] = await Promise.all([
+        storage.getProjectsForUsers(candidateIds),
+        storage.getReputationsForUsers(candidateIds),
+        storage.getAcceptedConnectionIds([userId, ...candidateIds]),
+      ]);
+      const myConnections = connectionsByUser.get(userId) ?? new Set<string>();
+
       for (const other of otherProfiles) {
-        const [otherProjects, mutualConns, otherReputation] = await Promise.all([
-          storage.getUserProjects(other.id),
-          storage.getMutualConnections(userId, other.id),
-          storage.getUserReputation(other.id),
-        ]);
+        const otherProjects = projectsByUser.get(other.id) ?? [];
+        const otherReputation = reputationByUser.get(other.id);
+        const theirConnections = connectionsByUser.get(other.id) ?? new Set<string>();
+        let mutualCount = 0;
+        for (const id of theirConnections) if (myConnections.has(id)) mutualCount += 1;
 
         const { score, factors } = scoreMatch(me, {
           profile: other.profile!,
           context: {
             categories: otherProjects.map((p) => p.category),
             rolesNeeded: otherProjects.flatMap((p) => p.rolesNeeded || []),
-            mutualConnections: mutualConns.length,
+            mutualConnections: mutualCount,
             builderIndex: otherReputation?.builderIndex || 0,
           },
         });
@@ -3922,7 +4123,15 @@ RULES:
       return savedMatches;
   }
 
-  app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
+  /*
+   * Limited, because this is the most expensive button on the site.
+   *
+   * One press scores the whole candidate pool and may call the model for the
+   * reasons. Unlimited, it was a scan per click as fast as a finger can move —
+   * so the limit is the shared AI budget rather than a write floor, which is
+   * what the cost of this actually resembles.
+   */
+  app.post("/api/matches/generate", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       res.json(await runMatchGeneration((req.user as any).id));
     } catch (error: any) {
@@ -3982,13 +4191,46 @@ RULES:
   });
 
   // Users
-  app.get("/api/users/search", async (req, res) => {
+  /*
+   * Finding people, for people who are here.
+   *
+   * This was open to anyone, with an offset and a page size of five hundred,
+   * and it answered an empty query with "everybody" — so the whole member
+   * directory could be walked from a shell, and each row carried the full
+   * profile: résumé link, work history, education. Discover's equivalent has
+   * always been behind a sign-in; this was the back door around it.
+   *
+   * Now: signed in, rate limited, a page at a time, and only the fields a
+   * card shows. A person's history is on their profile, where the person
+   * reading it is at least accountable for having asked.
+   */
+  app.get("/api/users/search", isAuthenticated, rateLimit("track"), async (req, res) => {
     try {
       const query = String(req.query.q ?? "").slice(0, 100);
-      const limit = req.query.limit !== undefined ? Number(req.query.limit) || undefined : undefined;
-      const offset = req.query.offset !== undefined ? Number(req.query.offset) || 0 : undefined;
-      const users = await storage.searchUsers(query, { limit, offset });
-      res.json(users);
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 50));
+      const offset = Math.min(500, Math.max(0, Number(req.query.offset) || 0));
+      // Searching by name is the simplest way back to somebody you blocked, so
+      // the viewer goes down with the query and the blocked rows never make the
+      // page. Cut in SQL, not after: filtering a page in memory silently
+      // shortens it and, worse, would end the results early on a paged search.
+      const users = await storage.searchUsers(query, { limit, offset, viewerId: (req as any).user?.id });
+      res.json(users.map((u) => ({
+        id: u.id,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        profileImageUrl: u.profileImageUrl,
+        profile: u.profile ? {
+          userId: u.profile.userId,
+          displayName: u.profile.displayName,
+          username: u.profile.username,
+          headline: u.profile.headline,
+          bio: u.profile.bio,
+          avatarUrl: u.profile.avatarUrl,
+          location: u.profile.location,
+          skills: u.profile.skills,
+          interests: u.profile.interests,
+        } : undefined,
+      })));
     } catch (error) {
       console.error("User search error:", error);
       res.status(500).json({ message: "Search failed" });
@@ -4005,12 +4247,41 @@ RULES:
     const user = await storage.getUser(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
     const profile = await storage.getUserProfile(req.params.id);
-    const allProjects = await storage.getProjects();
     const viewerId = req.user?.id as string | undefined;
-    const userProjects = [];
-    for (const p of allProjects.filter((x) => x.ownerId === req.params.id)) {
-      if (!p.isPrivate || (viewerId && (viewerId === p.ownerId || (await isProjectMember(viewerId, p.id))))) userProjects.push(p);
+    /*
+     * A block hides each from the other's profile — and it has to be the same
+     * 404 that a missing account gets. A distinct status or message here is
+     * the leak that undoes the whole design: it's the one endpoint anybody can
+     * poll with a known id, so a special answer turns "did they block me?"
+     * into a question with a reliable answer.
+     */
+    if (viewerId && viewerId !== user.id && await isBlockedBetween(viewerId, user.id)) {
+      return res.status(404).json({ message: "User not found" });
     }
+    /*
+     * A suspended or closed account has no public profile.
+     *
+     * The profile is the page every other surface links to, so leaving it up
+     * undid the rest of a suspension: the account still had a face, a
+     * headline, a project list and a Connect button, and anyone who had its
+     * link could still read it. A closed account is the same page with nobody
+     * behind it. Their own view is untouched — somebody suspended still needs
+     * to see their account to appeal — and so is a reviewer's, who has to be
+     * able to look at what they're deciding about.
+     */
+    const viewerRole = (req.user as any)?.platformRole;
+    const isStaff = viewerRole === "admin" || viewerRole === "reviewer";
+    if ((user.suspendedAt || user.deletedAt) && viewerId !== user.id && !isStaff) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    /*
+     * Their projects, asked for by owner: the listing is capped now, and
+     * filtering the newest 200 of everyone's would drop an older builder's
+     * work from their own profile. Private ones only for the owner (as
+     * before); anyone but the owner sees the public projection.
+     */
+    const ownProjects = await storage.getProjects({ ownerId: req.params.id, includePrivateOwnedBy: viewerId });
+    const userProjects = ownProjects.map((p) => (viewerId === p.ownerId ? p : publicProject(p)));
     /*
      * Profile views were not recorded anywhere — the number simply did not
      * exist, while the code carried a comment about LinkedIn's "profile
@@ -4028,6 +4299,8 @@ RULES:
         userAgent: req.headers["user-agent"] ?? null,
         path: req.originalUrl,
         referrer: req.headers.referer ?? null,
+        // The per-address cap on recording views: a GET carries no write-floor limit.
+        address: req.ip ?? null,
       },
     });
 
@@ -4234,19 +4507,15 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
         }
       }
 
-      try {
-        const allBadges = await storage.getBadges();
-        const aiExplorerBadge = allBadges.find(b => b.name === "AI Explorer");
-        if (aiExplorerBadge) {
-          const userId = (req.user as any).id;
-          const existingBadges = await storage.getUserBadges(userId);
-          if (!existingBadges.some(ub => ub.badgeId === aiExplorerBadge.id)) {
-            await storage.awardBadge(userId, aiExplorerBadge.id);
-          }
-        }
-      } catch (badgeErr) {
-        console.error("Badge awarding failed (non-fatal):", badgeErr);
-      }
+      /*
+       * By stable id, not by name.
+       *
+       * This site used to read every badge, look for one called "AI Explorer",
+       * find nothing — because nothing had ever inserted a badge — and return
+       * without a word. `award` names a catalog entry, so the same mistake is
+       * now a boot-time error outside production rather than a silence.
+       */
+      await award((req.user as any).id, BADGE.aiExplorer);
 
       /*
        * Persist scenes privately.
@@ -5720,14 +5989,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const files = await storage.getProjectFiles(req.params.id);
       // `?track=` shows that section's files and the shared ones (no section); absent, everything.
       const track = req.query.track;
-      res.json(isProjectGoal(track) ? files.filter((f) => !f.track || f.track === track) : files);
+      const section = normaliseGoal(track);
+      res.json(section ? files.filter((f) => !f.track || f.track === section) : files);
     } catch (error) { res.status(500).json({ message: "Failed to get files" }); }
   });
 
   app.post("/api/projects/:id/files", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const track = isProjectGoal(req.body?.track) ? req.body.track : null;
+      const track = normaliseGoal(req.body?.track);
       const parsed = insertProjectFileSchema.safeParse({ ...pickFields(req.body, WRITABLE.files), track, projectId: req.params.id, uploaderId: (req.user as any).id });
       if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid file" });
       const file = await storage.createProjectFile(parsed.data);
@@ -5786,6 +6056,59 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to update member" }); }
   });
 
+  /**
+   * Removing someone from a project, or leaving it.
+   *
+   * There was no way to do either: once on a team, always on it — a
+   * collaborator who'd moved on stayed in the member list, kept reading a
+   * private project, and kept the invite powers a teammate has, and the only
+   * fix was a support request. The owner may remove anyone but themselves;
+   * anyone may remove themselves. The owner can't leave: a project has to
+   * belong to someone, and handing it over is a decision for its own flow.
+   *
+   * In the same transaction, the invites that would undo it are revoked: any
+   * pending invite this person sent (it carries their name and would bring
+   * people in on their say-so after they've gone) and any addressed to them
+   * (which would let a removed member walk straight back in).
+   */
+  app.delete("/api/projects/:id/members/:userId", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const me = (req.user as any).id as string;
+      const target = String(req.params.userId);
+      const project = await storage.getProject(req.params.id);
+      // Off the team, a private project doesn't exist, whatever the verb.
+      if (!project || (project.isPrivate && !(await isOnTeam(me, project)))) return res.status(404).json({ message: "Project not found" });
+      if (target === project.ownerId) {
+        return res.status(400).json({ message: "The owner can't leave or be removed from their own project.", code: "owner_cannot_leave" });
+      }
+      if (me !== project.ownerId && me !== target) {
+        return res.status(403).json({ message: "Only the project's owner can remove someone else." });
+      }
+      const [person] = await db.select({ email: users.email }).from(users).where(eq(users.id, target));
+      const removed = await db.transaction(async (tx) => {
+        const gone = await tx.delete(projectMembers)
+          .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, target)))
+          .returning({ id: projectMembers.id });
+        if (!gone.length) return false;
+        const theirs = person?.email
+          ? sql`(${projectInvites.createdById} = ${target} or lower(${projectInvites.email}) = ${person.email.toLowerCase()})`
+          : eq(projectInvites.createdById, target);
+        await tx.update(projectInvites).set({ revokedAt: new Date() })
+          .where(and(eq(projectInvites.projectId, project.id), isNull(projectInvites.acceptedAt), isNull(projectInvites.revokedAt), theirs));
+        return true;
+      });
+      if (!removed) return res.status(404).json({ message: "That person isn't on this project." });
+      // Leaving is their own act; being removed is news they should get from us, not from a 404.
+      if (me !== target) {
+        void notify({ recipients: [target], actorId: me, kind: "project_removed", targetId: `${project.id}:${target}`, projectId: project.id, excerpt: project.title });
+      }
+      res.json({ removed: true, userId: target, left: me === target });
+    } catch (error) {
+      console.error("Remove member error:", error);
+      res.status(500).json({ message: "Couldn't remove that member" });
+    }
+  });
+
   // --- AI Copilot ---
   app.post("/api/projects/:id/ai/summarize-progress", isAuthenticated, async (req: any, res) => {
     try {
@@ -5798,7 +6121,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       // The project's own update posts are its written record of progress.
       const updates = await db.select({ postType: feedPosts.postType, content: feedPosts.content, createdAt: feedPosts.createdAt })
         .from(feedPosts)
-        .where(and(eq(feedPosts.projectId, req.params.id), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+        .where(and(eq(feedPosts.projectId, req.params.id), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()))
         .orderBy(desc(feedPosts.createdAt))
         .limit(5);
       const activity = await storage.getProjectActivity(req.params.id, 30);
@@ -5877,6 +6200,23 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     res.json(allBadges);
   });
 
+  /*
+   * The badges there are to earn, and how.
+   *
+   * From the catalog in code rather than from the table, on purpose: the table
+   * also holds rows left over from features that no longer exist (a typing
+   * race, a signal game), and offering somebody a badge nothing can award is
+   * worse than offering none. The panel shows this list with the earned ones
+   * lit, so a profile with no badges says what to do instead of saying
+   * nothing — which is what it did on the day badges started working.
+   */
+  app.get("/api/badges/catalog", async (_req, res) => {
+    res.json(BADGE_CATALOG.map((b) => ({
+      id: b.id, name: b.name, description: b.description,
+      icon: b.icon, rarity: b.rarity, category: b.category, howTo: b.howTo,
+    })));
+  });
+
   app.get("/api/users/:userId/badges", async (req, res) => {
     const userBadges = await storage.getUserBadges(req.params.userId);
     res.json(userBadges);
@@ -5908,7 +6248,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   app.get("/api/contests/:id/participants", async (req, res) => {
-    const participants = await storage.getContestParticipants(req.params.id);
+    // Paged and capped: the list is readable signed out, and an uncapped one
+    // let a single request pull every entrant plus their account and profile.
+    const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const offset = Number.parseInt(String(req.query.offset ?? ""), 10);
+    const participants = await storage.getContestParticipants(
+      req.params.id,
+      Number.isFinite(limit) ? limit : undefined,
+      Number.isFinite(offset) ? offset : 0,
+    );
     res.json(participants);
   });
 
@@ -5921,13 +6269,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (contest.status !== "active" && contest.status !== "upcoming") {
         return res.status(400).json({ message: "Contest is not accepting participants" });
       }
-      const already = await storage.isContestParticipant(contestId, userId);
-      if (already) return res.status(400).json({ message: "Already joined" });
-      if (contest.maxParticipants && contest.participantCount >= contest.maxParticipants) {
-        return res.status(400).json({ message: "Contest is full" });
-      }
-      const participant = await storage.joinContest(contestId, userId);
-      res.json(participant);
+      /*
+       * No read-then-write. "Already in?" and "is it full?" used to be two
+       * queries before the insert, so a double-clicked button ran both checks
+       * twice before either row was written: one person entered twice, the
+       * entrant count was wrong from then on, and a contest could pass its own
+       * maximum by however many requests were in flight. Both are now decided
+       * inside the insert — the unique index for the first, a count in the
+       * insert's own WHERE for the second.
+       */
+      const entry = await storage.joinContest(contestId, userId, contest.maxParticipants);
+      if (!entry) return res.status(400).json({ message: "Contest is full", code: "contest_full" });
+      if (!entry.created) return res.status(400).json({ message: "Already joined", code: "already_joined" });
+      res.json(entry.participant);
     } catch (error) {
       console.error("Error joining contest:", error);
       res.status(500).json({ message: "Failed to join contest" });
@@ -5964,8 +6318,29 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (requesterId === receiverId) return res.status(400).json({ message: "Cannot connect with yourself" });
       // An optional hello, capped: it's text going to someone who hasn't agreed to hear from you yet.
       const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, CONNECTION_NOTE_MAX) || null : null;
+      /*
+       * A block stops the request, in both directions, and says nothing.
+       *
+       * The connection request is the sharpest tool a harasser has here: it
+       * carries a 280-character note to somebody who has not agreed to hear
+       * from them, and it arrives as a notification. So it is the first thing
+       * a block has to close.
+       *
+       * It answers as though the request went through — a pending-shaped row
+       * with no id, which notifies nobody and writes nothing. That is
+       * deliberate. A 403 here, or a different message, tells the blocked
+       * person exactly what happened, and "you have been blocked" is the
+       * sentence that makes somebody open a second account. Nothing is lost by
+       * the silence: nobody is owed delivery confirmation for a message to
+       * someone who doesn't want it.
+       */
+      if (await isBlockedBetween(requesterId, String(receiverId))) {
+        recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
+        return res.json({ id: null, requesterId, receiverId, status: "pending", note, createdAt: new Date() });
+      }
       const conn = await storage.sendConnectionRequest(requesterId, receiverId, note);
-      recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
+      // Not for a repeat of a request already sent: one intent, one event, however many times the button is pressed.
+      if (!conn.alreadySent) recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
       if (conn?.id && conn.status === "pending") void notify({ recipients: [String(receiverId)], actorId: requesterId, kind: "connection_request", targetId: conn.id, excerpt: note });
       res.json(conn);
     } catch (error: any) {
@@ -6134,6 +6509,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const currentUserId = (req.user as any).id;
       const otherUserId = req.params.userId;
+      /*
+       * A block ends the thread for both of them. Checked before the
+       * connection so the answer is the same whichever side blocked, and
+       * phrased as the ordinary refusal: the blocked person must not be able
+       * to tell "they blocked me" from "we were never connected".
+       */
+      if (await isBlockedBetween(currentUserId, otherUserId)) {
+        return res.status(403).json({ message: "You can only view messages with connected users" });
+      }
       const conn = await storage.getConnectionStatus(currentUserId, otherUserId);
       if (!conn || conn.status !== "accepted") {
         return res.status(403).json({ message: "You can only view messages with connected users" });
@@ -6152,6 +6536,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const receiverId = req.params.userId;
       const { content } = req.body;
       if (!content || !content.trim()) return res.status(400).json({ message: "content is required" });
+
+      // The same test as the read side, for the same reason. A block also
+      // deletes the connection, so this is belt and braces — but the belt is
+      // what stops a connection created in the same second from reopening the
+      // channel, and the braces are what keeps the rule true if a future
+      // caller stops deleting connections on block.
+      if (await isBlockedBetween(senderId, receiverId)) {
+        return res.status(403).json({ message: "You can only message connected users" });
+      }
 
       const conn = await storage.getConnectionStatus(senderId, receiverId);
       if (!conn || conn.status !== "accepted") {
@@ -6390,15 +6783,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      let customerId = user.stripeCustomerId;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: user.email || undefined,
-          metadata: { userId },
-        });
-        await storage.updateUserStripeInfo(userId, { stripeCustomerId: customer.id });
-        customerId = customer.id;
-      }
+      // One customer per account, even for two checkouts at once (server/stripe-customer.ts).
+      const customerId = await ensureStripeCustomer(stripe, user);
 
       /*
        * Never a second subscription.
@@ -6551,14 +6937,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
 
       const stripe = await getUncachableStripeClient();
-      // Every status, then the paying one: a trial pays for its tier here as it
-      // does in the webhook. Asking only for "active" dropped trials to free.
-      const subscriptions = await stripe.subscriptions.list({
-        customer: user.stripeCustomerId,
-        status: "all",
-        limit: 10,
-      });
-
       /*
        * This read is Stripe's answer as of now, so it also sets the mark that
        * makes webhook events older than it no-ops (server/webhookHandlers.ts):
@@ -6566,22 +6944,21 @@ Respond ONLY with valid JSON (no markdown, no code fences):
        * confirmed with Stripe directly.
        */
       const syncedAt = { subscriptionEventAt: new Date() };
-      const sub = paidSubscription(subscriptions.data);
-      if (!sub) {
-        await storage.updateUserStripeInfo(userId, { subscriptionTier: "free", stripeSubscriptionId: undefined });
-        await db.update(users).set(syncedAt).where(eq(users.id, userId));
-        return res.json({ tier: "free" });
-      }
-      const priceId = sub.items.data[0]?.price?.id;
-      if (priceId) {
-        // Price metadata, else product metadata — as checkout reads it. A tier that can't be read changes nothing.
-        const tier = await tierForPrice(priceId);
-        const { refilled } = await applyTier(userId, tier, sub.id);
-        await db.update(users).set(syncedAt).where(eq(users.id, userId));
-        return res.json({ tier, refilled });
-      }
-
-      res.json({ tier: user.subscriptionTier || "free" });
+      /*
+       * The same decision the webhook and checkout make (server/subscription-
+       * state.ts): the highest paid tier among every live subscription. This
+       * used to take whichever paid subscription the list returned first, so a
+       * customer holding two could be set to the lower one here and back up by
+       * the next webhook — each flip up refilling credits. Trials count as
+       * paid, as before; a price whose tier can't be read throws and changes
+       * nothing.
+       */
+      const settled = await settleTier({
+        userId, customer: user.stripeCustomerId, stripe,
+        tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+      });
+      await db.update(users).set(syncedAt).where(eq(users.id, userId));
+      res.json({ tier: settled.tier });
     } catch (error) {
       if (error instanceof PriceTierMissingError) {
         console.error("[stripe] Sync: a paid subscription's price has no tier configured:", error.priceId);

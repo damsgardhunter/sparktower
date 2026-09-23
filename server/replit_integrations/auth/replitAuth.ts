@@ -10,6 +10,7 @@ import { authStorage } from "./storage";
 import bcrypt from "bcryptjs";
 import { sessionSecret } from "../../secrets";
 import { isDeleted } from "../../account-data";
+import { surfaceEnabled } from "../../surfaces";
 
 /** The host part of a configured URL — "https://sparktower.app/" → "sparktower.app". */
 function hostOf(url: string | undefined): string | null {
@@ -154,6 +155,13 @@ export async function setupAuth(app: Express) {
                 return done(null, updated);
               }
             }
+            /*
+             * The signup kill switch, on the one branch that creates an
+             * account. It gated the register routes but not this, so with
+             * sign-ups closed anyone could still open an account through
+             * Google. The two branches above are people who already have one.
+             */
+            if (!surfaceEnabled("signup")) return done(null, false, { message: "New accounts can't be created right now." });
             const newUser = await authStorage.upsertUser({
               email: email || undefined,
               firstName: profile.name?.givenName || profile.displayName,

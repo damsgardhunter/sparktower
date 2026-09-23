@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FeedComposer } from "@/components/feed-composer";
@@ -37,7 +38,7 @@ import { StartSectionDialog } from "@/components/manager/start-section-dialog";
 import { InviteCollaboratorDialog, PendingInvites } from "@/components/invite-collaborator-dialog";
 import { isTabId, tabDef, type TabId } from "@/components/manager/tabs";
 import { useSections, sectionDef, sectionFromUrl, taskInSection, sectionTag, LIVE_INTERVAL_MS, visibleTags, systemTags } from "@/lib/sections";
-import { DEFAULT_PROJECT_GOAL, isProjectGoal, type ProjectGoal } from "@shared/goals";
+import { DEFAULT_PROJECT_GOAL, normaliseGoal, type ProjectGoal } from "@shared/goals";
 import { RoadmapTab } from "@/components/roadmap-tab";
 import { NovaDashboard } from "@/components/nova-dashboard";
 import { HealthCheckPanel } from "@/components/health-check-panel";
@@ -53,6 +54,7 @@ import { ProjectCalendar, TASK_DRAG_TYPE } from "@/components/project-calendar";
 import { NovaTaskPlanner } from "@/components/nova-task-planner";
 import { DocumentStartDialog, looksLikeDocumentTask } from "@/components/document-start-dialog";
 import { CodebaseTab } from "@/components/codebase-tab";
+import { SimulationsPanel } from "@/components/manager/simulations-panel";
 import { NovaActionButton } from "@/components/nova-action-button";
 import { NovaHandoffProvider } from "@/components/nova-handoff";
 import { BackingSetup } from "@/components/backing-setup";
@@ -81,7 +83,8 @@ const sectionStoreKey = (projectId: string | undefined) => `manager-section:${pr
 function storedSection(projectId: string | undefined): ProjectGoal | null {
   try {
     const v = window.localStorage.getItem(sectionStoreKey(projectId));
-    return isProjectGoal(v) ? v : null;
+    // A section remembered before Raise was folded into Systemize comes back as the section that took it over, not as nothing.
+    return normaliseGoal(v);
   } catch { return null; }
 }
 
@@ -278,14 +281,25 @@ export default function ProjectManager() {
     onSuccess: () => { toast({ title: "Business plan uploaded" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] }); },
   });
 
+  /*
+   * Both task writes say when they fail. They used to fail silently — and an
+   * edit closed its dialog before the PATCH had even been sent, so a rejected
+   * save (a rate limit, a validation error, a dropped connection) threw away
+   * everything typed into the form with no sign it hadn't landed. The dialog
+   * now closes on success only (see handleTaskSubmit), and stays open with
+   * the words in it when the save fails.
+   */
   const createTaskMutation = useMutation({
     mutationFn: async (data: any) => { const res = await apiRequest("POST", `/api/projects/${projectId}/kanban`, data); return res.json(); },
     onSuccess: () => { toast({ title: "Task created" }); invalidateTaskViews(); closeTaskDialog(); },
+    onError: (err) => toast({ title: "Couldn't create that task", description: errorText(err), variant: "destructive" }),
   });
 
   const updateTaskMutation = useMutation({
     mutationFn: async ({ taskId, data }: { taskId: string; data: any }) => { const res = await apiRequest("PATCH", `/api/kanban/${taskId}`, data); return res.json(); },
     onSuccess: () => { invalidateTaskViews(); },
+    // A drag between columns has nothing to keep, but the card snapping back needs a reason.
+    onError: (err) => { toast({ title: "Couldn't save that task", description: errorText(err), variant: "destructive" }); invalidateTaskViews(); },
   });
 
   const deleteTaskMutation = useMutation({
@@ -408,13 +422,27 @@ export default function ProjectManager() {
 
   const updateProjectMutation = useMutation({
     mutationFn: async (data: any) => { const res = await apiRequest("PATCH", `/api/projects/${projectId}`, data); return res.json(); },
-    onSuccess: () => { toast({ title: "Project updated" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] }); },
-    onError: () => { toast({ title: "Failed to update", variant: "destructive" }); },
+    onSuccess: () => {
+      toast({ title: "Project updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      /*
+       * The project also appears under other keys, each cached forever
+       * (staleTime: Infinity): the sidebar and home's "your projects", the
+       * feed's project switcher and the profile summary. Renaming a project
+       * here left the old name on all of them until a full reload.
+       */
+      queryClient.invalidateQueries({ queryKey: ["/api/user/projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
+    },
+    onError: (err) => { toast({ title: "Failed to update", description: errorText(err), variant: "destructive" }); },
   });
 
   const createMilestoneMutation = useMutation({
     mutationFn: async (data: any) => { const res = await apiRequest("POST", `/api/projects/${projectId}/milestones`, data); return res.json(); },
     onSuccess: () => { toast({ title: "Milestone created" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "milestones"] }); },
+    // The form stays open with what was typed (MilestonesTab closes it on success only).
+    onError: (err) => toast({ title: "Couldn't create that milestone", description: errorText(err), variant: "destructive" }),
   });
 
   const updateMilestoneMutation = useMutation({
@@ -465,6 +493,49 @@ export default function ProjectManager() {
   const updateMemberMutation = useMutation({
     mutationFn: async ({ userId, data }: { userId: string; data: any }) => { const res = await apiRequest("PATCH", `/api/projects/${projectId}/members/${userId}`, data); return res.json(); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "members"] }); },
+  });
+
+  /*
+   * Removing a teammate (the owner) or leaving (anyone else). The member list
+   * is one cache; "your projects" in the sidebar and the feed's project
+   * switcher are two more, all cached forever, and a project someone just
+   * left staying in their sidebar is a link to a page that now turns them
+   * away. Someone who leaves is taken to their projects: this screen is the
+   * team's, and they aren't on it any more.
+   */
+  const removeMemberMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("DELETE", `/api/projects/${projectId}/members/${userId}`);
+      return res.json() as Promise<{ removed: boolean; userId: string; left: boolean }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "members"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "invites"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/user/projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-projects"] });
+      if (data.left) {
+        toast({ title: "You've left the project" });
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+        setLocation("/profile#projects");
+      } else {
+        toast({ title: "Removed from the team" });
+      }
+    },
+    onError: (err) => toast({ title: "Couldn't do that", description: errorText(err), variant: "destructive" }),
+  });
+
+  /** The owner's answer to an application. Accepting adds a member, so the team list refreshes too. */
+  const decideApplicationMutation = useMutation({
+    mutationFn: async ({ id, decision }: { id: string; decision: "accept" | "reject" }) => {
+      const res = await apiRequest("POST", `/api/applications/${id}/${decision}`);
+      return res.json();
+    },
+    onSuccess: (_data, { decision }) => {
+      toast({ title: decision === "accept" ? "Application accepted" : "Application declined" });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "applications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "members"] });
+    },
+    onError: (err) => toast({ title: "Couldn't answer that application", description: errorText(err), variant: "destructive" }),
   });
 
   const aiSummarizeMutation = useMutation({
@@ -522,7 +593,7 @@ export default function ProjectManager() {
     };
     // A card made inside a section belongs to it.
     if (!editingTask && !data.tags.some((t) => t.startsWith("track:"))) data.tags = [...data.tags, sectionTag(section)];
-    if (editingTask) { updateTaskMutation.mutate({ taskId: editingTask.id, data }); closeTaskDialog(); }
+    if (editingTask) updateTaskMutation.mutate({ taskId: editingTask.id, data }, { onSuccess: () => closeTaskDialog() });
     else createTaskMutation.mutate(data);
   }
 
@@ -554,7 +625,9 @@ export default function ProjectManager() {
     const params = new URLSearchParams(search);
     const s = params.get("section");
     const t = params.get("tab");
-    if (isProjectGoal(s) && s !== section) setChosenSection(s);
+    // Old links (a notification, a bookmark) may still say ?section=raise_funding: normalised, like every stored goal.
+    const linked = normaliseGoal(s);
+    if (linked && linked !== section) setChosenSection(linked);
     if (isTabId(t) && t !== activeTab) setActiveTab(t);
     // Only a change in the URL should drive this; state changes write the URL below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -755,7 +828,8 @@ export default function ProjectManager() {
         {activeTab === "milestones" && (
           <MilestonesTab
             milestones={sectionMilestones} isLoading={milestonesLoading}
-            onCreate={(data) => createMilestoneMutation.mutate(data)}
+            onCreate={(data, done) => createMilestoneMutation.mutate(data, { onSuccess: done })}
+            creating={createMilestoneMutation.isPending}
             onUpdate={(id, data) => updateMilestoneMutation.mutate({ id, data })}
             onDelete={(id) => deleteMilestoneMutation.mutate(id)}
             projectId={projectId!}
@@ -766,6 +840,11 @@ export default function ProjectManager() {
             project={project} members={members || []} applications={applications}
             isOwner={isOwner} tasks={kanbanTasks || []}
             onUpdateMember={(userId, data) => updateMemberMutation.mutate({ userId, data })}
+            currentUserId={user?.id}
+            onRemoveMember={(userId) => removeMemberMutation.mutate(userId)}
+            removingUserId={removeMemberMutation.isPending ? removeMemberMutation.variables : undefined}
+            onDecideApplication={(id, decision) => decideApplicationMutation.mutate({ id, decision })}
+            decidingId={decideApplicationMutation.isPending ? decideApplicationMutation.variables?.id : undefined}
             onRecommendPeople={() => recommendPeopleMutation.mutate()}
             recommendPending={recommendPeopleMutation.isPending}
             recommendData={recommendPeopleMutation.data}
@@ -774,6 +853,8 @@ export default function ProjectManager() {
         {activeTab === "codebase" && projectId && (
           <CodebaseTab projectId={projectId} repoUrl={project.repoUrl} isOwner={isOwner} />
         )}
+        {/* A market season for the people on this project — see the panel's own note. */}
+        {activeTab === "simulations" && projectId && <SimulationsPanel projectId={projectId} />}
         {activeTab === "files" && (
           <FilesTab
             files={projectFiles || []} isUploading={isUploadingFile}
@@ -2104,7 +2185,7 @@ function KanbanTab({
                             {task.estimateHours && <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-0.5"><Clock className="h-2.5 w-2.5" />{task.estimateHours}h</Badge>}
                           </div>
                           <div className="flex items-center gap-2">
-                            {task.dueDate && <span className="text-xs text-tertiary flex items-center gap-1"><Calendar className="h-3 w-3" />{new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
+                            {task.dueDate && <span className="text-xs text-tertiary flex items-center gap-1"><Calendar className="h-3 w-3" />{new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}</span>}
                             {task.assigneeId && <UserAvatar src={getMemberAvatar(task.assigneeId)} name={getMemberName(task.assigneeId) || ""} className="h-5 w-5" />}
                           </div>
                         </div>
@@ -2323,7 +2404,7 @@ function KanbanTab({
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Due</p>
                       {viewingTask.dueDate
-                        ? <span>{new Date(viewingTask.dueDate).toLocaleDateString()}</span>
+                        ? <span>{new Date(viewingTask.dueDate).toLocaleDateString(undefined, { timeZone: "UTC" })}</span>
                         : <span className="text-muted-foreground">No due date</span>}
                     </div>
                     <div className="col-span-2">
@@ -2406,9 +2487,11 @@ function KanbanTab({
   );
 }
 
-function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, projectId }: {
+function MilestonesTab({ milestones, isLoading, onCreate, creating, onUpdate, onDelete, projectId }: {
   milestones: ProjectMilestone[]; isLoading: boolean;
-  onCreate: (data: any) => void; onUpdate: (id: string, data: any) => void; onDelete: (id: string) => void;
+  /** `done` runs once the milestone is saved; the form clears and closes then, not before. */
+  onCreate: (data: any, done: () => void) => void; creating: boolean;
+  onUpdate: (id: string, data: any) => void; onDelete: (id: string) => void;
   projectId: string;
 }) {
   const [showForm, setShowForm] = useState(false);
@@ -2510,7 +2593,7 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, pr
                           <Badge variant="secondary" className={`text-xs ${statusColors[m.status]}`}>{m.status}</Badge>
                         </div>
                         {m.description && <p className="text-xs text-secondary mb-2">{m.description}</p>}
-                        {m.targetDate && <p className="text-xs text-muted-foreground flex items-center gap-1"><Calendar className="h-3 w-3" /> Target: {new Date(m.targetDate).toLocaleDateString()}</p>}
+                        {m.targetDate && <p className="text-xs text-muted-foreground flex items-center gap-1"><Calendar className="h-3 w-3" /> Target: {new Date(m.targetDate).toLocaleDateString(undefined, { timeZone: "UTC" })}</p>}
                       </button>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Select value={m.status} onValueChange={v => onUpdate(m.id, { status: v })}>
@@ -2569,7 +2652,13 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, pr
             <Textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} placeholder="Description (optional)" data-testid="textarea-milestone-desc" />
             <Input type="date" value={form.targetDate} onChange={e => setForm(p => ({ ...p, targetDate: e.target.value }))} data-testid="input-milestone-date" />
             <div className="flex gap-2">
-              <Button size="sm" disabled={!form.title.trim()} onClick={() => { onCreate({ title: form.title, description: form.description || null, targetDate: form.targetDate || null, order: milestones.length }); setForm({ title: "", description: "", targetDate: "", status: "planned" }); setShowForm(false); }} data-testid="button-save-milestone">Create</Button>
+              <Button size="sm" disabled={!form.title.trim() || creating} onClick={() => {
+                // Cleared and closed once it's saved: a failed create keeps what was typed (the error is toasted).
+                onCreate({ title: form.title, description: form.description || null, targetDate: form.targetDate || null, order: milestones.length }, () => {
+                  setForm({ title: "", description: "", targetDate: "", status: "planned" });
+                  setShowForm(false);
+                });
+              }} data-testid="button-save-milestone">{creating ? "Creating…" : "Create"}</Button>
               <Button size="sm" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>
             </div>
           </CardContent>
@@ -2579,15 +2668,22 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, pr
   );
 }
 
-function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMember, onRecommendPeople, recommendPending, recommendData }: {
+function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMember, currentUserId, onRemoveMember, removingUserId, onDecideApplication, decidingId, onRecommendPeople, recommendPending, recommendData }: {
   project: Project; members: (ProjectMember & { user: User; profile?: UserProfile })[];
   applications: any[] | undefined; isOwner: boolean; tasks: ProjectKanbanTask[];
   onUpdateMember: (userId: string, data: any) => void;
+  currentUserId: string | undefined;
+  onRemoveMember: (userId: string) => void; removingUserId: string | undefined;
+  onDecideApplication: (id: string, decision: "accept" | "reject") => void; decidingId: string | undefined;
   onRecommendPeople: () => void; recommendPending: boolean; recommendData: any;
 }) {
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [memberForm, setMemberForm] = useState({ timezone: "", availability: "", hoursPerWeek: "", skills: "" });
+  // Removing someone, or leaving, is asked about first: neither is undone by pressing it again.
+  const [confirmRemove, setConfirmRemove] = useState<{ userId: string; name: string; self: boolean } | null>(null);
   const pendingApps = applications?.filter(a => a.status === "pending") || [];
+  const personName = (profile: any, user: any, fallback: string) =>
+    profile?.displayName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || fallback;
   // Solo Builder Mode is fixed at creation time, so recruiting is off the
   // table for the life of the project.
   const soloMode = !!(project as any).soloMode;
@@ -2663,6 +2759,17 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
                       }
                     }}>Edit</Button>
                   )}
+                  {/* The owner removes anyone but themselves; anyone else can leave (server: DELETE /api/projects/:id/members/:userId). */}
+                  {member.userId !== project.ownerId && (isOwner || member.userId === currentUserId) && (
+                    <Button
+                      variant="ghost" size="sm" className="text-xs text-destructive"
+                      disabled={removingUserId === member.userId}
+                      onClick={() => setConfirmRemove({ userId: member.userId, name: personName(member.profile, member.user, "this member"), self: member.userId === currentUserId })}
+                      data-testid={member.userId === currentUserId ? "button-leave-project" : `button-remove-member-${member.userId}`}
+                    >
+                      {removingUserId === member.userId ? <Loader2 className="h-3 w-3 animate-spin" /> : member.userId === currentUserId ? "Leave" : "Remove"}
+                    </Button>
+                  )}
                 </div>
                 {isEditing && (
                   <div className="mt-3 space-y-2 pt-3 border-t border-border">
@@ -2701,17 +2808,56 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
           <CardHeader><CardTitle className="text-lg flex items-center gap-2">Pending Applications <Badge>{pendingApps.length}</Badge></CardTitle></CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {pendingApps.map((app: any) => (
-                <div key={app.id} className="flex items-center gap-3 p-2 rounded-md bg-muted/30" data-testid={`application-${app.id}`}>
-                  <UserAvatar src={null} name={app.userId} className="h-8 w-8" />
-                  <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{app.message || "No message"}</p><p className="text-xs text-tertiary">{new Date(app.createdAt).toLocaleDateString()}</p></div>
-                  <Badge variant="secondary" className="text-xs">Pending</Badge>
-                </div>
-              ))}
+              {/* Who applied, by name (the route sends the applicant's account and profile), and the owner's answer right here. */}
+              {pendingApps.map((app: any) => {
+                const name = personName(app.profile, app.user, "An applicant");
+                const deciding = decidingId === app.id;
+                return (
+                  <div key={app.id} className="flex items-center gap-3 p-2 rounded-md bg-muted/30" data-testid={`application-${app.id}`}>
+                    <UserAvatar src={app.profile?.avatarUrl ?? null} name={name} className="h-8 w-8" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{app.message || "No message"}</p>
+                      <p className="text-xs text-tertiary">{new Date(app.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <Button size="sm" className="text-xs" disabled={deciding} onClick={() => onDecideApplication(app.id, "accept")} data-testid={`button-accept-application-${app.id}`}>
+                        {deciding ? <Loader2 className="h-3 w-3 animate-spin" /> : "Accept"}
+                      </Button>
+                      <Button size="sm" variant="outline" className="text-xs" disabled={deciding} onClick={() => onDecideApplication(app.id, "reject")} data-testid={`button-reject-application-${app.id}`}>
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
       )}
+
+      <AlertDialog open={!!confirmRemove} onOpenChange={(open) => { if (!open) setConfirmRemove(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmRemove?.self ? `Leave ${project.title}?` : `Remove ${confirmRemove?.name}?`}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmRemove?.self
+                ? "You'll lose access to this project's workspace, and any invites you sent that haven't been accepted are cancelled. The owner can invite you back."
+                : "They'll lose access to this project's workspace and be told they were removed. Invites they sent, or that are waiting for them, are cancelled."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (confirmRemove) onRemoveMember(confirmRemove.userId); setConfirmRemove(null); }}
+              data-testid="button-confirm-remove-member"
+            >
+              {confirmRemove?.self ? "Leave" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {!soloMode && (
       <Card>

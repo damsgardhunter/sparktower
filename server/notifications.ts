@@ -22,6 +22,8 @@ import {
   notifications, projectFollows, projectMembers, projects, userFollows, users, userProfiles, feedComments, projectKanbanTasks,
   type NotificationKind,
 } from "@shared/schema";
+import { blockedIdsFor } from "./blocks";
+import { notBlockedSql } from "./block-sql";
 import { notificationHref, notificationText, PATH_FOCUS } from "@shared/notifications";
 import { goalOfBackboneId, isProjectGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
 
@@ -53,17 +55,45 @@ export async function notify(input: {
   once?: boolean;
 }): Promise<void> {
   try {
-    const recipients = [...new Set(input.recipients.filter((r): r is string => !!r && (input.allowSelf || r !== input.actorId)))].slice(0, MAX_FANOUT);
+    let recipients = [...new Set(input.recipients.filter((r): r is string => !!r && (input.allowSelf || r !== input.actorId)))].slice(0, MAX_FANOUT);
     if (!recipients.length) return;
+    /*
+     * Nobody who has blocked the actor, and nobody the actor has blocked,
+     * hears about this.
+     *
+     * The bell is the last way one person reaches another without asking, and
+     * it's the one that keeps working when everything else is closed: block
+     * somebody and they can still react to your post, follow you, or comment
+     * under you, and each of those used to ring your bell with their name on
+     * it. Filtering here rather than at each of the dozen emitters is the
+     * whole point — a new notification kind added next month is covered
+     * without anyone remembering to cover it.
+     *
+     * One indexed query against the actor's blocks, and only when there is
+     * something to check.
+     */
+    const cutOff = await blockedIdsFor(input.actorId);
+    if (cutOff.size) {
+      recipients = recipients.filter((r) => !cutOff.has(r));
+      if (!recipients.length) return;
+    }
     const excerpt = clip(input.excerpt);
+    /*
+     * The time from here, not the column's default or SQL's now(). The column
+     * is a zoneless timestamp holding UTC; `now()` is written in the database
+     * session's zone, so on a database in US Central every notification was
+     * five hours old the moment it arrived ("5h ago" for something just sent),
+     * and sorted among the rest by the wrong clock.
+     */
+    const now = new Date();
     const insert = db.insert(notifications).values(recipients.map((recipientId) => ({
       recipientId, actorId: input.actorId, kind: input.kind, targetId: input.targetId,
-      postId: input.postId ?? null, projectId: input.projectId ?? null, excerpt,
+      postId: input.postId ?? null, projectId: input.projectId ?? null, excerpt, createdAt: now,
     })));
     if (input.once) await insert.onConflictDoNothing();
     else await insert.onConflictDoUpdate({
       target: [notifications.recipientId, notifications.actorId, notifications.kind, notifications.targetId],
-      set: { readAt: null, createdAt: sql`now()`, excerpt },
+      set: { readAt: null, createdAt: now, excerpt },
     });
   } catch (err) {
     console.error("[notifications] couldn't record (non-fatal):", err);
@@ -182,7 +212,26 @@ export function registerNotificationRoutes(app: Express) {
         .innerJoin(users, eq(users.id, notifications.actorId))
         .leftJoin(userProfiles, eq(userProfiles.userId, notifications.actorId))
         .leftJoin(projects, eq(projects.id, notifications.projectId))
-        .where(and(eq(notifications.recipientId, me), before && !isNaN(before.getTime()) ? lt(notifications.createdAt, before) : undefined))
+        .where(and(
+          eq(notifications.recipientId, me),
+          /*
+           * The actor has to still be someone this person can hear from.
+           *
+           * Rows outlive the moment they were written: an account suspended
+           * for harassment, or blocked an hour ago, still has its old
+           * notifications sitting in its target's bell, each one a link back
+           * to them with their name attached. A suspension that leaves the
+           * suspended account's name in somebody's notifications every time
+           * they open the app is not much of a suspension, and a block that
+           * leaves the last week of pings behind isn't much of a block.
+           *
+           * A closed account goes too, for the same reason its profile does.
+           */
+          isNull(users.suspendedAt),
+          isNull(users.deletedAt),
+          notBlockedSql(me, notifications.actorId),
+          before && !isNaN(before.getTime()) ? lt(notifications.createdAt, before) : undefined,
+        ))
         .orderBy(desc(notifications.createdAt))
         .limit(limit);
 
@@ -214,9 +263,19 @@ export function registerNotificationRoutes(app: Express) {
   /** Counts for the bell and the home feed's "new from people you follow". */
   app.get("/api/notifications/unread-count", isAuthenticated, async (req: any, res) => {
     try {
+      // Counted over exactly what the list will show. Counting rows the list
+      // hides — a suspended or blocked actor's — is a number on the bell that
+      // nothing in the app can clear, because there is nothing there to read.
       const rows = await db.select({ kind: notifications.kind, n: sql<number>`count(*)::int` })
         .from(notifications)
-        .where(and(eq(notifications.recipientId, req.user.id), isNull(notifications.readAt)))
+        .innerJoin(users, eq(users.id, notifications.actorId))
+        .where(and(
+          eq(notifications.recipientId, req.user.id),
+          isNull(notifications.readAt),
+          isNull(users.suspendedAt),
+          isNull(users.deletedAt),
+          notBlockedSql(req.user.id, notifications.actorId),
+        ))
         .groupBy(notifications.kind);
       const count = rows.reduce((sum, r) => sum + r.n, 0);
       res.json({ count, followedPosts: rows.find((r) => r.kind === "followed_post")?.n ?? 0 });
@@ -236,7 +295,7 @@ export function registerNotificationRoutes(app: Express) {
       if (!ids?.length && !kind && !postId && req.body?.all !== true) {
         return res.status(400).json({ message: "Say which: ids, a kind, or all.", code: "invalid_input" });
       }
-      await db.update(notifications).set({ readAt: sql`now()` }).where(and(
+      await db.update(notifications).set({ readAt: new Date() }).where(and(
         eq(notifications.recipientId, me), isNull(notifications.readAt),
         ids?.length ? inArray(notifications.id, ids) : undefined,
         kind ? eq(notifications.kind, kind as NotificationKind) : undefined,

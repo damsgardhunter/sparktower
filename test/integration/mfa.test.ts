@@ -200,6 +200,36 @@ describe("two-factor sign-in", () => {
     expect(refused, "wrong codes must run out").toBe(RATE_LIMITS.mfaCode.max + 1);
   }, 120_000);
 
+  it("holds the limit against guesses sent all at once, on web and mobile", async () => {
+    /*
+     * The limit used to read the count, judge the code, and only then count a
+     * wrong one — so every request in flight read the same count and found
+     * room. A burst of guesses got through however many were sent together.
+     */
+    const app = await getTestApp();
+    const me = await account(app, "Burst");
+    await passMfa(me.agent);
+    const burst = RATE_LIMITS.mfaCode.max * 3;
+
+    const web = login(app, me.email);
+    await web.res;
+    const address = `203.0.113.${(Date.now() % 200) + 20}`;
+    const webStatuses = (await Promise.all(Array.from({ length: burst }, () =>
+      web.agent.post("/api/auth/mfa/verify").set("x-forwarded-for", address).send({ code: "000000" })))).map((r) => r.status);
+    expect(webStatuses.filter((s) => s === 401).length, "wrong codes judged").toBeLessThanOrEqual(RATE_LIMITS.mfaCode.max);
+    expect(webStatuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(burst - RATE_LIMITS.mfaCode.max);
+
+    // The app's route, for another account, each guess from a different address: the per-account budget holds alone.
+    const other = await account(app, "BurstMobile");
+    await passMfa(other.agent);
+    const mobile = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", ip()).send({ email: other.email, password });
+    expect(mobile.body.challengeToken).toEqual(expect.any(String));
+    const mobileStatuses = (await Promise.all(Array.from({ length: burst }, () =>
+      request(app).post("/api/auth/mobile/mfa/verify").set("x-forwarded-for", ip()).send({ challengeToken: mobile.body.challengeToken, code: "000000" })))).map((r) => r.status);
+    expect(mobileStatuses.filter((s) => s === 401).length, "wrong codes judged").toBeLessThanOrEqual(RATE_LIMITS.mfaCode.max);
+    expect(mobileStatuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(burst - RATE_LIMITS.mfaCode.max);
+  }, 60_000);
+
   it("has no second way in: the route that minted recovery codes is gone", async () => {
     const app = await getTestApp();
     const me = await account(app, "NoCodes");

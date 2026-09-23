@@ -4,10 +4,11 @@
  * recommendations.
  */
 import { useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Alert, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { useAuth } from "../../auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Avatar, Body, Btn, Card, Chip, Cost, Divider, Empty, Icon, Label, Loading, Meta, Row, timeAgo } from "../ui";
 import { Bubble, EditorSheet, Line, Tag, Well, shareText, useNotify, type Notify } from "./bits";
@@ -119,6 +120,7 @@ function InviteSheet({ projectId, projectTitle, visible, onClose, onNotice }: {
 export function Team({ projectId, project, members, isOwner }: { projectId: string; project: any; members: Member[]; isOwner: boolean }) {
   const router = useRouter();
   const qc = useQueryClient();
+  const { user } = useAuth();
   const { notify, fail } = useNotify();
   const solo = !!project?.soloMode;
   const [editing, setEditing] = useState<{ userId: string; timezone: string; availability: string; hoursPerWeek: string; skills: string } | null>(null);
@@ -160,6 +162,44 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
     },
     onError: (e) => fail(e),
   });
+  /*
+   * Removing a teammate (the owner) or leaving (anyone else) — the web's
+   * Team tab has the same pair (server: DELETE /api/projects/:id/members/:userId).
+   * There was no way to do either from anywhere. The project lists are
+   * refreshed too: a project someone has just left mustn't linger on their
+   * Projects tab, home rail or composer's project picker. Someone who leaves
+   * goes back, since this screen is the team's and they aren't on it now.
+   */
+  const remove = useMutation({
+    mutationFn: (userId: string) => api<{ removed: boolean; left: boolean }>(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" }),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: mkey(projectId, "members") });
+      qc.invalidateQueries({ queryKey: mkey(projectId, "invites") });
+      qc.invalidateQueries({ queryKey: ["my-projects"] });
+      qc.invalidateQueries({ queryKey: ["user-projects"] });
+      qc.invalidateQueries({ queryKey: ["feed", "my-projects"] });
+      if (r.left) {
+        notify("You've left the project");
+        if (router.canGoBack()) router.back(); else router.replace("/(tabs)/projects" as any);
+      } else {
+        notify("Removed from the team");
+      }
+    },
+    onError: (e) => fail(e),
+  });
+  const confirmRemove = (m: Member) => {
+    const self = m.userId === user?.id;
+    Alert.alert(
+      self ? `Leave ${project?.title ?? "this project"}?` : `Remove ${nameOf(m)}?`,
+      self
+        ? "You'll lose access to this project's workspace, and invites you sent that haven't been accepted are cancelled. The owner can invite you back."
+        : "They'll lose access to this project's workspace and be told they were removed. Invites they sent, or that are waiting for them, are cancelled.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: self ? "Leave" : "Remove", style: "destructive", onPress: () => remove.mutate(m.userId) },
+      ],
+    );
+  };
   const recommend = useMutation({
     mutationFn: () => api<any>(`/api/projects/${projectId}/recommend-people`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["subscription"] }),
@@ -289,6 +329,16 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
                   </View>
                   {isOwner && !isEditing && (
                     <Btn small variant="ghost" label="Edit" onPress={() => setEditing({ userId: m.userId, timezone: m.timezone ?? "", availability: m.availability ?? "", hoursPerWeek: m.hoursPerWeek?.toString() ?? "", skills: (m.skills ?? []).join(", ") })} />
+                  )}
+                  {/* The owner removes anyone but themselves; anyone else can leave. The owner can't leave their own project. */}
+                  {m.userId !== project?.ownerId && (isOwner || m.userId === user?.id) && !isEditing && (
+                    <Btn
+                      small variant="ghost"
+                      label={m.userId === user?.id ? "Leave" : "Remove"}
+                      loading={remove.isPending && remove.variables === m.userId}
+                      onPress={() => confirmRemove(m)}
+                      testID={m.userId === user?.id ? "button-leave-project" : `button-remove-member-${m.userId}`}
+                    />
                   )}
                 </Row>
                 {isEditing && (

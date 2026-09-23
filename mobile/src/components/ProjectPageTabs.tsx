@@ -478,7 +478,7 @@ export function MilestonesTab({ projectId, counts }: { projectId: string; counts
         return (
           <StepCard key={m.id} status={m.status} title={m.title} description={m.description}
             badges={<><OutlineBadge label={m.status} /><CommentCount count={count} /></>}
-            footnote={m.targetDate ? `Target ${new Date(m.targetDate).toLocaleDateString()}` : null}>
+            footnote={m.targetDate ? `Target ${new Date(m.targetDate).toLocaleDateString(undefined, { timeZone: "UTC" })}` : null}>
             <Discussion projectId={projectId} targetType="milestone" targetId={m.id} compact={count === 0} />
           </StepCard>
         );

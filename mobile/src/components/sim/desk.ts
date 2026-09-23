@@ -41,12 +41,39 @@ export interface LeverField {
   id: string;
   label: string;
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels";
   min?: number;
   max?: number;
   step?: number;
   options?: { value: string; label: string; help: string }[];
+  /** The season year this lever first appeared in, when not year one — so the screen can mark it new. */
+  unlocksIn?: number;
+  /** For "levels": the answers each option can be given. */
+  choices?: { value: string; label: string; help: string }[];
+  /** For "levels": the answer an option carries when nobody has chosen one. */
+  defaultChoice?: string;
 }
+
+/** Mirrors UnitPrices in shared/simulation/levers.ts: what one of each thing costs in this market. */
+export interface UnitPrices {
+  build: number;
+  lease: number;
+  shift?: number;
+  stock?: number;
+  automation?: number;
+  featureBuild?: number;
+  featureCopy?: number;
+  research?: number;
+  programme?: number;
+  statement?: number;
+  expansion?: number;
+}
+
+/** Half an executive's salary: what firing somebody costs on top of the bid. Mirrors SEVERANCE in shared/simulation/people.ts. */
+export const SEVERANCE = 70_000;
+
+/** Engineering pay as a multiplier on product spending. Mirrors payEffect() in shared/simulation/people.ts. */
+export const payCost = (pct: unknown): number => Math.max(80, Math.min(130, Number(pct) || 100)) / 100;
 
 /** Mirrors Commitment in shared/simulation/levers.ts. */
 export interface Commitment {
@@ -74,6 +101,8 @@ export interface DraftPreview {
 
 /** The subset of Company the desk sends. Mirrors Company in shared/simulation/types.ts. */
 export interface DeskCompany {
+  /** How automated the plant is, 0–100: what a point of automation is charged against. */
+  automation?: number;
   cash: number;
   debt: number;
   creditLimit: number;
@@ -82,6 +111,8 @@ export interface DeskCompany {
   brand: number;
   service: number;
   capacity: number;
+  /** Room the company's assets add on top of what it built. Served from all the same. */
+  assetCapacity?: number;
   unitCost: number;
   price: number;
   customers: number;
@@ -176,6 +207,8 @@ export interface DeskTableSeat {
   /** A seat the product is playing. Labelled here as it is in the lobby. */
   isBot?: boolean;
   isYou: boolean;
+  /** The chair's standing with the room. Not tracked for the chief executive. */
+  person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
 }
 
 export interface DeskRival {
@@ -301,6 +334,9 @@ export interface DeskView {
   totalYears?: number;
   /** ISO timestamp this year resolves at, or null once the season has finished. */
   resolvesAt?: string | null;
+  seasonId?: string;
+  /** Set only for developers and for companies running this season. */
+  canAdvance?: "developer" | "company" | "dev_flag" | null;
   yourRole: DeskRole | null;
   yourTitle?: string | null;
   yourLevers?: string[];
@@ -309,6 +345,15 @@ export interface DeskView {
   submitted?: boolean;
   company?: DeskCompany;
   /** Everywhere this market exists, with the ones the company already sells in flagged. */
+  /** What one unit of capacity costs to build, and to lease for a year, in this market. */
+  prices?: UnitPrices;
+  /** The levers this seat gets next year, by name. */
+  arrivingNextYear?: string[];
+  /** The product's risks and its bets. */
+  productRisk?: {
+    security: number; data: number; breachChance: number; outageChance: number;
+    features: { id: string; name: string; live: boolean; flopped: boolean; lands: number }[];
+  };
   cities?: DeskCity[];
   /**
    * What the company is worth today, floored at 500,000 — the number a raise
@@ -405,7 +450,7 @@ function num(value: any): number {
  * over-reads its own danger and under-spends the whole season.
  */
 export function commitment(input: {
-  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats">;
+  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats"> & { capacity?: number };
   decisions: FiledDecisions;
   costIndex: number;
   /**
@@ -420,21 +465,59 @@ export function commitment(input: {
    * missing from the total the meter exists to show.
    */
   cities?: DeskCity[];
+  /**
+   * What one unit of capacity costs to build, and to lease for a year, as the
+   * server priced them for this market (`prices` on the desk). Without
+   * them, building and leasing are left out, as the city fee is without a map.
+   */
+  prices?: UnitPrices | null;
 }): Commitment {
-  const { company, decisions, costIndex, reach, cities } = input;
+  const { company, decisions, costIndex, reach, cities, prices } = input;
   const cmo = decisions.cmo ?? {};
   const cto = decisions.cto ?? {};
   const coo = decisions.coo ?? {};
   const cfo = decisions.cfo ?? {};
+  const ceo = decisions.ceo ?? {};
 
   const bySeat: { role: DeskRole; spend: number }[] = [
-    { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) },
-    // Research is committed money like any other, even though it buys nothing
-    // until next year. Mirrors commitment() in shared/simulation/levers.ts.
-    { role: "cto", spend: num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) + num(cto.researchSpend) },
-    { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) },
+    // Including the moves that are one price or nothing: a report, a campaign to win people back.
+    { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) + num(cmo.prSpend) + num(cmo.referralSpend)
+      + num(cmo.winbackSpend) + (cmo.research && cmo.research !== "none" ? num(prices?.research) : 0) },
+    /*
+     * Research is committed money like any other, even though it buys nothing
+     * until next year; so are security, data and a feature bet. All of it at
+     * the engineering pay the seat set. Mirrors commitment() in
+     * shared/simulation/levers.ts.
+     */
+    { role: "cto", spend: (num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) + num(cto.researchSpend)
+      + num(cto.securitySpend) + num(cto.dataSpend)
+      + (cto.featureBet && prices?.featureBuild !== undefined ? num(cto.featureMode === "copy" ? prices.featureCopy : prices.featureBuild) : 0))
+      * payCost(cto.engineerPay) },
+    /*
+     * Building and leasing room are operations' money too, and so are hiring
+     * and training. Mirrors capacitySpend() in shared/simulation/levers.ts:
+     * new room is paid for in the year it is ordered, leased room for the year
+     * it is used.
+     */
+    { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) + num(coo.recruitingSpend) + num(coo.trainingSpend)
+      + (coo.programme ? num(prices?.programme) : 0) + (coo.expand ? num(prices?.expansion) : 0)
+      /*
+       * The plant: automating it, a second shift on it, stock for next year.
+       * Mirrors plantSpend() in shared/simulation/levers.ts.
+       */
+      + (prices?.automation !== undefined
+        ? Math.max(0, num(coo.automationTarget ?? (company as any).automation) - num((company as any).automation)) * num((company as any).capacity) * num(prices.automation)
+          + Math.max(0, Math.min(num((company as any).capacity) * 0.5, num(coo.shiftCapacity))) * num(prices.shift)
+          + Math.max(0, num(coo.stockTarget)) * num(prices.stock)
+        : 0)
+      + (prices && decisions.coo
+      ? Math.max(0, num(coo.capacityTarget ?? (company as any).capacity) - num((company as any).capacity)) * prices.build
+        + Math.max(0, num(coo.leaseCapacity)) * prices.lease
+      : 0) },
     { role: "cfo", spend: Math.max(0, num(cfo.repay)) },
-    { role: "ceo", spend: 0 },
+    // The bonus pot, and firing somebody: the bid plus half a year's salary in severance.
+    { role: "ceo", spend: num(ceo.bonusPool) + (ceo.replaceSeat ? num(ceo.replaceBid) + SEVERANCE : 0)
+      + (ceo.shockAnswer === "statement" ? num(prices?.statement) : 0) },
   ];
 
   /*
@@ -455,7 +538,13 @@ export function commitment(input: {
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
   const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1);
   const borrowable = Math.max(0, company.creditLimit - company.debt);
-  const available = Math.max(0, company.cash + num(cfo.borrow) + borrowable - num(cfo.cashBuffer));
+  // A drawdown counts only up to the line, as commitment() and resolve() both
+  // clamp it: asking the bank for fifty million against a two-million line
+  // brings in two, and a meter that counted the fifty would show a table
+  // funded by money that is never coming.
+  // The line left after this drawdown, so borrowed money isn't counted twice — the engine's rule.
+  const drawn = drawdown(cfo.borrow, company);
+  const available = Math.max(0, company.cash + drawn + Math.max(0, borrowable - drawn) - num(cfo.cashBuffer));
 
   return {
     spend, fixed, available,
@@ -506,18 +595,51 @@ export const shortfall = (c: Commitment): number => c.spend + c.fixed - c.availa
  * that meant different things would make one of them a lie.
  *
  * Read from the decisions rather than from the commitment meter's `bySeat`,
- * which is the whole reason this is its own sum. The meter now carries two
- * things these two rules do not count: the cost of opening a city, which the
- * engine charges against cash, and research, which buys nothing this year.
- * Deriving a cap from the meter would tell a CTO they had broken a ceiling
- * they were nowhere near — the same class of failure as a wrong total, wearing
- * the badge of the thing that was meant to prevent it.
+ * because the meter also carries the cost of opening a city, which the
+ * engine charges against cash rather than counting as spend here. The
+ * covenant adds that fee back on its own — see covenantSpend() below.
+ *
+ * Research is in it. It was left out here after the engine had put it back:
+ * the engine's comment on its own sum explains why (a company under a
+ * creditor's cap could pour money into next year's product and stay
+ * "compliant"), and the phone kept telling a CTO under a cap they had room
+ * the tick would then say they did not. It is also in the sum the finance
+ * seat's buffer cuts, so bufferCut() below was under-reading the cut too.
  */
 export const discretionarySpend = (decisions: FiledDecisions): number => (
   num(decisions.cmo?.brandSpend) + num(decisions.cmo?.performanceSpend) + num(decisions.cmo?.celebritySpend) +
   num(decisions.cto?.featureSpend) + num(decisions.cto?.reliabilitySpend) + num(decisions.cto?.techDebtPaydown) +
+  num(decisions.cto?.researchSpend) +
   num(decisions.coo?.supportSpend) + num(decisions.coo?.efficiencySpend)
 );
+
+/**
+ * What a creditor's spending cap is reviewed against.
+ *
+ * Mirrors the covenant review in server/simulation-tick.ts: the discretionary
+ * sum above plus the entry fee for every city this year's draft opens. A cap
+ * that ignored the fee would let a team under one open half the country and
+ * meet the creditor's terms on paper. A challenge's "spend" target does not
+ * add the fee (readMetric in shared/simulation/challenges.ts), which is why
+ * this is its own function rather than a change to the one above.
+ */
+export const covenantSpend = (decisions: FiledDecisions, cities: DeskCity[] | undefined): number =>
+  discretionarySpend(decisions) + openingCost(cities, decisions.cmo?.targetCities);
+
+/**
+ * The part of a drawdown the bank will actually lend.
+ *
+ * Mirrors the clamp in resolve() (shared/simulation/resolve.ts): whatever the
+ * finance seat asks for, what arrives is at most the credit line's unused
+ * room. A company from a payload without the line reads as unclamped, which
+ * is the old behaviour rather than a made-up limit.
+ */
+export function drawdown(borrow: any, company: { debt?: number; creditLimit?: number }): number {
+  const asked = Math.max(0, num(borrow));
+  const limit = Number(company.creditLimit);
+  if (!Number.isFinite(limit)) return asked;
+  return Math.min(asked, Math.max(0, limit - num(company.debt)));
+}
 
 // --- What the product owes itself ----------------------------------------
 
@@ -592,14 +714,17 @@ export function debtCostRead(cost: DeskCompany["techDebtCost"] | undefined): str
  * for term, and note the two places it deliberately disagrees with the
  * commitment meter directly above it:
  *
- * - **The credit line is not in it.** The meter counts unused borrowing as
- *   money the company has, because it is. The engine cuts against cash plus
- *   what the finance seat actually drew down, and nothing else — so a table
- *   can read "clear" on the meter and still be cut.
- * - **What gets cut is the same sum a covenant cap counts**: marketing,
- *   product and ops. Not the fee for opening a city, not research, not a
- *   repayment, and not the fixed bill — salaries are owed whatever anybody
- *   decided.
+ * - **The credit line is in it, the same way the engine counts it**: cash,
+ *   plus what the finance seat draws down (clamped to the line), plus the
+ *   credit still unused, less the buffer. This used to leave the unused
+ *   credit out, on the belief that the engine did — it does not, and the
+ *   phone was warning tables about cuts the year would never make. It still
+ *   differs from the meter in what it measures against: the meter counts the
+ *   fixed bill and the cost of opening a city, and the cut does not.
+ * - **What gets cut is the sum a challenge's spend target counts**:
+ *   marketing, product (research included) and ops. Not the fee for opening a
+ *   city, not a repayment, and not the fixed bill — salaries are owed
+ *   whatever anybody decided.
  *
  * Returns null when nothing would be cut, which is the ordinary case.
  */
@@ -617,12 +742,15 @@ export interface BufferCut {
 }
 
 export function bufferCut(input: {
-  company: Pick<DeskCompany, "cash">;
+  /** Debt and the line are optional so an old payload reads as "no credit", not as NaN. */
+  company: Pick<DeskCompany, "cash"> & Partial<Pick<DeskCompany, "debt" | "creditLimit">>;
   decisions: FiledDecisions;
 }): BufferCut | null {
   const { company, decisions } = input;
   const buffer = Math.max(0, num(decisions.cfo?.cashBuffer));
-  const spendable = Math.max(0, num(company.cash) + num(decisions.cfo?.borrow) - buffer);
+  const unused = Math.max(0, num(company.creditLimit) - num(company.debt));
+  const drawn = drawdown(decisions.cfo?.borrow, company);
+  const spendable = Math.max(0, num(company.cash) + drawn + Math.max(0, unused - drawn) - buffer);
   const wanted = discretionarySpend(decisions);
   if (wanted <= 0 || wanted <= spendable) return null;
   const allowed = spendable / wanted;
@@ -908,7 +1036,7 @@ export function shareOwnedRead(share: number | null | undefined): string {
 export function validateDraft(
   fields: LeverField[],
   draft: Record<string, any>,
-  company: Pick<DeskCompany, "debt">,
+  company: Pick<DeskCompany, "debt"> & Partial<Pick<DeskCompany, "creditLimit">>,
   role: DeskRole | null,
 ): { ok: boolean; errors: Record<string, string> } {
   const errors: Record<string, string> = {};
@@ -954,7 +1082,35 @@ export function validateDraft(
       continue;
     }
 
-    if (value === undefined || value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
+    // An answer per seat. Mirrors validateDecision().
+    if (field.kind === "levels") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Pick one for each."; continue; }
+      const allowed = (field.choices ?? []).map((c) => c.value);
+      if (Object.values(value as Record<string, unknown>).some((v) => v !== "" && !allowed.includes(String(v)))) errors[field.id] = "Pick one for each.";
+      continue;
+    }
+
+    // A map of numbers: a price per segment, or a share per seat. Mirrors validateDecision().
+    if (field.kind === "tiers" || field.kind === "allocation") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Needs a number for each."; continue; }
+      const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== "" && v !== null && v !== undefined);
+      if (entries.some(([, v]) => !Number.isFinite(Number(v)) || Number(v) < 0)) { errors[field.id] = "Each needs a number of nought or more."; continue; }
+      if (field.kind === "allocation") {
+        const total = entries.reduce((sum, [, v]) => sum + Number(v), 0);
+        if (total > 100) errors[field.id] = `That adds up to ${Math.round(total)}%. The shares can't come to more than 100%.`;
+      }
+      continue;
+    }
+
+    /*
+     * Never sent is fine; sent empty is not. Mirrors validateDecision(): a
+     * lever the phone has not drawn yet — one that arrives later in the
+     * season — must not be refused for being missing.
+     */
+    if (value === undefined) continue;
+    if (value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
     const n = Number(value);
     if (!Number.isFinite(n)) { errors[field.id] = "Needs a number."; continue; }
     if (field.min !== undefined && n < field.min) errors[field.id] = `Can't go below ${field.min}.`;
@@ -964,6 +1120,21 @@ export function validateDraft(
   // The one hard stop the server keeps: you cannot repay money you do not owe.
   if (role === "cfo" && Number(draft?.repay) > company.debt) {
     errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
+  }
+
+  /*
+   * And the other: you cannot draw down credit the bank has not extended.
+   * Mirrors the borrow check in validateDecision(), message included, so the
+   * words under the box are the ones the server would send back. Skipped when
+   * the payload carries no credit line, rather than inventing one.
+   */
+  if (role === "cfo" && Number.isFinite(Number(company.creditLimit))) {
+    const room = Math.max(0, Number(company.creditLimit) - company.debt);
+    if (Number(draft?.borrow) > room) {
+      errors.borrow = room > 0
+        ? `The bank will lend at most ${Math.round(room).toLocaleString()} more.`
+        : "The credit line is fully drawn. Repay some of it, or raise from investors.";
+    }
   }
 
   return { ok: Object.keys(errors).length === 0, errors };
@@ -1190,6 +1361,15 @@ export function targetProgress(target: Target, from: {
   company?: Pick<DeskCompany, "customers" | "reputation" | "quality" | "brand" | "service" | "price" | "unitCost" | "cash" | "debt" | "capacity"> | null;
   /** This year's discretionary spend, as the commitment meter computes it. */
   committedSpend?: number | null;
+  /**
+   * The price in the marketing seat's draft.
+   *
+   * A price target is judged on the price the year was sold at — readMetric()
+   * reads the company after the year, whose price is the one the CMO filed —
+   * so measuring it against today's price told a CMO who had just typed the
+   * right number that they were still missing the target, and the reverse.
+   */
+  draftedPrice?: number | null;
 }): TargetProgress {
   const read = LIVE_METRICS[target.metric];
   let actual: number | null = null;
@@ -1197,6 +1377,9 @@ export function targetProgress(target: Target, from: {
 
   if (target.metric === "spend" && from.committedSpend != null && Number.isFinite(from.committedSpend)) {
     actual = from.committedSpend;
+    source = "committed";
+  } else if (target.metric === "price" && from.draftedPrice != null && from.draftedPrice !== ("" as any) && Number.isFinite(Number(from.draftedPrice))) {
+    actual = Number(from.draftedPrice);
     source = "committed";
   } else if (read && from.company) {
     const value = read(from.company as DeskCompany);
@@ -1433,9 +1616,10 @@ export function covenantProgress(covenant: Covenant): {
 /**
  * How much of the spending cap this year's draft has used.
  *
- * The cap is on discretionary spend — what the four spending seats commit —
- * and the covenant is reviewed against what was actually spent, so the number
- * that matters is the same one the commitment meter is already showing.
+ * The cap is on discretionary spend — what the four spending seats commit,
+ * plus whatever opening a city costs — and the covenant is reviewed against
+ * what was actually spent. Pass covenantSpend(), which is that sum; the
+ * commitment meter's total also carries the fixed bill and is not it.
  */
 export function capUse(spend: number, covenant: Covenant | null | undefined): {
   over: boolean; fraction: number; left: number;

@@ -20,19 +20,19 @@
  * advances on a conditional update that names the year it expects to find. Run
  * the same tick twice and the second one does nothing.
  */
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import { surfaceEnabled } from "./surfaces";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
-  simChallenges, simListings, simBids, simRecoveryMoves, simOffers,
+  simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
 import { nicheById } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
 import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import {
-  buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver,
+  buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver, DAY_MS,
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
 import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
@@ -40,6 +40,9 @@ import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } fr
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
 import { applyAcquisition } from "@shared/simulation/mergers";
+import { closeYear, stretchChallenge, whoWasRight } from "@shared/simulation/people";
+import { takings } from "@shared/simulation/responsibilities";
+import { applySeatMoves } from "./simulation-people";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
 
 /** What the market did to one company in one year. */
@@ -71,6 +74,18 @@ async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null
     client.release();
   }
 }
+
+/**
+ * How long one simulated year lasts in this season.
+ *
+ * A day, unless a company running a private training season asked for
+ * minutes (`yearMinutes`, see sim_seasons in shared/schema.ts): a workshop
+ * that meets for an afternoon cannot wait a day between years. Public seasons
+ * never set it, so they are unchanged. Every place that schedules a year goes
+ * through this, so the two clocks cannot drift apart.
+ */
+export const yearMsOf = (season: { yearMinutes: number | null }): number =>
+  season.yearMinutes ? season.yearMinutes * 60_000 : DAY_MS;
 
 /**
  * Push every stalled lobby forward.
@@ -131,7 +146,15 @@ export async function settleLobbies(): Promise<number> {
  * begins, so that everybody in a season lives through the same years. The wait
  * is bounded by the lobby's own deadlines — twenty minutes at the very worst —
  * and `settleLobbies` above guarantees they expire whether or not anyone is
- * watching, so this can never hang on an empty room.
+ * watching, so this can never hang on an empty room. (Public matchmaking also
+ * stops adding rooms to a season that has kept a ready room waiting; see
+ * /api/sim/join.)
+ *
+ * Public seasons only. A company's training season is started by the company
+ * (POST /api/companies/:id/seasons/:seasonId/start): its tables fill with bots
+ * after a minute like any other, so "every room is out of the lobby" can be
+ * true while half the workshop is still finding the link, and a season that
+ * started itself then left them nowhere to sit.
  */
 export async function startReadySeasons(): Promise<string[]> {
   /*
@@ -152,30 +175,90 @@ export async function startReadySeasons(): Promise<string[]> {
    * starts, whatever its status says. One with nothing running is left alone.
    */
   const candidates = await db
-    .select({ id: simSeasons.id, nicheId: simSeasons.nicheId, status: simSeasons.status })
+    .select({ id: simSeasons.id })
     .from(simSeasons)
-    .where(inArray(simSeasons.status, ["forming", "abandoned"]))
+    .where(and(inArray(simSeasons.status, ["forming", "abandoned"]), isNull(simSeasons.companyId)))
     .limit(50);
 
   const started: string[] = [];
-
   for (const season of candidates) {
-    const ventures = await db
+    try {
+      const outcome = await startSeason(season.id);
+      if (outcome.outcome === "started") started.push(season.id);
+    } catch (err) {
+      console.error(`[sim] starting season ${season.id} failed:`, err);
+    }
+  }
+
+  await retireOrphanedRooms().catch((err) => console.error("[sim] retiring orphaned rooms failed:", err));
+  return started;
+}
+
+export type StartOutcome =
+  | { outcome: "started"; startsAt: Date; nextTickAt: Date; teams: number }
+  /** Some room is still in its lobby. */
+  | { outcome: "waiting"; rooms: number; ready: number }
+  /** Nobody has sat down yet. */
+  | { outcome: "empty" }
+  /** Every room fell apart, or the market no longer exists. */
+  | { outcome: "abandoned" }
+  /** Already running or finished, or not there at all. */
+  | { outcome: "not_forming" };
+
+/**
+ * Start one season, if every room in it is ready.
+ *
+ * ## Under the joiners' own locks
+ *
+ * Both ways into a season take an advisory lock for the whole of their
+ * choose-a-room-and-sit-down transaction: public matchmaking locks the market
+ * (so two joiners who both find no season cannot both make one), and a
+ * company's invite code locks the season. Starting used to take neither. A
+ * join that read "forming", and committed its new room a moment after this
+ * read the season's rooms, left that room in a season that had started
+ * without it: not in the world, so never resolved, its five people on
+ * "waiting for year one" with nothing anywhere that would ever move them on.
+ *
+ * So this takes the same locks, in the same order a joiner would meet them —
+ * market, then season — and reads the rooms again only once it holds them.
+ * Any join has then either committed (and its room is counted, and holds the
+ * season in "waiting" until it is ready) or has not begun (and will find the
+ * season running: the public path matches only forming seasons, the code path
+ * re-reads the status under the season lock and refuses). Rooms stranded by
+ * the race before this existed are swept by `retireOrphanedRooms`.
+ */
+export async function startSeason(seasonId: string): Promise<StartOutcome> {
+  const result = await db.transaction(async (tx): Promise<{ outcome: StartOutcome; world?: World; niche?: NonNullable<ReturnType<typeof nicheById>> }> => {
+    const [peek] = await tx.select({ nicheId: simSeasons.nicheId, companyId: simSeasons.companyId })
+      .from(simSeasons).where(eq(simSeasons.id, seasonId));
+    if (!peek) return { outcome: { outcome: "not_forming" } };
+    if (!peek.companyId) await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${peek.nicheId}, 0))`);
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`season:${seasonId}`}, 0))`);
+
+    const [season] = await tx.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    if (!season || (season.status !== "forming" && season.status !== "abandoned")) {
+      return { outcome: { outcome: "not_forming" } };
+    }
+
+    const ventures = await tx
       .select({ id: simVentures.id, name: simVentures.name, phase: simVentures.phase })
       .from(simVentures)
       .where(eq(simVentures.seasonId, season.id));
 
-    if (ventures.length === 0) continue;
+    if (ventures.length === 0) return { outcome: { outcome: "empty" } };
+    const live = ventures.filter((v) => v.phase !== "retired");
     // Still arguing. Come back next pass.
-    if (ventures.some((v) => v.phase !== "running" && v.phase !== "retired")) continue;
+    if (live.some((v) => v.phase !== "running")) {
+      return { outcome: { outcome: "waiting", rooms: live.length, ready: live.filter((v) => v.phase === "running").length } };
+    }
 
-    const playing = ventures.filter((v) => v.phase === "running");
+    const playing = live;
     if (playing.length === 0) {
       // Every room fell apart. Nothing to run.
       if (season.status !== "abandoned") {
-        await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+        await tx.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
       }
-      continue;
+      return { outcome: { outcome: "abandoned" } };
     }
 
     if (season.status === "abandoned") {
@@ -186,14 +269,23 @@ export async function startReadySeasons(): Promise<string[]> {
     if (!niche) {
       console.error(`[sim] season ${season.id} names a market that no longer exists: ${season.nicheId}`);
       if (season.status !== "abandoned") {
-        await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+        await tx.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
       }
-      continue;
+      return { outcome: { outcome: "abandoned" } };
     }
 
-    const seats = await db
-      .select({ ventureId: simSeats.ventureId, role: simSeats.role })
+    /*
+     * Who is in each chair, and whether they are a person.
+     *
+     * The chief executive's chair decides where the company opens: a bot-run
+     * company picks its own home (see `openingRegion`), a team with a person
+     * in that chair gets the same defensible home every season. It is the
+     * same rule the auction uses to decide who bids.
+     */
+    const seats = await tx
+      .select({ ventureId: simSeats.ventureId, role: simSeats.role, isBot: users.isBot })
       .from(simSeats)
+      .innerJoin(users, eq(users.id, simSeats.userId))
       .where(inArray(simSeats.ventureId, playing.map((v) => v.id)));
 
     const world = buildWorld({
@@ -203,39 +295,141 @@ export async function startReadySeasons(): Promise<string[]> {
         id: v.id,
         name: v.name ?? "Unnamed",
         seats: seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role),
+        botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
       })),
     });
 
     const startsAt = new Date(Date.now() + FIRST_YEAR_DELAY_MS);
+    const nextTickAt = tickDueAt(startsAt, 1, yearMsOf(season));
     // Conditional on the status still being the one that was read, so two
     // processes starting the same season at the same moment cannot both seed a
-    // world.
-    const claimed = await db
+    // world. (The season lock already serialises them; this keeps the rule
+    // true for any writer that does not take it.)
+    const claimed = await tx
       .update(simSeasons)
-      .set({ status: "running", year: 1, world, startsAt, nextTickAt: tickDueAt(startsAt, 1) })
+      .set({ status: "running", year: 1, world, startsAt, nextTickAt })
       .where(and(eq(simSeasons.id, season.id), eq(simSeasons.status, season.status)))
       .returning({ id: simSeasons.id });
+    if (claimed.length === 0) return { outcome: { outcome: "not_forming" } };
 
-    if (claimed.length > 0) {
-      // Year one's objectives, so nobody's first day is the one day they have
-      // nothing of their own to aim at.
-      await setChallenges({ world, year: 1 });
-      await fileBotDecisionsFor(world, 1, niche, season.id);
-      started.push(season.id);
-      console.log(`[sim] season ${season.id} (${niche.name}) starts with ${playing.length} team(s)`);
-    }
+    return { outcome: { outcome: "started", startsAt, nextTickAt, teams: playing.length }, world, niche };
+  });
+
+  if (result.outcome.outcome === "started" && result.world && result.niche) {
+    // Year one's objectives, so nobody's first day is the one day they have
+    // nothing of their own to aim at. After the commit: these read the seats
+    // through their own connections.
+    await setChallenges({ world: result.world, year: 1 });
+    await fileBotDecisionsFor(result.world, 1, result.niche, seasonId);
+    console.log(`[sim] season ${seasonId} (${result.niche.name}) starts with ${result.outcome.teams} team(s)`);
   }
-
-  return started;
+  return result.outcome;
 }
+
+/**
+ * Close rooms stranded outside a season that has already started.
+ *
+ * A room belongs to a season's play only if it is in that season's world;
+ * the world is fixed when the season starts. A room that is not in it — one
+ * that sat down in the instant before the start, back when starting took none
+ * of the joiners' locks — is never resolved, never finished, and never told
+ * so: its people see "waiting for year one" for the rest of the season. Now
+ * that `startSeason` takes those locks no new one can appear, but the ones
+ * already out there will not close themselves.
+ *
+ * Retired rather than deleted, so anyone still sitting in one lands on the
+ * ordinary "this table closed" screen and can join another.
+ */
+async function retireOrphanedRooms(): Promise<number> {
+  const result: any = await db.execute(sql`
+    update ${simVentures} v
+       set phase = 'retired'
+      from ${simSeasons} s
+     where s.id = v.season_id
+       and s.status in ('running', 'finished')
+       and v.phase <> 'retired'
+       and not exists (
+         select 1 from jsonb_array_elements(coalesce(s.world->'companies', '[]'::jsonb)) c
+          where c->>'id' = v.id
+       )
+  `);
+  const count = result?.rowCount ?? 0;
+  if (count > 0) console.warn(`[sim] retired ${count} room(s) left outside a season that had already started`);
+  return count;
+}
+
+/**
+ * Said to anyone who tries to change this year once it has started closing.
+ *
+ * From the moment a year is due until the tick has written the next one, the
+ * tick is reading decisions, bids, listings and recovery moves — and anything
+ * filed after it read them was accepted and then silently ignored, which is
+ * worse than being refused: the person believes they acted. So the routes
+ * that file those refuse with this instead, and the client can say "a moment"
+ * rather than "something went wrong".
+ */
+export const YEAR_CLOSING = {
+  code: "year_closing",
+  message: "This year is closing — it'll open for next year in a moment.",
+} as const;
+
+/** Whether a season's current year is due, and so no longer taking changes. */
+export const yearClosing = (season: { nextTickAt: Date | null }, now = new Date()): boolean =>
+  !!season.nextTickAt && now.getTime() >= season.nextTickAt.getTime();
 
 /**
  * Resolve one year for one season.
  *
  * Returns the year that was resolved, or null if there was nothing to do —
  * which is the normal answer when another process got there first.
+ *
+ * ## One tick per season at a time, whoever asks
+ *
+ * The minute job used to be the only caller, and it runs under its own lock,
+ * so "the whole tick is inside an advisory lock" was true and several things
+ * below leaned on it. Then two buttons arrived — a developer's "advance year"
+ * and a company's "end this year now" — and both called this directly. A
+ * double-click, or a click landing while the minute's pass was mid-tick, ran
+ * the same year twice at once. The conditional update on the year meant only
+ * one of them saved a world, but everything either had already written stood:
+ * the loser's marketplace withdrew and settled listings against its own copy
+ * of the world, so a seller could see their asset marked sold to a buyer whose
+ * purchase was then thrown away, and every fire sale was listed twice.
+ *
+ * So the lock lives here, where no caller can go round it: a session advisory
+ * lock keyed on the season, on a connection of its own. It *waits* rather
+ * than giving up — the second caller blocks until the first has committed,
+ * then reads the season afresh, finds the year already moved on and its next
+ * tick not due, and returns null having written nothing. That is the no-op
+ * the callers already handle (the manual routes report the year as it now
+ * stands), and it is decided by the database rather than by timing.
+ *
+ * Keyed with a prefix of its own so it never collides with the join paths'
+ * `season:<id>` transaction lock, which guards something else entirely.
  */
 export async function tickSeason(seasonId: string, now = new Date()): Promise<number | null> {
+  const key = `sim_tick:${seasonId}`;
+  const client = await pool.connect();
+  let broken: Error | undefined;
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key]);
+    try {
+      return await resolveSeasonYear(seasonId, now);
+    } finally {
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+      } catch (err) {
+        // A connection that cannot unlock is thrown away rather than pooled
+        // with the lock still on it; closing it releases the lock.
+        broken = err as Error;
+      }
+    }
+  } finally {
+    client.release(broken);
+  }
+}
+
+async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | null> {
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
   if (!season || season.status !== "running" || !season.world) return null;
   if (!season.nextTickAt || season.nextTickAt > now) return null;
@@ -408,27 +602,52 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     companies: teams.map((t) => ({ id: t.id, company: t })),
     year,
     niche,
+    seasonId,
+    world,
   }).catch((err) => console.error(`[sim] bot decisions for season ${seasonId} failed:`, err));
 
-  // Everything submitted for this year, and what each team ran last year.
+  /*
+   * Everything submitted for this year, and each seat's most recent filing
+   * before it.
+   *
+   * "Before it" used to mean "last year" and nothing older. That is fine for a
+   * seat that missed one year and ruinous for a seat that missed two: in year
+   * three the operations chair that last filed in year one had no row in year
+   * two, so its caretaker was handed nothing — and nothing, to the engine, is
+   * a headcount of zero, no support spend, no capacity plan. Everybody fired
+   * because the person was away for a weekend, while the colleagues who did
+   * file (and so kept the "previous" year non-empty) watched it happen.
+   *
+   * So each role's fallback is that role's own last real decision, however far
+   * back it was — the same rule the comment below has always promised. A role
+   * that has never filed at all has no decision to fall back on, and
+   * `decisionsForYear` gives it the opening plan for that key alone.
+   */
   const rows = await db
     .select({ ventureId: simDecisions.ventureId, role: simDecisions.role, year: simDecisions.year, payload: simDecisions.payload })
     .from(simDecisions)
     .where(and(
       inArray(simDecisions.ventureId, teams.map((t) => t.id)),
-      inArray(simDecisions.year, year > 1 ? [year, year - 1] : [year]),
+      lte(simDecisions.year, year),
     ));
 
   const decisions: TeamDecisions[] = [];
   const absences = new Map<string, { absent: Role[]; seats: number }>();
+  /** Overrules, with what the overruled seat had filed, so the year can be run the other way. */
+  const overrules = new Map<string, { role: Role; filed: any }>();
 
   for (const team of teams) {
     const submitted: Partial<Record<Role, any>> = {};
     const previousParts: Partial<Record<Role, any>> = {};
+    const previousYear: Partial<Record<Role, number>> = {};
     for (const r of rows) {
       if (r.ventureId !== team.id) continue;
-      if (r.year === year) submitted[r.role as Role] = r.payload;
-      else previousParts[r.role as Role] = r.payload;
+      const role = r.role as Role;
+      if (r.year === year) submitted[role] = r.payload;
+      else if (r.year < year && r.year > (previousYear[role] ?? 0)) {
+        previousParts[role] = r.payload;
+        previousYear[role] = r.year;
+      }
     }
 
     /*
@@ -439,18 +658,19 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
      * step down from the last real decision is the fair reading of silence,
      * however long the silence goes on.
      */
-    const previous: TeamDecisions | undefined = year > 1
+    const previous: TeamDecisions | undefined = year > 1 && Object.keys(previousParts).length > 0
       ? { companyId: team.id, ...previousParts } as TeamDecisions
       : undefined;
 
-    const { decisions: theirs, absent } = decisionsForYear({
+    const { decisions: theirs, absent, overruled } = decisionsForYear({
       company: team,
       niche,
       submitted,
-      previous: previous && Object.keys(previousParts).length > 0 ? previous : undefined,
+      previous,
     });
     decisions.push(theirs);
     if (absent.length > 0) absences.set(team.id, { absent, seats: team.seats.length });
+    if (overruled) overrules.set(team.id, overruled);
   }
 
   const economy = economyFor(seasonId, year);
@@ -489,6 +709,33 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   const cashAfterRewards = cashNow(nextWorld.companies);
 
+  /*
+   * The people side of the year: who was right about an overrule (the year
+   * run again the other way, without its news, so only the one decision
+   * differs), loyalty from each seat's objective, the bonus pot, the
+   * executive market, and resignations. See `closeYear` in people.ts.
+   */
+  const verdicts = new Map<string, { role: Role; right: "ceo" | "seat" }>();
+  for (const [ventureId, o] of overrules) {
+    try {
+      const asRun = resolveYear(world, decisions, economy, { withoutEvent: true });
+      const otherWay = resolveYear(world, decisions.map((d) => d.companyId === ventureId ? { ...d, [o.role]: o.filed } : d), economy, { withoutEvent: true });
+      const worth = (r: typeof asRun) => r.reports.find((x) => x.companyId === ventureId)?.founderValue ?? 0;
+      verdicts.set(ventureId, { role: o.role, right: whoWasRight(worth(asRun), worth(otherWay)) });
+    } catch (err) {
+      console.error(`[sim] judging the overrule for ${ventureId} failed:`, err);
+    }
+  }
+  const outcomes = new Map<string, { role: Role; outcome: "met" | "partial" | "missed" }[]>();
+  for (const [ventureId, results] of challengeResults) outcomes.set(ventureId, results.map((r) => ({ role: r.role, outcome: r.outcome })));
+  const closed = closeYear({ seasonId, year, companies: nextWorld.companies, decisions: decisions as any, outcomes, verdicts });
+  nextWorld.companies = closed.companies;
+  for (const [ventureId, lines] of closed.notes) {
+    const report = reports.find((r) => r.companyId === ventureId);
+    if (report) report.notes.push(...lines);
+  }
+  const cashAfterPeople = cashNow(nextWorld.companies);
+
   // Covenants, against what the team actually spent rather than what it planned.
   for (const company of nextWorld.companies) {
     if (company.kind !== "player" || !company.covenant) continue;
@@ -516,7 +763,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   }
 
   // The marketplace settles, and things change hands.
-  const marketNotes = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
+  const { notes: marketNotes, writes: marketWrites } = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
   for (const [ventureId, outcomes] of marketNotes) {
     const report = reports.find((r) => r.companyId === ventureId);
     if (report) report.market = outcomes;
@@ -562,7 +809,9 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
       const after: { label: string; amount: number }[] = [];
       const rewards = (cashAfterRewards.get(company.id) ?? 0) - bridge.closing;
       if (Math.abs(rewards) >= 1) after.push({ label: "Objectives met", amount: rewards });
-      const market = company.cash - (cashAfterRewards.get(company.id) ?? company.cash);
+      const people = (cashAfterPeople.get(company.id) ?? 0) - (cashAfterRewards.get(company.id) ?? 0);
+      if (Math.abs(people) >= 1) after.push({ label: "Bonuses and hiring", amount: people });
+      const market = company.cash - (cashAfterPeople.get(company.id) ?? company.cash);
       if (Math.abs(market) >= 1) after.push({ label: "The marketplace", amount: market });
 
       bridge.opening = cashAtStart.get(company.id) ?? bridge.opening;
@@ -581,14 +830,39 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     report.brand = company.brand;
     report.service = company.service;
     report.founderShare = company.founderShare ?? 1;
-    report.value = Math.max(0, Math.round(units * company.price * 1.2 + assets - company.debt));
+    // What its customers actually pay, tier by tier — the same valuation the engine uses.
+    report.value = Math.max(0, Math.round(takings(company, company.customers, niche.segments).revenue * 1.2 + assets - company.debt));
+    void units;
     report.founderValue = Math.round(report.value * report.founderShare);
     report.bankrupt = !!company.bankruptSince;
   }
 
   const finished = seasonOver(year + 1, season.totalYears);
-  const nextTickAt = season.startsAt && !finished ? tickDueAt(season.startsAt, year + 1) : null;
+  const yearMs = yearMsOf(season);
+  let startsAt = season.startsAt;
+  let nextTickAt = startsAt && !finished ? tickDueAt(startsAt, year + 1, yearMs) : null;
+  /*
+   * Never schedule the next year in the past.
+   *
+   * The schedule is counted from the season's start, so after a stretch of
+   * downtime — a deploy that took the night, a database that was away — every
+   * year the clock thinks should have happened is already overdue, and the
+   * minute job resolved them one a minute, back to back. A table that closed
+   * the app on year three came back to year seven, with four years of
+   * caretaker decisions made for them and nobody having been given a day to
+   * read any of it.
+   *
+   * So when the next due time has already passed, the clock is moved rather
+   * than obeyed: the start shifts so that the coming year lasts a full year
+   * from now, exactly as a manual advance does (server/season-control.ts).
+   * The years that were missed are not made up; they were never played.
+   */
+  if (startsAt && nextTickAt && nextTickAt.getTime() <= now.getTime()) {
+    startsAt = new Date(now.getTime() - year * yearMs);
+    nextTickAt = tickDueAt(startsAt, year + 1, yearMs);
+  }
 
+  let saved = false;
   await db.transaction(async (tx) => {
     /*
      * Reports first, then the year. If this dies in between, the next pass
@@ -611,6 +885,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
         world: { ...nextWorld, year: year + 1 },
         year: year + 1,
         nextTickAt,
+        startsAt,
         status: finished ? "finished" : "running",
       })
       .where(and(eq(simSeasons.id, seasonId), eq(simSeasons.year, year)))
@@ -619,6 +894,25 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     // Another process resolved this year while we were working. Its writes are
     // identical to ours, so there is nothing to correct — just nothing to do.
     if (advanced.length === 0) return;
+    saved = true;
+
+    /*
+     * The marketplace's writes, now that the year is known to have moved —
+     * in the same transaction, so a listing is marked sold if and only if the
+     * world that paid for it is the one that was saved. See `MarketWrites`.
+     */
+    for (const { id, set } of marketWrites.listings) {
+      await tx.update(simListings).set(set).where(eq(simListings.id, id));
+    }
+    if (marketWrites.spentBids && marketWrites.spentBids.listingIds.length > 0) {
+      await tx.delete(simBids).where(and(
+        eq(simBids.year, marketWrites.spentBids.year),
+        inArray(simBids.listingId, marketWrites.spentBids.listingIds),
+      ));
+    }
+    if (marketWrites.fireSales.length > 0) {
+      await tx.insert(simListings).values(marketWrites.fireSales);
+    }
 
     /*
      * Each venture keeps a copy of its own company for the screens, written in
@@ -632,6 +926,12 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
         .where(eq(simVentures.id, company.id));
     }
   });
+
+  /*
+   * Seats change hands only once the year that caused it is saved, and only by
+   * the process that saved it — so a retried year never moves anybody twice.
+   */
+  if (saved && closed.moves.length > 0) await applySeatMoves({ seasonId, year, moves: closed.moves });
 
   // Next year's objectives, set against where each company now stands.
   if (!finished) await setChallenges({ world: nextWorld, year: year + 1 });
@@ -664,7 +964,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
  */
 async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string): Promise<void> {
   const teams = world.companies.filter((c) => c.kind === "player");
-  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche })
+  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world })
     .catch((err) => console.error(`[sim] bot decisions for season ${seasonId} year ${year} failed:`, err));
 }
 
@@ -689,7 +989,11 @@ async function setChallenges(input: { world: World; year: number }): Promise<voi
       userId: seat.userId,
       role: seat.role,
       year,
-      challenge: challengeFor({ company, world, role: seat.role as Role, year, ventureId: seat.ventureId }),
+      // Pushed as hard as the chief executive set it (see `stretchChallenge`).
+      challenge: stretchChallenge(
+        challengeFor({ company, world, role: seat.role as Role, year, ventureId: seat.ventureId }),
+        company.people?.[seat.role as Role]?.stretch,
+      ),
     });
   }
 
@@ -755,13 +1059,36 @@ async function markChallenges(input: {
 }
 
 /**
+ * What settling the marketplace wants written, held back until the year is
+ * known to advance.
+ *
+ * Settlement used to write as it went — listings marked sold or withdrawn,
+ * bids deleted, fire-sold assets listed for next year — all before the
+ * transaction that advances the year. A tick that died after those writes and
+ * before the commit left them standing against a year that had not moved, and
+ * the retry then ran against a different database: the bids it should have
+ * resolved were gone, so the winners it had already credited in the discarded
+ * world were never credited in the saved one, and the sellers whose listings
+ * said "sold" were never paid. Held here and applied inside the year's own
+ * transaction, they land exactly when the world they describe does, or not at
+ * all.
+ */
+interface MarketWrites {
+  listings: { id: string; set: Partial<typeof simListings.$inferInsert> }[];
+  fireSales: (typeof simListings.$inferInsert)[];
+  spentBids: { year: number; listingIds: string[] } | null;
+}
+
+/**
  * The marketplace, settled.
  *
  * Bids are sealed until this moment: everyone committed a number without
  * seeing anyone else's, and the highest one over the reserve takes it. What
  * makes this safe to re-run is that the open market's listings are generated
  * from the season and year rather than stored, so the same tick run twice
- * deals the same hand and awards the same things.
+ * deals the same hand and awards the same things — and that nothing here
+ * writes to the database: the changes come back as `writes`, for the caller to
+ * apply in the transaction that advances the year.
  */
 async function settleMarket(input: {
   seasonId: string;
@@ -769,9 +1096,10 @@ async function settleMarket(input: {
   niche: NonNullable<ReturnType<typeof nicheById>>;
   world: World;
   releasedByTeam: Map<string, CompanyAsset[]>;
-}): Promise<Map<string, MarketOutcome[]>> {
+}): Promise<{ notes: Map<string, MarketOutcome[]>; writes: MarketWrites }> {
   const { seasonId, year, niche, world, releasedByTeam } = input;
   const notes = new Map<string, MarketOutcome[]>();
+  const writes: MarketWrites = { listings: [], fireSales: [], spentBids: null };
   const add = (id: string, kind: MarketOutcome["kind"], text: string) =>
     notes.set(id, [...(notes.get(id) ?? []), { kind, text }]);
 
@@ -780,176 +1108,188 @@ async function settleMarket(input: {
     .from(simListings)
     .where(and(eq(simListings.seasonId, seasonId), eq(simListings.year, year), eq(simListings.status, "open")));
 
+  /*
+   * Which listings a fire sale put up. Kept beside the engine's `Listing`
+   * rather than on it: the auction itself treats every lot the same, and the
+   * only differences — who owns the thing, and who is paid — are this
+   * function's business.
+   */
+  const forced = new Set(open.filter((row) => row.forced).map((row) => row.id));
+
   const listings: Listing[] = [
     ...marketListings({ seasonId, year, niche }),
     ...open.map((row) => ({
       id: row.id,
       asset: row.asset as CompanyAsset,
-      blurb: "Second-hand.",
+      blurb: row.forced ? "From a fire sale." : "Second-hand.",
       reserve: row.reserve,
       sellerId: row.sellerId,
     })),
   ];
-  if (listings.length === 0) return notes;
 
-  /*
-   * The bot-run companies bid last, and only now: a sealed auction means
-   * nobody sees anybody else's number, and the bots are held to that too —
-   * their bids are seeded on the venture and the year, not on what is already
-   * in the table. A human's bid for the same lot is never replaced.
-   */
-  await fileBotBids({
-    companies: world.companies.filter((c) => c.kind === "player").map((c) => ({ id: c.id, company: c })),
-    listings,
-    year,
-  });
-
-  const bidRows = await db
-    .select()
-    .from(simBids)
-    .where(and(eq(simBids.year, year), inArray(simBids.listingId, listings.map((l) => l.id))));
-
-  const funds: Record<string, number> = {};
-  for (const company of world.companies) {
-    if (company.kind === "player") funds[company.id] = biddableFunds(company);
-  }
-
-  const bids: Bid[] = bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount }));
-  const awards = resolveBids(listings, bids, funds);
-
-  for (const award of awards) {
-    const listing = listings.find((l) => l.id === award.listingId)!;
-
+  if (listings.length > 0) {
     /*
-     * Does the seller still own the thing?
+     * The bot-run companies bid last, and only now: a sealed auction means
+     * nobody sees anybody else's number, and the bots are held to that too —
+     * their bids are seeded on the venture and the year, not on what is already
+     * in the table. A human's bid for the same lot is never replaced.
      *
-     * Settlement happens after the recovery moves, and a fire sale releases
-     * every asset the company has. So a team could list an asset, file a fire
-     * sale, and be paid twice for it in the same year: once by the forced sale
-     * and once by the auction, which handed a live copy to the winner while
-     * the seller's `assets.filter` removed an asset that was already gone. The
-     * same shape applies after an acquisition, which moves the seller's assets
-     * to the buyer and leaves the seller's listing standing.
-     *
-     * Nothing is sold out from under anybody: the listing is withdrawn and
-     * everyone who bid is told, because a sealed bid that vanishes without a
-     * word is indistinguishable from the auction losing it.
+     * Inside the guard, because with nothing on the market there is nothing to
+     * bid on, and an empty auction should cost no work at all.
      */
-    if (listing.sellerId) {
-      const seller = world.companies.find((c) => c.id === listing.sellerId);
-      if (!seller || !seller.assets.some((a) => a.id === listing.asset.id)) {
-        await db.update(simListings).set({ status: "withdrawn" }).where(eq(simListings.id, listing.id));
-        add(listing.sellerId, "unsold", `${listing.asset.name} came off the market — it had already left the company before the auction ran.`);
+    await fileBotBids({
+      companies: world.companies.filter((c) => c.kind === "player").map((c) => ({ id: c.id, company: c })),
+      listings,
+      year,
+    });
+
+    const bidRows = await db
+      .select()
+      .from(simBids)
+      .where(and(eq(simBids.year, year), inArray(simBids.listingId, listings.map((l) => l.id))));
+
+    const funds: Record<string, number> = {};
+    for (const company of world.companies) {
+      if (company.kind === "player") funds[company.id] = biddableFunds(company);
+    }
+
+    const bids: Bid[] = bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount }));
+    const awards = resolveBids(listings, bids, funds);
+
+    for (const award of awards) {
+      const listing = listings.find((l) => l.id === award.listingId)!;
+      const isForced = forced.has(listing.id);
+      /*
+       * Who, if anyone, is paid. A fire sale's seller was paid in full, at the
+       * forced price, the moment the fire sale ran — they do not own the thing
+       * and have no claim on what it fetches now. Paying them again would make
+       * collapsing a profitable way to sell.
+       */
+      const payee = isForced ? undefined : listing.sellerId;
+
+      /*
+       * Does the seller still own the thing?
+       *
+       * Settlement happens after the recovery moves, and a fire sale releases
+       * every asset the company has. So a team could list an asset, file a fire
+       * sale, and be paid twice for it in the same year: once by the forced sale
+       * and once by the auction, which handed a live copy to the winner while
+       * the seller's `assets.filter` removed an asset that was already gone. The
+       * same shape applies after an acquisition, which moves the seller's assets
+       * to the buyer and leaves the seller's listing standing.
+       *
+       * Nothing is sold out from under anybody: the listing is withdrawn and
+       * everyone who bid is told, because a sealed bid that vanishes without a
+       * word is indistinguishable from the auction losing it.
+       *
+       * Not for a fire sale's own listing, though. Those are listed under the
+       * company that sold them, which by construction no longer owns them, and
+       * asking the question withdrew every single one: the forced sale that is
+       * supposed to put a failed team's things in front of everybody else put
+       * them in front of nobody.
+       */
+      if (listing.sellerId && !isForced) {
+        const seller = world.companies.find((c) => c.id === listing.sellerId);
+        if (!seller || !seller.assets.some((a) => a.id === listing.asset.id)) {
+          writes.listings.push({ id: listing.id, set: { status: "withdrawn" } });
+          add(listing.sellerId, "unsold", `${listing.asset.name} came off the market — it had already left the company before the auction ran.`);
+          for (const b of bids.filter((x) => x.listingId === listing.id)) {
+            add(b.ventureId, "lost", `${listing.asset.name} was withdrawn before the auction — the seller no longer had it. Your money stays where it is.`);
+          }
+          continue;
+        }
+      }
+
+      if (!award.winnerId) {
+        // Everyone who tried is told it went nowhere, so a sealed bid is never silent.
         for (const b of bids.filter((x) => x.listingId === listing.id)) {
-          add(b.ventureId, "lost", `${listing.asset.name} was withdrawn before the auction — the seller no longer had it. Your money stays where it is.`);
+          add(b.ventureId, "lost", award.couldNotAfford.includes(b.ventureId)
+            ? `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot.`
+            : award.note);
+        }
+        if (listing.sellerId) {
+          if (payee) add(payee, "unsold", `Nobody met your reserve on ${listing.asset.name}.`);
+          writes.listings.push({ id: listing.id, set: { status: "unsold" } });
         }
         continue;
       }
-    }
 
-    if (!award.winnerId) {
-      // Everyone who tried is told it went nowhere, so a sealed bid is never silent.
-      for (const b of bids.filter((x) => x.listingId === listing.id)) {
-        add(b.ventureId, "lost", award.couldNotAfford.includes(b.ventureId)
-          ? `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot.`
-          : award.note);
+      /*
+       * Money moves, then the asset. A seller gets what the winner paid — the
+       * discount on a second-hand thing is already in the reserve they chose,
+       * so taking another cut here would charge them for it twice.
+       *
+       * A winner who bid beyond their cash is drawing on credit, and that has to
+       * land as debt. It used to come straight out of `cash` and nowhere else,
+       * so a team could finish the year overdrawn with nothing on the balance
+       * sheet saying they had borrowed a penny — no interest, no covenant, and
+       * no insolvency until the following year happened to notice.
+       */
+      world.companies = world.companies.map((c) => {
+        if (c.id === award.winnerId) {
+          const fromCash = Math.min(Math.max(0, c.cash), award.price);
+          const borrowed = award.price - fromCash;
+          return {
+            ...c,
+            cash: c.cash - fromCash,
+            debt: c.debt + borrowed,
+            assets: [...c.assets, listing.asset],
+          };
+        }
+        if (payee && c.id === payee) {
+          return { ...c, cash: c.cash + award.price, assets: c.assets.filter((a) => a.id !== listing.asset.id) };
+        }
+        return c;
+      });
+
+      add(award.winnerId, "won", `Won ${listing.asset.name} for ${award.price.toLocaleString()}.`);
+      /*
+       * And the teams whose bid was good and whose money was gone. Silence here
+       * reads as the auction having lost their bid.
+       */
+      for (const id of award.couldNotAfford) {
+        add(id, "lost", `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot. Sealed bids are committed in the order the lots are listed.`);
+      }
+      for (const b of bids.filter((x) => x.listingId === listing.id && x.ventureId !== award.winnerId)) {
+        add(b.ventureId, "lost", `${listing.asset.name} went to somebody who bid more. Your money stays where it is.`);
       }
       if (listing.sellerId) {
-        add(listing.sellerId, "unsold", `Nobody met your reserve on ${listing.asset.name}.`);
-        await db.update(simListings).set({ status: "unsold" }).where(eq(simListings.id, listing.id));
+        if (payee) add(payee, "sold", `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
+        writes.listings.push({ id: listing.id, set: { status: "sold", buyerId: award.winnerId, soldFor: award.price } });
       }
-      continue;
     }
 
-    /*
-     * Money moves, then the asset. A seller gets what the winner paid — the
-     * discount on a second-hand thing is already in the reserve they chose,
-     * so taking another cut here would charge them for it twice.
-     *
-     * A winner who bid beyond their cash is drawing on credit, and that has to
-     * land as debt. It used to come straight out of `cash` and nowhere else,
-     * so a team could finish the year overdrawn with nothing on the balance
-     * sheet saying they had borrowed a penny — no interest, no covenant, and
-     * no insolvency until the following year happened to notice.
-     */
-    world.companies = world.companies.map((c) => {
-      if (c.id === award.winnerId) {
-        const fromCash = Math.min(Math.max(0, c.cash), award.price);
-        const borrowed = award.price - fromCash;
-        return {
-          ...c,
-          cash: c.cash - fromCash,
-          debt: c.debt + borrowed,
-          assets: [...c.assets, listing.asset],
-        };
-      }
-      if (listing.sellerId && c.id === listing.sellerId) {
-        return { ...c, cash: c.cash + award.price, assets: c.assets.filter((a) => a.id !== listing.asset.id) };
-      }
-      return c;
-    });
-
-    add(award.winnerId, "won", `Won ${listing.asset.name} for ${award.price.toLocaleString()}.`);
-    /*
-     * And the teams whose bid was good and whose money was gone. Silence here
-     * reads as the auction having lost their bid.
-     */
-    for (const id of award.couldNotAfford) {
-      add(id, "lost", `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot. Sealed bids are committed in the order the lots are listed.`);
-    }
-    for (const b of bids.filter((x) => x.listingId === listing.id && x.ventureId !== award.winnerId)) {
-      add(b.ventureId, "lost", `${listing.asset.name} went to somebody who bid more. Your money stays where it is.`);
-    }
-    if (listing.sellerId) {
-      add(listing.sellerId, "sold", `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
-      await db.update(simListings)
-        .set({ status: "sold", buyerId: award.winnerId, soldFor: award.price })
-        .where(eq(simListings.id, listing.id));
-    }
+    // Bids are spent once resolved: a new year is a new decision.
+    writes.spentBids = { year, listingIds: listings.map((l) => l.id) };
   }
 
   /*
    * A fire sale puts the company's things in front of everybody else next
    * year. That is the point of the discount: what one team could not afford to
    * keep, another can afford to buy.
+   *
+   * These used to be inserted here, outside the year's transaction, and so
+   * needed a read-before-insert to stop a retried tick listing everything
+   * twice. Written in the transaction that advances the year they cannot be
+   * written twice: the retry of a tick that committed finds the year already
+   * moved, and the retry of one that did not finds nothing to duplicate.
    */
   for (const [ventureId, assets] of releasedByTeam) {
     for (const asset of assets) {
-      /*
-       * Only if it is not already there.
-       *
-       * This whole function runs outside the transaction that advances the
-       * year, so a tick that dies between here and the commit leaves next
-       * year's listings written and the year unadvanced. The retry a minute
-       * later finds the recovery move still on file, releases the same assets
-       * again, and inserts a second copy of every one of them — and the market
-       * next year shows each fire-sold thing twice, each one buyable.
-       *
-       * There is no natural key to conflict on, so the check is a read. It
-       * races with nothing: the whole tick is already inside an advisory lock.
-       */
-      const existing = await db.select().from(simListings).where(and(
-        eq(simListings.seasonId, seasonId),
-        eq(simListings.sellerId, ventureId),
-        eq(simListings.year, year + 1),
-      ));
-      if (existing.some((l) => (l.asset as CompanyAsset).id === asset.id)) continue;
-
-      await db.insert(simListings).values({
+      writes.fireSales.push({
         seasonId,
         sellerId: ventureId,
         year: year + 1,
         asset,
         // Already sold at a forced price for cash; this is the market's copy.
         reserve: Math.round(asset.bookValue * 0.35),
+        forced: true,
+        createdAt: new Date(),
       });
     }
   }
 
-  // Bids are spent once resolved: a new year is a new decision.
-  await db.delete(simBids).where(and(eq(simBids.year, year), inArray(simBids.listingId, listings.map((l) => l.id))));
-
-  return notes;
+  return { notes, writes };
 }
 
 /** Resolve every season that is due. */

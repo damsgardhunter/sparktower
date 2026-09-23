@@ -1,7 +1,7 @@
 /**
  * A project works its three sections side by side — Ship an MVP, Systemize
- * the business, Raise funds. Starting one builds its path without touching
- * the others; each section's status, progress, route, pace and next step are
+ * the business (which now holds the funding routes), Run the company.
+ * Starting one builds its path without touching the others; each section's status, progress, route, pace and next step are
  * its own; files and tracked events can belong to a section or be shared; and
  * the home card offers the next step on every section someone has started.
  */
@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { projects } from "@shared/schema";
+import { goalOfBackboneId } from "@shared/goals";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -31,18 +32,18 @@ describe("sections", () => {
 
     let sections = (await agent.get(`/api/projects/${projectId}/tracks`)).body;
     expect(sections.primary).toBe("ship_mvp");
-    expect(sections.tracks.map((s: any) => [s.goal, s.started])).toEqual([["ship_mvp", true], ["systemize_business", false], ["raise_funding", false]]);
+    expect(sections.tracks.map((s: any) => [s.goal, s.started])).toEqual([["ship_mvp", true], ["systemize_business", false], ["run_company", false]]);
 
     const shipBefore = (await agent.get(`/api/projects/${projectId}/path`)).body;
-    expect((await agent.get(`/api/projects/${projectId}/path?goal=raise_funding`)).body).toMatchObject({ adopted: false, started: false, goal: "raise_funding" });
+    expect((await agent.get(`/api/projects/${projectId}/path?goal=systemize_business`)).body).toMatchObject({ adopted: false, started: false, goal: "systemize_business" });
     expect((await agent.get(`/api/projects/${projectId}/path?goal=nonsense`)).status).toBe(400);
 
     // Starting: the kind must fit the section.
-    expect((await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "raise_funding", subcategory: "restaurant" })).body.code).toBe("subcategory_mismatch");
-    const started = await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "raise_funding", subcategory: "startup_equity" });
+    expect((await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "systemize_business", subcategory: "saas" })).body.code).toBe("subcategory_mismatch");
+    const started = await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "systemize_business", subcategory: "service" });
     expect(started.status).toBe(200);
-    expect(started.body).toMatchObject({ started: true, goal: "raise_funding", created: true });
-    expect((await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "raise_funding", subcategory: "startup_equity" })).body.started).toBe(false);
+    expect(started.body).toMatchObject({ started: true, goal: "systemize_business", created: true });
+    expect((await agent.post(`/api/projects/${projectId}/tracks`).send({ goal: "systemize_business", subcategory: "service" })).body.started).toBe(false);
 
     // Ship is exactly as it was: nothing archived, same next step. The project's primary path hasn't moved.
     const shipAfter = (await agent.get(`/api/projects/${projectId}/path`)).body;
@@ -53,59 +54,78 @@ describe("sections", () => {
     const [row] = await db.select({ goal: projects.goal, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
     expect(row.goal).toBe("ship_mvp");
 
-    // Raise has its own tree and next step.
-    let fund = (await agent.get(`/api/projects/${projectId}/path?goal=raise_funding`)).body;
-    expect(fund).toMatchObject({ adopted: true, started: true, primary: false, goal: "raise_funding" });
-    expect(fund.next.id).toBe("FUND.C1.1");
-    expect(fund.phases.flatMap((p: any) => p.milestones.map((m: any) => m.id)).every((id: string) => id.startsWith("FUND."))).toBe(true);
+    // Systemize has its own tree and next step. Its funding milestones kept
+    // their FUND. ids, so "its own" means every id reads as Systemize's.
+    let sys = (await agent.get(`/api/projects/${projectId}/path?goal=systemize_business`)).body;
+    /*
+     * A link or an older client still asking for the retired funding section
+     * gets Systemize — which holds the funding routes now — rather than a 400
+     * for a name the product used to hand out itself.
+     */
+    const legacy = await agent.get(`/api/projects/${projectId}/path?goal=raise_funding`);
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.goal).toBe("systemize_business");
+    expect(sys).toMatchObject({ adopted: true, started: true, primary: false, goal: "systemize_business" });
+    expect(sys.next.id).toBe("SYS.F1.1");
+    const sysIds: string[] = sys.phases.flatMap((p: any) => p.milestones.map((m: any) => m.id));
+    expect(sysIds.every((id) => goalOfBackboneId(id) === "systemize_business")).toBe(true);
+    expect(sysIds).toContain("FUND.C2.2");
 
-    // Finishing a step on Raise moves Raise, not Ship; its pace is its own.
-    await agent.patch(`/api/kanban/${(await taskFor(agent, projectId, "FUND.C1.1")).id}`).send({ status: "done" }).expect(200);
-    fund = (await agent.get(`/api/projects/${projectId}/path?goal=raise_funding`)).body;
-    expect(fund.mainLine.done).toBe(1);
-    expect(fund.events.map((e: any) => e.backboneId)).toEqual(["FUND.C1.1"]);
+    // Finishing a step on Systemize moves Systemize, not Ship; its pace is its own.
+    await agent.patch(`/api/kanban/${(await taskFor(agent, projectId, "SYS.F1.1")).id}`).send({ status: "done" }).expect(200);
+    sys = (await agent.get(`/api/projects/${projectId}/path?goal=systemize_business`)).body;
+    expect(sys.mainLine.done).toBe(1);
+    expect(sys.events.map((e: any) => e.backboneId)).toEqual(["SYS.F1.1"]);
     const ship = (await agent.get(`/api/projects/${projectId}/path`)).body;
     expect(ship.mainLine.done).toBe(0);
     expect(ship.events).toEqual([]);
+    // The capital profile is Systemize's, not something every section carries.
+    expect(ship.capital).toBeNull();
 
-    // A route chosen on Raise is Raise's, kept on its section, not on the project.
-    for (const id of ["FUND.C1.2", "FUND.C1.3", "FUND.C1.4", "FUND.C1.5", "FUND.C1.6", "FUND.C2.1"]) {
+    // A funding route chosen on Systemize is Systemize's, kept on its section, not on the project.
+    for (const id of [
+      "SYS.F1.2", "SYS.F1.3", "SYS.F1.4", "SYS.F1.5", "SYS.F1.6", "SYS.F2.1", "SYS.F2.2", "SYS.F2.3", "SYS.F2.4", "SYS.F3.1", "SYS.F3.2", "SYS.F3.3",
+      "FUND.C1.1", "FUND.C1.2", "FUND.C1.3", "FUND.C1.4", "FUND.C1.5", "FUND.C1.6", "FUND.C2.1",
+    ]) {
       const t = await taskFor(agent, projectId, id);
       if (t) await agent.patch(`/api/kanban/${t.id}`).send({ status: "done" }).expect(200);
     }
     const routeTask = (await taskFor(agent, projectId, "FUND.C2.2")).id;
     expect((await agent.post(`/api/projects/${projectId}/path/intake`).send({ taskId: routeTask, answers: { route: "seller" } })).body.route).toBe("seller");
-    expect((await agent.get(`/api/projects/${projectId}/path?goal=raise_funding`)).body.capital.route).toBe("seller");
+    sys = (await agent.get(`/api/projects/${projectId}/path?goal=systemize_business`)).body;
+    expect(sys.capital.route).toBe("seller");
+    expect(sys.next.id).toBe("FUND.S1.1");
     const [after] = await db.select({ capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
     expect(after.capitalRoute).toBeNull();
 
     // Every section, with its progress, for the section buttons.
     sections = (await agent.get(`/api/projects/${projectId}/tracks`)).body;
-    expect(sections.tracks.find((s: any) => s.goal === "raise_funding")).toMatchObject({ started: true, primary: false, subcategory: "startup_equity" });
-    expect(sections.tracks.find((s: any) => s.goal === "raise_funding").done).toBeGreaterThan(0);
+    expect(sections.tracks.find((s: any) => s.goal === "systemize_business")).toMatchObject({ started: true, primary: false, subcategory: "service" });
+    expect(sections.tracks.find((s: any) => s.goal === "systemize_business").done).toBeGreaterThan(0);
     expect(sections.tracks.find((s: any) => s.goal === "ship_mvp")).toMatchObject({ started: true, primary: true, done: 0 });
+    expect(sections.tracks.find((s: any) => s.goal === "run_company")).toMatchObject({ started: false });
 
     // The home card: a next step per started section.
     const home = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === projectId);
-    expect(home.map((i: any) => i.track.goal).sort()).toEqual(["raise_funding", "ship_mvp"]);
+    expect(home.map((i: any) => i.track.goal).sort()).toEqual(["ship_mvp", "systemize_business"]);
   });
 
   it("keeps files and tracked events per section, with shared ones everywhere", async () => {
     const app = await getTestApp();
     const { agent, userId, projectId } = await founder(app);
     await agent.post(`/api/projects/${projectId}/files`).send({ name: "shared.pdf", url: "https://example.com/shared.pdf", track: null }).expect(200);
-    await agent.post(`/api/projects/${projectId}/files`).send({ name: "deck.pdf", url: "https://example.com/deck.pdf", track: "raise_funding" }).expect(200);
+    await agent.post(`/api/projects/${projectId}/files`).send({ name: "deck.pdf", url: "https://example.com/deck.pdf", track: "systemize_business" }).expect(200);
     await agent.post(`/api/projects/${projectId}/files`).send({ name: "spec.md", url: "https://example.com/spec.md", track: "ship_mvp" }).expect(200);
     const names = async (q: string) => (await agent.get(`/api/projects/${projectId}/files${q}`)).body.map((f: any) => f.name).sort();
-    expect(await names("?track=raise_funding")).toEqual(["deck.pdf", "shared.pdf"]);
+    expect(await names("?track=systemize_business")).toEqual(["deck.pdf", "shared.pdf"]);
     expect(await names("?track=ship_mvp")).toEqual(["shared.pdf", "spec.md"]);
     expect(await names("")).toEqual(["deck.pdf", "shared.pdf", "spec.md"]);
 
     // Analytics needs a plan; the section filter is what's under test.
     await db.execute(`update users set subscription_tier = 'builder' where id = '${userId}'` as any);
     await agent.post(`/api/projects/${projectId}/analytics-events`).send({ eventName: "signup", track: "ship_mvp" }).expect(200);
-    await agent.post(`/api/projects/${projectId}/analytics-events`).send({ eventName: "investor_intro", track: "raise_funding" }).expect(200);
-    const events = (await agent.get(`/api/projects/${projectId}/analytics-events?track=raise_funding`)).body.map((e: any) => e.eventName);
+    await agent.post(`/api/projects/${projectId}/analytics-events`).send({ eventName: "investor_intro", track: "systemize_business" }).expect(200);
+    const events = (await agent.get(`/api/projects/${projectId}/analytics-events?track=systemize_business`)).body.map((e: any) => e.eventName);
     expect(events).toEqual(["investor_intro"]);
   });
 
@@ -115,7 +135,7 @@ describe("sections", () => {
     const add = (title: string, tags: string[], status = "todo") => agent.post(`/api/projects/${projectId}/kanban`).send({ title, tags, status }).expect(200);
     await add("Ship card", ["track:ship_mvp"]);
     await add("Ship done card", ["track:ship_mvp"], "done");
-    await add("Raise card", ["track:raise_funding"]);
+    await add("Systemize card", ["track:systemize_business"]);
     await add("Shared card", []);
     const pathTasks = (await board(agent, projectId)).filter((t) => t.tags?.some((x: string) => x.startsWith("backbone:"))).length;
 
@@ -123,7 +143,7 @@ describe("sections", () => {
     expect((await agent.delete(`/api/projects/${projectId}/kanban?track=ship_mvp&status=done`)).body.removed).toBe(1);
     expect((await agent.delete(`/api/projects/${projectId}/kanban?track=ship_mvp`)).body.removed).toBe(1);
     const left = await board(agent, projectId);
-    expect(left.map((t) => t.title)).toEqual(expect.arrayContaining(["Raise card", "Shared card"]));
+    expect(left.map((t) => t.title)).toEqual(expect.arrayContaining(["Systemize card", "Shared card"]));
     expect(left.some((t) => t.title.startsWith("Ship"))).toBe(false);
     expect(left.filter((t) => t.tags?.some((x: string) => x.startsWith("backbone:"))).length).toBe(pathTasks);
   });

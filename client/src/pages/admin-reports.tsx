@@ -213,6 +213,9 @@ const isRetiredTarget = (r: Report) => (r.targetType as string) === "check_in";
 function targetLink(r: Report): string | null {
   // Check-ins are retired: old reports keep their snapshot but have nowhere to link.
   if (isRetiredTarget(r)) return null;
+  // The published page itself, before the post that announced it: it is what
+  // the reader saw and what the reviewer is being asked about.
+  if (r.targetType === "path_artifact") return `/a/${r.targetId}`;
   if (r.targetPostId) return `/posts/${r.targetPostId}`;
   if (r.targetType === "project") return `/projects/${r.targetId}`;
   if (r.targetType === "user") return `/profile/${r.targetId}`;

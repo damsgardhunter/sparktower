@@ -8,7 +8,8 @@
  * thing.
  */
 import { describe, it, expect } from "vitest";
-import { buildClaimIndex, contradictions, correct, verifyFindings, sanitizeRisks, sanitizeMissing } from "../../server/audit-claims";
+import { buildClaimIndex, contradictions, correct, verifyFindings, sanitizeRisks, sanitizeMissing, downgradeUnreadCapabilities, noteUnreadRecommendations } from "../../server/audit-claims";
+import { capabilityCounts, renderCapabilities, type CapabilityEntry } from "@shared/capabilities";
 
 const index = buildClaimIndex(
   [
@@ -117,6 +118,68 @@ describe("what the builder ends up reading", () => {
     expect(findings.capabilities[0].detail.gaps[0].item).toContain("CHECKED AGAINST THE REPOSITORY");
     expect(findings.loops[0].breaksAt).toContain("CHECKED AGAINST THE REPOSITORY");
     expect(findings.repo.name).toBe("sparktower");
+  });
+});
+
+/**
+ * The other half of the same failure: not a sentence that names something
+ * present, but a verdict on files the audit never opened. Every case here is
+ * one of this week's: a wedge that shipped, an admin loop with every route and
+ * test in place, tables declared in shared/schema.ts — all reported missing by
+ * an audit that had read a fraction of the tree.
+ */
+describe("what the audit did not read", () => {
+  const caps = () => ([
+    { area: "auth", status: "built", summary: "Passport sessions", evidence: [{ file: "server/index.ts" }] },
+    { area: "payments", status: "missing", summary: "No payment provider found", evidence: [] },
+    { area: "mobile", status: "missing", summary: "No app", evidence: [], note: "Earlier note." },
+    { area: "tests", status: "partial", summary: "Some", evidence: [{ file: "server/index.ts" }] },
+  ] as any as CapabilityEntry[]);
+
+  it("holds a partial read's 'missing' as unknown, with the reason on the entry", () => {
+    const { capabilities, downgraded } = downgradeUnreadCapabilities(caps(), { partial: true, fileCount: 900, readCount: 120 });
+    const by = Object.fromEntries(capabilities.map((c) => [c.area, c]));
+    expect(downgraded.map((d) => d.area).sort()).toEqual(["mobile", "payments"]);
+    expect(by.payments.status).toBe("unknown");
+    expect(by.payments.note).toMatch(/read 120 of 900 files/);
+    expect(by.payments.note).toMatch(/not the same as it not being there/);
+    // An existing note is kept, not replaced.
+    expect(by.mobile.note).toMatch(/^Earlier note\./);
+    // Verdicts about code that WAS read are untouched.
+    expect(by.auth.status).toBe("built");
+    expect(by.tests.status).toBe("partial");
+  });
+
+  it("leaves 'missing' alone when the whole codebase was read", () => {
+    const { capabilities, downgraded } = downgradeUnreadCapabilities(caps(), { partial: false, fileCount: 900, readCount: 900 });
+    expect(downgraded).toEqual([]);
+    expect(capabilities.find((c) => c.area === "payments")!.status).toBe("missing");
+  });
+
+  it("never lets an unknown count as a gap", () => {
+    const { capabilities } = downgradeUnreadCapabilities(caps(), { partial: true, fileCount: 900, readCount: 120 });
+    const counts = capabilityCounts(capabilities);
+    expect(counts.unknown).toBe(2);
+    expect(counts.missing).toBe(0);
+    // partial only: the two unknowns are questions, not outstanding work.
+    expect(counts.gaps).toBe(1);
+    // …and a later plan reading the inventory is told so in words.
+    expect(renderCapabilities(capabilities)).toMatch(/UNKNOWN \(not found in what this audit read — NOT a gap/);
+  });
+
+  it("turns 'build it' into 'confirm whether it exists' for an area it could not read", () => {
+    const findings: any = {
+      nextThreeThings: ["Add Stripe checkout and a billing page", "Write the onboarding copy"],
+      risks: [{ area: "Payments", finding: "No billing", recommendation: "Build subscription billing before launch." }],
+      missing: [{ item: "Billing", matters: "Nothing charges anyone: there is no checkout." }],
+    };
+    const noted = noteUnreadRecommendations(findings, ["payments"]);
+    expect(noted).toBe(3);
+    expect(findings.nextThreeThings[0]).toMatch(/Confirm whether this exists first — Payments & billing is UNKNOWN in this audit, not missing/);
+    // Untouched: it says nothing about the area the audit couldn't read.
+    expect(findings.nextThreeThings[1]).toBe("Write the onboarding copy");
+    expect(findings.risks[0].recommendation).toMatch(/could not read it|never covered it/);
+    expect(noteUnreadRecommendations(findings, [])).toBe(0);
   });
 });
 

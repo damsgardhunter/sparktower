@@ -55,15 +55,15 @@ export function admitInjections(
  */
 export const NEXT_PATHS: Record<ProjectGoal, { goal: ProjectGoal; why: string }[]> = {
   ship_mvp: [
-    { goal: "raise_funding", why: "You have a product and a read on who wants it. That is the strongest evidence a raise can carry." },
-    { goal: "systemize_business", why: "If the loop is paying, the next risk is that it only runs when you do." },
+    { goal: "systemize_business", why: "If the loop is paying, the next risk is that it only runs when you do — and Systemize is also where the money to grow it comes from." },
+    { goal: "run_company", why: "It has customers now. Keep it on track week to week: the numbers, the team's recurring work, and the next thing to fix." },
   ],
   systemize_business: [
-    { goal: "raise_funding", why: "A business that runs without you, with numbers on a dashboard, is what gets financed for growth." },
+    { goal: "run_company", why: "It runs without you in every step. Now keep it running: a weekly check-in on the numbers and a monthly report on what improved." },
   ],
-  raise_funding: [
-    { goal: "ship_mvp", why: "The money is for building. Put a first version in front of real people." },
-    { goal: "systemize_business", why: "Capital raised against a plan now needs operations that hold up without you." },
+  run_company: [
+    { goal: "systemize_business", why: "The check-ins keep pointing at the same bottleneck — you. Systemize takes you out of it, and finds the money to grow." },
+    { goal: "ship_mvp", why: "The business has a problem worth building a product for. Ship a first version of it." },
   ],
 };
 
@@ -95,7 +95,11 @@ export function splitMergedPaths<T extends { title: string; steps: string }>(fou
     const hay = `${f.title} ${f.steps}`.toLowerCase();
     const hits = PROJECT_GOALS.filter((g) => {
       const words = g.label.toLowerCase().split(" ");
-      return hay.includes(g.label.toLowerCase()) || hay.includes(words[0]) || (g.id === "raise_funding" && /\bfund/.test(hay));
+      // "Fund…" names the funding routes, which live inside Systemize now. And
+      // "run" is far too common a word to stand for the Run path on its own —
+      // "runs", "rerun" — so that one needs its full name.
+      if (g.id === "run_company") return /\brun a company\b|\brun\b(?:\s+\w+){0,2}\s+compan/.test(hay);
+      return hay.includes(g.label.toLowerCase()) || hay.includes(words[0]) || (g.id === "systemize_business" && /\bfund/.test(hay));
     });
     if (hits.length >= 2 && /\b(path|paths|goal|goals|journey)\b/.test(hay)) {
       for (const g of hits) out.push({ ...f, title: g.label, steps: f.steps ? `${f.steps} (on the ${g.label} path)` : "" });

@@ -29,7 +29,7 @@ interface NovaAction {
 interface NovaGuideProps {
   projectId: string;
   currentTab: string;
-  /** The manager section open (Ship / Systemize / Raise): Nova answers about that path. */
+  /** The manager section open (Ship / Systemize / Run): Nova answers about that path. */
   section?: ProjectGoal;
   project: any;
   onProjectUpdate?: () => void;
@@ -227,7 +227,7 @@ function NovaComposer({ value, onChange, onSend, disabled, placeholder, testId, 
 const SECTION_SUGGESTIONS: Record<ProjectGoal, string[]> = {
   ship_mvp: ["What should I build next for my MVP?", "What's the smallest version I can ship?", "Where am I on my MVP path?"],
   systemize_business: ["What should I systemize first?", "Which step still depends on me?", "Where am I on my systemize path?"],
-  raise_funding: ["Am I ready to raise?", "What do investors need to see?", "Where am I on my fundraising path?"],
+  run_company: ["What should I fix this week?", "Which numbers moved since last week?", "What's my team's recurring work?"],
 };
 
 export function NovaGuide({ projectId, currentTab, section, project, onProjectUpdate }: NovaGuideProps) {
@@ -363,8 +363,8 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
    * isn't "what would you like to focus on" — it's where you stand, asked as
    * the same bubbles as the path's first step, so answering here answers that.
    */
-  // The funding path opens the same way, on why they want to own a business.
-  const FIRST_STEP: Record<string, string> = { systemize_business: "SYS.F1.1", raise_funding: "FUND.C1.1" };
+  // A company already running opens on where it stands today, the same way.
+  const FIRST_STEP: Record<string, string> = { systemize_business: "SYS.F1.1", run_company: "RUN.S1.1" };
   const firstStepId = FIRST_STEP[project?.goal ?? ""];
   const moneyFirst = isOnboarding && !!firstStepId && localMessages.length <= 1;
   const { data: pathForMoney } = useQuery<{ adopted: boolean; next?: { id: string; workTaskId: string | null; intake?: IntakeQuestion[] } | null }>({
@@ -403,15 +403,15 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
 
           {moneyStep ? (
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" data-testid="nova-money-first">
-              {project?.goal === "raise_funding" ? (
+              {project?.goal === "run_company" ? (
                 <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">
-                  <p className="font-semibold">Let's find the money for your business.</p>
+                  <p className="font-semibold">Let's get your week under control.</p>
                   <p>
-                    I'm Nova. First I'll get to know what you want from owning a business and where you stand, then build
-                    your capital profile — with a score for how fundable you are today and exactly what raises it — and map
-                    every route to the money.
+                    I'm Nova. You already have a business, so we don't start from zero — we start from this week. A quick
+                    picture of the company first, then the five numbers worth watching, and from there a check-in every week
+                    and a report every month on what improved.
                   </p>
-                  <p>Start with why. Pick everything that's true.</p>
+                  <p>Start with where it stands. Tap what fits.</p>
                 </div>
               ) : (
                 <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">

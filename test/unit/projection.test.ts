@@ -67,10 +67,10 @@ describe("the projection", () => {
   it("serves this year with the capacity already built, and opens the rest next year", () => {
     const pair = projectYear({
       world: fresh(), companyId: "t", economy: economyFor("proj", 1),
-      filed: { ...filed, coo: { ...filed.coo, capacityTarget: 5_000_000 } },
+      filed: { ...filed, coo: { ...filed.coo, capacityTarget: 200_000 } },
     })!;
-    expect(pair.filed.capacityNow, "this year: what it had").toBeLessThan(5_000_000);
-    expect(pair.filed.capacityNext, "next year: what it ordered").toBe(5_000_000);
+    expect(pair.filed.capacityNow, "this year: what it had").toBeLessThan(200_000);
+    expect(pair.filed.capacityNext, "next year: what it ordered").toBe(200_000);
   });
 
   it("forecasts next year's demand, which is what capacity should be sized to", () => {

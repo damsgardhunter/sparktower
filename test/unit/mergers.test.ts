@@ -144,6 +144,26 @@ describe("the acquisition itself", () => {
     expect(out.buyer.cash).toBe(20_000_000 - 6_000_000);
   });
 
+  it("pays from cash first and borrows the rest, rather than going overdrawn", () => {
+    /*
+     * A buyer with two million in the bank and credit to spare buys for five.
+     * The whole five used to come out of cash, leaving minus three — which the
+     * engine reads as a company that cannot pay its bills, and answers with an
+     * emergency loan at the emergency rate. The credit the purchase was
+     * approved against is what should carry the difference.
+     */
+    const stretched = company("s", { cash: 2_000_000, debt: 1_000_000, creditLimit: 10_000_000 });
+    const out = applyAcquisition({ buyer: stretched, seller, amount: 5_000_000 });
+    expect(out.buyer.cash).toBe(0);
+    expect(out.buyer.debt).toBe(1_000_000 + seller.debt + 3_000_000);
+
+    // Already overdrawn: none of the price comes from cash that is not there.
+    const overdrawn = company("o", { cash: -200_000, debt: 0, creditLimit: 10_000_000 });
+    const after = applyAcquisition({ buyer: overdrawn, seller, amount: 1_000_000 });
+    expect(after.buyer.cash).toBe(-200_000);
+    expect(after.buyer.debt).toBe(seller.debt + 1_000_000);
+  });
+
   it("leaves the seller a company, not a crater", () => {
     /*
      * The claim the whole feature turns on. Five people whose company was

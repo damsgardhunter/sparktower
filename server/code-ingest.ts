@@ -40,8 +40,32 @@ export interface RepoSnapshot {
   source: string;
   /** Files present in the archive but deliberately not read. */
   skipped: number;
+  /**
+   * Of those, the ones that could have held an answer: source files.
+   *
+   * A skipped lockfile, PNG or font tells the audit nothing it was going to
+   * grade, so counting them as "this read was partial" would make every audit
+   * partial and no verdict of "missing" could ever survive — which is the
+   * opposite failure from the one we are fixing. An unread *source* file is
+   * different: it is a place the feature could have been.
+   */
+  unreadSource: number;
   truncated: boolean;
   totalBytes: number;
+  /**
+   * Provenance, for the audit's header (shared/audit-provenance.ts).
+   *
+   * An audit that grades code it could not see is the failure these exist to
+   * make visible: a builder shown "62% built" has no way of knowing whether
+   * the audit read today's tree or a zip from last Tuesday. Null means the
+   * source genuinely cannot answer — an uploaded archive has no commit — and
+   * saying so is the point; a guessed sha would be worse than none.
+   */
+  commit?: string | null;
+  /** When this snapshot was taken (ISO). */
+  capturedAt: string;
+  /** Newest file timestamp in the archive, when the archive carries them. */
+  contentAt?: string | null;
 }
 
 /**
@@ -155,7 +179,7 @@ export function snapshotFromFiles(
 ): RepoSnapshot {
   const files: RepoFile[] = [];
   const seen = new Set<string>();
-  let totalBytes = 0, skipped = 0, truncated = false;
+  let totalBytes = 0, skipped = 0, unreadSource = 0, truncated = false;
 
   for (const raw of input) {
     if (files.length >= MAX_FILES) { truncated = true; break; }
@@ -175,11 +199,18 @@ export function snapshotFromFiles(
     if (content === undefined || !isTextual(path) || size > MAX_FILE_BYTES) {
       files.push({ path, size });
       skipped++;
+      /*
+       * A source file the audit did not see, either way round: one the editor
+       * listed without contents, or one too big to read. Both are places the
+       * feature could have been.
+       */
+      if (isTextual(path)) unreadSource++;
       continue;
     }
     if (totalBytes + size > MAX_TOTAL_BYTES) {
       files.push({ path, size });
       skipped++;
+      unreadSource++;
       truncated = true;
       continue;
     }
@@ -187,7 +218,9 @@ export function snapshotFromFiles(
     files.push({ path, size, content });
   }
 
-  return { files, source, skipped, truncated, totalBytes };
+  // The editor bridge reads the disk as it is now, so the snapshot is the tree
+  // as it stands — uncommitted work included, which is why it carries no sha.
+  return { files, source, skipped, unreadSource, truncated, totalBytes, capturedAt: new Date().toISOString(), commit: null, contentAt: null };
 }
 
 export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
@@ -212,6 +245,7 @@ export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
   const files: RepoFile[] = [];
   let totalBytes = 0;
   let skipped = 0;
+  let unreadSource = 0;
   let truncated = false;
 
   for (const entry of entries) {
@@ -228,11 +262,13 @@ export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
       // Recorded so the tree is complete, but not read.
       files.push({ path, size: declared });
       skipped++;
+      if (isTextual(path) && declared > MAX_FILE_BYTES) unreadSource++;
       continue;
     }
     if (totalBytes + declared > MAX_TOTAL_BYTES) {
       files.push({ path, size: declared });
       skipped++;
+      unreadSource++;
       truncated = true;
       continue;
     }
@@ -243,6 +279,8 @@ export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
     } catch {
       files.push({ path, size: declared });
       skipped++;
+      // Unreadable, and it is a source file by extension: the audit is blind to it.
+      unreadSource++;
       continue;
     }
 
@@ -260,7 +298,24 @@ export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
     throw new Error("That archive has no readable source files in it.");
   }
 
-  return { files, source, skipped, truncated, totalBytes };
+  /*
+   * How old the code in the archive is, as opposed to how recently it was
+   * uploaded. Zip entries carry the mtime of the file they were made from, so
+   * the newest of them is the closest honest answer to "when was this code" —
+   * and it is exactly what a builder needs to see when an audit of a stale
+   * upload tells them a feature they shipped on Friday doesn't exist.
+   */
+  const newest = entries.reduce((max, e) => {
+    const t = e.header?.time instanceof Date ? e.header.time.getTime() : 0;
+    return t > max ? t : max;
+  }, 0);
+
+  return {
+    files, source, skipped, unreadSource, truncated, totalBytes,
+    capturedAt: new Date().toISOString(),
+    contentAt: newest > 0 ? new Date(newest).toISOString() : null,
+    commit: null,
+  };
 }
 
 export interface GithubRef {
@@ -383,6 +438,13 @@ export async function fetchRepoMeta(ref: GithubRef, token?: string): Promise<Rep
 }
 
 /** Downloads a repository as a zip and reads it into a snapshot. */
+/** `attachment; filename=owner-repo-0a1b2c3.zip` → `0a1b2c3`. */
+export function archiveCommit(contentDisposition: string | null | undefined): string | null {
+  const name = String(contentDisposition ?? "").match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1];
+  const sha = name?.match(/-([0-9a-f]{7,40})(?:\.zip)?$/i)?.[1];
+  return sha ? sha.slice(0, 10) : null;
+}
+
 export async function snapshotFromGithub(
   ref: GithubRef,
   token?: string,
@@ -405,5 +467,13 @@ export async function snapshotFromGithub(
 
   const archive = Buffer.from(await res.arrayBuffer());
   const snapshot = snapshotFromZip(archive, `github:${meta.fullName}@${branch}`);
+  /*
+   * The commit, free: GitHub names its zipballs `owner-repo-<sha>.zip` in the
+   * content-disposition header, so the exact tree this audit read is knowable
+   * without a second API call. When the header isn't there we leave it null
+   * rather than reporting the branch name as if it were a commit — an audit
+   * that says "at main" has told the reader nothing they can check.
+   */
+  snapshot.commit = archiveCommit(res.headers.get("content-disposition"));
   return { snapshot, meta };
 }

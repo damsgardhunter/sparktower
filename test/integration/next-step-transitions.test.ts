@@ -139,12 +139,24 @@ describe("the next step follows the path", () => {
     expect(walked).toEqual(main.slice(0, 4).map((m) => m.id));
   }, 180_000);
 
-  it("moves four times down the funding path", async () => {
+  /*
+   * The same walk, asked for under the retired `raise_funding` id at every
+   * step. Funding folded into Systemize, and a bookmark, an open tab or a
+   * notification written before the fold still names it — those have to land
+   * on the path rather than on a section that no longer exists.
+   *
+   * The project itself is made under the live id, because creating a *new*
+   * project under a retired goal is refused, and should be: the alias is there
+   * to keep understanding what was written, not to mint more of it. Its type
+   * is "other" because that is what the fold gave every funding project
+   * (migration 0034).
+   */
+  it("walks the funding path for a link that still says raise_funding", async () => {
     const app = await getTestApp();
     const agent = await builder(app);
-    const id = (await create(agent, "raise_funding", "startup_equity")).body.id;
+    const id = (await create(agent, "systemize_business", "other")).body.id;
 
-    const walked = await walk(agent, id, "raise_funding", "startup_equity", 4);
+    const walked = await walk(agent, id, "raise_funding" as ProjectGoal, "other", 4);
     expect(walked).toHaveLength(4);
   }, 180_000);
 });
@@ -211,15 +223,20 @@ describe("a project with no path", () => {
     const agent = await builder(app);
     const id = (await create(agent, "ship_mvp", "saas")).body.id;
 
-    // Funding has never been started here, so it is not on the card at all…
+    // Systemize has never been started here, so it is not on the card at all…
     const items = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === id);
-    expect(items.every((i: any) => i.track.goal !== "raise_funding")).toBe(true);
+    expect(items.every((i: any) => i.track.goal !== "systemize_business")).toBe(true);
 
-    // …until it is, and then it has a step of its own.
-    const started = await agent.post(`/api/projects/${id}/tracks`).send({ goal: "raise_funding", subcategory: "startup_equity" });
+    /*
+     * …until it is, and then it has a step of its own. Started here under the
+     * old `raise_funding` id on purpose: funding folded into Systemize, the
+     * alias is what keeps an open tab and the phone working, and this is the
+     * write path where that used to be refused.
+     */
+    const started = await agent.post(`/api/projects/${id}/tracks`).send({ goal: "raise_funding", subcategory: "other" });
     expect(started.status, JSON.stringify(started.body).slice(0, 200)).toBe(200);
     const withFunding = (await agent.get("/api/me/next-steps")).body.items
-      .find((i: any) => i.project.id === id && i.track.goal === "raise_funding");
-    expect(withFunding?.next?.id).toBe("FUND.C1.1");
+      .find((i: any) => i.project.id === id && i.track.goal === "systemize_business");
+    expect(withFunding?.next?.id).toBe("SYS.F1.1");
   }, 180_000);
 });

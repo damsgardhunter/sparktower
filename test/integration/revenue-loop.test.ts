@@ -112,6 +112,34 @@ describe("hitting the AI credits limit", () => {
     expect((await me.agent.get("/api/subscription")).body).toMatchObject({ creditsRemaining: 200, creditState: "ok" });
   });
 
+  it("switching between paid plans doesn't refill the allowance — only a paid invoice does", async () => {
+    /*
+     * The switch goes through stripe.subscriptions.update with prorations: the
+     * difference lands on the next invoice, so nothing has been paid. Every
+     * "up" used to refill, so Builder → Pro → Builder → Pro handed out a fresh
+     * month each round for about nothing.
+     */
+    const me = await builder(app);
+    expect(await applyTier(me.id, "builder", "sub_switch_1")).toEqual({ refilled: true });
+    await setUsed(me.id, 700);
+    for (const tier of ["pro", "builder", "pro"]) {
+      expect(await applyTier(me.id, tier, "sub_switch_1"), tier).toEqual({ refilled: false });
+      expect(await usedOf(me.id), tier).toEqual({ u: 700, t: tier });
+    }
+    // The prorated invoice for the switch isn't a new month either; the next cycle's is.
+    const customer = `cus_switch_${Date.now()}`;
+    await db.update(users).set({ stripeCustomerId: customer }).where(eq(users.id, me.id));
+    const invoice = (billing_reason: string) => {
+      const body = JSON.stringify({ id: `evt_${Math.random().toString(36).slice(2)}`, object: "event", type: "invoice.paid", data: { object: { id: "in_sw", object: "invoice", customer, billing_reason, subscription: "sub_switch_1" } } });
+      return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")
+        .set("stripe-signature", stripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET })).send(body);
+    };
+    expect((await invoice("subscription_update")).status).toBe(200);
+    expect((await usedOf(me.id)).u).toBe(700);
+    expect((await invoice("subscription_cycle")).status).toBe(200);
+    expect((await usedOf(me.id)).u).toBe(0);
+  });
+
   const signed = (type: string, object: Record<string, unknown>) => {
     const body = JSON.stringify({ id: `evt_${Math.random().toString(36).slice(2)}`, object: "event", type, data: { object } });
     return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")

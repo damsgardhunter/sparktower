@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useUpload } from "@/hooks/use-upload";
 import { MentionTextarea } from "@/components/mention-textarea";
 import {
-  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign, HelpCircle, Plus, Repeat, Sparkles,
+  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign, HelpCircle, Plus, Repeat, Sparkles, Building2, User as UserIcon,
 } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
 import { MAX_ASKS, ASK_MAX, creditLine } from "@shared/feedback-loop";
@@ -36,8 +36,12 @@ function TypeIcon({ name, className }: { name: string; className?: string }) {
  * types come first deliberately — a founder staring at an empty box rarely
  * knows what to write, but "Looking for Help" with an example placeholder is
  * an easy thing to fill in.
+ *
+ * Someone a company lets "post as the company" also gets a "Post as" choice:
+ * themselves, or each such company. `asCompany` fixes it to one company — the
+ * company's own Posts tab — and hides the choice.
  */
-export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }) {
+export function FeedComposer({ defaultProjectId, asCompany }: { defaultProjectId?: string; asCompany?: { id: string; name: string } }) {
   const { user } = useAuth();
   const { toast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -56,6 +60,14 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
     queryKey: ["/api/feed/my-projects"],
     enabled: open && !!user,
   });
+
+  // The companies this person may speak for; "me" posts as themselves.
+  const [postAs, setPostAs] = useState<string>(asCompany?.id ?? "me");
+  const { data: myCompanies } = useQuery<{ id: string; name: string; slug: string }[]>({
+    queryKey: ["/api/feed/my-companies"],
+    enabled: open && !!user && !asCompany,
+  });
+  const company = asCompany ?? myCompanies?.find((c) => c.id === postAs) ?? null;
 
   const { uploadFile, isUploading } = useUpload({
     onSuccess: (response) => setMediaUrls((prev) => [...prev, response.objectPath].slice(0, MAX_POST_MEDIA)),
@@ -117,7 +129,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
 
   const publish = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/feed", {
+      const res = await apiRequest("POST", company ? `/api/companies/${company.id}/posts` : "/api/feed", {
         postType,
         content,
         projectId: projectId === "none" ? undefined : projectId,
@@ -128,9 +140,10 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Posted", description: credited.length && projectId !== "none" ? `Your update is on the feed, and ${credited.length === 1 ? "the person" : "the people"} whose feedback you used will see it.` : "Your update is on the feed." });
+      toast({ title: "Posted", description: credited.length && projectId !== "none" ? `Your update is on the feed, and ${credited.length === 1 ? "the person" : "the people"} whose feedback you used will see it.` : company ? `On the feed as ${company.name}.` : "Your update is on the feed." });
       reset();
       queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
+      if (company) queryClient.invalidateQueries({ queryKey: ["/api/companies", company.id, "posts"] });
       if (projectId !== "none") queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "feedback"] });
     },
     onError: (err: any) => {
@@ -176,7 +189,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
               className="flex-1 text-left px-4 py-2.5 rounded-full border border-border text-[13px] text-muted-foreground hover:bg-accent transition-colors"
               data-testid="button-open-composer"
             >
-              Share what you're building…
+              {asCompany ? `Share news from ${asCompany.name}…` : "Share what you're building…"}
             </button>
           </div>
         </CardContent>
@@ -190,9 +203,14 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
         <div className="flex items-start gap-3">
           <UserAvatar src={user.profileImageUrl} name={displayName} className="h-10 w-10 shrink-0" />
           <div className="min-w-0 flex-1">
-            <p className="font-medium text-sm">{displayName}</p>
+            <p className="font-medium text-sm flex items-center gap-1">
+              {company && <Building2 className="h-3.5 w-3.5 text-muted-foreground" />}
+              {company ? company.name : displayName}
+            </p>
             <p className="text-xs text-muted-foreground">
-              Posting {selectedProject ? `for ${selectedProject.title}` : "as yourself"}
+              {company
+                ? `Posting as ${company.name}${selectedProject ? `, about ${selectedProject.title}` : ""} — people will see you wrote it`
+                : `Posting ${selectedProject ? `for ${selectedProject.title}` : "as yourself"}`}
             </p>
           </div>
           <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={reset} data-testid="button-close-composer">
@@ -328,6 +346,23 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
         )}
 
         <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/50">
+          {!asCompany && (myCompanies?.length ?? 0) > 0 && (
+            <Select value={postAs} onValueChange={setPostAs}>
+              <SelectTrigger className="w-auto min-w-[9rem] h-8 text-xs" aria-label="Post as" data-testid="select-post-as">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="me">
+                  <span className="flex items-center gap-1.5"><UserIcon className="h-3.5 w-3.5" /> Post as yourself</span>
+                </SelectItem>
+                {myCompanies!.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    <span className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> Post as {c.name}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select value={projectId} onValueChange={setProjectId}>
             <SelectTrigger className="w-auto min-w-[11rem] h-8 text-xs" data-testid="select-post-project">
               <SelectValue />

@@ -32,9 +32,11 @@
  * to your teammates — which is the pressure that actually gets someone back
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
-import type { Company, Niche, Role, World } from "./types";
+import { defaultDraft } from "./levers";
+import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedIncumbents } from "./incumbents";
+import { between, pick } from "./random";
 
 /** Fourteen days, fourteen years. One tick a day. */
 export const SEASON_YEARS = 14;
@@ -108,13 +110,56 @@ export function economyFor(seasonId: string, year: number): {
  * nobody has heard of it. Price starts at the middle segment's reference,
  * which is a defensible opening nobody has to think about on their first day.
  */
+/** What a new company is given to start with. Named because the plant and the home are sized against it. */
+export const STARTING_CASH = 6_000_000;
+
+/**
+ * What a company can sensibly pay to open its first region: a sixth of the
+ * money it has, which leaves it able to trade for three years afterwards.
+ */
+export const OPENING_BUDGET = STARTING_CASH * 0.15;
+
+/**
+ * Where a company opens.
+ *
+ * A person's team opens in the cheapest region that is still a real place to
+ * sell (see `cities` below), which is the same home every season and makes
+ * teams comparable.
+ *
+ * A bot-run company tosses a seeded coin instead. Half the time it makes the
+ * call a good operator would — the largest region it can open without gutting
+ * the balance sheet — and half the time it takes any region it can afford,
+ * good or daft. Deterministic, like every other bot decision: the same venture
+ * always opens in the same place.
+ *
+ * The point is not that bots play well. It is that five bot companies no
+ * longer all open in one region and fight over a twelfth of the market while
+ * the incumbents hold the rest.
+ */
+export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: string } = {}): City {
+  const real = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
+    ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
+  if (!options.botRun) return real;
+
+  const affordable = niche.cities.filter((c) => c.entryCost <= OPENING_BUDGET);
+  if (affordable.length === 0) return real;
+
+  const seed = options.seed ?? niche.id;
+  if (between(`${seed}:home:coin`, 0, 1) < 0.5) {
+    return [...affordable].sort((a, b) => b.weight - a.weight)[0];
+  }
+  return pick(`${seed}:home:any`, affordable);
+}
+
 export function startingCompany(input: {
   id: string;
   name: string;
   niche: Niche;
   seats: Role[];
+  /** Whether the chief executive's chair is held by a bot. See `openingRegion`. */
+  botRun?: boolean;
 }): Company {
-  const { id, name, niche, seats } = input;
+  const { id, name, niche, seats, botRun } = input;
   /*
    * Priced where most of the customers are.
    *
@@ -132,6 +177,13 @@ export function startingCompany(input: {
 
   const market = niche.segments.reduce((sum, s) => sum + s.size, 0);
 
+  /*
+   * The one region the company opens in, chosen before the plant is sized —
+   * because the plant is sized against it. See `cities` below for why it is
+   * this one.
+   */
+  const home = openingRegion(niche, { botRun, seed: id });
+
   return {
     id,
     name,
@@ -147,7 +199,7 @@ export function startingCompany(input: {
      * of it, and every season ends in five identical bankruptcies. Runway is
      * what makes the early decisions decisions rather than a countdown.
      */
-    cash: 6_000_000,
+    cash: STARTING_CASH,
     debt: 0,
     creditLimit: 2_000_000,
     reputation: 50,
@@ -182,12 +234,22 @@ export function startingCompany(input: {
      * before anyone had made a decision, and it made the operations seat's
      * first job undoing a mistake it did not make.
      *
-     * A percent and a half of the market is room to be surprised by a good
-     * year without paying for a fantasy. Building more is the operations
-     * seat's call, and the forecast on the desk is there to make it.
+     * And sized against the region it opens in, not the whole market.
+     *
+     * A percent and a half of the *market* was still a fantasy, because a new
+     * company sells in one region: a dating app opened in a region holding a
+     * twelfth of the country with room for a sixtieth of it, and paid to keep
+     * two thirds of that room empty from its first year — before anybody had
+     * made a decision, and with no lever the chief executive could reach.
+     *
+     * A tenth of the region it actually sells in is about half as much again
+     * as a good first year there, which is room to be surprised without paying
+     * for a fantasy — and still enough plant to cover the salary bill in the
+     * markets where one customer is worth a great deal. Building more is the operations seat's call, and
+     * the forecast on the desk is there to make it.
      */
     capacity: Math.min(
-      Math.round(market * 0.015),
+      Math.round(market * home.weight * 0.1),
       Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
     ),
     unitCost: niche.baseUnitCost,
@@ -196,14 +258,20 @@ export function startingCompany(input: {
     assets: [],
     seats,
     /*
-     * One city to begin with, and the cheapest one.
+     * One region to begin with: the cheapest that is still somewhere.
      *
      * Starting everywhere would remove the most interesting early decision in
      * the game — go deep somewhere small, or spend what little you have buying
      * reach you cannot yet serve. Starting nowhere would be a puzzle rather
      * than a company.
+     *
+     * "Cheapest" alone was that home while every market had six regions and
+     * the cheapest held a tenth of it. With a long tail of small, cheap places
+     * it became a region worth a fiftieth of the market: a company nobody
+     * could find, in a game where being found is the first problem. So the
+     * home is the cheapest region that is still a real place to sell.
      */
-    cities: [[...niche.cities].sort((a, b) => a.entryCost - b.entryCost)[0]?.id].filter(Boolean) as string[],
+    cities: [home?.id].filter(Boolean) as string[],
     founderShare: 1,
   };
 }
@@ -212,7 +280,7 @@ export function startingCompany(input: {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[] }[];
+  teams: { id: string; name: string; seats: Role[]; botRun?: boolean }[];
 }): World {
   const { seasonId, niche, teams } = input;
   return {
@@ -221,7 +289,7 @@ export function buildWorld(input: {
     year: 1,
     companies: [
       ...seedIncumbents(niche),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats })),
+      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, botRun: t.botRun })),
     ],
     economy: economyFor(seasonId, 1),
   };
@@ -364,6 +432,11 @@ export interface YearDecisions {
   decisions: TeamDecisions;
   /** Roles that submitted nothing this year and were run by the caretaker rules. */
   absent: Role[];
+  /**
+   * The seat the chief executive overruled, and what it had filed — kept so
+   * the year can be run the other way afterwards to see who was right.
+   */
+  overruled?: { role: Role; filed: TeamDecisions[keyof TeamDecisions] };
 }
 
 /**
@@ -383,7 +456,8 @@ export function decisionsForYear(input: {
   previous?: TeamDecisions;
 }): YearDecisions {
   const { company, niche, submitted, previous } = input;
-  const fallback = previous ? caretakerDecisions(previous, company) : openingDecisions(company, niche);
+  const opening = openingDecisions(company, niche);
+  const fallback = previous ? caretakerDecisions(previous, company) : opening;
 
   const decisions: TeamDecisions = { companyId: company.id };
   const absent: Role[] = [];
@@ -395,9 +469,37 @@ export function decisionsForYear(input: {
       (decisions as any)[key] = theirs;
     } else {
       absent.push(role);
-      (decisions as any)[key] = (fallback as any)[key];
+      /*
+       * Per key, with the opening plan behind it.
+       *
+       * `previous` is assembled from whatever each seat last filed, and a seat
+       * that has never filed has no entry in it — so the caretaker, which only
+       * scales what it is given, hands that key back as undefined. The engine
+       * reads an undefined operations plan as a headcount of zero and nothing
+       * spent, which fires everyone at a company whose only fault was that one
+       * chair was empty. The opening plan is what a chair nobody has ever sat
+       * in runs in year one; it is the right thing for it to run later, too.
+       */
+      (decisions as any)[key] = (fallback as any)[key] ?? (opening as any)[key];
     }
   }
+
+  /*
+   * The chief executive's overrule: one seat's filing reversed to what it ran
+   * last year. Only a seat that actually filed something different can be
+   * overruled — there is nothing to reverse in an empty chair — and never the
+   * chief executive's own. The seat's one-off moves do not come back with
+   * last year's plan: a loan taken last year is not taken again because the
+   * seat was overruled this year.
+   */
+  const target = (decisions.ceo as any)?.overrule as Role | "" | undefined;
+  if (target && target !== "ceo" && company.seats.includes(target) && submitted[target] && previous?.[LEVER_OF[target]]) {
+    const filed = (decisions as any)[LEVER_OF[target]];
+    (decisions as any)[LEVER_OF[target]] = defaultDraft(target, company, (previous as any)[LEVER_OF[target]]);
+    return { decisions, absent, overruled: { role: target, filed } };
+  }
+  // An overrule that could not happen is not recorded as one.
+  if (target && decisions.ceo) (decisions.ceo as any) = { ...decisions.ceo, overrule: "" };
 
   return { decisions, absent };
 }

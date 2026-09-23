@@ -27,10 +27,10 @@ import { SectionPathStrip } from "../../src/components/manage/SectionPathStrip";
 import { ALL_TABS, ProjectTabRow, SectionSwitcher, SectionTabRow, type Tab } from "../../src/components/manage/SectionChrome";
 import { mkey } from "../../src/components/manage/shared";
 import { NovaFab, NovaGuideSheet, useNovaMessages } from "../../src/components/manage/path/NovaGuide";
-import { isProjectGoal, sectionDef, useScreenFocused, useSections, type ProjectGoal } from "../../src/sections";
+import { normaliseGoal, sectionDef, useScreenFocused, useSections, type ProjectGoal } from "../../src/sections";
 
 /** Paths whose first screen is the money step's bubbles on the dashboard, not the chat (nova-guide.tsx). */
-const MONEY_FIRST = new Set(["systemize_business", "raise_funding"]);
+const MONEY_FIRST = new Set(["systemize_business", "run_company"]);
 
 /** Older links and the web's ids: `?tab=kanban`, `?tab=nova`, and the retired `?tab=checkins` (now Activity). */
 const ALIAS: Record<string, { tab: Tab; sub?: "feedback" }> = {
@@ -65,13 +65,16 @@ export default function Manage() {
    * The open section: ?section= in the link, else the one last opened on this
    * device for this project, else (once the sections load) the primary.
    */
-  const [chosen, setChosen] = useState<ProjectGoal | null>(isProjectGoal(sectionParam) ? sectionParam : null);
-  const [prefRead, setPrefRead] = useState(isProjectGoal(sectionParam));
+  // An old link to the retired funding section opens Systemize, which holds it now.
+  const linkedSection = normaliseGoal(sectionParam);
+  const [chosen, setChosen] = useState<ProjectGoal | null>(linkedSection);
+  const [prefRead, setPrefRead] = useState(!!linkedSection);
   useEffect(() => {
-    if (isProjectGoal(sectionParam)) { setChosen(sectionParam); setPrefRead(true); return; }
+    if (linkedSection) { setChosen(linkedSection); setPrefRead(true); return; }
     if (!id) return;
     let live = true;
-    readPref(sectionPrefKey(id)).then((v) => { if (live && isProjectGoal(v)) setChosen((c) => c ?? v); }).catch(() => {}).finally(() => { if (live) setPrefRead(true); });
+    // Normalised like the link above: a remembered "raise_funding" (the retired Raise section) opens the section that took it over, not the default.
+    readPref(sectionPrefKey(id)).then((v) => { const g = normaliseGoal(v); if (live && g) setChosen((c) => c ?? g); }).catch(() => {}).finally(() => { if (live) setPrefRead(true); });
     return () => { live = false; };
   }, [id, sectionParam]);
   useEffect(() => { if (id && chosen) void writePref(sectionPrefKey(id), chosen).catch(() => {}); }, [id, chosen]);
@@ -112,7 +115,7 @@ export default function Manage() {
     const member = project.ownerId === user?.id || members.some((m) => m.userId === user?.id);
     if (member && !project.novaOnboardingComplete && novaMessages.length === 0 && !MONEY_FIRST.has(project.goal) && tab === "dashboard"
       // A link into another section (the home card's "Continue" on Raise, say) opens that section, not the welcome.
-      && (!isProjectGoal(sectionParam) || sectionParam === project.goal)
+      && (!linkedSection || linkedSection === project.goal)
       // Opening the app lands on the path; the welcome chat is for arriving from a new project, not every launch (the Nova button is right there).
       && from !== "launch"
       // Nor when a notification sent them to a step: that step is what they came for.

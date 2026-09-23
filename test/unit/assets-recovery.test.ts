@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  assetEffects, ageAssets, marketListings, resaleValue, resolveBids, ownListing, biddableFunds,
+  assetEffects, ageAssets, stillHeld, marketListings, resaleValue, resolveBids, ownListing, biddableFunds,
 } from "@shared/simulation/assets";
 import {
   distressOf, recoveryOptions, applyRecovery, reviewCovenant, climbing, COVENANT_YEARS,
@@ -91,9 +91,17 @@ describe("what owning something does", () => {
 });
 
 describe("a year passing over what you own", () => {
-  it("retires what has run out and says so", () => {
+  it("lets an asset work through its last year, says so, and drops it when the year is over", () => {
     const { assets, expired, notes } = ageAssets([{ ...deal, expiresIn: 1 }, patent]);
-    expect(assets.map((a) => a.id)).toEqual(["a1"]);
+    expect(assets.map((a) => a.id).sort(), "both still work this year").toEqual(["a1", "a2"]);
+    expect(expired).toEqual([]);
+    expect(notes.join(" ")).toMatch(/last year/i);
+    expect(stillHeld(assets).map((a) => a.id)).toEqual(["a1"]);
+  });
+
+  it("retires something already spent, and says so", () => {
+    const { assets, expired, notes } = ageAssets([{ ...deal, expiresIn: 0 }]);
+    expect(assets).toEqual([]);
     expect(expired.map((a) => a.id)).toEqual(["a2"]);
     expect(notes.join(" ")).toMatch(/run out/i);
   });
@@ -103,6 +111,26 @@ describe("a year passing over what you own", () => {
     // licence they agreed to three years ago ending.
     const { notes } = ageAssets([{ ...deal, expiresIn: 2 }]);
     expect(notes.join(" ")).toMatch(/expires at the end of next year/i);
+  });
+
+  /*
+   * The bug this pins: "expires at the end of next year" was followed by the
+   * asset doing nothing in that year. A three-year deal works three years.
+   */
+  it("works for exactly as many years as its life, through the engine", () => {
+    let world: any = {
+      seasonId: "s", niche, year: 1,
+      economy: { demand: 1, interestRate: 0.08, costIndex: 1, outlook: "steady" as const },
+      companies: [...seedIncumbents(niche), company({ assets: [{ ...deal, expiresIn: 3 }] })],
+    };
+    const capacityInYear: number[] = [];
+    for (let y = 0; y < 4; y++) {
+      const held = world.companies.find((c) => c.id === "t")!.assets;
+      capacityInYear.push(assetEffects(ageAssets(held).assets).capacity);
+      world = { ...resolveYear(world, [{ companyId: "t" }]).world, year: world.year + 1 };
+    }
+    expect(capacityInYear).toEqual([500_000, 500_000, 500_000, 0]);
+    expect(world.companies.find((c) => c.id === "t")!.assets).toEqual([]);
   });
 
   it("leaves things that do not expire alone", () => {

@@ -27,9 +27,10 @@ import { isDeleted } from "./account-data";
 import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
-import { enforceRateLimit, enforceRejectionLimit, countRejection, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "./moderation";
+import { enforceRateLimit, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { checkSecondFactor, countWrongMfaCode, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
+import { checkSecondFactor, mfaCodeAccepted, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
+import { surfaceEnabled } from "./surfaces";
 import { checkPassword } from "@shared/passwords";
 import { isBreached, BREACHED_MESSAGE } from "./password-breach";
 
@@ -375,6 +376,8 @@ export function registerMobileAuthRoutes(app: Express) {
               .where(eq(users.id, byEmail.id)).returning();
           }
         } else {
+          // The signup kill switch covers this branch, and only this one: everyone above already has an account.
+          if (!surfaceEnabled("signup")) return res.status(404).json({ message: "New accounts can't be created right now.", code: "signup_closed" });
           [user] = await db.insert(users).values({
             email,
             googleId: payload.sub,
@@ -442,20 +445,23 @@ export function registerMobileAuthRoutes(app: Express) {
   });
 
   /** Finishing a mobile sign-in that stopped at the second factor: the challenge from login, and a code. */
-  /* Per address and per account, both counting wrong codes only — see server/mfa.ts. */
+  /* Per address and per account, both reserved before the code is judged and given back when it's right — see server/mfa.ts. */
   app.post("/api/auth/mobile/mfa/verify", async (req, res) => {
     // public-write: a signed five-minute challenge that only a correct password produced, plus a one-time code; limited per address and per account
     try {
-      if (!(await enforceRejectionLimit(res, ipKey(req), "mfaCode"))) return;
+      if (!(await enforceReservedLimit(res, ipKey(req), "mfaCode"))) return;
       const userId = readMfaChallenge(req.body?.challengeToken);
-      if (!userId) return res.status(401).json({ message: "That sign-in has expired. Enter your password again.", code: "mfa_challenge_expired" });
-      if (!(await limitMfaAttempts(req, res, userId))) return;
+      if (!userId) {
+        await refundAttempt(ipKey(req), "mfaCode");
+        return res.status(401).json({ message: "That sign-in has expired. Enter your password again.", code: "mfa_challenge_expired" });
+      }
+      if (!(await limitMfaAttempts(req, res, userId))) { await refundAttempt(ipKey(req), "mfaCode"); return; }
       const method = await checkSecondFactor(userId, String(req.body?.code ?? ""));
       if (!method) {
-        await countRejection(ipKey(req), "mfaCode");
-        await countWrongMfaCode(userId);
         return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
       }
+      await refundAttempt(ipKey(req), "mfaCode");
+      await mfaCodeAccepted(userId);
       res.json({ ...(await buildSession(userId, typeof req.body?.device === "string" ? req.body.device : undefined, { mfa: true })), mfaMethod: method });
     } catch (error) {
       console.error("Mobile MFA verify error:", error);

@@ -121,6 +121,10 @@ export interface VentureView {
   openRoles: string[];
   seats: SimSeat[];
   you: { role: string | null; isCeo: boolean };
+  /** Retired because its season ran all fourteen years, not because it never filled. */
+  seasonOver?: boolean;
+  /** While filling: seconds until bots take the empty seats if nobody else arrives. */
+  botsInSeconds?: number | null;
 }
 
 // --- The clock -----------------------------------------------------------
@@ -193,8 +197,10 @@ export function phaseCopy(input: {
   /** Who is naming the company, for everyone who isn't. */
   ceoName: string | null;
   companyName: string | null;
+  /** A retired room whose season finished, rather than one that never filled. */
+  seasonOver?: boolean;
 }): RoomCopy {
-  const { phase, here, lobbySize, yourRoleTitle, isCeo, ceoName, companyName } = input;
+  const { phase, here, lobbySize, yourRoleTitle, isCeo, ceoName, companyName, seasonOver } = input;
 
   if (phase === "filling") {
     const missing = Math.max(0, lobbySize - here);
@@ -203,7 +209,7 @@ export function phaseCopy(input: {
       body:
         missing === 0
           ? "Everyone's here. Seats open in a moment."
-          : `${here} of ${lobbySize} seats filled. Three is enough to start — if the clock runs out below that, the room is retired rather than left half-played.`,
+          : `${here} of ${lobbySize} seats filled. The room waits for real people first; if nobody new arrives for a minute, bots take the empty seats — and that minute starts again whenever someone joins.`,
       deadline: "until the room starts without the stragglers",
     };
   }
@@ -232,6 +238,14 @@ export function phaseCopy(input: {
     return {
       title: companyName ? `${companyName} is trading` : "Year one has begun",
       body: "The seats are settled and the first year is live. A day is a year; a season is fourteen of them.",
+      deadline: "",
+    };
+  }
+
+  if (seasonOver) {
+    return {
+      title: "Season over",
+      body: "Your company played all fourteen years. See how it finished, then start a new company in any market.",
       deadline: "",
     };
   }

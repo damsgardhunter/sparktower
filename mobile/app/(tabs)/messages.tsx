@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, fetchMe } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Avatar, Empty, Icon, IconButton, Loading, Segments, TAB_BAR_SPACE } from "../../src/components/ui";
+import { Avatar, Empty, ErrorState, Icon, IconButton, Loading, Segments, TAB_BAR_SPACE, errText } from "../../src/components/ui";
 import { Sheet } from "../../src/components/Sheet";
 import { inboxTime, personAvatar, personName, useConnections } from "../../src/networkData";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
@@ -34,7 +34,7 @@ export default function Messages() {
   const [who, setWho] = useState("");
   const connections = useConnections(composing);
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
-  const { data, isLoading, isRefetching, refetch } = useQuery({
+  const { data, isLoading, isRefetching, refetch, error } = useQuery({
     queryKey: ["conversations"],
     queryFn: () => api<Conversation[]>("/api/messages/conversations"),
     // Chat lists go stale fast; poll while the screen is open.
@@ -84,7 +84,22 @@ export default function Messages() {
         ItemSeparatorComponent={() => <View style={s.sep} />}
         contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }}
         ListEmptyComponent={
-          needle || filter === "unread" ? (
+          /*
+           * A failed request is not an empty inbox. Without this branch the
+           * list said "No messages yet — once you're connected with someone,
+           * you can message them", which is a specific, false claim about the
+           * person's account made on the strength of one dropped request: they
+           * go looking for a conversation they know exists and conclude it was
+           * deleted. `data` decides, not `error` alone, so a poll that fails
+           * while the list is already on screen doesn't wipe it.
+           */
+          error && !data ? (
+            <ErrorState
+              title="Couldn't load your messages"
+              message={errText(error, "We couldn't reach the server.")}
+              onRetry={() => void refetch()}
+            />
+          ) : needle || filter === "unread" ? (
             <Empty icon="chatbubbles-outline" title={needle ? "No conversations found" : "You're all caught up"} />
           ) : (
             <Empty

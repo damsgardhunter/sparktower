@@ -28,6 +28,7 @@ import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
 import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
+import AdminContests from "@/pages/admin-contests";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
@@ -38,6 +39,12 @@ import SimulationMarketPage from "@/pages/simulation-market";
 import SimulationStandingsPage from "@/pages/simulation-standings";
 import SimulationOffersPage from "@/pages/simulation-offers";
 import SimulationReportPage from "@/pages/simulation-report";
+import CompaniesPage from "@/pages/companies";
+import CompanyPage from "@/pages/company";
+import JoinSeasonPage from "@/pages/join-season";
+import TalentPage from "@/pages/talent";
+import ChallengesPage from "@/pages/challenges";
+import ChallengePage from "@/pages/challenge";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -273,8 +280,16 @@ function Router() {
             <Route path="/projects/new/create" component={ProjectCreate} />
             {/* Before /projects/:id so the builder path isn't swallowed by it. */}
             <Route path="/projects/:projectId/documents/:docId" component={DocumentBuilder} />
-            <Route path="/projects/:id/manage" component={ProjectManager} />
-            <Route path="/projects/:id" component={ProjectDashboard} />
+            {/*
+              * Keyed by the project id. With component= wouter reuses the same
+              * instance when only :id changes (a link from one project to
+              * another, a notification, Back), so every useState inside kept the
+              * previous project's tab, selections and drafts — and could act on
+              * them against the new project. A key makes a new project a fresh
+              * mount, the same as arriving from anywhere else.
+              */}
+            <Route path="/projects/:id/manage">{(params) => <ProjectManager key={params.id} />}</Route>
+            <Route path="/projects/:id">{(params) => <ProjectDashboard key={params.id} />}</Route>
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
@@ -291,6 +306,13 @@ function Router() {
             <Route path="/simulation/:id/standings" component={SimulationStandingsPage} />
             <Route path="/simulation/:id/offers" component={SimulationOffersPage} />
             <Route path="/simulation/:id/report/:year?" component={SimulationReportPage} />
+            {/* Company accounts: training seasons, recruiting, challenges, scouting, running the business. */}
+            <Route path="/companies" component={CompaniesPage} />
+            <Route path="/companies/:id" component={CompanyPage} />
+            <Route path="/join-season/:code" component={JoinSeasonPage} />
+            <Route path="/talent" component={TalentPage} />
+            <Route path="/challenges" component={ChallengesPage} />
+            <Route path="/challenges/:id" component={ChallengePage} />
             <Route path="/simulation/:id" component={SimulationDeskPage} />
             {/* Ten Years From Now. Declared before /sprints/:id, which would
                 otherwise match "boards" and "game" as sprint ids. */}
@@ -317,6 +339,7 @@ function Router() {
             <Route path="/admin/security" component={AdminSecurity} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route path="/admin/promotions" component={AdminPromotions} />
+            <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />
           </Switch>
         </main>

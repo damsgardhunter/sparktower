@@ -1,4 +1,5 @@
-import { areaLabel, type CapabilityEntry } from "@shared/capabilities";
+import { areaLabel, capabilityCounts, CAPABILITY_STATUS_LABEL, type CapabilityEntry } from "@shared/capabilities";
+import { describeProvenance, type AuditProvenance } from "@shared/audit-provenance";
 import type { AuditDelta } from "@shared/audit-delta";
 import { DataSourceCard } from "@/components/data-source-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -13,6 +14,7 @@ import {
   Loader2, Github, Upload, ScanSearch, CheckCircle2, AlertTriangle, XCircle,
   CircleDot, FileCode, Lock, ChevronDown, ChevronRight, Wand2, ShieldAlert,
   Route as RouteIcon, Database, FlaskConical, Check, Terminal, ArrowRight, History,
+  HelpCircle,
 } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
@@ -76,6 +78,12 @@ const STATUS_BADGE: Record<string, string> = {
   "in-progress": "bg-blue-500/10 text-blue-700 border-blue-500/30",
   open: "bg-amber-500/10 text-amber-700 border-amber-500/30",
   missing: "bg-rose-500/10 text-rose-700 border-rose-500/30",
+  /*
+   * Not a gap, and it must not look like one. "unknown" means the audit never
+   * read the files that would answer — a question for the builder, not work —
+   * so it gets its own quiet, dashed treatment rather than the red of missing.
+   */
+  unknown: "bg-sky-500/10 text-sky-700 border-sky-500/40 border-dashed",
   "not-started": "bg-muted text-muted-foreground border-black/[0.08] dark:border-white/10",
   "not built": "bg-muted text-muted-foreground border-black/[0.08] dark:border-white/10",
 };
@@ -456,6 +464,14 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const loops = (findings.loops ?? []) as LoopClosureRead[];
   const closedLoops = loops.filter((l) => l.closure === "closed").length;
   const capabilities = (findings.capabilities ?? []) as CapabilityEntry[];
+  const capCounts = capabilityCounts(capabilities);
+  /*
+   * What the audit actually read. Shown in the header rather than buried in
+   * "Details", because everything below it is only as true as this line: an
+   * audit of last Tuesday's zip and an audit of today's tree look identical
+   * once they're a percentage and a list of gaps.
+   */
+  const provenance = (scan.provenance ?? null) as AuditProvenance | null;
   const risks = (findings.risks ?? []) as any[];
   const highRisks = risks.filter((r) => r.severity === "high").length;
   const looksDone = findings.taskReconciliation?.looksDone ?? [];
@@ -652,6 +668,13 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
               <Stat icon={Database} label="models" value={scan.modelCount ?? scan.dataModels?.length ?? 0} />
               <Stat icon={FlaskConical} label="test files" value={scan.testFiles ?? 0} />
             </div>
+            <p
+              className={`text-[11px] leading-snug break-words ${provenance?.partial ? "text-amber-700" : "text-muted-foreground"}`}
+              data-testid="text-audit-provenance"
+            >
+              {provenance ? describeProvenance(provenance) : `${audit.source} · this audit predates provenance being recorded`}
+            </p>
+
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full bg-primary" style={{ width: `${audit.completionPercent || 0}%` }} />
             </div>
@@ -856,13 +879,20 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 )}
 
                 {capabilities.length > 0 && (
-                  <Group title="What the code has" icon={CheckCircle2} tone="text-emerald-500" count={`${capabilities.filter((c) => c.status === "built").length}/${capabilities.length} built`} testId="capability-inventory">
+                  <Group title="What the code has" icon={CheckCircle2} tone="text-emerald-500"
+                    // Unknown areas are excluded from anything that reads as work outstanding.
+                    count={`${capCounts.built}/${capCounts.total} built${capCounts.unknown ? ` · ${capCounts.unknown} not read` : ""}`}
+                    testId="capability-inventory">
                     {capabilities.map((c) => (
                       <Row key={c.area} testId={`capability-${c.area}`}
                         title={<><span className="font-medium">{areaLabel(c.area)}</span>{c.summary && <span className="text-muted-foreground"> · {c.summary}</span>}</>}
                         meta={<>
-                          {c.detail?.gaps?.length ? <span className="text-[11px] text-muted-foreground tabular-nums">{c.detail.gaps.length} gap{c.detail.gaps.length === 1 ? "" : "s"}</span> : null}
-                          <Pill className={STATUS_BADGE[c.status] ?? "border-black/[0.08] dark:border-white/10 text-muted-foreground"}>{c.status}</Pill>
+                          {/* An unknown area has no gaps to count: the audit never read it. */}
+                          {c.status !== "unknown" && c.detail?.gaps?.length ? <span className="text-[11px] text-muted-foreground tabular-nums">{c.detail.gaps.length} gap{c.detail.gaps.length === 1 ? "" : "s"}</span> : null}
+                          <Pill className={STATUS_BADGE[c.status] ?? "border-black/[0.08] dark:border-white/10 text-muted-foreground"} data-testid={`capability-status-${c.area}`}>
+                            {c.status === "unknown" && <HelpCircle className="h-3 w-3" />}
+                            {CAPABILITY_STATUS_LABEL[c.status] ?? c.status}
+                          </Pill>
                         </>}>
                         {c.summary && <p className="text-foreground/80">{c.summary}</p>}
                         {c.missing && <p>Missing: {c.missing}</p>}
@@ -878,7 +908,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                           </ul>
                         ) : null}
                         {c.evidence.length > 0 && <p className="font-mono text-[10px] break-all">{c.evidence.map((e) => e.route ? `${e.route} · ${e.file}` : e.file).join(" · ")}</p>}
-                        {c.note && <p className="text-amber-700">{c.note}</p>}
+                        {c.note && <p className={c.status === "unknown" ? "text-sky-700" : "text-amber-700"}>{c.note}</p>}
                       </Row>
                     ))}
                   </Group>

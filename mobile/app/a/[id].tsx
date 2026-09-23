@@ -12,6 +12,7 @@ import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
 import { Avatar, Btn, Empty, Icon, IconButton, Loading, NovaGradient, assetUri } from "../../src/components/ui";
 import { shareText } from "../../src/components/manage/bits";
+import { rememberReturnPath } from "../../src/pendingDestination";
 
 interface PublicArtifact {
   id: string;
@@ -49,6 +50,20 @@ export default function PublicArtifactPage() {
       </View>
     );
   }
+
+  /*
+   * This page is one of the two the app shows signed out, and both of its
+   * calls to action need an account. Pushed straight, AuthGate replaces them
+   * with sign-in and the destination is lost — the reader lands on the feed
+   * having asked to start a path on a specific goal, which is exactly the
+   * conversion this page exists for. So write the route down first and let the
+   * entry point (or the end of onboarding) finish the journey.
+   */
+  const go = (path: string) => {
+    if (user) { router.push(path as any); return; }
+    void rememberReturnPath(path);
+    router.push("/(auth)/sign-in" as any);
+  };
 
   const url = `${API_URL}/a/${data.id}`;
   const share = () => void shareText(`${data.title} — ${data.project.title}\n${url}`);
@@ -117,7 +132,7 @@ export default function PublicArtifactPage() {
             </View>
           )}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
-            <Btn small variant="outline" icon="compass-outline" label="Explore this project and its path" onPress={() => router.push(`/project/${data.project.id}` as any)} />
+            <Btn small variant="outline" icon="compass-outline" label="Explore this project and its path" onPress={() => go(`/project/${data.project.id}`)} />
             {user && data.postId && <Btn small variant="ghost" icon="chatbubbles-outline" label="See the discussion" onPress={() => router.push(`/post/${data.postId}` as any)} />}
           </View>
         </View>
@@ -130,7 +145,7 @@ export default function PublicArtifactPage() {
             <Text style={{ fontSize: font.sm, lineHeight: 20, color: colors.textSecondary, fontFamily: fontFamily.regular }}>
               SparkTower breaks the goal into steps, Nova helps with each one, and what you finish becomes something you can publish — like this.
             </Text>
-            <Btn icon="arrow-forward" label="Start a project on this path" onPress={() => router.push(`/project/new?goal=${encodeURIComponent(data.path.goal)}${data.path.subcategory ? `&subcategory=${encodeURIComponent(data.path.subcategory)}` : ""}` as any)} style={{ alignSelf: "flex-start" }} />
+            <Btn icon="arrow-forward" label="Start a project on this path" onPress={() => go(`/project/new?goal=${encodeURIComponent(data.path.goal)}${data.path.subcategory ? `&subcategory=${encodeURIComponent(data.path.subcategory)}` : ""}`)} style={{ alignSelf: "flex-start" }} />
           </View>
         </View>
       </ScrollView>

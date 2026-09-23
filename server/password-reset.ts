@@ -176,7 +176,8 @@ export async function resetPassword(
       accessTokensRevokedAt: now,
       // Opening the link proved they can read mail at this address, which is
       // all verification ever asked for.
-      emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, ${now})`,
+      // The database's UTC clock, not `now` interpolated: a JS Date in raw sql is sent in the server's local zone.
+      emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, (now() at time zone 'utc'))`,
     }).where(eq(users.id, user.id));
 
     /*

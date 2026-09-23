@@ -35,6 +35,9 @@
  * screen can answer "what if we charged a bit more" while a hand is on the
  * price, without a round trip.
  */
+import { annualPlans, fundYear } from "./responsibilities";
+import { dataEffects } from "./product";
+import { sanitiseDecisions } from "./decisions";
 import type { Company, Economy, World } from "./types";
 import { allocate } from "./market";
 import { incumbentYear } from "./incumbents";
@@ -76,6 +79,9 @@ function projected(company: Company, d: TeamDecisions | undefined, innovationPac
   return {
     ...company,
     price: Math.max(1, d?.cmo?.price ?? company.price),
+    // Tiers as drafted, and the annual plans on offer, since both change who stays and who comes.
+    tiers: d?.cmo ? d.cmo.tiers : company.tiers,
+    retention: annualPlans(d?.cfo?.annualDiscount).retention,
     brand: clamp(company.brand + brandGain - 4.5),
     quality: clamp(company.quality + qualityGain - 3),
     service: clamp(company.service + serviceGain - 3.5),
@@ -136,7 +142,14 @@ export function forecastDemand(input: {
   const company = world.companies.find((c) => c.id === companyId);
   if (!company) return null;
 
-  const me = projected(company, draft, world.niche.innovationPace);
+  /*
+   * The draft as it can actually be paid for. A plan the company cannot fund
+   * is cut before the year runs (see `fundYear`); forecasting the uncut plan
+   * predicted the customers a company with no money would have won with
+   * marketing it was never going to be able to buy.
+   */
+  const funded = draft && company.kind === "player" ? sanitiseAndFund(company, draft, world.niche, economy) : draft;
+  const me = projected(company, funded, world.niche.innovationPace);
   const at = demandAt(world, me, year, economy);
 
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
@@ -146,7 +159,8 @@ export function forecastDemand(input: {
    * whether people stay, which is far easier than whether they arrive.
    */
   const anchored = at.total > 0 ? Math.min(1, held / at.total) : 0;
-  const band = Math.round((year <= 2 ? 0.35 : 0.25 - 0.1 * anchored) * 100) / 100;
+  // And narrower again for a company that has built up its analytics (see `dataEffects`).
+  const band = Math.round((year <= 2 ? 0.35 : 0.25 - 0.1 * anchored) * dataEffects(company.data).band * 100) / 100;
 
   const curve = [0.8, 0.9, 1, 1.1, 1.2].map((m) => {
     const price = Math.max(1, Math.round(me.price * m));
@@ -196,4 +210,9 @@ export function capacityRisk(input: { capacity: number; forecast: Forecast; pric
     revenueLostAtHigh: Math.round(shortAtHigh * price),
     verdict,
   };
+}
+
+/** The draft, cleaned the way the engine cleans it and cut to what can be paid for. */
+function sanitiseAndFund(company: Company, draft: TeamDecisions, niche: World["niche"], economy: Economy): TeamDecisions {
+  return fundYear(company, sanitiseDecisions(draft), niche, economy).decisions;
 }

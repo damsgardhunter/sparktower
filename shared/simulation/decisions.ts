@@ -50,6 +50,26 @@ export interface MarketingDecision {
   celebritySpend: number;
   /** Cities to concentrate on rather than spraying the whole market. Focus beats reach at small budgets. */
   targetCities: string[];
+  /** Customers the seat expects to end the year with. Everybody else plans on it. From year two. */
+  forecast?: number;
+  /** A price per segment; one left out pays `price`, and nought is a free tier. From year three. */
+  tiers?: Record<string, number>;
+  /** PR and influencers: cheap brand when it lands, which is a little better than half the time. From year three. */
+  prSpend?: number;
+  /** A referral programme: customers bringing customers, if the product is worth it. From year four. */
+  referralSpend?: number;
+  /** A promotion: a free first month, or a January sale. From year five. */
+  promo?: "none" | "free_month" | "january";
+  /** Spent bringing back last year's leavers. From year six. */
+  winbackSpend?: number;
+  /** A research report: next year's expectations, or what the incumbents will charge. From year six. */
+  research?: "none" | "expectations" | "rivals";
+  /** How the year's marketing attention is split across the regions you sell in. From year seven. */
+  regionFocus?: Record<string, number>;
+  /** And across the segments you sell to. From year eight. */
+  segmentFocus?: Record<string, number>;
+  /** A vote on each deal the chief executive sent to the table. From year five. */
+  dealVotes?: Record<string, "yes" | "no">;
 }
 
 /** Money: where it comes from and what it costs. */
@@ -72,6 +92,30 @@ export interface FinanceDecision {
   raiseAmount?: number;
   /** Held back rather than spent. Dull, and the reason a bad year isn't a fatal one. */
   cashBuffer: number;
+  /** "short" draws on the credit line; "long" issues a fixed-rate loan with a covenant. From year three. */
+  borrowTerm?: "short" | "long";
+  /** Percentage, up to 20, held back from what a seat (or everyone) committed. From year four. */
+  holdBack?: number;
+  /** Whose spending the hold-back applies to: a seat, or "all". */
+  holdBackSeat?: string;
+  /** Discount, up to 30%, for paying a year up front. From year four. */
+  annualDiscount?: number;
+  /** Overhead cut this year, up to 20%. Service and morale find out next year. From year five. */
+  costReview?: number;
+  /** What to insure against. From year six. */
+  insurance?: "none" | "breach" | "lawsuit" | "poaching" | "all";
+  /** Share of profit paid out, 0–100. From year six. */
+  dividendPct?: number;
+  /** Days customers get to pay: 0, 30, 60 or 90. From year seven. */
+  terms?: number;
+  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year eight. */
+  factorPct?: number;
+  /** Credit-line debt to move onto fixed terms this year. From year eight. */
+  refinance?: number;
+  /** Cash spent buying a stake back from investors. From year nine. */
+  buyback?: number;
+  /** A vote on each deal the chief executive sent to the table. From year five. */
+  dealVotes?: Record<string, "yes" | "no">;
 }
 
 /** The product itself. */
@@ -91,6 +135,18 @@ export interface TechDecision {
    * real product organisation actually argues about.
    */
   researchSpend?: number;
+  /** Engineering pay as a percentage of the market, 80–130. From year three. */
+  engineerPay?: number;
+  /** Security: lowers the odds and the size of a breach. Builds up. From year two. */
+  securitySpend?: number;
+  /** Analytics: a gift to the other seats. Builds up. From year three. */
+  dataSpend?: number;
+  /** One feature from this year's menu, by id, or "" for none. From year four. */
+  featureBet?: string;
+  /** Build it (a year, full effect, might flop) or copy a rival's (now, half effect). */
+  featureMode?: "build" | "copy";
+  /** A vote on each deal the chief executive sent to the table. From year five. */
+  dealVotes?: Record<string, "yes" | "no">;
 }
 
 /** Making and serving what is sold. */
@@ -103,6 +159,26 @@ export interface OpsDecision {
   efficiencySpend: number;
   /** People. Cheaper than it looks in year one, and the largest fixed cost by year five. */
   headcount: number;
+  /** Room rented for this year only: immediate, and 40% dearer than building. From year two. */
+  leaseCapacity?: number;
+  /** Spent on who the year's hires are. Lands when they arrive, next year. From year four. */
+  recruitingSpend?: number;
+  /** Spent making the staff already here better. Lands next year. From year four. */
+  trainingSpend?: number;
+  /** One improvement programme to start this year. From year three. */
+  programme?: "" | "process" | "vendor" | "quality" | "green" | "benchmarking";
+  /** Open the region announced for next year: its city id, or "". From year five. */
+  expand?: string;
+  /** How automated the plant should be next year, 0–100. From year seven. */
+  automationTarget?: number;
+  /** Units of a second shift to run this year, capped at half the room built. From year seven. */
+  shiftCapacity?: number;
+  /** Units of stock to hold for next year. From year eight. */
+  stockTarget?: number;
+  /** Do the work in house, or buy it in. From year eight. */
+  sourcing?: "in_house" | "outsourced";
+  /** A vote on each deal the chief executive sent to the table. From year five. */
+  dealVotes?: Record<string, "yes" | "no">;
 }
 
 /** The decisions only the chief executive can make. */
@@ -126,6 +202,23 @@ export interface ExecutiveDecision {
   positioning?: string;
   /** Seats to bring back, at the cost of the salary that was saved by losing them. A single seat arrives as a string. */
   rehire?: Role[] | Role | "";
+  /** Percentages of what the company can spend, per spending seat. From year two. */
+  budget?: Partial<Record<"cmo" | "cto" | "coo", number>>;
+  /** How hard each other seat's next objective is pushed. From year three. */
+  targets?: Partial<Record<Role, "easy" | "fair" | "aggressive">>;
+  /** Paid, shared equally, to the seats that meet this year's objective. From year three. */
+  bonusPool?: number;
+  /** One seat whose decision this year is reversed to last year's. From year five. */
+  overrule?: Role | "";
+  /** One seat to fire, and what to bid for their replacement. From year six. */
+  replaceSeat?: Role | "";
+  replaceBid?: number;
+  /** "ship" it, "balanced", or get it "right". From year four. */
+  pace?: "ship" | "balanced" | "right";
+  /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year five. */
+  deals?: Record<string, "accept" | "decline" | "vote">;
+  /** How to answer last year's shock. From year two, and only when there is one. */
+  shockAnswer?: string;
 }
 
 /** One year, from all five seats. A missing seat is a real state, not an error. */
@@ -251,6 +344,47 @@ const clean = (value: unknown, fallback = 0): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const SEATS = ["cmo", "cfo", "cto", "coo"] as const;
+const isSeat = (v: unknown): v is Role => typeof v === "string" && (SEATS as readonly string[]).includes(v);
+
+/** A yes or no per deal, and nothing else. */
+function cleanVotes(value: unknown): Record<string, "yes" | "no"> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, "yes" | "no"> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) if (v === "yes" || v === "no") out[k.slice(0, 64)] = v;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Accept, decline or vote per deal, and nothing else. */
+function cleanAnswers(value: unknown): Record<string, "accept" | "decline" | "vote"> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, "accept" | "decline" | "vote"> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) if (v === "accept" || v === "decline" || v === "vote") out[k.slice(0, 64)] = v;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** A stretch per seat, and nothing that is not one. */
+function cleanLevels(value: unknown): Partial<Record<Role, "easy" | "fair" | "aggressive">> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Partial<Record<Role, "easy" | "fair" | "aggressive">> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (isSeat(k) && (v === "easy" || v === "fair" || v === "aggressive")) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** A map of numbers, each made a number and bounded; anything else dropped. Empty becomes undefined. */
+function cleanNumbers(value: unknown, min: number, max = Infinity): Record<string, number> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === "" || v === null || v === undefined) continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) out[k] = Math.max(min, Math.min(max, n));
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
   const out: TeamDecisions = { companyId: d.companyId };
 
@@ -263,6 +397,16 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     performanceSpend: Math.max(0, clean(d.cmo.performanceSpend)),
     celebritySpend: Math.max(0, clean(d.cmo.celebritySpend)),
     targetCities: Array.isArray(d.cmo.targetCities) ? d.cmo.targetCities.filter((c) => typeof c === "string") : [],
+    forecast: Math.max(0, clean(d.cmo.forecast)),
+    tiers: cleanNumbers(d.cmo.tiers, 0),
+    prSpend: Math.max(0, clean(d.cmo.prSpend)),
+    referralSpend: Math.max(0, clean(d.cmo.referralSpend)),
+    promo: d.cmo.promo === "free_month" || d.cmo.promo === "january" ? d.cmo.promo : "none",
+    winbackSpend: Math.max(0, clean(d.cmo.winbackSpend)),
+    research: d.cmo.research === "expectations" || d.cmo.research === "rivals" ? d.cmo.research : "none",
+    regionFocus: cleanNumbers(d.cmo.regionFocus, 0, 100),
+    segmentFocus: cleanNumbers(d.cmo.segmentFocus, 0, 100),
+    dealVotes: cleanVotes(d.cmo.dealVotes),
   };
 
   if (d.cto) out.cto = {
@@ -270,6 +414,12 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     reliabilitySpend: Math.max(0, clean(d.cto.reliabilitySpend)),
     techDebtPaydown: Math.max(0, clean(d.cto.techDebtPaydown)),
     researchSpend: Math.max(0, clean(d.cto.researchSpend)),
+    engineerPay: d.cto.engineerPay === undefined ? undefined : Math.max(80, Math.min(130, clean(d.cto.engineerPay, 100))),
+    securitySpend: Math.max(0, clean(d.cto.securitySpend)),
+    dataSpend: Math.max(0, clean(d.cto.dataSpend)),
+    featureBet: typeof d.cto.featureBet === "string" ? d.cto.featureBet.slice(0, 64) : "",
+    featureMode: d.cto.featureMode === "copy" ? "copy" : "build",
+    dealVotes: cleanVotes(d.cto.dealVotes),
   };
 
   if (d.coo) out.coo = {
@@ -278,6 +428,16 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     supportSpend: Math.max(0, clean(d.coo.supportSpend)),
     efficiencySpend: Math.max(0, clean(d.coo.efficiencySpend)),
     headcount: Math.max(0, Math.round(clean(d.coo.headcount))),
+    leaseCapacity: Math.max(0, Math.round(clean(d.coo.leaseCapacity))),
+    recruitingSpend: Math.max(0, clean(d.coo.recruitingSpend)),
+    trainingSpend: Math.max(0, clean(d.coo.trainingSpend)),
+    programme: (["process", "vendor", "quality", "green", "benchmarking"] as const).includes(d.coo.programme as any) ? d.coo.programme : "",
+    expand: typeof d.coo.expand === "string" ? d.coo.expand.slice(0, 64) : "",
+    automationTarget: d.coo.automationTarget === undefined ? undefined : Math.max(0, Math.min(100, clean(d.coo.automationTarget))),
+    shiftCapacity: Math.max(0, Math.round(clean(d.coo.shiftCapacity))),
+    stockTarget: Math.max(0, Math.round(clean(d.coo.stockTarget))),
+    sourcing: d.coo.sourcing === "outsourced" ? "outsourced" : "in_house",
+    dealVotes: cleanVotes(d.coo.dealVotes),
   };
 
   if (d.cfo) out.cfo = {
@@ -286,6 +446,18 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     repay: Math.max(0, clean(d.cfo.repay)),
     cashBuffer: Math.max(0, clean(d.cfo.cashBuffer)),
     raiseAmount: Math.max(0, clean((d.cfo as any).raiseAmount)),
+    borrowTerm: d.cfo.borrowTerm === "long" ? "long" : "short",
+    holdBack: Math.max(0, Math.min(20, clean(d.cfo.holdBack))),
+    holdBackSeat: typeof d.cfo.holdBackSeat === "string" && d.cfo.holdBackSeat ? d.cfo.holdBackSeat : "all",
+    annualDiscount: Math.max(0, Math.min(30, clean(d.cfo.annualDiscount))),
+    costReview: Math.max(0, Math.min(20, clean(d.cfo.costReview))),
+    insurance: (["breach", "lawsuit", "poaching", "all"] as const).includes(d.cfo.insurance as any) ? d.cfo.insurance : "none",
+    dividendPct: Math.max(0, Math.min(100, clean(d.cfo.dividendPct))),
+    terms: d.cfo.terms === undefined || (d.cfo.terms as unknown) === "" ? undefined : Math.max(0, Math.min(90, Math.round(clean(d.cfo.terms, 30)))),
+    factorPct: Math.max(0, Math.min(100, clean(d.cfo.factorPct))),
+    refinance: Math.max(0, clean(d.cfo.refinance)),
+    buyback: Math.max(0, clean(d.cfo.buyback)),
+    dealVotes: cleanVotes(d.cfo.dealVotes),
   };
 
   if (d.ceo) out.ceo = {
@@ -293,6 +465,15 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     focus: (["growth", "margin", "quality", "survival"] as const).includes(d.ceo.focus as any)
       ? d.ceo.focus
       : "growth",
+    budget: cleanNumbers(d.ceo.budget, 0, 100),
+    targets: cleanLevels(d.ceo.targets),
+    bonusPool: Math.max(0, clean(d.ceo.bonusPool)),
+    overrule: isSeat(d.ceo.overrule) ? d.ceo.overrule : "",
+    replaceSeat: isSeat(d.ceo.replaceSeat) ? d.ceo.replaceSeat : "",
+    replaceBid: Math.max(0, clean(d.ceo.replaceBid)),
+    pace: d.ceo.pace === "ship" || d.ceo.pace === "right" ? d.ceo.pace : "balanced",
+    deals: cleanAnswers(d.ceo.deals),
+    shockAnswer: typeof d.ceo.shockAnswer === "string" && /^(statement|silence|blame_(cmo|cfo|cto|coo))$/.test(d.ceo.shockAnswer) ? d.ceo.shockAnswer : "",
   };
 
   return out;

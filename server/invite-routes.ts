@@ -6,7 +6,8 @@
  *   signed in → POST /api/invites/:token/accept → a member of the project; the owner hears
  *
  * Abuse controls: only the owner invites; 20 invites an hour per person
- * (`invite`), 25 a day and 50 pending per project; opening or accepting a link
+ * (`invite`), 25 a day and 50 pending per project, and 3 a day to any one
+ * email address wherever they come from; opening or accepting a link
  * is limited per address (`inviteLookup`); tokens are 256 random bits, stored
  * only as a hash, single use, expiring, revocable.
  */
@@ -15,14 +16,14 @@ import { pathProgress } from "./path-return";
 import crypto from "node:crypto";
 import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { projectInvites, projectMembers, projects, users, userProfiles } from "@shared/schema";
+import { projectApplications, projectInvites, projectMembers, projects, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey, rateLimit, refuseWithRetry } from "./moderation";
 import { notify } from "./notifications";
 import { sendEmail, devOutbox } from "./email";
 import { feedDisplayName } from "./feed-routes";
 import {
-  INVITES_PER_PROJECT_PER_DAY, MAX_PENDING_INVITES, invitePath, inviteStatus, isInviteToken, maskEmail, validateInviteInput,
+  INVITES_PER_ADDRESS_PER_DAY, INVITES_PER_PROJECT_PER_DAY, MAX_PENDING_INVITES, invitePath, inviteStatus, isInviteToken, maskEmail, validateInviteInput,
 } from "@shared/invites";
 import { publicBaseUrl } from "./public-url";
 
@@ -130,6 +131,30 @@ export function registerInviteRoutes(app: Express) {
         });
       }
       if (email) {
+        /*
+         * The cap counted from the recipient's side, and the only one that is.
+         *
+         * Everything above this counts per project or per sender, so one
+         * person with several projects could mail the same stranger again and
+         * again — a fresh project each time, every check passing, no limit
+         * anywhere aware that it was the same inbox. Counted across the whole
+         * table rather than within this project, because "which project it
+         * came from" is the sender's business and means nothing to the person
+         * receiving it.
+         *
+         * Revoked and expired invites still count. What matters here is how
+         * many times we sent mail to this address today, and revoking the
+         * invite afterwards does not unsend it.
+         */
+        const [toAddress] = await db.select({ n: count() }).from(projectInvites)
+          .where(and(sql`lower(${projectInvites.email}) = ${email}`, gt(projectInvites.createdAt, sql`now() - interval '1 day'`)));
+        if (toAddress.n >= INVITES_PER_ADDRESS_PER_DAY) {
+          return res.status(429).json({
+            message: "That address has already been invited a few times today. Give them a chance to reply.",
+            code: "rate_limited", action: "invite", field: "email",
+          });
+        }
+
         const [already] = await db.select({ id: projectMembers.id }).from(projectMembers).innerJoin(users, eq(users.id, projectMembers.userId))
           .where(and(eq(projectMembers.projectId, project.id), sql`lower(${users.email}) = ${email}`));
         if (already) return res.status(409).json({ message: "That person is already on the team.", code: "already_member", field: "email" });
@@ -242,8 +267,15 @@ export function registerInviteRoutes(app: Express) {
         if (!project) return { status: 404, body: { message: "That project no longer exists.", code: "invite_not_found" } };
         const alreadyIn = project.ownerId === req.user.id
           || (await tx.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, req.user.id)))).length > 0;
-        if (!alreadyIn) await tx.insert(projectMembers).values({ projectId: project.id, userId: req.user.id, role: invite.role });
+        if (!alreadyIn) await tx.insert(projectMembers).values({ projectId: project.id, userId: req.user.id, role: invite.role }).onConflictDoNothing();
         await tx.update(projectInvites).set({ acceptedAt: new Date(), acceptedById: req.user.id }).where(eq(projectInvites.id, invite.id));
+        /*
+         * If they'd also applied, the application is answered: they're in.
+         * Left pending, it sat on the owner's Team tab as a decision still to
+         * make about someone already on the team, and accepting it failed.
+         */
+        await tx.update(projectApplications).set({ status: "accepted" })
+          .where(and(eq(projectApplications.projectId, project.id), eq(projectApplications.userId, req.user.id), eq(projectApplications.status, "pending")));
         return { status: 200, body: { ok: true, projectId: project.id, projectTitle: project.title, role: invite.role, alreadyMember: alreadyIn }, notifyOwner: !alreadyIn ? project : null };
       });
       if (outcome.status === 200 && (outcome as any).notifyOwner) {

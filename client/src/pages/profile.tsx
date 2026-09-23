@@ -1,5 +1,7 @@
 import { PinnedBadges } from "@/components/pinned-badges";
 import { errorText } from "@/lib/api-error";
+import { ReportButton } from "@/components/report-button";
+import { BlockButton } from "@/components/block-button";
 import { FollowBuilderButton } from "@/components/discover-actions";
 import { exploreContext } from "@/lib/explore";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -17,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart, Activity } from "lucide-react";
+import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, UserCheck, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart, Activity } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useRef, useEffect } from "react";
@@ -76,7 +78,19 @@ export default function Profile() {
   useEffect(() => { if (id && !isOwnProfile) markSeen("builder", id); }, [id, isOwnProfile]);
 
   const { data: profileData, isLoading: profileLoading } = useQuery<any>({
-    queryKey: [id ? `/api/users/${id}` : "/api/profile"],
+    /*
+     * An array, not one template string.
+     *
+     * Everything here is `staleTime: Infinity`, so nothing refetches until a
+     * key is invalidated — and half the app was invalidating `["/api/users"]`,
+     * which cannot prefix-match a single string `"/api/users/abc"`. Saving
+     * from the resume panel or the "what I'm looking for" card therefore
+     * refreshed nothing at all, and the page went on showing what it had
+     * before the save. Split into segments, `["/api/users"]` reaches this and
+     * the badges query below, and the default query function still joins them
+     * into the same URL.
+     */
+    queryKey: id ? ["/api/users", id] : ["/api/profile"],
     queryFn: async ({ queryKey }) => {
       const res = await fetch(queryKey.join("/"), { credentials: "include" });
       if (res.status === 404 || res.status === 401) return null;
@@ -96,9 +110,22 @@ export default function Profile() {
   });
 
   const { data: otherUserProjects } = useQuery<any>({
-    queryKey: [`/api/users/${userId}`],
+    queryKey: ["/api/users", userId],
     enabled: !!userId && !isOwnProfile,
     select: (data: any) => data?.projects || [],
+  });
+
+  /*
+   * What there is to earn, from the catalog in code rather than the badges
+   * table — the table still holds rows from features that no longer exist, and
+   * dangling an unearnable badge in front of somebody is worse than showing
+   * none. Own profile only: a visitor is interested in what you did, not in
+   * what you haven't.
+   */
+  const { data: badgeCatalog } = useQuery<{ id: string; name: string; description: string; icon: string; rarity: string; howTo: string }[]>({
+    queryKey: ["/api/badges/catalog"],
+    enabled: !!isOwnProfile,
+    staleTime: 60 * 60 * 1000,
   });
 
   const { data: userBadges } = useQuery<(UserBadge & { badge: BadgeType })[]>({
@@ -123,6 +150,19 @@ export default function Profile() {
 
   const { data: myConnections } = useQuery<(Connection & { user: User; profile?: UserProfile })[]>({
     queryKey: ["/api/connections"],
+    enabled: !!isOwnProfile,
+  });
+
+  /*
+   * The requests you sent that nobody has answered.
+   *
+   * `GET /api/connections/sent` has existed the whole time and nothing on the
+   * web ever called it, so a request sent by mistake — or to somebody who has
+   * clearly stopped logging in — could not be taken back from a browser at
+   * all. There was no screen anywhere that even listed them.
+   */
+  const { data: sentRequests } = useQuery<(Connection & { user: User; profile?: UserProfile })[]>({
+    queryKey: ["/api/connections/sent"],
     enabled: !!isOwnProfile,
   });
 
@@ -207,6 +247,24 @@ export default function Profile() {
     },
   });
 
+  /*
+   * Withdrawing one. The same DELETE that removes an accepted connection —
+   * a pending row and an accepted row are the same row — so nothing new was
+   * needed on the server, only a way to reach it.
+   */
+  const withdrawMutation = useMutation({
+    mutationFn: async (connId: string) => {
+      await apiRequest("DELETE", `/api/connections/${connId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/connections/sent"] });
+      // The button on their profile goes back to "Connect".
+      queryClient.invalidateQueries({ queryKey: ["/api/connections/status"] });
+      toast({ title: "Request withdrawn" });
+    },
+    onError: () => toast({ title: "Couldn't withdraw that request", variant: "destructive" }),
+  });
+
   const removeMutation = useMutation({
     mutationFn: async (connId: string) => {
       await apiRequest("DELETE", `/api/connections/${connId}`);
@@ -272,7 +330,7 @@ export default function Profile() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/users/${userId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users", userId] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
       toast({ title: "Photo updated" });
     },
@@ -284,7 +342,10 @@ export default function Profile() {
     try {
       await apiRequest("POST", "/api/profile", data);
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/users/${userId}`] });
+      // Reaches the profile read and the badges list under it, both of which
+      // an edit can change — completing a profile earns a badge.
+      queryClient.invalidateQueries({ queryKey: ["/api/users", userId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
       setIsEditing(false);
       toast({ title: "Profile updated", description: "Your profile has been updated successfully." });
     } catch (error) {
@@ -692,6 +753,22 @@ export default function Profile() {
                 <div className="flex flex-wrap items-center gap-2">
                   {currentUser && !isOwnProfile && userId && <FollowBuilderButton userId={userId} />}
                   {renderConnectionButton()}
+                  {/*
+                    * Report and block, together, on the profile.
+                    *
+                    * Reporting was the only one of these that existed, and it
+                    * asks someone else to act. Blocking is the one the person
+                    * can do themselves, so it belongs in the same place, at
+                    * the same weight — and on the profile in particular,
+                    * because the profile is where somebody goes to work out
+                    * who is contacting them.
+                    */}
+                  {currentUser && !isOwnProfile && userId && (
+                    <>
+                      <ReportButton targetType="user" targetId={userId} variant="action" />
+                      <BlockButton userId={userId} name={profile?.displayName || null} />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -818,15 +895,36 @@ export default function Profile() {
                 </Card>
               )}
 
-              {userBadges && userBadges.length > 0 && (
+              {/*
+                * Your own profile shows the whole catalog, earned or not; a
+                * visitor sees only what you actually hold. An empty panel told
+                * a new member nothing — not even that badges existed, let
+                * alone what to do — and the answer to "how do I get one" was
+                * nowhere in the product.
+                */}
+              {((userBadges && userBadges.length > 0) || (isOwnProfile && badgeCatalog && badgeCatalog.length > 0)) && (
                 <Card className="border-border/50">
                   <CardHeader>
-                    <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">Earned Badges</CardTitle>
+                    <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">
+                      {isOwnProfile && badgeCatalog?.length
+                        ? `Badges · ${userBadges?.length ?? 0} of ${badgeCatalog.length}`
+                        : "Earned Badges"}
+                    </CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-3">
-                      {userBadges.map((ub) => {
-                        const BADGE_ICONS: Record<string, typeof Award> = { rocket: Rocket, star: Star, trophy: Trophy, users: UsersIcon, sparkles: Sparkles, award: Award };
+                      {(userBadges ?? []).map((ub) => {
+                        /*
+                         * Every icon the catalog names (@shared/badges), by its
+                         * lucide name. A badge whose icon is missing here still
+                         * renders — as the generic award mark — which is how
+                         * three differently-earned badges came to look
+                         * identical on the page.
+                         */
+                        const BADGE_ICONS: Record<string, typeof Award> = {
+                          rocket: Rocket, star: Star, trophy: Trophy, users: UsersIcon,
+                          sparkles: Sparkles, award: Award, "user-check": UserCheck,
+                        };
                         const RARITY_STYLES: Record<string, string> = {
                           common: "bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600",
                           rare: "bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600",
@@ -844,6 +942,21 @@ export default function Profile() {
                           </div>
                         );
                       })}
+                      {/* The rest of the catalog, greyed, each saying how it's earned. */}
+                      {isOwnProfile && (badgeCatalog ?? [])
+                        .filter((b) => !(userBadges ?? []).some((ub) => ub.badge.id === b.id))
+                        .map((b) => {
+                          const LockedIcon = { rocket: Rocket, star: Star, trophy: Trophy, users: UsersIcon, sparkles: Sparkles, award: Award, "user-check": UserCheck }[b.icon] || Award;
+                          return (
+                            <div key={b.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-border bg-muted/30 opacity-70" title={b.description} data-testid={`badge-locked-${b.id}`}>
+                              <LockedIcon className="h-4 w-4 text-muted-foreground" />
+                              <div>
+                                <p className="text-xs font-medium leading-tight text-muted-foreground">{b.name}</p>
+                                <p className="text-[10px] text-muted-foreground">{b.howTo}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </CardContent>
                 </Card>
@@ -977,6 +1090,47 @@ export default function Profile() {
                             Decline
                           </Button>
                         </div>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/*
+                * Beside the requests you received: the ones you sent.
+                *
+                * Only shown when there are any — an empty card explaining that
+                * you have not asked anybody anything is noise on a tab whose
+                * job is the list below.
+                */}
+              {sentRequests && sentRequests.length > 0 && (
+                <Card className="border-border/50" data-testid="card-sent-requests">
+                  <CardHeader>
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      Sent
+                      <Badge variant="secondary" className="text-xs">{sentRequests.length}</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {sentRequests.map(req => (
+                      <div key={req.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50" data-testid={`connection-sent-${req.id}`}>
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setLocation(`/profile/${req.user.id}`)}>
+                          <UserAvatar src={req.profile?.avatarUrl} name={req.profile?.displayName || req.user.firstName || "User"} className="h-10 w-10" />
+                          <div>
+                            <p className="font-medium text-sm">{req.profile?.displayName || req.user.firstName || "User"}</p>
+                            {req.profile?.headline && <p className="text-xs text-muted-foreground">{req.profile.headline}</p>}
+                            <p className="text-xs text-muted-foreground">Waiting for a reply</p>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => withdrawMutation.mutate(req.id)}
+                          disabled={withdrawMutation.isPending}
+                          data-testid={`button-withdraw-${req.id}`}
+                        >
+                          Withdraw
+                        </Button>
                       </div>
                     ))}
                   </CardContent>

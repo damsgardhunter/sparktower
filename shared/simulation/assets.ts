@@ -64,30 +64,58 @@ export function assetEffects(assets: CompanyAsset[]): AssetEffect {
 }
 
 /**
+ * The room a company can actually serve from: what it built, plus what its
+ * assets add. The engine has always served customers from both (see
+ * `effectiveOf` in resolve.ts); anything that reads `company.capacity` alone
+ * is reading the part the company built, and will call a company with a
+ * distribution deal "at its limit" while it is serving comfortably.
+ */
+export function servingCapacity(company: Pick<Company, "capacity" | "assets">): number {
+  return company.capacity + assetEffects(company.assets ?? []).capacity;
+}
+
+/**
  * A year passing over the things a company owns.
  *
- * Assets with a life on them lapse, and the team is told which and when —
- * a capability that vanishes without warning reads as a bug rather than as
- * the licence expiring that they agreed to three years ago.
+ * `expiresIn` is the years of use left, this one included: a five-year
+ * licence works for five years, and one with `expiresIn: 1` works this year
+ * and is gone when it ends. That is what every screen says ("One year, then
+ * it lapses"), and what the team is told the year before.
+ *
+ * It used to count down before the year was played and retire anything that
+ * reached nought — so a five-year asset worked for four, and the one the team
+ * had been told "expires at the end of next year" stopped working at the
+ * start of it, taking its capacity with it while the desk still counted it.
+ *
+ * So this runs at the start of the year and returns what works *this* year,
+ * each a year shorter. Ones that reach nought still work now, and are dropped
+ * when the year settles (`stillHeld`). `expired` only ever holds something
+ * already spent — a stored asset from before this was fixed.
  */
 export function ageAssets(assets: CompanyAsset[]): { assets: CompanyAsset[]; expired: CompanyAsset[]; notes: string[] } {
-  const kept: CompanyAsset[] = [];
+  const working: CompanyAsset[] = [];
   const expired: CompanyAsset[] = [];
   const notes: string[] = [];
 
   for (const asset of assets) {
-    if (asset.expiresIn === undefined) { kept.push(asset); continue; }
-    const left = asset.expiresIn - 1;
-    if (left <= 0) {
+    if (asset.expiresIn === undefined) { working.push(asset); continue; }
+    if (asset.expiresIn <= 0) {
       expired.push(asset);
       notes.push(`${asset.name} has run out. Whatever it was doing for you, it stopped doing this year.`);
-    } else {
-      kept.push({ ...asset, expiresIn: left });
-      if (left === 1) notes.push(`${asset.name} expires at the end of next year.`);
+      continue;
     }
+    const left = asset.expiresIn - 1;
+    working.push({ ...asset, expiresIn: left });
+    if (left === 0) notes.push(`This is ${asset.name}'s last year. It keeps working until the year ends, then it is gone.`);
+    if (left === 1) notes.push(`${asset.name} expires at the end of next year.`);
   }
 
-  return { assets: kept, expired, notes };
+  return { assets: working, expired, notes };
+}
+
+/** What a company still owns once a year is over: anything whose last year that was has gone. */
+export function stillHeld(assets: CompanyAsset[]): CompanyAsset[] {
+  return assets.filter((a) => a.expiresIn === undefined || a.expiresIn > 0);
 }
 
 /** The things that can come up for sale, before a season decides which ones do. */

@@ -387,7 +387,11 @@ export function validateOffer(input: {
   if (pendingElsewhere) {
     return {
       ok: false,
-      error: `You have an offer on ${pendingElsewhere.to}'s table already. Withdraw it before making another.`,
+      // An agreed purchase cannot be withdrawn, so telling somebody to do so
+      // would send them looking for a button that is not there.
+      error: pendingElsewhere.status === "accepted"
+        ? `${pendingElsewhere.to} has already agreed to sell to you this year. One purchase a year — the next can wait until it completes.`
+        : `You have an offer on ${pendingElsewhere.to}'s table already. Withdraw it before making another.`,
       warning: null,
     };
   }
@@ -458,14 +462,22 @@ export function purchaseRead(target: OfferTarget, amount: number): string[] {
 }
 
 /**
- * The live offer you have out, if any.
+ * The offer you have out this year, if any — waiting on an answer, or agreed.
  *
- * One at a time is the server's rule (`already_pending`), so this is a `find`
- * rather than a filter on purpose: a screen that showed two would be showing
- * a state the engine cannot produce.
+ * One at a time is the server's rule (`already_pending`), and the server
+ * counts an *accepted* offer as well as a pending one
+ * (POST /api/sim/ventures/:id/offers in server/simulation-market-routes.ts):
+ * nothing changes hands until the tick, so an acceptance must not free the
+ * money up for a second purchase. This used to find pending offers only, so
+ * the moment a seller said yes the phone offered the CEO every other target
+ * again and the server refused each one with a 409.
+ *
+ * A pending one wins if somehow both exist, since it is the one that can
+ * still be acted on. Still a `find` rather than a filter: a screen that
+ * showed two would be showing a state the engine cannot produce.
  */
 export const outstandingOffer = (made: MadeOffer[] | undefined): MadeOffer | null =>
-  (made ?? []).find((o) => isLive(o.status)) ?? null;
+  (made ?? []).find((o) => isLive(o.status)) ?? (made ?? []).find((o) => o.status === "accepted") ?? null;
 
 /**
  * The order to read targets in.

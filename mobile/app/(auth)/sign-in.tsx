@@ -1,11 +1,13 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
+import { resetRefusal, resetWindowPhrase, waitPhrase } from "../../src/passwordReset";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
 import { Icon, type IconName } from "../../src/components/ui";
 import { LandingSections } from "../../src/components/onboarding/LandingSections";
@@ -42,6 +44,17 @@ export default function SignIn() {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * The phone had no way back into a locked-out account at all: the web has
+   * /forgot-password, the server has the routes, and this screen offered a
+   * password box and nothing else. Someone who forgot theirs had to find a
+   * browser — or, more often, just stopped using the app.
+   *
+   * It opens in place of the login card rather than on a route of its own,
+   * because it belongs to the same card and the (auth) group is where AuthGate
+   * pins a signed-out person anyway.
+   */
+  const [forgot, setForgot] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const cardY = useRef(0);
@@ -50,11 +63,12 @@ export default function SignIn() {
   const openAuth = (t: Tab) => {
     setTab(t);
     setError(null);
+    setForgot(false);
     setShowAuth(true);
     // Bring the card into view once it has laid out.
     setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(cardY.current - spacing.lg, 0), animated: true }), 60);
   };
-  const switchTab = (t: Tab) => { setTab(t); setError(null); };
+  const switchTab = (t: Tab) => { setTab(t); setError(null); setForgot(false); };
 
   const submit = async () => {
     setError(null);
@@ -170,7 +184,13 @@ export default function SignIn() {
             </View>
           )}
 
-          {showAuth && !mfaPending && (
+          {showAuth && !mfaPending && forgot && (
+            <View style={styles.cardWrap} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
+              <ForgotPassword initialEmail={email} onBack={() => { setForgot(false); setError(null); }} />
+            </View>
+          )}
+
+          {showAuth && !mfaPending && !forgot && (
             <View style={styles.cardWrap} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
               <View style={styles.card}>
                 <View style={styles.tabs} accessibilityRole="tablist">
@@ -252,6 +272,12 @@ export default function SignIn() {
                     <Text style={styles.primaryButtonText}>{tab === "login" ? "Log In" : "Create Account"}</Text>
                   )}
                 </Pressable>
+
+                {tab === "login" && (
+                  <Pressable onPress={() => { setForgot(true); setError(null); }} hitSlop={8} testID="link-forgot-password">
+                    <Text style={styles.switch}>Forgot your password? <Text style={styles.switchLink}>Reset it</Text></Text>
+                  </Pressable>
+                )}
               </View>
             </View>
           )}
@@ -262,6 +288,104 @@ export default function SignIn() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+/**
+ * "I can't get in" — the first half of a password reset, the same two states
+ * the web's /forgot-password has (client/src/pages/forgot-password.tsx).
+ *
+ * The screen deliberately tells you nothing about the address you typed. An
+ * answer that differed for a known and an unknown address would turn this box
+ * into a free membership check for anyone holding a list of emails, so the
+ * server always says 200 and this always says the same sentence back
+ * (server/password-reset.ts). Which means the confirmation is not evidence
+ * that an account exists, and the copy has to say so rather than imply it.
+ *
+ * The second half stays on the web: the emailed link opens
+ * /reset-password?token=…, and there is no mobile deep link registered for it.
+ * That's deliberate — a link that opens the app on some phones and the browser
+ * on others is a reset that half of people can't finish.
+ */
+function ForgotPassword({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** Seconds until the server will take another request, counted down so the button can say when. */
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  const send = async () => {
+    if (!email.trim()) { setError("Enter the address you signed up with."); return; }
+    setError(null);
+    setBusy(true);
+    try {
+      await api("/api/auth/forgot-password", { method: "POST", body: { email: email.trim() } });
+      setSent(true);
+    } catch (e) {
+      // A rate limit is the one case where nothing was sent, so the
+      // confirmation below would be a lie. Say when instead of showing a code.
+      const refusal = resetRefusal(e);
+      if (refusal.cooldown > 0) setCooldown(refusal.cooldown);
+      setError(refusal.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={styles.card} testID="forgot-password-card">
+      <Text style={[styles.tabText, styles.tabTextActive, { textAlign: "center" }]}>
+        {sent ? "Check your inbox" : "Reset your password"}
+      </Text>
+      <Text style={styles.cardSub}>
+        {sent
+          ? "If there's an account for that address, a reset link is on its way."
+          : "Enter the address you signed up with and we'll send you a link to set a new password."}
+      </Text>
+
+      {error && (
+        <View style={styles.errorBox} testID="text-forgot-error"><Text style={styles.error}>{error}</Text></View>
+      )}
+
+      {sent ? (
+        <>
+          <Text style={[styles.hint, { textAlign: "left", lineHeight: 18 }]} testID="text-forgot-sent">
+            Open it on this phone or anywhere else — the link expires in {resetWindowPhrase()} and works once. Check the
+            spam folder if it isn't there, and if nothing arrives, the address may not have an account on it.
+          </Text>
+          <Pressable onPress={send} disabled={busy || cooldown > 0} testID="button-forgot-resend"
+            style={({ pressed }) => [styles.secondaryButton, (pressed || busy || cooldown > 0) && styles.pressed]}>
+            {busy ? <ActivityIndicator color={colors.text} /> : (
+              <Text style={styles.secondaryButtonText}>{cooldown > 0 ? `Send another in ${waitPhrase(cooldown)}` : "Send another link"}</Text>
+            )}
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <LabeledInput label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com"
+            autoCapitalize="none" keyboardType="email-address" autoComplete="email" autoFocus
+            onSubmitEditing={() => { if (!busy && cooldown <= 0) void send(); }} returnKeyType="go"
+            testID="input-forgot-email" />
+          <Pressable onPress={send} disabled={busy || cooldown > 0} testID="button-submit-forgot"
+            style={({ pressed }) => [styles.primaryButton, (pressed || busy || cooldown > 0) && styles.pressed]}>
+            {busy ? <ActivityIndicator color={colors.primaryText} /> : (
+              <Text style={styles.primaryButtonText}>{cooldown > 0 ? `Try again in ${waitPhrase(cooldown)}` : "Send reset link"}</Text>
+            )}
+          </Pressable>
+        </>
+      )}
+
+      <Pressable onPress={onBack} hitSlop={8} testID="link-forgot-back-to-signin">
+        <Text style={styles.switch}>← Back to sign in</Text>
+      </Pressable>
+    </View>
   );
 }
 

@@ -205,6 +205,21 @@ describe("filing a decision", () => {
     expect(res.body.errors.repay).toBeTruthy();
   }, 120_000);
 
+  it("refuses a drawdown the credit line cannot cover, and says how much there is", async () => {
+    /*
+     * `borrow` used to be taken at face value: fifty million against a line of
+     * a couple of million funded the lot. The desk now refuses it under the
+     * field, in the same words the phone shows before the round trip.
+     */
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const res = await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 50_000_000, repay: 0, cashBuffer: 0 } });
+    expect(res.status).toBe(400);
+    expect(res.body.errors.borrow).toMatch(/at most|fully drawn/);
+  }, 120_000);
+
   it("refuses a seat that is not yours to file from", async () => {
     const app = await getTestApp();
     const { ventureId } = await runningCompany(app);
@@ -231,8 +246,10 @@ describe("what the table has committed", () => {
       .send({ decision: { price: 22, brandSpend: 2_000_000, performanceSpend: 0, celebritySpend: 0 } });
     await seat("cto").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
       .send({ decision: { featureSpend: 2_000_000, reliabilitySpend: 0, techDebtPaydown: 0 } });
+    // Capacity held where it is: building more is operations' money too now, and this is about the other three.
+    const before = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
     const last = await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
-      .send({ decision: { capacityTarget: 400_000, supportSpend: 2_000_000, efficiencySpend: 0, headcount: 0 } });
+      .send({ decision: { capacityTarget: before.body.company.capacity, supportSpend: 2_000_000, efficiencySpend: 0, headcount: 0 } });
 
     // The seat that files last is told immediately, without another request.
     expect(last.body.preview.commitment.spend).toBe(6_000_000);

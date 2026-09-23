@@ -12,7 +12,22 @@ const ACL_POLICY_METADATA_KEY = "custom:aclPolicy";
 // - GROUP_MEMBER: the users who are members of a specific group;
 // - SUBSCRIBER: the users who are subscribers of a specific service / content
 //   creator.
-export enum ObjectAccessGroupType {}
+export enum ObjectAccessGroupType {
+  /**
+   * Everyone on a project's team: its owner and its members. The group's `id`
+   * is the project id.
+   *
+   * This exists because "private" and "readable by the people it belongs to"
+   * were the same thing for every server-generated artefact and there was no
+   * way to say both. A document's rendered PDF belongs to a project, not to
+   * whoever happened to press Publish, and marking it private with only an
+   * owner meant the rest of the team downloading it from the Files tab got a
+   * 404 on their own file. Marking it public instead meant anyone at all could
+   * read a private project's plan from its URL, signed out. This is the middle
+   * the two needed.
+   */
+  PROJECT_MEMBER = "PROJECT_MEMBER",
+}
 
 // The logic user group that can access the object.
 export interface ObjectAccessGroup {
@@ -82,10 +97,36 @@ abstract class BaseObjectAccessGroup implements ObjectAccessGroup {
   public abstract hasMember(userId: string): Promise<boolean>;
 }
 
+/**
+ * The project's owner and members.
+ *
+ * `storage` is imported lazily on purpose: this module sits under
+ * replit_integrations and is pulled in by the storage layer's own
+ * neighbourhood, so importing the application's storage at module scope would
+ * close an import cycle that resolves to `undefined` at call time — which here
+ * would read as "nobody is on the team" and deny the whole project its files.
+ */
+class ProjectMemberAccessGroup extends BaseObjectAccessGroup {
+  constructor(id: string) {
+    super(ObjectAccessGroupType.PROJECT_MEMBER, id);
+  }
+
+  async hasMember(userId: string): Promise<boolean> {
+    const { storage } = await import("../../storage");
+    const project = await storage.getProject(this.id).catch(() => undefined);
+    if (!project) return false;
+    if (project.ownerId === userId) return true;
+    const members = await storage.getProjectMembers(this.id).catch(() => []);
+    return members.some((m: { userId: string }) => m.userId === userId);
+  }
+}
+
 function createObjectAccessGroup(
   group: ObjectAccessGroup,
 ): BaseObjectAccessGroup {
   switch (group.type) {
+    case ObjectAccessGroupType.PROJECT_MEMBER:
+      return new ProjectMemberAccessGroup(group.id);
     // Implement the case for each type of access group to instantiate.
     //
     // For example:
@@ -165,14 +206,27 @@ export async function canAccessObject({
     return true;
   }
 
-  // Go through the ACL rules to check if the user has the required permission.
+  /*
+   * Go through the ACL rules to check if the user has the required permission.
+   *
+   * Each rule is evaluated in its own try: an unrecognised group type throws
+   * out of `createObjectAccessGroup`, and a membership lookup can fail because
+   * the database is having a moment. Either one used to escape this function
+   * and become a 500 on `GET /objects/...`, which on a page full of images
+   * looks like storage is down rather than one rule being unreadable. A rule
+   * that can't be evaluated grants nothing and the next one is still tried.
+   */
   for (const rule of aclPolicy.aclRules || []) {
-    const accessGroup = createObjectAccessGroup(rule.group);
-    if (
-      (await accessGroup.hasMember(userId)) &&
-      isPermissionAllowed(requestedPermission, rule.permission)
-    ) {
-      return true;
+    try {
+      const accessGroup = createObjectAccessGroup(rule.group);
+      if (
+        (await accessGroup.hasMember(userId)) &&
+        isPermissionAllowed(requestedPermission, rule.permission)
+      ) {
+        return true;
+      }
+    } catch (err) {
+      console.error(`[objects] couldn't evaluate ACL rule ${JSON.stringify(rule.group)}:`, err);
     }
   }
 

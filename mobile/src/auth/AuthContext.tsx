@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { Platform } from "react-native";
 import * as Google from "expo-auth-session/providers/google";
 import * as WebBrowser from "expo-web-browser";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   clearSession, fetchMe, getAccessToken, isMfaChallenge, login as apiLogin, loginWithGoogle,
   logout as apiLogout, register as apiRegister, setSessionExpiredHandler, verifyMfa as apiVerifyMfa,
@@ -101,6 +102,7 @@ function GoogleAuthBridge({
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<any | null>(null);
   const [profile, setProfile] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -146,13 +148,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  /*
+   * Everything the query cache holds for the person who just left.
+   *
+   * The QueryClient is made once, at module scope in app/_layout.tsx, so it
+   * outlives any session: dropping the tokens leaves every answered query —
+   * conversations, the profile summary, projects, notification counts — sitting
+   * in memory under keys the next account uses too. Hand the phone over, let
+   * them sign in, and for the 30 seconds of `staleTime` (longer for anything
+   * that only refetches on demand) they are reading the previous person's
+   * inbox. `clear()` removes the data as well as the queries, so nothing is
+   * served from cache while the new account's requests are in flight.
+   *
+   * Both ways out have to do it. Session expiry drops to sign-in without ever
+   * calling signOut, and that is the path a shared or stolen phone takes.
+   */
+  const forgetEverything = useCallback(() => {
+    setUser(null);
+    setProfile(null);
+    setChallenge(null);
+    queryClient.clear();
+  }, [queryClient]);
+
   // Drop to the sign-in screen when a refresh fails server-side.
   useEffect(() => {
-    setSessionExpiredHandler(() => {
-      setUser(null);
-      setProfile(null);
-    });
-  }, []);
+    setSessionExpiredHandler(forgetEverything);
+  }, [forgetEverything]);
 
   const handlePromptReady = useCallback((prompt: () => Promise<unknown>) => {
     promptRef.current = prompt;
@@ -195,9 +216,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     await apiLogout();
-    setUser(null);
-    setProfile(null);
-  }, []);
+    forgetEverything();
+  }, [forgetEverything]);
 
   const refreshUser = useCallback(async () => {
     try {

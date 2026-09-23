@@ -1,5 +1,14 @@
 /**
- * The three paths a project can be on.
+ * The three paths a project can be on: build something new, systemize (and
+ * finance) a business, or run one that already exists.
+ *
+ * There used to be a "Raise funding" path. Systemize already covered most of
+ * it — its first four weeks were money — so everything Raise did that
+ * Systemize didn't (the scored capital profile and how to raise it, the
+ * capital map, the five funding routes and their roadmaps, the investor
+ * tools) moved into Systemize, and its slot went to a path for companies that
+ * already exist and need help with this week, not with starting. See
+ * `LEGACY_GOALS` for how old Raise projects are carried across.
  *
  * Every project declares one, and everything that reasons about the project
  * — Nova's roadmaps, the briefing, what the dashboard leads with — reads it.
@@ -22,12 +31,30 @@ export const PROJECT_GOALS = [
     description: "Turn something that already works into something that runs without you in every step.",
   },
   {
-    id: "raise_funding",
-    label: "Raise funding",
-    short: "Raise",
-    description: "Get the story, the numbers and the plan into a shape investors will back.",
+    id: "run_company",
+    label: "Run a company",
+    short: "Run",
+    description: "Keep an existing business on track every week: the numbers, the team's recurring work, and what to fix next.",
   },
 ] as const;
+
+/**
+ * Goals that no longer exist, and the path that took over their work.
+ *
+ * Every read of a stored goal goes through `normaliseGoal`, so a row written
+ * before the change — or a link still carrying `?section=raise_funding` —
+ * lands somewhere real instead of nowhere. The rows themselves are rewritten
+ * by migration 0033; this is the belt to that migration's braces.
+ */
+export const LEGACY_GOALS: Record<string, ProjectGoal> = {
+  raise_funding: "systemize_business",
+};
+
+export const normaliseGoal = (v: unknown): ProjectGoal | null => {
+  if (typeof v !== "string") return null;
+  if (LEGACY_GOALS[v]) return LEGACY_GOALS[v];
+  return PROJECT_GOALS.some((g) => g.id === v) ? (v as ProjectGoal) : null;
+};
 
 export type ProjectGoal = (typeof PROJECT_GOALS)[number]["id"];
 
@@ -42,13 +69,25 @@ export const isProjectGoal = (v: unknown): v is ProjectGoal => PROJECT_GOALS.som
 export const GOAL_BACKBONE_PREFIX: Record<ProjectGoal, string> = {
   ship_mvp: "SHIP",
   systemize_business: "SYS",
-  raise_funding: "FUND",
+  run_company: "RUN",
 };
+
+/**
+ * Prefixes that belong to a path other than the one they are named after.
+ *
+ * The funding milestones kept their `FUND.` ids when they moved into
+ * Systemize, deliberately: every finished step on every project is a task
+ * tagged with that id, and the capital profile's score reads its answers by
+ * it. Renaming them would have meant rewriting every one of those tasks for no
+ * benefit to anybody; mapping the prefix costs one line.
+ */
+const PREFIX_ALIASES: Record<string, ProjectGoal> = { FUND: "systemize_business" };
 
 /** The path a milestone id belongs to, from its prefix; null for anything else. */
 export function goalOfBackboneId(id: string | null | undefined): ProjectGoal | null {
   if (!id) return null;
   const prefix = id.split(".")[0];
+  if (PREFIX_ALIASES[prefix]) return PREFIX_ALIASES[prefix];
   return (Object.entries(GOAL_BACKBONE_PREFIX).find(([, p]) => p === prefix)?.[0] as ProjectGoal | undefined) ?? null;
 }
 
@@ -60,8 +99,8 @@ const tagValue = (tags: string[] | null | undefined, prefix: string) => tags?.fi
  * added by hand without a section — returns null: it shows in every section.
  */
 export function sectionOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal | null {
-  const tagged = tagValue(tags, "track:");
-  if (isProjectGoal(tagged)) return tagged;
+  const tagged = normaliseGoal(tagValue(tags, "track:"));
+  if (tagged) return tagged;
   const id = tagValue(tags, "backbone:") ?? tagValue(tags, "parent:");
   if (id) return goalOfBackboneId(id) ?? primary;
   if (tagValue(tags, "injected:")) return primary;
@@ -94,10 +133,12 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "retail", label: "Retail" },
     { id: "other", label: "Other" },
   ],
-  raise_funding: [
-    { id: "startup_equity", label: "Startup equity" },
-    { id: "local_community", label: "Local community" },
-    { id: "loan_grant", label: "Loan or grant" },
+  run_company: [
+    { id: "restaurant", label: "Restaurant or café" },
+    { id: "service", label: "Service business" },
+    { id: "retail", label: "Retail or e-commerce" },
+    { id: "agency", label: "Agency or studio" },
+    { id: "software", label: "Software company" },
     { id: "other", label: "Other" },
   ],
 };
@@ -127,4 +168,4 @@ export const PROJECT_GOAL_IDS = PROJECT_GOALS.map((g) => g.id) as [ProjectGoal, 
 export const DEFAULT_PROJECT_GOAL: ProjectGoal = "ship_mvp";
 
 export const projectGoal = (id: string | null | undefined) =>
-  PROJECT_GOALS.find((g) => g.id === id) ?? PROJECT_GOALS[0];
+  PROJECT_GOALS.find((g) => g.id === normaliseGoal(id)) ?? PROJECT_GOALS[0];

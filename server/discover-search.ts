@@ -14,6 +14,7 @@
  */
 import type { Express } from "express";
 import { storage } from "./storage";
+import { publicProject } from "./project-visibility";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { PROJECT_GOAL_IDS, isProjectGoal } from "@shared/goals";
 import { PROJECT_CATEGORIES, isProjectStatus, type ProjectStatus } from "@shared/categories";
@@ -57,10 +58,8 @@ export function registerDiscoverSearchRoutes(app: Express) {
   /**
    * Everything matching, in one answer: projects first, then people.
    *
-   * Filtering happens here rather than in the query because the pool is small
-   * and the filters are about words in several columns — a project's title,
-   * its one-liner, its stack, the roles it needs. When that stops being true,
-   * the shape of this response is what a real index would fill.
+   * Projects are filtered in the query (see below); people are still
+   * filtered here, from a capped search.
    */
   app.get("/api/discover/search", isAuthenticated, async (req: any, res) => {
     try {
@@ -71,20 +70,28 @@ export function registerDiscoverSearchRoutes(app: Express) {
       const wantProjects = f.kind !== "people";
       const wantPeople = f.kind !== "projects";
 
+      /*
+       * The filters run in SQL now (storage.getProjects), under its listing
+       * cap: this used to load every project with two queries each and filter
+       * in memory, which was fine at fifty projects and a slow, unbounded read
+       * for anyone who can sign in at five thousand. `counts` is therefore
+       * "up to the cap", which is all the screen's "showing 24 of 61" needs.
+       *
+       * Rows the viewer doesn't own get the public projection: Discover is a
+       * public surface, and a project's notes to Nova aren't part of its pitch.
+       */
       const projects = wantProjects
-        ? (await storage.getProjects({ category: f.category ?? undefined, status: f.status ?? undefined, includePrivateOwnedBy: viewerId }))
-          .filter((p) => {
-            if (f.goal && p.goal !== f.goal) return false;
-            if (f.shape === "solo" && !p.soloMode) return false;
-            if (f.shape === "team" && p.soloMode) return false;
-            if (f.needs && !(p.rolesNeeded ?? []).some((r) => r.toLowerCase().includes(f.needs!.toLowerCase()))) return false;
-            if (!f.q) return true;
-            return text(p.title, p.oneLiner, p.description, (p.techStack ?? []).join(" "), (p.rolesNeeded ?? []).join(" ")).includes(f.q.toLowerCase());
-          })
+        ? (await storage.getProjects({
+            category: f.category ?? undefined, status: f.status ?? undefined, goal: f.goal ?? undefined,
+            shape: f.shape ?? undefined, needs: f.needs ?? undefined, q: f.q || undefined,
+            includePrivateOwnedBy: viewerId,
+          })).map((p) => (p.ownerId === viewerId ? p : publicProject(p)))
         : [];
 
       const people = wantPeople
-        ? (await storage.searchUsers(f.q, { limit: 200 }))
+        // The viewer travels with the query so blocks are cut in SQL: Discover
+        // is the other way somebody blocked walks back into view.
+        ? (await storage.searchUsers(f.q, { limit: 200, viewerId }))
           .filter((u) => u.id !== viewerId && u.profile?.isOnboarded)
           .filter((u) => {
             if (!f.needs) return true;

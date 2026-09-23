@@ -22,10 +22,21 @@ export function PathMap({ projectId, goal, data, flash, openId, onOpen, isPrimar
   const fail = useFail();
   const refresh = () => refreshPath(projectId);
   const [showSwitch, setShowSwitch] = useState(false);
+  /*
+   * Marking takes a line saying what makes it done.
+   *
+   * It used to be one tap, and the server filled in "already done before this
+   * path existed" for everyone — so the map filled with milestones ticked off
+   * for reasons nobody could recall, including ones tapped by mistake. The
+   * line is the record; /path/unmark is the way back from a wrong tap.
+   */
+  const [marking, setMarking] = useState<string | null>(null);
+  const [why, setWhy] = useState("");
 
   const mark = useMutation({
-    mutationFn: (ids: string[]) => apiRequest("POST", `/api/projects/${projectId}/path/mark`, { ids, goal }).then((r) => r.json()),
-    onSuccess: refresh, onError: fail,
+    mutationFn: ({ ids, evidence }: { ids: string[]; evidence: string }) =>
+      apiRequest("POST", `/api/projects/${projectId}/path/mark`, { ids, goal, evidence }).then((r) => r.json()),
+    onSuccess: () => { setMarking(null); setWhy(""); refresh(); }, onError: fail,
   });
   const inject = useMutation({
     mutationFn: (phaseId: string) => apiRequest("POST", `/api/projects/${projectId}/path/inject`, { phaseId, goal }).then((r) => r.json()),
@@ -88,10 +99,22 @@ export function PathMap({ projectId, goal, data, flash, openId, onOpen, isPrimar
                       </button>
                       <span className="hidden sm:inline text-[11px] text-muted-foreground shrink-0">{ACTOR_SHORT[m.actor]} · {estimate(m.estimateMinutes)}</span>
                       {!m.done && (
-                        <button className="text-[11px] text-primary hover:underline shrink-0" disabled={mark.isPending} onClick={() => mark.mutate([m.id])} data-testid={`mark-${m.id}`} title="Already done? Mark it.">done</button>
+                        <button className="text-[11px] text-primary hover:underline shrink-0" disabled={mark.isPending} onClick={() => { setMarking(marking === m.id ? null : m.id); setWhy(""); }} data-testid={`mark-${m.id}`} title="Already done? Mark it.">done</button>
                       )}
                       <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
                     </div>
+                    {marking === m.id && !m.done && (
+                      <div className="flex items-center gap-2 px-3 pb-2" data-testid={`mark-why-${m.id}`}>
+                        <input
+                          className="flex-1 min-w-0 rounded-md border border-border bg-background px-2 py-1 text-[12px]"
+                          placeholder="What shows this is done?" value={why} autoFocus
+                          onChange={(e) => setWhy(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter" && why.trim().length >= 10) mark.mutate({ ids: [m.id], evidence: why.trim() }); }}
+                          data-testid={`mark-evidence-${m.id}`}
+                        />
+                        <Button size="sm" variant="secondary" disabled={mark.isPending || why.trim().length < 10} onClick={() => mark.mutate({ ids: [m.id], evidence: why.trim() })} data-testid={`mark-confirm-${m.id}`}>Mark done</Button>
+                      </div>
+                    )}
                     {open && <div className="px-3 pb-3"><MilestoneDetail projectId={projectId} backboneId={m.id} /></div>}
                   </li>
                 );

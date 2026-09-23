@@ -1,6 +1,6 @@
 /**
  * The project manager's three sections — Ship an MVP, Systemize the business,
- * Raise funds — each its own path on the same project, worked side by side.
+ * Run a company — each its own path on the same project, worked side by side.
  *
  * One place for what the manager and its tabs need to agree on: the section
  * list, which section a board task belongs to (the same rule as the server's
@@ -9,8 +9,8 @@
  * existing `invalidateQueries(["/api/projects", id, "path"])` refreshes it.
  */
 import { useQuery } from "@tanstack/react-query";
-import { PROJECT_GOALS, isProjectGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
-import { Rocket, Workflow, HandCoins, type LucideIcon } from "lucide-react";
+import { PROJECT_GOALS, isProjectGoal, normaliseGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
+import { Rocket, Workflow, CalendarCheck, type LucideIcon } from "lucide-react";
 
 export interface SectionDef {
   goal: ProjectGoal;
@@ -24,9 +24,9 @@ export interface SectionDef {
 const BLURB: Record<ProjectGoal, string> = {
   ship_mvp: "Build it and get it in front of people",
   systemize_business: "Make it run without you",
-  raise_funding: "Get the money behind it",
+  run_company: "Keep it on track every week",
 };
-const ICON: Record<ProjectGoal, LucideIcon> = { ship_mvp: Rocket, systemize_business: Workflow, raise_funding: HandCoins };
+const ICON: Record<ProjectGoal, LucideIcon> = { ship_mvp: Rocket, systemize_business: Workflow, run_company: CalendarCheck };
 
 export const SECTIONS: SectionDef[] = PROJECT_GOALS.map((g) => ({ goal: g.id, label: g.label, short: g.short, blurb: BLURB[g.id], icon: ICON[g.id] }));
 export const sectionDef = (goal: ProjectGoal) => SECTIONS.find((s) => s.goal === goal)!;
@@ -80,11 +80,13 @@ export const taskInSection = (tags: string[] | null | undefined, goal: ProjectGo
 /** The tag a task created inside a section carries. */
 export const sectionTag = (goal: ProjectGoal) => `track:${goal}`;
 
-/** The section in the URL (`?section=raise_funding`), if it names one. */
+/**
+ * The section in the URL (`?section=systemize_business`), if it names one.
+ * An old link to the retired funding section opens Systemize, which holds it now.
+ */
 export function sectionFromUrl(): ProjectGoal | null {
   if (typeof window === "undefined") return null;
-  const s = new URLSearchParams(window.location.search).get("section");
-  return isProjectGoal(s) ? s : null;
+  return normaliseGoal(new URLSearchParams(window.location.search).get("section"));
 }
 
 /**

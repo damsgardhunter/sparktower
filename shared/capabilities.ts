@@ -21,8 +21,80 @@ export const CAPABILITY_AREAS = [
 ] as const;
 
 export type CapabilityArea = (typeof CAPABILITY_AREAS)[number]["id"];
-export const CAPABILITY_STATUSES = ["built", "partial", "missing", "unreported"] as const;
+/**
+ * Four verdicts and a fifth thing that is not a verdict.
+ *
+ * "unknown" is the one that had to be added: not found in what the audit read.
+ * The audit reads a digest, and a digest is a view — lists are clipped, most
+ * files appear as excerpts, an archive can be cut to a byte budget. For three
+ * audits running, that view's edges were reported as the product's edges: a
+ * shipped wedge told to cancel itself, an admin safety loop with every route,
+ * page and test in place graded four partial steps, tables declared in
+ * shared/schema.ts listed as absent from the code.
+ *
+ * "missing" is a claim about the repository. "unknown" is a claim about the
+ * read, and the only honest one to make when the read didn't cover the area.
+ * Nothing downstream may treat it as a gap: it is a question, not work.
+ *
+ * The model never returns it — it is applied deterministically after the fact
+ * (server/audit-claims.ts, downgradeUnreadCapabilities), because a model asked
+ * to know what it didn't see will guess.
+ */
+export const CAPABILITY_STATUSES = ["built", "partial", "missing", "unknown", "unreported"] as const;
 export type CapabilityStatus = (typeof CAPABILITY_STATUSES)[number];
+
+/** How each verdict reads to a person. */
+export const CAPABILITY_STATUS_LABEL: Record<CapabilityStatus, string> = {
+  built: "built",
+  partial: "partial",
+  missing: "missing",
+  unknown: "not read",
+  unreported: "unreported",
+};
+
+/**
+ * Words that mean an area, for matching prose against the inventory.
+ *
+ * Used only to annotate a recommendation whose area the audit could not read —
+ * "build X" where X is unknown rather than missing. Kept tight on purpose: a
+ * false match adds a sentence to a fair recommendation, which is cheap, but a
+ * loose one would add it to half of them, which is noise.
+ */
+export const AREA_TERMS: Record<CapabilityArea, string[]> = {
+  auth: ["auth", "sign-in", "sign in", "sign-up", "sign up", "login", "log in", "session", "password"],
+  rateLimiting: ["rate limit", "rate-limit", "ratelimit", "throttl"],
+  moderation: ["moderat", "report queue", "take-down", "takedown", "suspend"],
+  payments: ["payment", "billing", "stripe", "checkout", "subscription", "paywall"],
+  ai: ["ai route", "ai endpoint", "model call", "prompt", "llm", "openai"],
+  analytics: ["analytic", "funnel", "retention", "event tracking", "metrics dashboard"],
+  data: ["schema", "migration", "database table", "persistence", "drizzle", "prisma"],
+  tests: ["test suite", "unit test", "integration test", "tests", "e2e", "coverage"],
+  ci: ["ci ", "ci/", "continuous integration", "pipeline", "github action"],
+  deploy: ["deploy", "health check", "feature flag", "kill switch", "environment contract"],
+  mobile: ["mobile app", "expo", "react native", "native app", "ios app", "android app"],
+};
+
+/**
+ * What the inventory says is outstanding work.
+ *
+ * `gaps` is what a count in the UI or a plan may act on: partial and missing.
+ * `unknown` is counted separately and never folded in — an audit that couldn't
+ * read the payments code has not found a payments gap, and showing it as one
+ * is how a builder ends up rebuilding what they already shipped.
+ */
+export function capabilityCounts(caps: CapabilityEntry[] | null | undefined) {
+  const list = caps ?? [];
+  const of = (s: CapabilityStatus) => list.filter((c) => c.status === s).length;
+  return {
+    total: list.length,
+    built: of("built"),
+    partial: of("partial"),
+    missing: of("missing"),
+    unknown: of("unknown"),
+    unreported: of("unreported"),
+    gaps: of("partial") + of("missing"),
+  };
+}
 
 export interface CapabilityEvidence { file: string; route?: string }
 /** The second read's answer: quantified coverage and the specific gaps. */
@@ -107,13 +179,16 @@ export function sanitizeCapabilities(
 /** The inventory as prompt text, in the order a planner should read it. */
 export function renderCapabilities(caps: CapabilityEntry[] | null | undefined): string | null {
   if (!caps?.length) return null;
-  const order: Record<CapabilityStatus, number> = { built: 0, partial: 1, missing: 2, unreported: 3 };
+  const order: Record<CapabilityStatus, number> = { built: 0, partial: 1, missing: 2, unknown: 3, unreported: 4 };
   const lines = [...caps].sort((a, b) => order[a.status] - order[b.status]).map((c) => {
     const ev = c.evidence.map((e) => (e.route ? `${e.route} in ${e.file}` : e.file)).join(", ");
     const detail = c.detail
       ? `${c.detail.coverage ? ` Coverage: ${c.detail.coverage}` : ""}${c.detail.gaps.length ? ` Gaps: ${c.detail.gaps.slice(0, 5).map((g) => `${g.item}${g.file ? ` (${g.file})` : ""}`).join("; ")}` : ""}`
       : "";
-    return `- ${areaLabel(c.area)}: ${c.status.toUpperCase()}${c.summary ? ` — ${c.summary}` : ""}${ev ? ` [${ev}]` : ""}${c.missing ? ` Missing: ${c.missing}` : ""}${detail}${c.note ? ` (${c.note})` : ""}`;
+    // UNKNOWN is spelled out, because a later plan reading "UNKNOWN" alone
+    // would treat it as a gap — which is the failure this state exists to stop.
+    const verdict = c.status === "unknown" ? "UNKNOWN (not found in what this audit read — NOT a gap; confirm before building it)" : c.status.toUpperCase();
+    return `- ${areaLabel(c.area)}: ${verdict}${c.summary ? ` — ${c.summary}` : ""}${ev ? ` [${ev}]` : ""}${c.missing ? ` Missing: ${c.missing}` : ""}${detail}${c.note ? ` (${c.note})` : ""}`;
   });
   return `CAPABILITY INVENTORY (from the latest audit — what already exists, with the files that prove it. A plan that proposes something marked BUILT from scratch is wrong; extend or wire the file named.)\n${lines.join("\n")}`;
 }

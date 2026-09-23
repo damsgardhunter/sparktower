@@ -11,6 +11,7 @@ import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Icon, Loading } from "../../src/components/ui";
 import { ConnectActions, useConnectionStates } from "../../src/components/ConnectActions";
+import { BlockAction } from "../../src/components/BlockAction";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { messageTemplates } from "../../src/messageTemplates";
 import { clockTime, dayLabel, personAvatar, personName } from "../../src/networkData";
@@ -152,7 +153,20 @@ export default function Chat() {
 
   return (
     <>
-      <Stack.Screen options={{ headerTitle: () => title, headerTitleAlign: "left" }} />
+      {/*
+        * Block, in the thread's own header.
+        *
+        * The thread is where the thing somebody wants to stop is actually
+        * happening, and making them go via the profile to stop it is a detour
+        * at the worst moment. Blocking removes the connection, which closes
+        * this screen — so it navigates back rather than leaving the person
+        * staring at a conversation that will now 403 on its next poll.
+        */}
+      <Stack.Screen options={{
+        headerTitle: () => title,
+        headerTitleAlign: "left",
+        headerRight: () => (id ? <BlockAction userId={id} name={name} compact onBlocked={() => router.back()} /> : null),
+      }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}

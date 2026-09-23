@@ -6,7 +6,8 @@ import {
   type BooleanFeature, type Entitlements, type TierId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
-import { enforceRateLimit, consumeRateLimit , refuseWithRetry } from "./moderation";
+import { enforceRateLimit, consumeRateLimit, refuseWithRetry } from "./moderation";
+import { holdCredits } from "./credit-reservations";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -109,50 +110,61 @@ export async function requireCredits(
   if (!(await enforceRateLimit(res, userId, "ai"))) return null;
 
   const ent = await getUserEntitlements(userId);
-  const sub = await storage.getUserSubscription(userId);
+  let sub = await storage.getUserSubscription(userId);
 
-  if (ent.credits === Infinity) {
-    if (sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP) {
-      /*
-       * A month's ceiling, in the shape every other refusal has. The wait is
-       * until the month turns over, which is the honest answer even when it is
-       * a fortnight: a client that reads Retry-After should not be told to
-       * come back in a minute to the same wall.
-       */
-      const monthTurns = new Date();
-      monthTurns.setUTCMonth(monthTurns.getUTCMonth() + 1, 1);
-      monthTurns.setUTCHours(0, 0, 0, 0);
-      refuseWithRetry(res, {
-        action: "ai",
-        message:
-          `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
-          `this month. Get in touch and we'll sort it out.`,
-        retryAfterSeconds: Math.max(60, Math.round((monthTurns.getTime() - Date.now()) / 1000)),
-        // The phone routes this code to the pricing screen (mobile/src/components/SprintKit.tsx).
-        code: "fair_use_limit",
-        extra: { creditsUsed: sub.creditsUsed, fairUseCap: FAIR_USE_MONTHLY_CAP, tier: ent.tier },
-      });
-      return null;
-    }
+  /*
+   * The credits are taken here, before the model is called, not only checked
+   * (server/credit-reservations.ts). Checking alone let every request in a
+   * burst pass against the same balance and reach the model; the deduction
+   * after it was conditional, but by then the call was paid for. The charge is
+   * the same conditional update, so it can't take the balance past the cap —
+   * the fair-use ceiling for unlimited tiers — and a route that never deducts
+   * gets the credits back before its response goes out.
+   */
+  const unlimited = ent.credits === Infinity;
+  const refused = unlimited ? sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP : sub.creditsRemaining < amount;
+  if (!refused && (await storage.chargeCredits(userId, amount))) {
+    holdCredits(res, userId, amount);
     return ent;
   }
+  // Refused by the check, or by the charge because a request running alongside took the last of them.
+  if (!refused) sub = await storage.getUserSubscription(userId);
 
-  if (sub.creditsRemaining < amount) {
-    res.status(403).json({
-      message: `Not enough credits for ${label}. This costs ${amount} credit${amount === 1 ? "" : "s"}.`,
-      code: "insufficient_credits",
-      cost: amount,
-      creditsRemaining: sub.creditsRemaining,
-      creditsLimit: sub.creditsLimit,
-      tier: ent.tier,
-      // What the client needs to offer the way on: "Upgrade to keep generating".
-      creditState: "out",
-      upgradeUrl: "/pricing",
+  if (unlimited) {
+    /*
+     * A month's ceiling, in the shape every other refusal has. The wait is
+     * until the month turns over, which is the honest answer even when it is a
+     * fortnight: a client that reads Retry-After should not be told to come
+     * back in a minute to the same wall.
+     */
+    const monthTurns = new Date();
+    monthTurns.setUTCMonth(monthTurns.getUTCMonth() + 1, 1);
+    monthTurns.setUTCHours(0, 0, 0, 0);
+    refuseWithRetry(res, {
+      action: "ai",
+      message:
+        `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
+        `this month. Get in touch and we'll sort it out.`,
+      retryAfterSeconds: Math.max(60, Math.round((monthTurns.getTime() - Date.now()) / 1000)),
+      // The phone routes this code to the pricing screen (mobile/src/components/SprintKit.tsx).
+      code: "fair_use_limit",
+      extra: { creditsUsed: sub.creditsUsed, fairUseCap: FAIR_USE_MONTHLY_CAP, tier: ent.tier },
     });
     return null;
   }
 
-  return ent;
+  res.status(403).json({
+    message: `Not enough credits for ${label}. This costs ${amount} credit${amount === 1 ? "" : "s"}.`,
+    code: "insufficient_credits",
+    cost: amount,
+    creditsRemaining: sub.creditsRemaining,
+    creditsLimit: sub.creditsLimit,
+    tier: ent.tier,
+    // What the client needs to offer the way on: "Upgrade to keep generating".
+    creditState: "out",
+    upgradeUrl: "/pricing",
+  });
+  return null;
 }
 
 /**

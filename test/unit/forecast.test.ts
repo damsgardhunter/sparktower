@@ -25,8 +25,15 @@ import type { TeamDecisions } from "@shared/simulation/decisions";
 const dating = nicheById("dating_apps")!;
 const seg = (niche: typeof dating, id: string) => niche.segments.find((s) => s.id === id)!;
 
-function plan(world: World, id: string, year: number, spend = 400_000): TeamDecisions {
+function plan(world: World, id: string, year: number, most = 400_000): TeamDecisions {
   const c = world.companies.find((x) => x.id === id)!;
+  /*
+   * Within its means. This team used to spend 2.4m a year whatever it had, ran
+   * out of money in year three, and only kept growing because a plan cut to
+   * nothing still bought a full year of brand — the bug `fundYear` fixed. A
+   * team that spends money it does not have is not a fair test of a forecast.
+   */
+  const spend = Math.min(most, Math.max(25_000, Math.round(c.cash * 0.06)));
   return {
     companyId: id,
     cmo: { price: c.price, brandSpend: spend, performanceSpend: spend, celebritySpend: 0, targetCities: [] },
@@ -235,7 +242,9 @@ describe("the year-end report adds up", () => {
   it("has a P&L whose lines sum to the profit", () => {
     for (const { niche, report: r } of years) {
       const p = r.pnl!;
-      const costs = p.costToServe + p.salaries + p.marketing + p.product + p.operations + p.idleCapacity + p.interest;
+      // Building and leasing capacity are costs; a forecast's saving (or loss) is the other way round.
+      const costs = p.costToServe + p.salaries + p.marketing + p.product + p.operations + p.idleCapacity + p.interest
+        + (p.capacity ?? 0) + (p.incidents ?? 0) + (p.partners ?? 0) + (p.insurance ?? 0) - (p.planning ?? 0);
       expect(p.revenue - costs, `${niche} y${r.year} operating`).toBeCloseTo(p.operatingProfit, 0);
       expect(p.operatingProfit - p.tax, `${niche} y${r.year} after tax`).toBeCloseTo(p.profit, 0);
       expect(p.profit, `${niche} y${r.year}`).toBeCloseTo(r.profit, 0);

@@ -4,7 +4,7 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
-import { Avatar, Empty, Icon, Loading, Screen, Segments, TabStrip, assetUri, type IconName } from "../../src/components/ui";
+import { Avatar, Empty, ErrorState, Icon, Loading, Screen, Segments, TabStrip, assetUri, errText, type IconName } from "../../src/components/ui";
 import { Pill, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 
 type Board = "builder" | "views" | "donations";
@@ -66,6 +66,20 @@ export default function Leaderboard() {
       <View style={{ paddingHorizontal: spacing.md, gap: spacing.md }}>
         {active.isLoading ? <View style={{ height: 240 }}><Loading /></View>
           : active.error && isSwitchedOff(active.error) ? <Empty icon="pause-circle-outline" title="The leaderboard is paused" body="It's switched off right now. Check back soon." />
+          /*
+           * Any other failure. It used to fall through to the empty state, so
+           * a dropped request read as "No projects ranked yet" — a claim about
+           * SparkTower having nobody on it, on a screen whose whole purpose is
+           * to show that people are building. Pull-to-refresh was the only way
+           * back and nothing said so.
+           */
+          : active.error && !active.data ? (
+            <ErrorState
+              title="Couldn't load the leaderboard"
+              message={errText(active.error, "We couldn't reach the server.")}
+              onRetry={() => void active.refetch()}
+            />
+          )
           : list.length === 0 ? (
             <Empty icon="trophy-outline"
               title={board === "builder" ? "No builder scores yet" : "No projects ranked yet"}

@@ -153,6 +153,18 @@ export interface CatchUpContext {
   pathDone: Set<string>;
   /** One-line descriptions of edits the builder declined last time. */
   declined: string[];
+  /**
+   * Whether the audit read the whole codebase, or a clipped view of it.
+   *
+   * A digest has budgets: a large repository is read in part, and a zip that
+   * predates this morning's work is a view of a codebase that no longer
+   * exists. Everything an audit *adds* survives that safely — a feature it
+   * can see is a feature that is there. Everything it *takes away* does not:
+   * "no trace of it in the code" is then a statement about the digest, and
+   * retiring a builder's work on it tells somebody to cancel the thing they
+   * spent the week building.
+   */
+  partialView?: boolean;
 }
 
 export interface TidiedCatchUp {
@@ -268,6 +280,28 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
         } else drop("over the loops limit");
         continue;
       }
+    }
+    /*
+     * Taking work away needs more than not having seen it.
+     *
+     * These three operations are the only ones that remove or undo something
+     * the builder has: retiring a loop, retiring a card, and reopening a card
+     * they marked done. Each is proposed when the code "has no trace" of the
+     * thing — which is sound from a complete reading and worthless from a
+     * partial one. The failure it produced is the one worth naming: a builder
+     * who had shipped a whole wedge into the product was told to cancel it,
+     * because the snapshot the audit read was taken before the work landed.
+     *
+     * So on a partial view they are held back, with the reason said plainly.
+     * The rest of the audit still lands: everything it found, everything it
+     * closed, every new loop and every next step. The audit goes on helping
+     * with what is there and stops arguing with what it could not see.
+     */
+    const removes = op.op === "retire_loop" || op.op === "retire_task"
+      || (op.op === "update_task" && taskById.get(op.id)?.status === "done" && typeof op.status === "string" && op.status !== "done");
+    if (removes && ctx.partialView) {
+      drop("it reads as removing work, and this audit only saw part of the codebase");
+      continue;
     }
     if (op.op === "retire_loop" && !loopById.has(op.id)) { drop("a loop that isn't on the project"); continue; }
     if (op.op === "retire_task") {

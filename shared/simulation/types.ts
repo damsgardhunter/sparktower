@@ -117,6 +117,15 @@ export interface City {
   entryCost: number;
   /** What it is like to sell here, in one line. */
   note: string;
+  /**
+   * Who lives here, by segment, as a multiplier on how many of them there are
+   * relative to the market as a whole: 1.3 means this region over-indexes on
+   * that segment by a third, 0.8 means it under-indexes. A company selling
+   * everywhere gets exactly the market average, whatever these say (see
+   * `regionalFit`), so this is about *where* you sell, never about the size of
+   * the market.
+   */
+  mix?: Record<string, number>;
 }
 
 export interface Niche {
@@ -375,6 +384,76 @@ export interface Company {
   /** Who bought a stake, what they expect, and whether they have taken the chair. */
   investors?: import("./finance").Investors;
   /**
+   * A price per segment, set by the marketing seat once tiers unlock. A segment
+   * with no tier pays `price`. See `responsibilities.ts` for how tiers leak.
+   */
+  tiers?: Record<string, number>;
+  /**
+   * Long-term loans: fixed rate, repaid in full when they mature, with a
+   * covenant. Always a portion of `debt`, like the emergency loan.
+   */
+  bonds?: import("./responsibilities").Bond[];
+  /**
+   * Cash collected this year from annual plans for service owed next year. It
+   * was received early, so next year it is revenue that brings no cash in.
+   */
+  prepaid?: number;
+  /**
+   * How much less likely this company's customers are to leave this year, 0–1.
+   * Set on the way into the market from the annual plans on offer; never stored.
+   */
+  retention?: number;
+  /** Room leased for this year only. Set on the way into the market; never stored. */
+  leased?: number;
+  /** The five chairs as people: how loyal, how good, how hard pushed. See `people.ts`. */
+  people?: Partial<Record<Role, import("./people").Person>>;
+  /** How good the staff are, 0–100; what their support is worth. Set a year ahead by recruiting and training. */
+  staffQuality?: number;
+  /** How automated the plant is, 0–100: cheaper units, a dearer and slower plant to change. See `factory.ts`. */
+  automation?: number;
+  /** Stock bought last year, waiting to serve customers this year's room cannot. */
+  stock?: number;
+  /** Whether the work is done in house or bought in. */
+  sourcing?: "in_house" | "outsourced";
+  /** Days customers get to pay. Longer wins business and delays the money. See `treasury.ts`. */
+  terms?: number;
+  /** Money earned but not yet collected, arriving next year. */
+  receivables?: number;
+  /** Last year's cost review, as a percentage: felt this year in service and morale. */
+  reviewScar?: number;
+  /** Features built or copied, and whether they worked. See `product.ts`. */
+  features?: import("./product").Feature[];
+  /** Security built up, 0–100: lowers the chance and the damage of a breach. */
+  security?: number;
+  /** Analytics built up, 0–100: a narrower forecast and better-aimed spending. */
+  data?: number;
+  /** This year's PR backfire, as reputation lost. Set on the way into the market; never stored. */
+  prReputation?: number;
+  /** A shock the chief executive has yet to answer. See `world.ts`. */
+  shock?: import("./world").Shock;
+  /** Dividends the founders have taken out: theirs for good, counted in what they own. */
+  banked?: number;
+  /** Improvement programmes started, each paying out over three years. */
+  programmes?: import("./world").Programme[];
+  /** A region operations has committed to open, and the year it opens. */
+  expanding?: { cityId: string; opensYear: number };
+  /** How much of a newly opened region is reached this year, by city. Set on the way into the market; never stored. */
+  ramp?: Record<string, number>;
+  /** Customers won by last year's promotion, by segment: deal-chasers, who leave faster. */
+  dealChasers?: Record<string, number>;
+  /** Customers lost to rivals last year, by segment, for win-back. */
+  leftLastYear?: Record<string, number>;
+  /** Where the company stood when those customers left, to judge whether it fixed anything. */
+  lastStats?: { quality: number; service: number; price: number };
+  /** Revenue shares owed to distribution partners, and the last year each runs. */
+  revenueShares?: { rate: number; until: number; from: string }[];
+  /** This year's promotion. Set on the way into the market; never stored. */
+  promo?: string;
+  /** How the marketing seat split its attention across regions this year. Set on the way in; never stored. */
+  regionFocus?: Record<string, number>;
+  /** And across segments. Set on the way in; never stored. */
+  segmentFocus?: Record<string, number>;
+  /**
    * What the founders still own, 0–1.
    *
    * Starts whole and only ever goes down. Raising money is not free and this
@@ -448,6 +527,14 @@ export function repairCompany(c: Company): Company {
     staff: Math.max(0, Math.round(num(c.staff, 0))),
     creditScore: Math.max(0, Math.min(100, num(c.creditScore, 50))),
     emergencyDebt: Math.max(0, num(c.emergencyDebt, 0)),
+    tiers: c.tiers && typeof c.tiers === "object"
+      ? Object.fromEntries(Object.entries(c.tiers).filter(([, v]) => Number.isFinite(Number(v)) && Number(v) >= 0).map(([k, v]) => [k, Number(v)]))
+      : undefined,
+    bonds: Array.isArray(c.bonds)
+      ? c.bonds.filter((b) => Number.isFinite(Number(b?.amount)) && Number(b.amount) > 0)
+          .map((b) => ({ amount: Number(b.amount), rate: num(b.rate, 0.08), maturesYear: Math.round(num(b.maturesYear, 1)) }))
+      : undefined,
+    prepaid: Math.max(0, num(c.prepaid, 0)),
   };
 }
 

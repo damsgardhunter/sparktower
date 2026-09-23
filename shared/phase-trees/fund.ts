@@ -1,4 +1,4 @@
-import type { PathTree, BackbonePhase } from "./types";
+import type { BackbonePhase } from "./types";
 import {
   OWNERSHIP_GOAL_QUESTIONS, MONEY_TODAY_QUESTIONS, EXPERIENCE_QUESTIONS, BUSINESS_HISTORY_QUESTIONS,
   CAPITAL_GOAL_QUESTIONS, ROUTE_CHOICE_QUESTIONS,
@@ -7,7 +7,7 @@ import {
 const h = (n: number) => n * 60;
 
 /**
- * Part 4 — Raise funding.
+ * The funding routes — now part of Systemize (see FUNDING_PHASES below).
  *
  * Two weeks that everyone walks — who they are to a funder (the capital
  * profile and its score) and every way the money could come (the capital
@@ -344,10 +344,18 @@ const SELF: BackbonePhase[] = [
   },
 ];
 
-export const FUND_TREE: PathTree = {
-  goal: "raise_funding",
-  promise: "Know how fundable you are, pick the route to the money, and build it out step by step",
-  target: "2 weeks to a capital profile and route, then the route's roadmap",
-  defaultTier: "artifact",
-  phases: [PROFILE, MAP, ...DEBT, ...SELLER, ...INVESTOR, ...HYBRID, ...SELF],
-};
+/**
+ * Everything the funding path did, handed to Systemize.
+ *
+ * The "Raise funding" path was retired and its phases moved here intact — the
+ * scored capital profile with what raises it, the capital map, the route
+ * choice, and each route's four-phase roadmap to money in the bank. Their
+ * `FUND.` ids are kept on purpose: every finished step on every project is a
+ * task tagged with one, and the capital profile's score reads its answers by
+ * them. `goalOfBackboneId` maps the prefix to Systemize.
+ */
+export const FUNDING_PHASES: BackbonePhase[] = [
+  { ...PROFILE, title: "Your capital profile" },
+  { ...MAP, title: "Your capital map" },
+  ...DEBT, ...SELLER, ...INVESTOR, ...HYBRID, ...SELF,
+];

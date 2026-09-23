@@ -38,7 +38,8 @@
  * over-reaches is the most vulnerable company in the market, and everybody can
  * see them.
  */
-import type { Company } from "./types";
+import type { Company, Segment } from "./types";
+import { takings } from "./responsibilities";
 
 export type OfferKind = "acquire";
 export type OfferStatus = "pending" | "accepted" | "declined" | "lapsed" | "withdrawn";
@@ -71,7 +72,15 @@ export interface Valuation {
  */
 export function valuation(company: Company): Valuation {
   const customers = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
-  const revenue = customers * company.price;
+  /*
+   * What the customers actually pay, tier by tier. Only the segments the
+   * company holds or prices matter, and a free tier's advertising is left out
+   * of a buyer's arithmetic — it is the part nobody can count on.
+   */
+  const segmentIds = Array.from(new Set([...Object.keys(company.customers), ...Object.keys(company.tiers ?? {})]));
+  const revenue = company.tiers
+    ? takings(company, company.customers, segmentIds.map((id) => ({ id, referencePrice: 0 }) as Segment)).revenue
+    : customers * company.price;
   const assets = company.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
   const debt = company.debt;
 
@@ -84,7 +93,9 @@ export function valuation(company: Company): Valuation {
   const fair = Math.max(0, Math.round(revenue * 1.2 + assets - debt));
 
   const notes: string[] = [];
-  notes.push(`${customers.toLocaleString()} customers at ${Math.round(company.price)} is ${Math.round(revenue).toLocaleString()} a year.`);
+  notes.push(company.tiers
+    ? `${customers.toLocaleString()} customers across its price tiers is ${Math.round(revenue).toLocaleString()} a year.`
+    : `${customers.toLocaleString()} customers at ${Math.round(company.price)} is ${Math.round(revenue).toLocaleString()} a year.`);
   if (assets > 0) notes.push(`What it owns would fetch about ${Math.round(assets).toLocaleString()}.`);
   if (debt > 0) notes.push(`It owes ${Math.round(debt).toLocaleString()}, and that comes with it.`);
   if (company.bankruptSince !== undefined) {
@@ -201,10 +212,25 @@ export function applyAcquisition(input: { buyer: Company; seller: Company; amoun
     combined[segment] = (combined[segment] ?? 0) + n;
   }
 
+  /*
+   * Paid from cash first, and the rest on credit — the way a marketplace win
+   * is settled (see settleMarket in server/simulation-tick.ts).
+   *
+   * The whole price used to come out of cash. A buyer the tick had just
+   * checked could afford it — cash plus undrawn credit — was left overdrawn
+   * instead of borrowed, and the engine reads negative cash as a company that
+   * cannot pay its bills: it took out an emergency loan on their behalf, at
+   * the emergency rate, with the credit score hit that goes with it. The
+   * credit line the purchase was approved against went unused, and the team
+   * was punished for a deal the game had told them they could make.
+   */
+  const fromCash = Math.min(Math.max(0, buyer.cash), amount);
+  const borrowed = amount - fromCash;
+
   const buyerAfter: Company = {
     ...buyer,
-    cash: buyer.cash - amount,
-    debt: buyer.debt + seller.debt,
+    cash: buyer.cash - fromCash,
+    debt: buyer.debt + seller.debt + borrowed,
     customers: combined,
     assets: [...buyer.assets, ...seller.assets],
   };

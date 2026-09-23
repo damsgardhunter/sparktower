@@ -15,6 +15,7 @@
 import type { Express } from "express";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
+import { publiclyVisible } from "./visibility";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { projects, projectMembers, feedPosts, projectKanbanTasks } from "@shared/schema";
 import { pathStatus, listTracks } from "./phase-trees";
@@ -22,12 +23,23 @@ import { mainLineMilestones, resolveTree } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import { weekStartOf } from "@shared/weeks";
 import { notify } from "./notifications";
+import { notifyScouts } from "./scouting-alerts";
 import type { NextStepItem, WeeklyUpdate, NeedsPath } from "@shared/next-step";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
 export const NUDGE_AFTER_DAYS = 2;
 /** The home card shows at most this many sections, across projects. */
 const MAX_ITEMS = 5;
+/**
+ * How many projects one request will walk.
+ *
+ * This runs on every home-screen load and does a handful of queries per
+ * section of every project someone belongs to. Someone on thirty projects
+ * turned the home feed into a hundred-odd round trips for a card that shows
+ * five rows. Newest projects first, since that is the one a builder is most
+ * likely to be working, and the card itself only shows five sections anyway.
+ */
+const MAX_PROJECTS = 8;
 
 export type { NextStepItem, WeeklyUpdate, NeedsPath } from "@shared/next-step";
 
@@ -109,7 +121,16 @@ async function teamOf(projectId: string): Promise<{ ownerId: string; members: st
  * the project hears, with what's next. When nobody did — Nova's answer was
  * chosen, an audit found it done — the whole team hears, owner included.
  */
-export async function afterPathStepDone(task: { id: string; projectId: string; title: string; completedById?: string | null }): Promise<void> {
+export async function afterPathStepDone(task: { id: string; projectId: string; title: string; completedById?: string | null; tags?: string[] | null }): Promise<void> {
+  /*
+   * Companies following the project hear about milestones only — a task
+   * tagged with its own backbone id — not every sub-step under one. A busy
+   * project finishes a dozen sub-steps a day, and a company that follows ten
+   * of them would learn to ignore the whole feed.
+   */
+  if (task.tags?.some((t) => t.startsWith("backbone:"))) {
+    void notifyScouts(task.projectId, { key: `step:${task.id}`, text: `finished "${task.title}"` });
+  }
   try {
     const team = await teamOf(task.projectId);
     if (!team) return;
@@ -142,7 +163,7 @@ export async function lastDoneStep(projectId: string, events: { taskId: string |
     // Shared on its own or in a weekly update: either way the task carries the post that shared it.
     const sharedBy = [...(task.tags ?? [])].reverse().find((t) => t.startsWith("posted:"))?.slice("posted:".length) ?? null;
     const [shared] = sharedBy
-      ? await db.select({ id: feedPosts.id }).from(feedPosts).where(and(eq(feedPosts.id, sharedBy), isNull(feedPosts.hiddenAt))).limit(1)
+      ? await db.select({ id: feedPosts.id }).from(feedPosts).where(and(eq(feedPosts.id, sharedBy), publiclyVisible.feedPost())).limit(1)
       : [];
     return { taskId: task.id, title: task.title, completedAt: new Date(task.completedAt ?? e.createdAt).toISOString(), sharedPostId: shared?.id ?? null };
   }
@@ -181,14 +202,16 @@ export async function pathProgress(projectId: string): Promise<{ done: number; t
 
 /** Each of someone's projects with a path, what's next on it, and how long since they worked it. */
 export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
-  const owned = await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status })
+  const owned = await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status, createdAt: projects.createdAt })
     .from(projects).where(eq(projects.ownerId, userId));
   const memberOf = await db.select({ id: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId));
   const joined = memberOf.length
-    ? await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status })
+    ? await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status, createdAt: projects.createdAt })
       .from(projects).where(inArray(projects.id, memberOf.map((m) => m.id).filter((id) => !owned.some((o) => o.id === id))))
     : [];
-  const candidates = [...owned, ...joined].filter((p) => p.status !== "completed");
+  const candidates = [...owned, ...joined].filter((p) => p.status !== "completed")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, MAX_PROJECTS);
 
   const items: NextStepItem[] = [];
   for (const p of candidates) {
@@ -215,7 +238,8 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
     }
 
     for (const section of sections) {
-    const status = await pathStatus(p.id, section.goal).catch(() => null);
+    // Read-only: a GET of the home screen must never create path tasks. See pathStatus.
+    const status = await pathStatus(p.id, section.goal, { sync: false }).catch(() => null);
     if (!status) continue;
     /*
      * Started, but made before paths existed: there are tasks and no tree.

@@ -5,7 +5,7 @@
  * whole path one tap away. Everything reads the section's live path.
  */
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
@@ -572,7 +572,17 @@ function PathMap({ projectId, goal, data, isPrimary, onOpen }: {
   const refresh = useRefreshPath(projectId);
   const { notify, fail } = useNotify();
   const [showSwitch, setShowSwitch] = useState(false);
-  const mark = useMutation({ mutationFn: (ids: string[]) => api(`/api/projects/${projectId}/path/mark`, { method: "POST", body: { ids, goal } }), onSuccess: refresh, onError: (e) => fail(e) });
+  /*
+   * Marking takes a line saying what makes it done. One tap with canned
+   * evidence filled the map with milestones nobody could account for, and a
+   * mistap was permanent; the line is the record, and /path/unmark undoes it.
+   */
+  const [marking, setMarking] = useState<string | null>(null);
+  const [why, setWhy] = useState("");
+  const mark = useMutation({
+    mutationFn: ({ ids, evidence }: { ids: string[]; evidence: string }) => api(`/api/projects/${projectId}/path/mark`, { method: "POST", body: { ids, goal, evidence } }),
+    onSuccess: () => { setMarking(null); setWhy(""); refresh(); }, onError: (e) => fail(e),
+  });
   const inject = useMutation({
     mutationFn: (phaseId: string) => api<any>(`/api/projects/${projectId}/path/inject`, { method: "POST", body: { phaseId, goal } }),
     onSuccess: (r) => { refresh(); notify(r?.created?.length ? `Nova added ${r.created.length} task${r.created.length === 1 ? "" : "s"}` : "Nothing missing here"); },
@@ -599,16 +609,27 @@ function PathMap({ projectId, goal, data, isPrimary, onOpen }: {
             <Tag label={`${phase.done}/${phase.total}`} color={phase.done === phase.total && phase.total > 0 ? colors.success : colors.textSecondary} />
           </Row>
           {phase.milestones.map((m) => (
-            <Pressable key={m.id} onPress={() => onOpen({ id: m.id, title: m.title })} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6 }, pressed && { opacity: 0.6 }]}>
-              <Tick done={m.done} size={16} />
-              <Text numberOfLines={2} style={{ flex: 1, fontSize: font.sm, fontFamily: m.id === data.next?.id ? fontFamily.semibold : fontFamily.regular, color: m.done ? colors.textTertiary : colors.text }}>{m.title}</Text>
-              {!m.done && (
-                <Pressable hitSlop={8} onPress={() => mark.mutate([m.id])} disabled={mark.isPending}>
-                  <Text style={{ fontSize: font.xs, color: colors.primary, fontFamily: fontFamily.semibold }}>Mark done</Text>
-                </Pressable>
+            <View key={m.id}>
+              <Pressable onPress={() => onOpen({ id: m.id, title: m.title })} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6 }, pressed && { opacity: 0.6 }]}>
+                <Tick done={m.done} size={16} />
+                <Text numberOfLines={2} style={{ flex: 1, fontSize: font.sm, fontFamily: m.id === data.next?.id ? fontFamily.semibold : fontFamily.regular, color: m.done ? colors.textTertiary : colors.text }}>{m.title}</Text>
+                {!m.done && (
+                  <Pressable hitSlop={8} onPress={() => { setMarking(marking === m.id ? null : m.id); setWhy(""); }} disabled={mark.isPending}>
+                    <Text style={{ fontSize: font.xs, color: colors.primary, fontFamily: fontFamily.semibold }}>Mark done</Text>
+                  </Pressable>
+                )}
+                <Icon name="chevron-forward" size={13} color={colors.textTertiary} />
+              </Pressable>
+              {marking === m.id && !m.done && (
+                <Row center gap={spacing.sm} style={{ paddingBottom: 6 }}>
+                  <TextInput
+                    value={why} onChangeText={setWhy} autoFocus placeholder="What shows this is done?" placeholderTextColor={colors.textTertiary}
+                    style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 6, fontSize: font.sm, color: colors.text }}
+                  />
+                  <Btn label="Mark" small disabled={mark.isPending || why.trim().length < 10} onPress={() => mark.mutate({ ids: [m.id], evidence: why.trim() })} />
+                </Row>
               )}
-              <Icon name="chevron-forward" size={13} color={colors.textTertiary} />
-            </Pressable>
+            </View>
           ))}
           {phase.injected.map((t) => (
             <Row key={t.id} center gap={spacing.sm} style={{ paddingVertical: 4 }}>

@@ -37,10 +37,25 @@ test("commenting on a followed builder's progress comes back round when they rep
   await page.getByTestId(`button-comment-${post.id}`).click();
   await page.getByTestId(`textarea-comment-${post.id}`).fill("How accurate is the scan?");
   await page.getByTestId(`button-submit-comment-${post.id}`).click();
+  /*
+   * The composer empties only once the server has taken it, so this waits for
+   * the round trip rather than for the words to appear. They appear at once
+   * either way: the mention box keeps a mirror of the draft behind the
+   * textarea for highlighting, so "the text is on the page" was true a
+   * millisecond after the click and this test used to read Bea's copy of the
+   * thread before the comment had been written at all — passing or failing on
+   * how quickly the runner answered a POST.
+   */
+  await expect(page.getByTestId(`textarea-comment-${post.id}`)).toHaveValue("", { timeout: 15_000 });
+  // And now the words on the page are the posted comment, the mirror having emptied with the box.
   await expect(page.getByText("How accurate is the scan?")).toBeVisible();
 
   // Bea replies to him.
-  const comments = await (await bea.get(`/api/feed/${post.id}/comments`)).json();
+  let comments: any[] = [];
+  await expect.poll(async () => {
+    comments = await (await bea.get(`/api/feed/${post.id}/comments`)).json();
+    return comments.some?.((c: any) => c.content === "How accurate is the scan?") ?? false;
+  }, { message: "Bea can't see Ari's comment", timeout: 15_000 }).toBe(true);
   const ariComment = comments.find((c: any) => c.content === "How accurate is the scan?");
   expect(ariComment, `Bea can't see Ari's comment; she got: ${JSON.stringify(comments).slice(0, 600)}`).toBeTruthy();
   expect((await bea.post(`/api/feed/${post.id}/comments`, { data: { content: "About 90% so far.", parentCommentId: ariComment.id } })).ok()).toBeTruthy();

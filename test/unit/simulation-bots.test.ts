@@ -13,11 +13,13 @@ import { describe, it, expect } from "vitest";
 import {
   BOT_FILL_AFTER_SECONDS, BOT_JITTER, botAmbition, botBids, botDecision, botDisplayName, botIdentity,
   botsForVenture, botsNeeded, decisionSeed, jitter,
+  botCapacity,
 } from "@shared/simulation/bots";
 import type { Listing } from "@shared/simulation/assets";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@shared/simulation/levers";
 import { nextPhase } from "@shared/simulation/lobby";
 import { ROLES } from "@shared/simulation/types";
+import { NICHES, nicheById } from "@shared/simulation/niches";
 import type { Company } from "@shared/simulation/types";
 
 /** A company mid-season, plain enough that any lever can be filed against it. */
@@ -198,6 +200,57 @@ describe("what a bot files", () => {
  * minutes of one real person watching an empty room tick down. These are the
  * two places the room is allowed to stop waiting early.
  */
+describe("what a bot chair will pay for", () => {
+  /*
+   * Every number here is seeded on the venture's id: how ambitious this bot
+   * company is, which lot it wants, and what it offers. That is the point —
+   * eight bot companies in one market must not all want the same thing at the
+   * same price — and it has a consequence worth stating: whether a *given*
+   * company bids at all is a property of its id.
+   *
+   * So most bid and some don't, and a test that creates a room with a random
+   * id and asserts "it bids" is a test that fails about one run in seven. That
+   * is exactly what was happening in the integration suite, where it read as a
+   * broken auction rather than as the dice. The integration test now fixes its
+   * room id; this is the test that owns the spread, so the behaviour is
+   * described somewhere rather than only being tripped over.
+   */
+  const listings: any = [
+    { id: "lot-a", reserve: 1_000_000, sellerId: null, blurb: "A thing.",
+      asset: { id: "ast-a", kind: "distribution", name: "Lot A", effect: { capacity: 50_000 }, bookValue: 1_000_000 } },
+    { id: "lot-b", reserve: 2_000_000, sellerId: null, blurb: "Another.",
+      asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
+  ];
+  const flush = (id: string): any => ({
+    id, kind: "player", name: "Test Co", cash: 40_000_000, creditLimit: 10_000_000, debt: 0,
+    price: 40, capacity: 250_000, positioning: "", cities: [], customers: {}, assets: [],
+  });
+
+  it("has most well-funded bots bidding, and not all of them", () => {
+    const seeds = Array.from({ length: 200 }, (_, i) => `seed-${i}`);
+    const bidding = seeds.filter((id) => botBids({ ventureId: id, year: 1, company: flush(id), listings }).length > 0);
+    expect(bidding.length / seeds.length, "a market where nobody bids is not an auction").toBeGreaterThan(0.6);
+    expect(bidding.length, "and one where everybody bids the same way is not a market either").toBeLessThan(seeds.length);
+  });
+
+  it("never bids under the reserve, or more than the purse", () => {
+    for (const id of ["seed-1", "seed-7", "seed-23", "seed-99"]) {
+      const bids = botBids({ ventureId: id, year: 1, company: flush(id), listings });
+      let spent = 0;
+      for (const bid of bids) {
+        const lot = listings.find((l: any) => l.id === bid.listingId)!;
+        expect(bid.amount, `${id} bid under the reserve`).toBeGreaterThanOrEqual(lot.reserve);
+        spent += bid.amount;
+      }
+      expect(spent, `${id} bid more than it holds`).toBeLessThanOrEqual(40_000_000);
+    }
+  });
+
+  it("buys nothing when the company is out of money", () => {
+    expect(botBids({ ventureId: "seed-0", year: 1, company: { ...flush("seed-0"), cash: 0 }, listings })).toEqual([]);
+  });
+});
+
 describe("a room that is waiting on bots", () => {
   const seat = (userId: string, role: any, isBot = false) => ({ userId, role, assigned: false, isBot });
   const claiming = (seats: any[], secondsLeft = 120) =>
@@ -253,7 +306,16 @@ describe("what a seat is allowed to file", () => {
 
   it("fills in what wasn't sent rather than leaving a hole", () => {
     const clean = cleanDecision("cfo", {});
-    for (const field of LEVER_FIELDS.cfo) expect(clean).toHaveProperty(field.id);
+    /*
+     * Except the levers whose answer is a map — price tiers, a budget split,
+     * a vote on each offer. There, empty means "none filed", and writing an
+     * empty object would file a decision nobody made.
+     */
+    const maps = new Set(["tiers", "allocation", "levels"]);
+    for (const field of LEVER_FIELDS.cfo) {
+      if (maps.has(field.kind)) expect(clean).not.toHaveProperty(field.id);
+      else expect(clean).toHaveProperty(field.id);
+    }
   });
 
   it("turns a number that isn't one into zero, not NaN", () => {
@@ -266,11 +328,146 @@ describe("what a seat is allowed to file", () => {
   });
 
   it("passes everything a bot files", () => {
-    for (const role of ROLES) {
-      const d = botDecision({ ventureId: "v1", year: 1, role, company: company() });
-      const clean = cleanDecision(role, d);
-      expect(clean, `${role} loses something on the way in`).toEqual(d);
+    /*
+     * Every year of a season, not just the early ones. This used to stop at
+     * five and so never reached the levers that arrive later — one of which
+     * the bot filed in the wrong type, failing validation and quietly falling
+     * back to bare defaults for the rest of the game.
+     */
+    for (const year of [1, 2, 3, 4, 5, 6, 7, 8, 10, 14]) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year, role, company: company() });
+      const clean = cleanDecision(role, d, [], { year });
+      expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);
     }
+  });
+});
+
+describe("a bot that knows the market", () => {
+  const niche = nicheById("dating_apps")!;
+  const running = (over: Partial<Company> = {}) => company({
+    capacity: 50_000,
+    customers: { swipers: 20_000, recently_single: 18_000, long_haulers: 4_000 } as any,
+    cities: ["leeds", "manchester"],
+    automation: 10,
+    ...(over as any),
+  });
+
+  it("files a year that survives the same cleaning a person's does", () => {
+    const cityIds = niche.cities.map((c) => c.id);
+    const segmentIds = niche.segments.map((g) => g.id);
+    for (const year of [1, 3, 5, 7, 9, 14]) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year, role, company: running(), niche });
+      const clean = cleanDecision(role, d, cityIds, { year, segmentIds });
+      expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);
+    }
+  });
+
+  /*
+   * The point of the coin. Five bot companies in a season used to answer every
+   * standing question identically for fourteen years, which made them one
+   * company copied five times.
+   */
+  it("does not make the same calls as the company next door", () => {
+    const shown = ["alpha", "beta", "gamma", "delta"].map((v) =>
+      JSON.stringify(ROLES.map((role) => botDecision({ ventureId: v, year: 6, role, company: running(), niche }))));
+    expect(new Set(shown).size, "every bot company filed the same year").toBeGreaterThan(1);
+  });
+
+  it("makes the same calls twice for the same company and year", () => {
+    const once = botDecision({ ventureId: "v1", year: 6, role: "coo", company: running(), niche });
+    const again = botDecision({ ventureId: "v1", year: 6, role: "coo", company: running(), niche });
+    expect(again).toEqual(once);
+  });
+
+  it("changes its mind from one year to the next", () => {
+    const years = [3, 4, 5, 6, 7, 8].map((year) =>
+      JSON.stringify(botDecision({ ventureId: "v1", year, role: "cfo", company: running(), niche })));
+    expect(new Set(years).size, "filed the identical year six times").toBeGreaterThan(1);
+  });
+
+  /*
+   * The hard rule: a bot may be wrong, but it may not spend money the company
+   * does not have. Everything that costs cash is offered only while the purse
+   * covers it, so a company with nothing buys nothing.
+   */
+  it("buys nothing when there is no money", () => {
+    const broke = running({ cash: 0, creditLimit: 0, debt: 0 });
+    for (const v of ["a", "b", "c", "d", "e", "f"]) {
+      const coo: any = botDecision({ ventureId: v, year: 9, role: "coo", company: broke, niche });
+      expect(coo.automationTarget, "automated a plant it cannot pay for").toBe(Math.round(broke.automation ?? 0));
+      expect(coo.shiftCapacity).toBe(0);
+      expect(coo.stockTarget).toBe(0);
+      const cmo: any = botDecision({ ventureId: v, year: 9, role: "cmo", company: broke, niche });
+      expect(cmo.research, "bought research it cannot pay for").toBe("none");
+      expect(cmo.targetCities, "opened a region it cannot pay for").toEqual(broke.cities);
+    }
+  });
+
+  it("opens a region once it has filled the one it is in, and only one", () => {
+    const full = running({ capacity: 40_000, cash: 8_000_000 });
+    const opened = ["a", "b", "c", "d", "e", "f", "g", "h"].map((v) => {
+      const d: any = botDecision({ ventureId: v, year: 9, role: "cmo", company: full, niche });
+      return (d.targetCities as string[]).filter((c) => !(full.cities ?? []).includes(c));
+    });
+    for (const added of opened) expect(added.length, "opened more than one region in a year").toBeLessThanOrEqual(1);
+    expect(opened.some((added) => added.length === 1), "never left home").toBe(true);
+  });
+
+  it("aims its marketing at the regions and segments that are actually there", () => {
+    const d: any = botDecision({ ventureId: "v1", year: 9, role: "cmo", company: running(), niche });
+    for (const key of Object.keys(d.regionFocus ?? {})) expect(running().cities).toContain(key);
+    for (const key of Object.keys(d.segmentFocus ?? {})) expect(niche.segments.map((g) => g.id)).toContain(key);
+    const total = (map: Record<string, number>) => Object.values(map ?? {}).reduce((a, b) => a + b, 0);
+    expect(total(d.regionFocus), "a split that is not a hundred points").toBeLessThanOrEqual(100);
+    expect(total(d.segmentFocus)).toBeLessThanOrEqual(100);
+  });
+
+  it("files a legal year in every market", () => {
+    for (const n of NICHES) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year: 9, role, company: running(), niche: n });
+      expect(validateDecision(role, d, running()).ok, `${n.id}/${role}`).toBe(true);
+    }
+  });
+});
+
+describe("an operations bot's capacity", () => {
+  const full = { capacity: 231_000, customers: { swipers: 300_000, recently_single: 250_000, long_haulers: 100_000 } } as any;
+  const cluster = { id: "c", kind: "facility", name: "Cluster", bookValue: 1, effect: { capacity: 484_000 } } as any;
+
+  /*
+   * The bug: capacity was jittered either way at random, and a bot cut a
+   * company serving 650,000 from 231,000 built to 210,000.
+   */
+  it("never cuts a company that is running full", () => {
+    for (let i = 0; i < 200; i++) {
+      const c = company({ ...full, assets: [{ ...cluster, expiresIn: 3 }] });
+      expect(botCapacity({ seed: `s${i}`, company: c, step: 10_000, min: 0 })).toBeGreaterThanOrEqual(230_000);
+    }
+  });
+
+  it("builds to replace room its assets stop adding after this year", () => {
+    const lapsing = company({ ...full, assets: [{ ...cluster, expiresIn: 1 }] });
+    const lasting = company({ ...full, assets: [{ ...cluster, expiresIn: 4 }] });
+    expect(botCapacity({ seed: "x", company: lapsing, step: 10_000 })).toBeGreaterThan(botCapacity({ seed: "x", company: lasting, step: 10_000 }));
+  });
+
+  it("gives back room a mostly idle company is paying to keep empty", () => {
+    /*
+     * It used to trim up to a tenth and no more, which on a plant four fifths
+     * empty is a shrug: the seat holding the company's costs down watched a
+     * quarter of a million a year go on room nobody used.
+     */
+    const idle = company({ capacity: 500_000, customers: { swipers: 100_000 } as any, assets: [] });
+    for (let i = 0; i < 50; i++) {
+      const v = botCapacity({ seed: `i${i}`, company: idle, step: 10_000 });
+      expect(v, "half the plant is the most it will give back in one year").toBe(250_000);
+    }
+    // Still room to grow into: half as much again as it serves now, at least.
+    const lopsided = company({ capacity: 500_000, customers: { swipers: 40_000 } as any, assets: [] });
+    expect(botCapacity({ seed: "x", company: lopsided, step: 10_000 })).toBe(250_000);
+    // And a company that has not opened yet keeps what it was given.
+    const unopened = company({ capacity: 90_000, customers: {} as any, assets: [] });
+    expect(botCapacity({ seed: "x", company: unopened, step: 10_000 })).toBe(90_000);
   });
 });
 

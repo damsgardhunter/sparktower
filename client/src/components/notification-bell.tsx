@@ -49,7 +49,12 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [, setLocation] = useLocation();
   const { data: counts } = useNotificationCounts();
-  const { data, isLoading } = useQuery<{ items: NotificationItem[] }>({ queryKey: ["/api/notifications"], enabled: open });
+  /*
+   * Read fresh each time it opens. Only the count polls; with the app's
+   * never-stale default the list stayed as it was the first time the bell
+   * was opened, so the badge said "1" over a list without that one in it.
+   */
+  const { data, isLoading } = useQuery<{ items: NotificationItem[] }>({ queryKey: ["/api/notifications"], enabled: open, staleTime: 0 });
 
   const read = useMutation({
     mutationFn: (body: { ids?: string[]; all?: boolean }) => apiRequest("POST", "/api/notifications/read", body),

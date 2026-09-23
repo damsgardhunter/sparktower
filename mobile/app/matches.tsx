@@ -65,23 +65,33 @@ export default function Matches() {
           </Pressable>
         </NovaGradient>
 
-        {/* Start a sprint without leaving the page, as the web's Matches does. */}
+        {/*
+          * What a match can actually do, which is not what this used to say.
+          *
+          * This panel offered "Find a partner" → /sprint/new and "Practice with
+          * Nova" → /sprint/practice. Neither route exists in this app: both
+          * landed on the not-found screen, under copy promising a 24-or-72-hour
+          * co-founder sprint that has been retired on the web too. Ten Years
+          * From Now is the thing that replaced it and it does exist here
+          * (app/game/[id].tsx), so that is what this offers — with no partner
+          * id, because there is deliberately no way to drag a named person
+          * into a game with a running clock.
+          */}
         <View style={{ backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.md }}>
           <Row gap={spacing.md}>
             <View style={{ width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
-              <Icon name="timer-outline" size={20} color={colors.primary} />
+              <Icon name="trophy-outline" size={20} color={colors.primary} />
             </View>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={networkStyles.rowTitle}>Start a Sprint</Text>
-              <Text style={networkStyles.rowSub}>Build something with a stranger in 24 or 72 hours — or rehearse against Nova first.</Text>
+              <Text style={networkStyles.rowTitle}>Ten Years From Now</Text>
+              <Text style={networkStyles.rowSub}>Invent a startup in five rounds and find out what an AI thinks it's worth in a decade.</Text>
             </View>
           </Row>
           <Row gap={spacing.sm}>
-            <Btn label="Find a partner" small icon="people-outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/new")} />
-            <Btn label="Practice with Nova" small variant="outline" icon="hardware-chip-outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/practice")} />
+            <Btn label="Leaderboards" small variant="outline" icon="podium-outline" style={{ flex: 1 }} onPress={() => router.push("/game/boards")} />
           </Row>
           <Row between>
-            <Text style={networkStyles.meta}>Matching is free. Nova's ideas and practice partner use credits.</Text>
+            <Text style={networkStyles.meta}>Matching is free. Nova's match reasons use credits on paid plans.</Text>
           </Row>
         </View>
 
@@ -130,8 +140,11 @@ export default function Matches() {
                 </Row>
               )}
               <Row center gap={spacing.sm} wrap>
+                {/* Connect and Message only. "Start trial sprint" pointed at
+                    /sprint/new, a screen this app does not have — it opened the
+                    not-found page — and the retired sprint it named took a
+                    partner id nothing would have read anyway. */}
                 <ConnectActions userId={m.matchedUserId} name={name} reason={reasons[0]} headline={p.headline} connection={connections?.[m.matchedUserId]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={p.skills?.[0]} />
-                <Btn label="Start trial sprint" small variant="outline" icon="people-outline" onPress={() => router.push(`/sprint/new?partnerId=${m.matchedUserId}`)} />
               </Row>
             </View>
           );

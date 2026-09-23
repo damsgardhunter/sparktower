@@ -44,5 +44,9 @@ export const SECONDARY_NAV: NavItem[] = [
   { title: "Sprints & simulations", url: "/sprints", icon: "Handshake", surface: "sprints" },
   { title: "Messages", url: "/messages", icon: "MessageSquare", surface: "messages" },
   { title: "Contests and Communities", url: "/contests", icon: "Medal", surface: "contests" },
+  // For existing businesses: training seasons, recruiting, challenges they sponsor, startups they follow.
+  { title: "Companies", url: "/companies", icon: "Users", surface: "companies" },
+  // Real problems companies put up, for founders to answer.
+  { title: "Challenges", url: "/challenges", icon: "Trophy", surface: "companies" },
   { title: "Pricing", url: "/pricing", icon: "CreditCard" },
 ];

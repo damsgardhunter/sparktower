@@ -100,25 +100,32 @@ decoration and it is not derived from the hostname a request arrived on:
 
 Consequences worth being blunt about:
 
-- **Today `PUBLIC_URL` points at `onrender.com`** — production's sitemap
-  publishes `https://sparktower.onrender.com/` as canonical. So every link
-  already emailed, every artifact URL already shared, and every URL Google has
-  been offered points at `onrender.com`, permanently, regardless of what
-  happens to DNS later.
-- **When DNS moves to `sparktower.app`, changing `PUBLIC_URL` is a required
-  step of that move, not a follow-up.** A domain that resolves to the app while
-  `PUBLIC_URL` still says `onrender.com` produces a site that works and emails
-  that send people somewhere else — and a Google sign-in that returns them to
-  the other host, where their session cookie isn't, so they arrive signed out
-  with nothing in the log to explain it. Session cookies are host-only.
+- **`PUBLIC_URL` is `https://sparktower.app`, and production agrees.** Verified
+  2026-09-22 by asking the site rather than the dashboard: `npm run check:live`
+  reads `sitemap.xml`, which is built from the same base URL as every emailed
+  link, and it publishes `https://sparktower.app/`. That is the check to run
+  after any deploy that touches the domain.
+- **`sparktower.onrender.com` still answers, and should.** Links shared before
+  the cutover point there. It publishes the canonical address, which is right —
+  `npm run check:live -- https://sparktower.onrender.com --publishes https://sparktower.app`
+  is how to say that to the checker so it doesn't read a correct secondary host
+  as a fault.
+- **If the domain moves again, `PUBLIC_URL` changes in the same sitting as DNS,
+  not afterwards.** A domain that resolves to the app while `PUBLIC_URL` still
+  names the old host produces a site that works and emails that send people
+  somewhere else — and a Google sign-in that returns them to the other host,
+  where their session cookie isn't, so they arrive signed out with nothing in
+  the log to explain it. Session cookies are host-only.
 - Changing it needs a redeploy (or restart) to take effect, and the Google
   console's authorised redirect URI has to change in the same sitting.
-- Links already in the wild are not rewritten. Keep `onrender.com` answering
-  after the move; do not delete the Render subdomain.
+- Links already in the wild are not rewritten. Keep the old hostname answering;
+  do not delete the Render subdomain.
 
-`render.yaml` declares `PUBLIC_URL: https://sparktower.app` — the intended
-end state, not what the running service has. The dashboard value wins, and
-the dashboard value is what is live. See the open questions.
+`render.yaml` deliberately carries **no value** for `PUBLIC_URL` (`sync: false`).
+The blueprint once declared one, and the dashboard held a different one — so
+re-syncing the blueprint would have silently repointed the product at a host
+that had no app behind it. The site's address is an operational fact that
+changes on the day DNS moves, not a constant of the repository.
 
 ## How a deploy is triggered
 
@@ -256,10 +263,30 @@ The fuller pass — auth, Stripe, uploads, the wedge, the owner's console — is
   returns 404 for the whole route prefix, which reads as "this feature doesn't
   exist" rather than "the site is broken".
 
-## Uptime monitoring — NOT YET DONE
+## Is anything watching? Partly.
 
-Nothing is watching this service. If it goes down right now, the way anybody
-finds out is by opening it.
+**What runs today, without an account anywhere:**
+
+```sh
+npm run check:live      # the canonical site: alive, database, migrations, and the address it publishes
+```
+
+It asks the site what it believes about itself. `/_health` says a process
+answered; `/_ready` says it can reach Postgres and that every migration in the
+repo has run; `sitemap.xml` says which address the product is putting in
+emails and share links. That last one is the check no ordinary monitor makes,
+and it is the failure that has actually happened here: a site that is up,
+healthy, and quietly sending everybody to a hostname that is no longer the
+product. It exits non-zero, so CI and an uptime service can both run it.
+
+CI runs it after every deploy to `main` (`.github/workflows/ci.yml`), which is
+the moment a misconfigured redeploy would otherwise go unnoticed.
+
+**What is still missing: nobody is woken at 3am.** CI checks a deploy; it does
+not watch the site between deploys. If production falls over an hour after a
+green deploy, the way anybody finds out is by opening it. That needs a service
+that runs on a clock and has somewhere to send an alert, which needs an account
+and a person's address — the steps below, which only you can do.
 
 **No UptimeRobot account exists yet.** The steps below are the plan, not a
 description of something that is running. Do not tick a box until you have done

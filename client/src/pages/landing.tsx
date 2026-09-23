@@ -55,8 +55,8 @@ function afterAuthPath(): string {
  */
 const PATH_DETAIL: Record<string, string> = {
   ship_mvp: "Scope down to something you can finish, build it, and put it in front of real people before you are ready.",
-  systemize_business: "Write down what you already do, find the parts only you can do, and hand the rest to a process or a person.",
-  raise_funding: "Get the numbers, the story and the deck into one shape, and practise the questions before you are asked them.",
+  systemize_business: "Know how fundable you are and the route to the money, write down what you already do, and hand the rest to a process or a person.",
+  run_company: "Check in on the numbers every week, give the team's recurring work an owner, and get a monthly report on what improved.",
 };
 
 export default function LandingPage() {
@@ -287,7 +287,7 @@ export default function LandingPage() {
             <ol className="mt-4 grid gap-4 sm:grid-cols-2 text-sm text-gray-600">
               {[
                 ["Describe the idea in a sentence", "Nova asks what you're building and who it's for, then writes the project for you — you're editing rather than starting at a blank page."],
-                ["Pick a path", "Ship, Systemize or Raise. It decides what Nova puts in front of you first, and it can change."],
+                ["Pick a path", "Ship, Systemize or Run. It decides what Nova puts in front of you first, and it can change."],
                 ["Do the next step", "One card at a time, never a backlog. Each finished step saves what you wrote as part of the project."],
                 ["Publish one and get feedback", "A finished step becomes a page you can share with anyone, no account needed to read it. That is how people find you here."],
               ].map(([title, body], n) => (

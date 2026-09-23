@@ -65,4 +65,21 @@ beforeEach(async (ctx) => {
 
   if (!url) throw new Error("DATABASE_URL is unset in the test worker");
   await truncateAll(url);
+
+  /*
+   * The badge catalog is reference data, not fixture data.
+   *
+   * `truncateAll` empties every table in the schema, including `badges` — and
+   * the catalog is seeded once, when the app boots, which under a cached test
+   * app is before the first test rather than before each one. So without this
+   * the first test has badges and every test after it has none, and anything
+   * that awards one quietly stops working. That is precisely the failure this
+   * feature already shipped with in production, and a test harness that
+   * recreates it is a harness that can never catch it.
+   *
+   * Imported here rather than at the top of the file so the unit suite, which
+   * returns above, never loads the server or its database client.
+   */
+  const { ensureBadgeCatalog } = await import("../../server/badges");
+  await ensureBadgeCatalog();
 });

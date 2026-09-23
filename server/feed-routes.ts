@@ -9,8 +9,9 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, userProfiles, projects, projectMembers, feedReactions, feedComments, feedCommentReactions, userFollows, projectFollows, connections } from "@shared/schema";
-import { eq, and, or, ilike, ne, desc } from "drizzle-orm";
+import { publiclyVisible } from "./visibility";
+import { users, userProfiles, projects, projectMembers, feedPosts, feedReactions, feedComments, feedCommentReactions, userFollows, projectFollows, connections, companies, companyMembers } from "@shared/schema";
+import { eq, and, or, ilike, ne, desc, inArray, isNull, lt } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
@@ -19,7 +20,10 @@ import { markStepsShared, shareableSteps } from "./path-return";
 import { validateAsks } from "@shared/feedback-loop";
 import { closableComments, markClosed, markClosureAnswered, projectTeam } from "./feedback-loop-routes";
 import { notify, unnotify, notifyFollowersOfPost, notifyComment } from "./notifications";
+import { notifyScouts } from "./scouting-alerts";
 import { rankFeed, viewerTerms, emptyAffinity, type ViewerAffinity } from "@shared/feed-ranking";
+import { companyCan, logCompany } from "./company-access";
+import { hasPower, type CompanyRole } from "@shared/companies";
 
 /** Comments on a post, each saying whether its author is on the post's project — only outsiders' count as feedback. */
 async function commentsWithTeam(post: { id: string; projectId: string | null }, viewerId?: string) {
@@ -79,6 +83,29 @@ async function resolveMentions(raw: unknown): Promise<FeedMention[]> {
   return found.filter((m): m is FeedMention => m !== null);
 }
 
+/** The company a post was made in the name of, as a card shows it. */
+export type PostCompany = { id: string; name: string; slug: string };
+
+/**
+ * Adds `company` to each post: who the feed should show as the poster when a
+ * post was made in a company's name, or null for a person's own post.
+ *
+ * Done here, once per page, rather than per post: most pages have no company
+ * posts at all, and the ones that do usually repeat the same company.
+ */
+export async function withCompanies<T extends { companyId?: string | null }>(posts: T[]): Promise<(T & { company: PostCompany | null })[]> {
+  const ids = Array.from(new Set(posts.map((p) => p.companyId).filter((id): id is string => !!id)));
+  const rows = ids.length
+    ? await db.select({ id: companies.id, name: companies.name, slug: companies.slug }).from(companies).where(inArray(companies.id, ids))
+    : [];
+  const byId = new Map(rows.map((c) => [c.id, c]));
+  return posts.map((p) => ({ ...p, company: (p.companyId && byId.get(p.companyId)) || null }));
+}
+
+async function withCompany<T extends { companyId?: string | null }>(post: T): Promise<T & { company: PostCompany | null }> {
+  return (await withCompanies([post]))[0];
+}
+
 /**
  * Creates a post on behalf of the system for a project event.
  *
@@ -107,9 +134,106 @@ export async function publishSystemPost(input: {
     });
     // A milestone landing or a launch is exactly the progress a follower came for.
     void notifyFollowersOfPost(post);
+    void notifyScouts(input.projectId, { key: `post:${post.id}`, text: input.content });
   } catch (err) {
     console.error("Failed to publish system feed post (non-fatal):", err);
   }
+}
+
+/**
+ * Writes a post from a request: the one path every hand-written post takes,
+ * whether the person posts as themselves or in a company's name.
+ *
+ * One path on purpose. The rate limit, the duplicate check and the email gate
+ * sit in front of both routes, and everything after them — what a post may
+ * say, which project it may be on, who hears about it — lives here, so a
+ * company post can't quietly be held to a lower standard than a person's.
+ * The caller has already decided the person may speak for `asCompany`.
+ */
+async function publishPost(req: any, res: any, asCompany?: { id: string }) {
+  const userId = req.user.id;
+  const { content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds, pathTaskId, pathStepIds, imageUrl } = req.body as {
+    postType?: string; content?: string; projectId?: string;
+    mediaUrls?: string[]; mentions?: unknown;
+    /** One picture, the shorter way a company post can carry it; folded into `mediaUrls`. */
+    imageUrl?: unknown;
+    /** Specific questions for readers (a project's progress post). */
+    asks?: unknown;
+    /** Feedback this update acted on, credited on the post and told to whoever gave it. */
+    closesCommentIds?: unknown;
+    /** A finished step on the project's path this post shares, so feedback on it is feedback on that step. */
+    pathTaskId?: unknown;
+    /** The week's finished steps this post shares — the weekly progress update. */
+    pathStepIds?: unknown;
+  };
+  // A company announcing something is an update unless it says otherwise; a person picks a type in the composer.
+  const postType: string | undefined = req.body?.postType ?? (asCompany ? "project_update" : undefined);
+
+  if (!FEED_POST_TYPES.includes(postType as any)) {
+    return res.status(400).json({ message: `postType must be one of: ${FEED_POST_TYPES.join(", ")}` });
+  }
+  if (!content?.trim()) return res.status(400).json({ message: "Write something first." });
+  if (content.length > MAX_POST_LENGTH) {
+    return res.status(400).json({ message: `Posts are limited to ${MAX_POST_LENGTH} characters.` });
+  }
+
+  // Posting on behalf of a project requires membership.
+  if (projectId) {
+    const project = await storage.getProject(projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const members = await storage.getProjectMembers(projectId).catch(() => []);
+    const isMember = project.ownerId === userId || members.some((m) => m.userId === userId);
+    if (!isMember) return res.status(403).json({ message: "You can only post for projects you're on." });
+  }
+
+  // Asks and credited feedback belong to a project's progress post.
+  const asked = validateAsks(rawAsks);
+  if ("error" in asked) return res.status(400).json({ message: asked.error, code: "invalid_input", field: "asks" });
+  if (!projectId && (asked.asks.length || (Array.isArray(closesCommentIds) && closesCommentIds.length))) {
+    return res.status(400).json({ message: "Asks and credited feedback go on a post for one of your projects.", code: "invalid_input", field: "projectId" });
+  }
+  const closes = projectId ? await closableComments(projectId, closesCommentIds) : { ids: [] as string[] };
+  if ("error" in closes) return res.status(400).json({ message: closes.error, code: "invalid_input", field: "closesCommentIds" });
+  let pathStep: string | null = null;
+  if (pathTaskId != null && pathTaskId !== "") {
+    const task = projectId ? await storage.getKanbanTask(String(pathTaskId)) : undefined;
+    const onPath = task && task.projectId === projectId && (task.tags ?? []).some((t) => t.startsWith("backbone:") || t.startsWith("parent:") || t.startsWith("injected:"));
+    if (!onPath) return res.status(400).json({ message: "That isn't a step on this project's path.", code: "invalid_input", field: "pathTaskId" });
+    if (task.status !== "done") return res.status(400).json({ message: "Share a step once it's done.", code: "invalid_input", field: "pathTaskId" });
+    pathStep = task.id;
+  }
+  let weekSteps: string[] = [];
+  if (pathStepIds != null) {
+    if (!projectId) return res.status(400).json({ message: "A weekly update goes on one of your projects.", code: "invalid_input", field: "projectId" });
+    const checked = await shareableSteps(projectId, pathStepIds);
+    if ("error" in checked) return res.status(400).json({ message: checked.error, code: "invalid_input", field: "pathStepIds" });
+    weekSteps = checked.ids;
+  }
+
+  const post = await storage.createFeedPost({
+    authorId: userId,
+    projectId: projectId || null,
+    companyId: asCompany?.id ?? null,
+    postType: postType as FeedPostType,
+    content: content.trim(),
+    mediaUrls: [...(Array.isArray(mediaUrls) ? mediaUrls : []), ...(typeof imageUrl === "string" && imageUrl ? [imageUrl] : [])].slice(0, MAX_POST_MEDIA),
+    mentions: await resolveMentions(mentions),
+    asks: asked.asks,
+    isSystemGenerated: false,
+    ...(pathStep ? { entityType: "path_step", entityId: pathStep } : weekSteps.length ? { entityType: "path_week", entityId: projectId } : {}),
+  });
+  // Shared steps leave the weekly update: offered until they're posted, never twice.
+  if (pathStep || weekSteps.length) await markStepsShared(post.id, pathStep ? [pathStep] : weekSteps);
+  await markClosed(post, closes.ids);
+  // The Explore loop's way back: people following this builder or project hear there's progress.
+  void notifyFollowersOfPost(post);
+  if (post.projectId) void notifyScouts(post.projectId, { key: `post:${post.id}`, text: post.content });
+  void notify({ recipients: ((post.mentions as FeedMention[]) ?? []).map((m) => m.userId), actorId: userId, kind: "mention", targetId: post.id, postId: post.id, projectId: post.projectId, excerpt: post.content });
+
+  if (asCompany) await logCompany(asCompany.id, userId, "post_published", userId, { postId: post.id });
+
+  const created = await storage.getFeedPost(post.id, userId);
+  res.json(created ? await withCompany(created) : created);
 }
 
 export function registerFeedRoutes(app: Express) {
@@ -220,7 +344,8 @@ export function registerFeedRoutes(app: Express) {
         : rankFeed(posts, await viewerAffinity(req.user.id));
 
       res.json({
-        posts: ranked,
+        // A post made in a company's name carries `company`, so the card shows the company as the poster.
+        posts: await withCompanies(ranked),
         // Cursor for the next page; null when we've reached the end.
         nextCursor,
         // Says how the page is ordered, so the feed can label it.
@@ -236,80 +361,7 @@ export function registerFeedRoutes(app: Express) {
 
   app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
     try {
-      const userId = req.user.id;
-      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds, pathTaskId, pathStepIds } = req.body as {
-        postType?: string; content?: string; projectId?: string;
-        mediaUrls?: string[]; mentions?: unknown;
-        /** Specific questions for readers (a project's progress post). */
-        asks?: unknown;
-        /** Feedback this update acted on, credited on the post and told to whoever gave it. */
-        closesCommentIds?: unknown;
-        /** A finished step on the project's path this post shares, so feedback on it is feedback on that step. */
-        pathTaskId?: unknown;
-        /** The week's finished steps this post shares — the weekly progress update. */
-        pathStepIds?: unknown;
-      };
-
-      if (!FEED_POST_TYPES.includes(postType as any)) {
-        return res.status(400).json({ message: `postType must be one of: ${FEED_POST_TYPES.join(", ")}` });
-      }
-      if (!content?.trim()) return res.status(400).json({ message: "Write something first." });
-      if (content.length > MAX_POST_LENGTH) {
-        return res.status(400).json({ message: `Posts are limited to ${MAX_POST_LENGTH} characters.` });
-      }
-
-      // Posting on behalf of a project requires membership.
-      if (projectId) {
-        const project = await storage.getProject(projectId);
-        if (!project) return res.status(404).json({ message: "Project not found" });
-        const members = await storage.getProjectMembers(projectId).catch(() => []);
-        const isMember = project.ownerId === userId || members.some((m) => m.userId === userId);
-        if (!isMember) return res.status(403).json({ message: "You can only post for projects you're on." });
-      }
-
-      // Asks and credited feedback belong to a project's progress post.
-      const asked = validateAsks(rawAsks);
-      if ("error" in asked) return res.status(400).json({ message: asked.error, code: "invalid_input", field: "asks" });
-      if (!projectId && (asked.asks.length || (Array.isArray(closesCommentIds) && closesCommentIds.length))) {
-        return res.status(400).json({ message: "Asks and credited feedback go on a post for one of your projects.", code: "invalid_input", field: "projectId" });
-      }
-      const closes = projectId ? await closableComments(projectId, closesCommentIds) : { ids: [] as string[] };
-      if ("error" in closes) return res.status(400).json({ message: closes.error, code: "invalid_input", field: "closesCommentIds" });
-      let pathStep: string | null = null;
-      if (pathTaskId != null && pathTaskId !== "") {
-        const task = projectId ? await storage.getKanbanTask(String(pathTaskId)) : undefined;
-        const onPath = task && task.projectId === projectId && (task.tags ?? []).some((t) => t.startsWith("backbone:") || t.startsWith("parent:") || t.startsWith("injected:"));
-        if (!onPath) return res.status(400).json({ message: "That isn't a step on this project's path.", code: "invalid_input", field: "pathTaskId" });
-        if (task.status !== "done") return res.status(400).json({ message: "Share a step once it's done.", code: "invalid_input", field: "pathTaskId" });
-        pathStep = task.id;
-      }
-      let weekSteps: string[] = [];
-      if (pathStepIds != null) {
-        if (!projectId) return res.status(400).json({ message: "A weekly update goes on one of your projects.", code: "invalid_input", field: "projectId" });
-        const checked = await shareableSteps(projectId, pathStepIds);
-        if ("error" in checked) return res.status(400).json({ message: checked.error, code: "invalid_input", field: "pathStepIds" });
-        weekSteps = checked.ids;
-      }
-
-      const post = await storage.createFeedPost({
-        authorId: userId,
-        projectId: projectId || null,
-        postType: postType as FeedPostType,
-        content: content.trim(),
-        mediaUrls: Array.isArray(mediaUrls) ? mediaUrls.slice(0, MAX_POST_MEDIA) : [],
-        mentions: await resolveMentions(mentions),
-        asks: asked.asks,
-        isSystemGenerated: false,
-        ...(pathStep ? { entityType: "path_step", entityId: pathStep } : weekSteps.length ? { entityType: "path_week", entityId: projectId } : {}),
-      });
-      // Shared steps leave the weekly update: offered until they're posted, never twice.
-      if (pathStep || weekSteps.length) await markStepsShared(post.id, pathStep ? [pathStep] : weekSteps);
-      await markClosed(post, closes.ids);
-      // The Explore loop's way back: people following this builder or project hear there's progress.
-      void notifyFollowersOfPost(post);
-      void notify({ recipients: ((post.mentions as FeedMention[]) ?? []).map((m) => m.userId), actorId: userId, kind: "mention", targetId: post.id, postId: post.id, projectId: post.projectId, excerpt: post.content });
-
-      res.json(await storage.getFeedPost(post.id, userId));
+      await publishPost(req, res);
     } catch (error) {
       console.error("Create post error:", error);
       res.status(500).json({ message: "Failed to publish your post" });
@@ -318,8 +370,12 @@ export function registerFeedRoutes(app: Express) {
 
   app.delete("/api/feed/:id", isAuthenticated, async (req: any, res) => {
     try {
+      // Read first: once the row is gone there's no telling it was made in a company's name.
+      const [row] = await db.select({ companyId: feedPosts.companyId }).from(feedPosts).where(eq(feedPosts.id, req.params.id));
       const deleted = await storage.deleteFeedPost(req.params.id, req.user.id);
       if (!deleted) return res.status(404).json({ message: "Post not found" });
+      // A company can see everything said in its name coming and going, whoever took it down.
+      if (row?.companyId) await logCompany(row.companyId, req.user.id, "post_removed", req.user.id, { postId: req.params.id, by: "author" });
       // "kept": other people had replied, so their thread is still there without your post in it.
       res.json({ success: true, thread: deleted });
     } catch (error) {
@@ -361,12 +417,12 @@ export function registerFeedRoutes(app: Express) {
   /** One post, for its own page. Same visibility as the feed: private projects' posts only to their team. */
   app.get("/api/feed/:id", async (req: any, res, next) => {
     // Named sub-routes registered after this one (my-projects, mention-search, config) aren't post ids.
-    if (["config", "my-projects", "mention-search", "comments"].includes(req.params.id)) return next();
+    if (["config", "my-projects", "my-companies", "mention-search", "comments"].includes(req.params.id)) return next();
     try {
       const post = await storage.getFeedPost(req.params.id, req.user?.id);
       if (!post) return res.status(404).json({ message: "Post not found" });
       if (post.project?.isPrivate && !post.viewerIsTeam) return res.status(404).json({ message: "Post not found" });
-      res.json(post);
+      res.json(await withCompany(post));
     } catch (error) {
       console.error("Post error:", error);
       res.status(500).json({ message: "Failed to load the post" });
@@ -576,6 +632,111 @@ export function registerFeedRoutes(app: Express) {
     } catch (error) {
       console.error("Feed my-projects error:", error);
       res.status(500).json({ message: "Failed to load your projects" });
+    }
+  });
+
+  // ─── Posting as a company ─────────────────────────────────────────────────
+  //
+  // A company speaks on the feed through its people: the post is written by a
+  // person (`authorId`, who answers for it to moderation) and shown as the
+  // company. Only someone the company gave "post as the company" may do it —
+  // leaders hold that power by their role.
+
+  /** Publishes a post in the company's name. Same checks, limits and notifications as a person's post. */
+  app.post("/api/companies/:id/posts", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "post_as_company");
+      if (!found) return;
+      await publishPost(req, res, { id: found.company.id });
+    } catch (error) {
+      console.error("Company post error:", error);
+      res.status(500).json({ message: "Failed to publish the post" });
+    }
+  });
+
+  /**
+   * What the company has said, newest first, for anyone in it — each post with
+   * the person who wrote it. Also tells the page whether this viewer may post
+   * or take posts down, so the tab doesn't need a second request to decide.
+   */
+  app.get("/api/companies/:id/posts", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const found = await companyCan(res, String(req.params.id), userId, "view");
+      if (!found) return;
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const before = req.query.before ? new Date(String(req.query.before)) : null;
+      const rows = await db.select({ id: feedPosts.id, createdAt: feedPosts.createdAt }).from(feedPosts)
+        .where(and(
+          eq(feedPosts.companyId, found.company.id),
+          isNull(feedPosts.deletedAt),
+          publiclyVisible.feedPost(),
+          ...(before && !isNaN(before.getTime()) ? [lt(feedPosts.createdAt, before)] : []),
+        ))
+        .orderBy(desc(feedPosts.createdAt))
+        .limit(limit);
+      const hydrated = await Promise.all(rows.map((r) => storage.getFeedPost(r.id, userId)));
+      // A post on a private project stays with that project's team, even inside the company.
+      const visible = hydrated.filter((p): p is NonNullable<typeof p> => !!p && !(p.project?.isPrivate && !p.viewerIsTeam));
+      const canPost = hasPower(found.member, "post_as_company");
+      res.json({
+        posts: await withCompanies(visible),
+        nextCursor: rows.length === limit ? rows[rows.length - 1].createdAt : null,
+        canPost,
+        // The same power lets someone take down what others posted in the company's name; anyone may remove their own.
+        canRemoveOthers: canPost,
+      });
+    } catch (error) {
+      console.error("Company posts error:", error);
+      res.status(500).json({ message: "Couldn't load the company's posts." });
+    }
+  });
+
+  /**
+   * Takes down a post made in the company's name.
+   *
+   * Its author can, as they can anywhere; so can anyone holding "post as the
+   * company", because what goes out under the company's name is the company's
+   * to withdraw — a person who has left, or posted in error, shouldn't be the
+   * only one able to. Removal works as the author's own delete does: replies
+   * from other people keep the thread.
+   */
+  app.delete("/api/companies/:id/posts/:postId", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const found = await companyCan(res, String(req.params.id), userId, "view");
+      if (!found) return;
+      const [post] = await db.select({ id: feedPosts.id, authorId: feedPosts.authorId }).from(feedPosts)
+        .where(and(eq(feedPosts.id, String(req.params.postId)), eq(feedPosts.companyId, found.company.id), isNull(feedPosts.deletedAt)));
+      if (!post) return res.status(404).json({ message: "Post not found" });
+      if (post.authorId !== userId && !hasPower(found.member, "post_as_company")) {
+        return res.status(403).json({ message: 'That needs the "Post as the company" power in this company. Ask one of its leaders.', code: "missing_power", power: "post_as_company" });
+      }
+      const deleted = await storage.deleteFeedPost(post.id, post.authorId);
+      if (!deleted) return res.status(404).json({ message: "Post not found" });
+      await logCompany(found.company.id, userId, "post_removed", post.authorId, { postId: post.id, by: post.authorId === userId ? "author" : "company" });
+      res.json({ success: true, thread: deleted });
+    } catch (error) {
+      console.error("Company post removal error:", error);
+      res.status(500).json({ message: "Couldn't remove that post." });
+    }
+  });
+
+  /** Companies the caller may post in the name of — what the composer's "Post as" offers. */
+  app.get("/api/feed/my-companies", isAuthenticated, async (req: any, res) => {
+    try {
+      const rows = await db
+        .select({ id: companies.id, name: companies.name, slug: companies.slug, role: companyMembers.role, permissions: companyMembers.permissions })
+        .from(companyMembers)
+        .innerJoin(companies, eq(companies.id, companyMembers.companyId))
+        .where(eq(companyMembers.userId, req.user.id))
+        .orderBy(companies.name);
+      res.json(rows
+        .filter((r) => hasPower({ role: r.role as CompanyRole, permissions: r.permissions }, "post_as_company"))
+        .map((r) => ({ id: r.id, name: r.name, slug: r.slug })));
+    } catch (error) {
+      console.error("Feed my-companies error:", error);
+      res.status(500).json({ message: "Failed to load your companies" });
     }
   });
 }

@@ -90,7 +90,7 @@ export default function AdminSurfaces() {
         <CardHeader className="pb-2">
           <CardTitle className="text-base">Sequencing: the path loops first</CardTitle>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            The three path loops — Ship, Systemize, Raise — are the wedge. New work goes to them and to what they need.
+            The three path loops — Ship, Systemize, Run — are the wedge. New work goes to them and to what they need.
             Everything marked <span className="font-medium">after the wedge</span> stays built, tested and switchable, but sits in the secondary nav and gets no new work until this is true:
           </p>
           <p className="text-xs font-medium leading-relaxed" data-testid="wedge-proof">{WEDGE_PROOF}</p>

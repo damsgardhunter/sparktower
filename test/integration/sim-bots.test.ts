@@ -484,3 +484,42 @@ describe("what the bots bid for", () => {
     expect(kept.amount, "the bid that was there stands").toBe(9_999_999);
   }, 120_000);
 });
+
+describe("what the room says about the wait", () => {
+  it("counts down the minute for people, and starts it again when someone joins", async () => {
+    const app = await getTestApp();
+    const { one, ventureId } = await roomOfOne(app);
+
+    const fresh = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.phase).toBe("filling");
+    // Just arrived: nearly the whole minute to go, and no bots yet.
+    expect(fresh.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
+    expect(fresh.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS);
+    expect(fresh.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
+
+    // Forty seconds on, someone else turns up: the minute is theirs now, not what was left of the first one.
+    await db.update(simSeats).set({ joinedAt: new Date(Date.now() - 40_000) }).where(eq(simSeats.ventureId, ventureId));
+    const waited = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(waited.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS - 39);
+    const two = await player(app);
+    await db.insert(simSeats).values({ ventureId, userId: two.id, joinedAt: new Date() } as any);
+    const again = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(again.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
+    expect(again.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
+  }, 120_000);
+
+  it("says a finished season is over, not that nobody came", async () => {
+    const app = await getTestApp();
+    const { one, ventureId } = await roomOfOne(app);
+    const [v] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
+
+    const closed = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(closed.body).toMatchObject({ phase: "retired", seasonOver: false, botsInSeconds: null });
+
+    await db.update(simSeasons).set({ status: "finished" }).where(eq(simSeasons.id, v.seasonId));
+    const over = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(over.body).toMatchObject({ phase: "retired", seasonOver: true });
+  }, 120_000);
+});

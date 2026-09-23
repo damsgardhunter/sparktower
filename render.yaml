@@ -127,9 +127,13 @@ services:
       - key: STRIPE_WEBHOOK_SECRET
         sync: false # from the endpoint the app registers on first boot
 
-      # --- Mail. Until SPF and DKIM are published, leave these unset ----------
-      # (docs/ops/email-authentication.md — the domain's DMARC is p=quarantine,
-      # so unauthenticated mail is quarantined rather than delivered.)
+      # --- Mail ----------------------------------------------------------------
+      # SPF, DKIM and DMARC are published for sparktower.app and verified by
+      # `npm run check:email-auth` (2026-09-22: SPF pass, DKIM `resend`, DMARC
+      # p=quarantine). So these can be set: mail now authenticates rather than
+      # being quarantined. Without them the product still runs, and every
+      # confirm-your-email link goes to the server log instead of the person —
+      # which means nobody who signs up can post, comment, message or invite.
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

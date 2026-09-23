@@ -28,7 +28,11 @@ import { between, pick } from "./random";
 import { biddableFunds, type Bid, type Listing } from "./assets";
 import { BOT_POOL_SIZE, botsFor } from "../bots";
 import { LEVER_FIELDS, defaultDraft, validateDecision } from "./levers";
-import type { Company } from "./types";
+import type { City, Company, Niche } from "./types";
+import { assetEffects } from "./assets";
+import { isUnlocked, buildCostPerUnit } from "./responsibilities";
+import { researchCost } from "./world";
+import { automationCost, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "./factory";
 import type { Role } from "./types";
 
 /*
@@ -142,6 +146,43 @@ export function botAmbition(ventureId: string): number {
   return between(`bot:${ventureId}:ambition`, 0.75, 1.4);
 }
 
+/**
+ * How a bot makes one call: the sensible one about half the time, and any of
+ * the others the rest of the time.
+ *
+ * Bots used to answer every standing question the same way for fourteen years
+ * — no offer, no research, in house, thirty days — which made five bot
+ * companies in a season five copies of one company, and made the answers
+ * themselves invisible: a lever nobody ever moves teaches a player nothing.
+ *
+ * A coin, seeded on the venture, the year and the field, so the same company
+ * makes the same call in the same year and two companies make different ones.
+ * The sensible answer comes up about half the time, which is roughly how often
+ * a person gets these right, and the rest of the time the bot does something
+ * defensible and wrong — which is the part worth playing against.
+ */
+function call<T>(seed: string, best: T, options: readonly T[]): T {
+  if (options.length === 0) return best;
+  return between(`${seed}:coin`, 0, 1) < 0.5 ? best : pick(`${seed}:among`, options);
+}
+
+/**
+ * A hundred points of effort, divided by weight and snapped to the step the
+ * control moves in, so a bot's split is one a person could have filed.
+ */
+function split(parts: { id: string; weight: number }[]): Record<string, number> {
+  const total = parts.reduce((sum, p) => sum + Math.max(0, p.weight), 0);
+  if (total <= 0) return {};
+  const out: Record<string, number> = {};
+  let left = 100;
+  parts.forEach((p, i) => {
+    const share = i === parts.length - 1 ? left : Math.min(left, Math.round((Math.max(0, p.weight) / total) * 20) * 5);
+    if (share > 0) out[p.id] = share;
+    left -= share;
+  });
+  return out;
+}
+
 /** Everything the company sold last year, at this year's price — its size, roughly. */
 function turnoverOf(company: Company): number {
   const customers = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
@@ -173,8 +214,14 @@ export function botDecision(input: {
   role: Role;
   company: Company;
   previous?: Record<string, any>;
+  /**
+   * The market, when the caller has it. Without it a bot still files a legal
+   * year; with it, it can price what a choice costs and aim its marketing at
+   * real places and real people rather than spraying it.
+   */
+  niche?: Niche;
 }): Record<string, any> {
-  const { ventureId, year, role, company, previous } = input;
+  const { ventureId, year, role, company, previous, niche } = input;
   const base = defaultDraft(role, company, previous);
   const draft: Record<string, any> = { ...base };
   const fields = LEVER_FIELDS[role] ?? [];
@@ -194,8 +241,14 @@ export function botDecision(input: {
    * inventing a loan is a bot making a decision, which is more than one should
    * do.
    */
+  // A money lever that has only just arrived starts at nought, like any other.
+  for (const f of fields) {
+    if (f.kind === "money" && draft[f.id] === undefined && isUnlocked(role, f.id, year)) draft[f.id] = 0;
+  }
   const ambition = botAmbition(ventureId);
-  const money = role === "cfo" ? [] : fields.filter((f) => f.kind === "money");
+  // The chief executive's money is never spent by a bot on a human's behalf, and
+  // a lever the seat has not been handed yet is not one it can spend on.
+  const money = role === "cfo" || role === "ceo" ? [] : fields.filter((f) => f.kind === "money" && isUnlocked(role, f.id, year));
   const openable = money.filter((f) => Number(draft[f.id]) === 0);
   const budgetSeed = decisionSeed({ ventureId, year, role, field: "_budget" });
   /*
@@ -214,14 +267,264 @@ export function botDecision(input: {
     ? ambition * between(budgetSeed, 0.05, 0.12) * ((Number(company.cash) || 0) + turnoverOf(company))
     : 0;
   const budget = Math.max(0, Math.min(want, headroom(company) * 0.25));
+  /*
+   * The same money, tracked as it is committed.
+   *
+   * The standing choices below — opening a region, automating, a second
+   * shift, buying research — cost real money that never went through the
+   * budget above, so a bot could choose four of them in a year it could not
+   * pay for and leave the engine to cut everybody. Each one takes what it
+   * costs out of the purse and is simply not available once the purse cannot
+   * cover it, and what is left is what the spending levers divide up.
+   */
+  let purse = budget;
+  const afford = (cost: number) => cost > 0 && cost <= purse;
+  const commit = (cost: number) => { purse = Math.max(0, purse - cost); };
+
+  const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const room = Math.max(0, Number(company.capacity) || 0) + assetEffects(company.assets ?? []).capacity;
+  const load = room > 0 ? held / room : 0;
   const perField = openable.length ? budget / openable.length : 0;
 
   for (const field of fields) {
     const value = draft[field.id];
     const seed = decisionSeed({ ventureId, year, role, field: field.id });
 
+    // A lever the seat does not have yet is not filed at all (see UNLOCKS).
+    if (!isUnlocked(role, field.id, year)) { delete draft[field.id]; continue; }
+
+    /*
+     * The newer levers each get a considered value rather than a random one.
+     * A bot is a teammate a person has to live with: it forecasts honestly,
+     * rents room only when the company is already full, borrows on the
+     * ordinary line, and never imposes a budget split, a hold-back or price
+     * tiers on the humans at its table.
+     */
+    if (field.id === "forecast") {
+      const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      draft[field.id] = held > 0 ? snap(held * between(`${seed}:growth`, 0.95, 1.2), field.step, 0) : 0;
+      continue;
+    }
+    if (field.id === "leaseCapacity") {
+      const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      const room = (Number(company.capacity) || 0) + assetEffects(company.assets ?? []).capacity;
+      draft[field.id] = room > 0 && held >= room * 0.98 ? snap(held * 0.1, field.step, 0) : 0;
+      continue;
+    }
+    /*
+     * Where the marketing goes.
+     *
+     * Spreading it evenly is not neutral — it is a decision to be equally
+     * unremarkable in a region holding a quarter of the market and one holding
+     * a fortieth. The sensible call is to put it where the customers are; the
+     * other half of the time the bot backs a region for its own reasons.
+     */
+    if (field.id === "regionFocus") {
+      const open = (company.cities ?? []).map((id) => niche?.cities.find((c) => c.id === id)).filter(Boolean) as City[];
+      if (!niche || open.length < 2) { delete draft[field.id]; continue; }
+      const byWeight = split(open.map((c) => ({ id: c.id, weight: Math.max(0.01, c.weight) })));
+      const byWhim = split(open.map((c) => ({ id: c.id, weight: between(`${seed}:${c.id}`, 0.2, 1) })));
+      draft[field.id] = call(seed, byWeight, [byWeight, byWhim]);
+      continue;
+    }
+    if (field.id === "budget" || field.id === "tiers") {
+      delete draft[field.id];
+      continue;
+    }
+    // A bot never pays the money out: it keeps it in the company it is running.
+    if (field.id === "dividendPct") { draft[field.id] = 0; continue; }
+    if (field.id === "holdBack" || field.id === "costReview" || field.id === "bonusPool" || field.id === "replaceBid") {
+      draft[field.id] = 0;
+      continue;
+    }
+    /*
+     * A bot chief executive manages people gently: fair targets for everyone,
+     * and it never overrules or fires a human. Those are decisions a person
+     * should only ever have made to them by another person.
+     */
+    if (field.id === "targets") {
+      draft[field.id] = Object.fromEntries((company.seats ?? ["cmo", "cfo", "cto", "coo"]).filter((r) => r !== "ceo").map((r) => [r, "fair"]));
+      continue;
+    }
+    if (field.id === "overrule" || field.id === "replaceSeat") {
+      draft[field.id] = "";
+      continue;
+    }
+    /*
+     * Pay. The going rate keeps the engineers you have; under it, the market
+     * takes them. A bot pays the rate or a little over, and sometimes tries
+     * its luck under it.
+     */
+    if (field.id === "engineerPay") {
+      draft[field.id] = call(seed, 105, [90, 95, 100, 105, 110, 115]);
+      continue;
+    }
+    /*
+     * A bot keeps a balanced pace and places no feature bets: the menu is the
+     * season's, and a bet is the kind of call a table should see a person make.
+     */
+    if (field.id === "pace") { draft[field.id] = "balanced"; continue; }
+    /*
+     * The world's offers are filled in by the server, which knows the season
+     * and so knows what was offered (see `fileBotDecisions`). A bot chief
+     * executive puts every offer to the table rather than deciding alone: the
+     * humans at the table should get the call.
+     */
+    if (field.id === "deals" || field.id === "dealVotes") { delete draft[field.id]; continue; }
+    if (field.id === "shockAnswer") { draft[field.id] = "statement"; continue; }
+    /*
+     * An offer wins the people who watch the price, and costs margin on
+     * everybody. The sensible call is to make one while there is room to fill
+     * and stop once the plant is full.
+     */
+    if (field.id === "promo") {
+      draft[field.id] = call(seed, load < 0.6 ? "free_month" : "none", ["none", "free_month", "january"]);
+      continue;
+    }
+    /* Research is worth buying while the year is still winnable, and it is money. */
+    if (field.id === "research") {
+      const cost = niche ? researchCost(niche) : Infinity;
+      const options = afford(cost) ? ["none", "expectations", "rivals"] : ["none"];
+      const chosen = call(seed, afford(cost) ? "expectations" : "none", options);
+      if (chosen !== "none") commit(cost);
+      draft[field.id] = chosen;
+      continue;
+    }
+    /*
+     * Insurance is a premium on revenue against a year going wrong. Breaches
+     * are the common ruin, so that is the sensible cover — and "everything",
+     * at about twice the price of any one, is the defensible mistake.
+     */
+    if (field.id === "insurance") {
+      draft[field.id] = call(seed, "breach", ["none", "breach", "lawsuit", "poaching", "all"]);
+      continue;
+    }
+    if (field.id === "programme" || field.id === "expand") { draft[field.id] = ""; continue; }
+    /*
+     * The plant and the balance sheet: a bot keeps what it has. Automating,
+     * running a second shift, holding stock, selling what it is owed and
+     * buying the company back are all calls with a shape a person should
+     * choose — and a bot that made them would be spending a human table's
+     * money on a hunch.
+     */
+    /*
+     * Automating pays for itself on a plant that is running, and is money
+     * spent on rigidity on one that is not. A bot automates in steps it can
+     * pay for, and only while the room it has is being used.
+     */
+    if (field.id === "automationTarget") {
+      const now = Math.round(company.automation ?? 0);
+      const step = (to: number) => niche
+        ? automationCost({ from: now, to, capacity: Number(company.capacity) || 0, niche })
+        : Infinity;
+      const steps = [now + 5, now + 10, now + 20].filter((t) => t <= 100 && afford(step(t)));
+      const best = load > 0.7 && steps.length ? steps[0] : now;
+      const chosen = call(seed, best, [now, ...steps]);
+      if (chosen > now) commit(step(chosen));
+      draft[field.id] = chosen;
+      continue;
+    }
+    /*
+     * A second shift is room for this year only, at a premium and at the cost
+     * of service. Worth it when the plant is full and people are being turned
+     * away; a waste otherwise.
+     */
+    if (field.id === "shiftCapacity") {
+      const built = Math.max(0, Number(company.capacity) || 0);
+      const unit = niche ? buildCostPerUnit(niche) * SHIFT_RATE : Infinity;
+      const short = Math.max(0, held - room);
+      const sizes = [Math.round(built * 0.1), Math.round(built * 0.25), Math.round(built * SHIFT_MAX)]
+        .filter((u) => u > 0 && afford(u * unit));
+      const best = load > 0.95 && sizes.length
+        ? sizes.find((u) => u >= short) ?? sizes[sizes.length - 1]
+        : 0;
+      const chosen = call(seed, best, [0, ...sizes]);
+      if (chosen > 0) commit(chosen * unit);
+      draft[field.id] = chosen;
+      continue;
+    }
+    /*
+     * Stock is insurance against a year nobody forecast: bought now, it serves
+     * next year's surprise. A bot holds a little when it is already full, and
+     * none when it is not.
+     */
+    if (field.id === "stockTarget") {
+      const unit = niche ? buildCostPerUnit(niche) * STOCK_RATE : Infinity;
+      const sizes = [Math.round(held * 0.05), Math.round(held * 0.1)].filter((u) => u > 0 && afford(u * unit));
+      const best = load > 0.9 && sizes.length ? sizes[0] : 0;
+      const chosen = call(seed, best, [0, ...sizes]);
+      if (chosen > 0) commit(chosen * unit);
+      draft[field.id] = chosen;
+      continue;
+    }
+    /*
+     * Selling what you are owed, refinancing and buying the company back are
+     * left alone. Each is a call about the shape of the company rather than
+     * its year, and a bot that made them would be spending a table's money on
+     * a hunch.
+     */
+    if (field.id === "factorPct" || field.id === "refinance" || field.id === "buyback") {
+      draft[field.id] = 0;
+      continue;
+    }
+    /*
+     * Making it yourself costs a fixed overhead and is three points better at
+     * the thing itself; buying it in trades that for a variable cost. The
+     * sensible call is to keep doing what the company already does — changing
+     * how you make it is not an annual decision.
+     */
+    if (field.id === "sourcing") {
+      draft[field.id] = call(seed, company.sourcing ?? "in_house", ["in_house", "outsourced"]);
+      continue;
+    }
+    /*
+     * As the company already bills, as a string — the lever's answers are
+     * strings, and a number here failed validation, which threw away the whole
+     * draft and left the seat filing bare defaults for the rest of the season.
+     */
+    /*
+     * Terms are appeal bought with cash flow. A company with money in the bank
+     * can afford to be easy to buy from; one that is short cannot, whatever it
+     * would buy.
+     */
+    if (field.id === "terms") {
+      const flush = (Number(company.cash) || 0) > turnoverOf(company) * 0.5;
+      draft[field.id] = call(seed, flush ? "30" : "0", ["0", "30", "60", "90"]);
+      continue;
+    }
+    /*
+     * Who the marketing is for. The sensible call is the segment that holds
+     * the most customers; the other half is a bot betting on a niche.
+     */
+    if (field.id === "segmentFocus") {
+      if (!niche || niche.segments.length < 2) { delete draft[field.id]; continue; }
+      const bySize = split(niche.segments.map((g) => ({ id: g.id, weight: Math.max(1, g.size) })));
+      const byWhim = split(niche.segments.map((g) => ({ id: g.id, weight: between(`${seed}:${g.id}`, 0.2, 1) })));
+      draft[field.id] = call(seed, bySize, [bySize, byWhim]);
+      continue;
+    }
+    if (field.id === "featureBet") { draft[field.id] = ""; continue; }
+    if (field.id === "featureMode") { draft[field.id] = "build"; continue; }
+    if (field.id === "borrowTerm") {
+      // The line moves with the rating and can be repaid whenever; a fixed
+      // loan is cheaper and cannot. The line is the safe answer.
+      draft[field.id] = call(seed, "short", ["short", "long"]);
+      continue;
+    }
+    if (field.id === "holdBackSeat") { draft[field.id] = "all"; continue; }
+    if (field.id === "annualDiscount") {
+      // A modest discount, some years: never a quarter of the revenue on a whim.
+      draft[field.id] = between(`${seed}:plans`, 0, 1) < 0.5 ? 0 : 10;
+      continue;
+    }
+
     if (field.kind === "choice" && field.options?.length) {
       draft[field.id] = jitterChoice(seed, field.options.map((o) => o.value), value);
+      continue;
+    }
+
+    if (field.id === "capacityTarget") {
+      draft[field.id] = botCapacity({ seed, company, step: field.step, min: field.min, max: field.max });
       continue;
     }
 
@@ -245,9 +548,9 @@ export function botDecision(input: {
    * is a seat quietly spending less of the business every year. The shortfall
    * against the budget is spread over this seat's money levers.
    */
-  if (money.length && budget > 0) {
+  if (money.length && purse > 0) {
     const spent = money.reduce((sum, f) => sum + (Number(draft[f.id]) || 0), 0);
-    const short = budget - spent;
+    const short = purse - spent;
     if (short > 0) {
       /*
        * Uneven, but adding up: each lever draws a weight and the weights are
@@ -262,6 +565,28 @@ export function botDecision(input: {
         const bumped = (Number(draft[field.id]) || 0) + short * (weights[i] / total);
         draft[field.id] = snap(bumped, field.step, field.min, field.max);
       });
+    }
+  }
+
+  /*
+   * Opening another region.
+   *
+   * A bot never opened one, so a bot company spent fourteen years in the
+   * region it was given while the market moved around it. Now, once its own
+   * region is full enough to be worth leaving, it opens one more — the
+   * biggest it can pay for, about half the time, and somewhere it can afford
+   * the rest — and only ever one in a year, because entry is paid in cash.
+   */
+  if (role === "cmo" && niche && Array.isArray(draft.targetCities)) {
+    const open: string[] = draft.targetCities.map(String);
+    const shut = niche.cities.filter((c) => !open.includes(c.id) && afford(c.entryCost));
+    if (load > 0.8 && shut.length > 0) {
+      const biggest = [...shut].sort((a, b) => b.weight - a.weight)[0];
+      const chosen = call(decisionSeed({ ventureId, year, role, field: "_open" }), biggest, shut);
+      if (chosen && afford(chosen.entryCost)) {
+        commit(chosen.entryCost);
+        draft.targetCities = [...open, chosen.id];
+      }
     }
   }
 
@@ -311,6 +636,58 @@ export function botDecision(input: {
 
   const checked = validateDecision(role, draft, company);
   return checked.ok ? draft : base;
+}
+
+/**
+ * What an operations bot builds: enough room for the customers it has.
+ *
+ * Capacity used to be jittered like any other number — up or down by as much
+ * as 12% at random. That is a coin toss on the one lever where the direction
+ * matters most: a cut takes effect at once, growth a year later, so a bot
+ * that rolled a cut while half a million people were being turned away made
+ * the company smaller in the year it most needed to be bigger.
+ *
+ * So it looks at how full the company is, counting room its assets add, and
+ * builds toward next year: a little more than it serves now, less whatever
+ * assets will still be adding then (the ones in their last year won't be).
+ * It only ever cuts when the company is mostly empty, and never by much.
+ */
+export function botCapacity(input: { seed: string; company: Company; step?: number; min?: number; max?: number }): number {
+  const { seed, company, step, min, max } = input;
+  const built = Math.max(0, Number(company.capacity) || 0);
+  const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const assets = company.assets ?? [];
+  const room = built + assetEffects(assets).capacity;
+  const load = room > 0 ? held / room : 1;
+
+  if (load < 0.5) {
+    /*
+     * Mostly idle — and idle room is not free. A company serving a third of
+     * what it built pays every year to keep the rest ready, so trimming five
+     * per cent of it is not an operations decision, it is a shrug: the seat
+     * that is supposed to hold the company's costs down watched a quarter of
+     * a million pounds a year go on empty room and gave back a rounding
+     * error.
+     *
+     * So it gives back what it cannot foresee using, down to half as much
+     * again as it serves now, and never more than half the plant in one year
+     * — room sold back goes at a loss, and a good year would have to buy it
+     * again. A company that has not opened yet is left alone: nought
+     * customers is not an empty plant, it is a plant waiting for its first
+     * year.
+     */
+    if (held <= 0) return snap(built, step, min, max, built);
+    const keep = Math.max(held * 1.5, built * 0.5);
+    return snap(Math.min(built, keep), step, min, max, built);
+  }
+  if (load < 0.85) {
+    // Comfortable: hold, or edge up. Never a cut on a busy operation.
+    return snap(built * (1 + between(`${seed}:edge`, 0, 0.08)), step, min, max, built);
+  }
+  const assetsNextYear = assetEffects(assets.filter((a) => a.expiresIn === undefined || a.expiresIn > 1)).capacity;
+  const wanted = held * (1 + between(`${seed}:ahead`, 0.1, 0.25)) - assetsNextYear;
+  // Room for growth, but not a factory five times the size in a year.
+  return snap(Math.min(Math.max(built, wanted), built * 1.6 + 10_000), step, min, max, built);
 }
 
 // ─── The marketplace ─────────────────────────────────────────────────────────

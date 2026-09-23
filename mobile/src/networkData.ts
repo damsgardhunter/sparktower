@@ -3,7 +3,7 @@
  * the pieces those screens share that aren't drawing.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./api/client";
+import { api, API_URL } from "./api/client";
 
 /** What the server returns for a person, in the several shapes it comes in. */
 export interface PersonLike {
@@ -142,6 +142,32 @@ export function useInvitationActions(notify: (n: { text: string; tone: "success"
  * so translate: a post opens the post, a project its page (or its path), a
  * connection request the invitations list, anything else the person.
  */
+/**
+ * Open a page of the website in the in-app browser, signed in as you.
+ *
+ * The browser has no session of its own, and the website sends signed-out
+ * visitors of any page it doesn't know to its home page — so opening the
+ * address bare lost where you were going. A one-time link (a minute, single
+ * use; server/web-handoff.ts) signs the browser in on the way. If that can't
+ * be had, the bare page is still better than nothing.
+ */
+export async function openWebSignedIn(url: string, open: (url: string) => Promise<unknown>): Promise<void> {
+  const next = url.startsWith(API_URL) ? url.slice(API_URL.length) || "/" : null;
+  if (next) {
+    try {
+      const { path } = await api<{ path: string }>("/api/auth/mobile/web-handoff", { method: "POST", body: { next } });
+      await open(`${API_URL}${path}`);
+      return;
+    } catch {
+      // Fall through to the page itself.
+    }
+  }
+  await open(url);
+}
+
+/** Whether `appHref` answered with a web page rather than a screen in the app. */
+export const isWebHref = (href: string) => /^https?:\/\//.test(href);
+
 export function appHref(webHref: string | null | undefined, actorId: string): string {
   const href = webHref || "";
   let m: RegExpExecArray | null;
@@ -153,6 +179,21 @@ export function appHref(webHref: string | null | undefined, actorId: string): st
   if ((m = /^\/projects\/([^/?#]+)/.exec(href))) return `/project/${m[1]}`;
   if (href === "/profile") return "/network/invitations";
   if ((m = /^\/profile\/([^/?#]+)/.exec(href))) return `/user/${m[1]}`;
+  // The simulation: the phone has the room, the desk and its side screens.
+  if ((m = /^\/simulation\/([^/?#]+)\/(market|offers|standings)(?:[/?#]|$)/.exec(href))) return `/sim/${m[2]}/${m[1]}`;
+  if ((m = /^\/simulation\/([^/?#]+)$/.exec(href))) return `/sim/desk/${m[1]}`;
+  if (href === "/simulation") return "/sim";
+  if (href === "/sprints") return "/(tabs)/sprints";
+  if (href === "/" || href === "/feed") return "/(tabs)/feed";
+  /*
+   * Pages the phone doesn't have yet — companies, challenges, talent, a
+   * season invite, a sim year report, a sprint room — open on the web, in
+   * the in-app browser. Before this they fell through to the sender's
+   * profile: "Alex added you to their company" opened Alex, and "It's
+   * check-in day" or "There's news on your challenge entry" opened whoever
+   * happened to send it. A web page is the right destination; a person is not.
+   */
+  if (/^\/(companies|challenges|talent|join-season|simulation|sprints)(?:[/?#]|$)/.test(href)) return `${API_URL}${href}`;
   return actorId ? `/user/${actorId}` : "/(tabs)/feed";
 }
 

@@ -277,3 +277,36 @@ jobs:
       # native modules are stand-ins (mobile/test/stubs).
       - name: Test
         run: npm test
+
+  # Did the deploy that just went out come up as the product, or merely come up?
+  #
+  # Render auto-deploys `main`, so a merge is a release, and the failure this
+  # catches is the quiet one: a service that answers, passes a health check, and
+  # is misconfigured — PUBLIC_URL left on the old host so every emailed link
+  # leads somewhere else, or a process serving ahead of its migrations. Nothing
+  # in the suite above can see that, because it is a fact about the running
+  # deployment rather than about the code.
+  #
+  # Only on `main` (a pull request has nothing deployed to look at), and never a
+  # gate on merging: it runs after the merge, and it needs no secret, because
+  # every endpoint it reads is public.
+  live:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [server-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: npm ci
+      # Render builds and swaps in the new version after the merge, so the first
+      # look would otherwise catch the previous one. Long enough for an ordinary
+      # deploy; if it is still the old build, the check reports what it found
+      # rather than guessing.
+      - name: Wait for the deploy to swap in
+        run: sleep 180
+      - name: Check the live site
+        run: npm run check:live

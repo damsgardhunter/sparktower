@@ -139,6 +139,8 @@ export interface FeedPost {
   pathStep?: { taskId: string; title: string } | null;
   /** A weekly progress update: the path steps it shared. */
   pathWeek?: { steps: { taskId: string; title: string }[] } | null;
+  /** Set when the post was made in a company's name: the company is shown as the poster, the author under it. */
+  company?: { id: string; name: string; slug: string } | null;
 }
 
 export interface FeedPage { posts: FeedPost[]; nextCursor: string | null; followingCount?: number }

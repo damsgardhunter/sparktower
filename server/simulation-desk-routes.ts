@@ -26,7 +26,7 @@ import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallen
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, rateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
-import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@shared/simulation/types";
+import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
@@ -36,10 +36,21 @@ import { forecastDemand } from "@shared/simulation/forecast";
 import { projectYear } from "@shared/simulation/projection";
 import { advanceAuthority, advanceSeasonNow, warnIfDevAdvance } from "./season-control";
 import { mfaGate, mfaRequiredFor, mfaSatisfied } from "./mfa";
+import { SPENDING_SEATS, arrivingIn, buildCostPerUnit, isUnlocked, leaseCostPerUnit, unlockYear } from "@shared/simulation/responsibilities";
+import { STAFF_QUALITY_START, WARN_AT, overrulable, personOf } from "@shared/simulation/people";
+import { breachChance, featureCost, featureMenu, outageChance } from "@shared/simulation/product";
+import { AUTOMATION_RATE, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
+import {
+  EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, programmeCost, researchCost, statementCost,
+  type ProgrammeId,
+} from "@shared/simulation/world";
+import { valuation } from "@shared/simulation/mergers";
+import { incumbentYear } from "@shared/simulation/incumbents";
+import { assetEffects } from "@shared/simulation/assets";
 import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
-import { startReadySeasons } from "./simulation-tick";
+import { startReadySeasons, YEAR_CLOSING, yearClosing } from "./simulation-tick";
 
 /**
  * The desk nudges the season forward, the way the lobby screen nudges the room.
@@ -171,6 +182,17 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const year = season.year;
     const { decisions, filedBy } = await draftFor(venture.id, year);
     const economy = economyFor(season.id, year);
+    /*
+     * The year's offers, worked out once: the chief executive answers them,
+     * everybody else votes on them, and every seat can read them.
+     */
+    const offers = season.status === "running" && company.kind === "player"
+      ? dealsFor({
+          seasonId: season.id, year, company, niche,
+          incumbents: world.companies.filter((c) => c.kind === "incumbent"),
+          worth: valuation(company).fair,
+        })
+      : [];
 
     // Last year's result, and what each seat filed then, so a draft can start
     // from what they actually did rather than from zero.
@@ -261,10 +283,155 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * filled in: which seats could be rehired, and which segments this market
        * actually has. A static list cannot know either.
        */
-      fields: seat.role ? LEVER_FIELDS[seat.role as Role].map((base) => {
+      fields: seat.role ? LEVER_FIELDS[seat.role as Role]
+        // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
+        .filter((base) => isUnlocked(seat.role as Role, base.id, year))
+        .map((base) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
-        const field = speak(base, niche.voice);
+        const unlocksIn = unlockYear(seat.role as Role, base.id);
+        const field = { ...speak(base, niche.voice), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        if (field.id === "tiers") {
+          return {
+            ...field,
+            options: niche.segments.map((s) => ({ value: s.id, label: s.name, help: `Pays around ${s.referencePrice} and ${s.priceSensitivity >= 0.6 ? "watches every penny" : s.priceSensitivity <= 0.3 ? "barely looks at the price" : "notices price"}.` })),
+          };
+        }
+        /*
+         * The year's offers, for the chief executive to answer and everybody
+         * else to vote on. The same list for both, so a seat voting can read
+         * exactly what it is voting on.
+         */
+        if (field.id === "deals" || field.id === "dealVotes") {
+          return {
+            ...field,
+            options: offers.map((o) => ({ value: o.id, label: o.title, help: o.terms })),
+          };
+        }
+        // What to say about last year's shock — and who to blame, if it comes to that.
+        if (field.id === "shockAnswer") {
+          if (!company.shock) return { ...field, options: [] };
+          return {
+            ...field,
+            label: `Answer: ${company.shock.headline}`,
+            options: [
+              { value: "statement", label: "Make a statement", help: `Costs ${statementCost(niche).toLocaleString()} to do well, and wins back about half of the ${Math.round(company.shock.reputation)} points of reputation it cost.` },
+              { value: "silence", label: "Say nothing", help: "Cheap, and it reads as evasive: a little more reputation goes." },
+              ...overrulable(company.seats).map((r) => ({
+                value: `blame_${r}`,
+                label: `Blame the ${ROLE_TITLES[r].toLowerCase()}`,
+                help: `Wins back about 70% of it, and costs that seat 25 points of loyalty. They are at ${Math.round(personOf(company, r).loyalty)}.`,
+              })),
+            ],
+          };
+        }
+        // The improvement programmes not already running, and what one costs.
+        if (field.id === "programme") {
+          const running = new Set((company.programmes ?? []).map((p) => p.id));
+          return {
+            ...field,
+            options: [
+              { value: "", label: "None this year", help: "Keep the money." },
+              ...Object.entries(PROGRAMMES).filter(([id]) => !running.has(id as ProgrammeId)).map(([id, p]) => ({
+                value: id, label: p.name, help: `${p.blurb} ${programmeCost(niche).toLocaleString()} to start.`,
+              })),
+            ],
+          };
+        }
+        // The region announced for next year, if the company has not committed to one already.
+        if (field.id === "expand") {
+          const announced = company.expanding ? null : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+          return {
+            ...field,
+            options: announced
+              ? [
+                  { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
+                  { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString()} now, opening next year — and in its first year you reach only as far as the brand does.` },
+                ]
+              : [],
+          };
+        }
+        /*
+         * This year's feature menu: three ideas, the same for every team in
+         * the season, each saying who it is for, whether a rival already has
+         * it (so it can be copied), and what it costs.
+         */
+        if (field.id === "featureBet") {
+          const owned = new Set((company.features ?? []).map((f) => f.id));
+          const menu = featureMenu(niche, season.id, year).filter((m) => !owned.has(m.id));
+          const segName = (id: string) => niche.segments.find((s) => s.id === id)?.name ?? id;
+          const build = featureCost(niche, "build");
+          const copy = featureCost(niche, "copy");
+          return {
+            ...field,
+            options: [
+              { value: "", label: "No bet this year", help: "Keep the money." },
+              ...menu.map((m) => ({
+                value: m.id,
+                label: m.name,
+                help: `For ${segName(m.segment).toLowerCase()}. ${m.blurb} Build £${build.toLocaleString()}${m.rivalHas ? ` · a rival already has it: copy £${copy.toLocaleString()}` : ""}.`,
+              })),
+            ],
+          };
+        }
+        /*
+         * Where the marketing goes: the regions this company actually sells
+         * in, each saying how big it is and who over-indexes there, because
+         * that is the whole basis of the decision.
+         */
+        if (field.id === "regionFocus") {
+          const open = new Set(company.cities ?? niche.cities.map((c) => c.id));
+          const segName = (id: string) => niche.segments.find((s) => s.id === id)?.name ?? id;
+          return {
+            ...field,
+            options: niche.cities.filter((c) => open.has(c.id)).map((c) => {
+              const leans = Object.entries(c.mix ?? {}).sort((a, b) => b[1] - a[1])[0];
+              const character = leans && leans[1] > 1.02 ? ` Leans ${segName(leans[0]).toLowerCase()}.`
+                : leans && leans[1] < 0.98 ? "" : "";
+              return { value: c.id, label: c.name, help: `${Math.round(c.weight * 100)}% of the market.${character} ${c.note}` };
+            }),
+          };
+        }
+        // And who it is for: the segments, with what each is worth.
+        if (field.id === "segmentFocus") {
+          const market = niche.segments.reduce((sum, s) => sum + s.size, 0) || 1;
+          return {
+            ...field,
+            options: niche.segments.map((s) => ({
+              value: s.id,
+              label: s.name,
+              help: `${Math.round((s.size / market) * 100)}% of the market, paying around ${s.referencePrice}. ${describeWeights(s)}`,
+            })),
+          };
+        }
+        // A second shift can only run the plant you have: half as much again, at most.
+        if (field.id === "shiftCapacity") {
+          return { ...field, max: Math.round(company.capacity * SHIFT_MAX) };
+        }
+        // The other four chairs, for the chief executive's people levers.
+        if (field.id === "targets" || field.id === "overrule" || field.id === "replaceSeat") {
+          const others = overrulable(company.seats).map((r) => {
+            const person = personOf(company, r);
+            const record = person.record ?? [];
+            const right = record.filter((x) => x.right === "seat").length;
+            return {
+              value: r,
+              label: ROLE_TITLES[r],
+              help: `Loyalty ${Math.round(person.loyalty)}${person.loyalty < WARN_AT ? " — thinking about leaving" : ""} · rated ${person.skill}${record.length ? ` · overruled ${record.length}×, right ${right} of those` : ""}`,
+            };
+          });
+          return {
+            ...field,
+            options: field.id === "targets" ? others : [{ value: "", label: "Nobody", help: field.id === "overrule" ? "Every seat's own decision stands." : "Keep everybody." }, ...others],
+          };
+        }
+        if (field.id === "budget") {
+          return {
+            ...field,
+            options: SPENDING_SEATS.filter((r) => company.seats.includes(r))
+              .map((r) => ({ value: r, label: ROLE_TITLES[r], help: "" })),
+          };
+        }
         if (field.id === "rehire") {
           return {
             ...field,
@@ -284,6 +451,19 @@ export function registerSimulationDeskRoutes(app: Express): void {
         }
         return field;
       }) : [],
+      /** What one of each thing costs in this market, for the committed-spend meter. */
+      prices: {
+        build: buildCostPerUnit(niche), lease: leaseCostPerUnit(niche),
+        featureBuild: featureCost(niche, "build"), featureCopy: featureCost(niche, "copy"),
+        research: researchCost(niche), programme: programmeCost(niche), statement: statementCost(niche),
+        shift: buildCostPerUnit(niche) * SHIFT_RATE, stock: buildCostPerUnit(niche) * STOCK_RATE,
+        automation: buildCostPerUnit(niche) * AUTOMATION_RATE,
+        expansion: Math.round((announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] })?.entryCost ?? 0) * EXPANSION_DISCOUNT),
+      },
+      /** The levers this seat gets next year, by label, so nobody is surprised by them. */
+      arrivingNextYear: seat.role
+        ? arrivingIn(seat.role as Role, year + 1).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
+        : [],
       /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
       draft: seat.role
         ? (decisions as any)[seat.role] ?? defaultDraft(seat.role as Role, company, (previous as any)?.[seat.role])
@@ -298,7 +478,12 @@ export function registerSimulationDeskRoutes(app: Express): void {
         quality: Math.round(company.quality),
         brand: Math.round(company.brand),
         service: Math.round(company.service),
+        /** What the company built. The operations lever sets this; it is not all the room there is. */
         capacity: company.capacity,
+        /** How automated the plant is, 0–100 — what a point of automation is charged against. */
+        automation: Math.round(company.automation ?? 0),
+        /** What the company's assets add on top — a distribution deal, a second site. Served from all the same. */
+        assetCapacity: assetEffects(company.assets ?? []).capacity,
         unitCost: Math.round(company.unitCost * 100) / 100,
         price: Math.round(company.price),
         customers: Object.values(company.customers).reduce((sum, n) => sum + n, 0),
@@ -418,7 +603,31 @@ export function registerSimulationDeskRoutes(app: Express): void {
         // spend a fortnight deciding things with.
         isBot: !!s.isBot,
         isYou: s.userId === req.user.id,
+        /** How this chair stands with the room: loyalty, how good, how hard pushed. The chief executive's own is not tracked. */
+        person: s.role && s.role !== "ceo" ? (() => {
+          const p = personOf(company, s.role as Role);
+          return { loyalty: Math.round(p.loyalty), skill: p.skill, stretch: p.stretch ?? "fair", warning: p.loyalty < WARN_AT, record: p.record ?? [] };
+        })() : null,
       })),
+      /** What the world is offering this year, in full, for every seat to read. */
+      offers,
+      /** A shock the chief executive has still to answer, if there is one. */
+      shock: company.shock ?? null,
+      /** What the table bought: a research report, if the marketing seat filed for one. */
+      research: researchFor(decisions.cmo?.research, { niche, year, world, economy }),
+      /** The product's risks and its bets, for the technology seat to point at. */
+      productRisk: {
+        security: Math.round(company.security ?? 0),
+        data: Math.round(company.data ?? 0),
+        breachChance: isUnlocked("cto", "securitySpend", year) ? Math.round(breachChance(company.security, company.techDebt) * 100) : 0,
+        outageChance: Math.round(outageChance(company.techDebt, 0) * 100),
+        features: (company.features ?? []).map((f) => ({
+          id: f.id, name: f.name, segment: f.segment, mode: f.mode,
+          live: f.lands <= year && !f.flopped, flopped: !!f.flopped && f.lands <= year, lands: f.lands,
+        })),
+      },
+      /** How good the staff are at looking after people, 0–100. */
+      staffQuality: Math.round(company.staffQuality ?? STAFF_QUALITY_START),
       /** Every filed decision, so nobody has to guess what the others committed. */
       filed: decisions,
       preview,
@@ -498,7 +707,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
       try {
         const raw = JSON.parse(req.query.draft);
-        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id)) };
+        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) }) };
       } catch {
         return res.status(400).json({ message: "That draft couldn't be read." });
       }
@@ -539,6 +748,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!season || season.status !== "running" || !season.world) {
       return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
     }
+    // Refused once the year is due: the tick may already have read this year's filings.
+    if (yearClosing(season)) return res.status(409).json(YEAR_CLOSING);
 
     const niche = nicheById(season.nicheId)!;
     const world = season.world as World;
@@ -564,10 +775,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     // Only the fields this seat owns, taken from the lever list rather than
     // from the request — the same cleaning a bot's decision goes through.
-    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id));
+    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) });
 
     await db.insert(simDecisions)
-      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean })
+      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean, submittedAt: new Date() })
       .onConflictDoUpdate({
         target: [simDecisions.ventureId, simDecisions.role, simDecisions.year],
         set: { payload: clean, userId: req.user.id, submittedAt: new Date() },
@@ -590,3 +801,43 @@ const OUTLOOK_MEANS: Record<string, string> = {
   steady: "Next year looks much like this one.",
   tightening: "Next year looks thinner. Debt taken now is repaid into a worse market.",
 };
+
+/**
+ * A research report, once the marketing seat has paid for one.
+ *
+ * Not a hint and not a nudge: the actual numbers, because the report is
+ * bought with money that could have been marketing. Expectations are what
+ * every segment will demand of a company next year; rivals are what the
+ * incumbents are likely to charge, run through the same function that will
+ * decide it.
+ */
+function researchFor(
+  bought: string | undefined,
+  input: { niche: Niche; year: number; world: World; economy: Economy },
+): { kind: "expectations"; segments: { id: string; name: string; floors: { axis: string; atLeast: number }[]; priceCeiling: number }[] }
+  | { kind: "rivals"; rivals: { id: string; name: string; priceNow: number; priceNext: number }[] }
+  | null {
+  const { niche, year, world, economy } = input;
+  if (bought === "expectations") {
+    return {
+      kind: "expectations",
+      segments: niche.segments.map((s) => {
+        const next = expectationsFor(s, year + 1);
+        return { id: s.id, name: s.name, floors: next.floors, priceCeiling: next.priceCeiling };
+      }),
+    };
+  }
+  if (bought === "rivals") {
+    const players = world.companies.filter((c) => c.kind === "player");
+    return {
+      kind: "rivals",
+      rivals: world.companies.filter((c) => c.kind === "incumbent").map((c) => ({
+        id: c.id,
+        name: c.name,
+        priceNow: Math.round(c.price),
+        priceNext: Math.round(incumbentYear(c, players, niche, economy).price),
+      })),
+    };
+  }
+  return null;
+}

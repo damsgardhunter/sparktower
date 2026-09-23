@@ -235,7 +235,13 @@ describe("running out of money", () => {
 });
 
 describe("the emergency loan", () => {
-  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 10_000, creditLimit: 20_000 });
+  /*
+   * A company whose year costs more than it has, by less than one rescue can
+   * cover. (It used to start with ten thousand and survive only because a plan
+   * cut to nothing by the cash floor still bought a whole year's brand and
+   * quality — see step 0 in resolve.ts.)
+   */
+  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 300_000, creditLimit: 20_000 });
 
   it("keeps a company solvent the first time its cash runs out", () => {
     const { reports } = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]);
@@ -304,3 +310,17 @@ describe("the market adds up", () => {
     expect(r.reputationChange).toBeLessThan(0);
   });
 });
+
+describe("the chairs, in the order a player expects", () => {
+  it("lists the other seats canonically, however the company filled them", async () => {
+    const { overrulable } = await import("@shared/simulation/people");
+    // The order chairs happen to sit in after a season of hiring and firing…
+    expect(overrulable(["cfo", "cto", "ceo", "cmo", "coo"] as any)).toEqual(["cmo", "cfo", "cto", "coo"]);
+    // …never changes what the chief executive's menus look like.
+    expect(overrulable(["ceo", "cmo"] as any)).toEqual(["cmo"]);
+    expect(overrulable(["ceo"] as any)).toEqual([]);
+    // A duplicate chair, however it got there, is still one entry.
+    expect(overrulable(["cto", "cto", "ceo"] as any)).toEqual(["cto"]);
+  });
+});
+

@@ -65,7 +65,10 @@ async function runStep(agent: any, projectId: string, backboneId: string, answer
 const PATHS: { goal: ProjectGoal; subcategory: string; answer: string }[] = [
   { goal: "ship_mvp", subcategory: "saas", answer: "A week of dinners planned from what is already in the fridge, for people who cook on weeknights." },
   { goal: "systemize_business", subcategory: "restaurant", answer: "Opening runs off one checklist: fridge temperatures, prep list, float counted, specials written up." },
-  { goal: "raise_funding", subcategory: "startup_equity", answer: "Eighteen months of runway buys the second city and the team to run it; the raise is sized to that and nothing else." },
+  // Run a company — the third path. This row used to be raise_funding, which
+  // folded into Systemize and would now walk the same milestones as the row
+  // above it, leaving "every path" covering two of the three.
+  { goal: "run_company", subcategory: "software", answer: "The week runs off one rhythm: Monday the numbers, Wednesday the customers we lost, Friday what shipped." },
 ];
 
 describe("the first steps of every path leave something behind", () => {

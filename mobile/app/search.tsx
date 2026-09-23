@@ -140,13 +140,13 @@ export default function Search() {
   const openPerson = (u: any, rank: number) => {
     const name = personName(u, u.profile);
     remember({ kind: "builder", id: u.id, name, subtitle: u.profile?.headline, avatarUrl: personAvatar(u, u.profile) });
-    trackExplore(EXPLORE.openProfile, { matchType: "builder", targetId: u.id, rankPosition: rank, source: "discover" });
+    trackExplore(EXPLORE.openProfile, { matchType: "builder", targetId: u.id, rankPosition: rank, source: "search" });
     markSeen("builder", u.id);
     router.push(`/user/${u.id}`);
   };
   const openProject = (p: any, rank: number) => {
     remember({ kind: "project", id: p.id, name: p.title, subtitle: p.oneLiner || p.category });
-    trackExplore(EXPLORE.openProject, { matchType: "project", targetId: p.id, rankPosition: rank, source: "discover" });
+    trackExplore(EXPLORE.openProject, { matchType: "project", targetId: p.id, rankPosition: rank, source: "search" });
     markSeen("project", p.id);
     router.push(`/project/${p.id}`);
   };
@@ -177,7 +177,7 @@ export default function Search() {
               onOpen={() => openPerson(u, i + 1)}
               right={
                 <View style={{ width: 112 }}>
-                  <ConnectActions block userId={u.id} name={name} headline={u.profile?.headline} connection={states?.[u.id]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={u.profile?.skills?.[0]} />
+                  <ConnectActions block userId={u.id} name={name} headline={u.profile?.headline} connection={states?.[u.id]} notify={show} explore={{ source: "search", rankPosition: i + 1 }} moreLikeThis={u.profile?.skills?.[0]} />
                 </View>
               }
             >
@@ -213,7 +213,7 @@ export default function Search() {
             roles={(p.rolesNeeded ?? []).slice(0, 2)}
             onOpen={() => openProject(p, i + 1)}
             action={p.ownerId === meId ? undefined : (
-              <FollowButton projectId={p.id} title={p.title} following={followedIds.has(p.id)} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={p.category} />
+              <FollowButton projectId={p.id} title={p.title} following={followedIds.has(p.id)} notify={show} explore={{ source: "search", rankPosition: i + 1 }} moreLikeThis={p.category} />
             )}
           />
         </View>

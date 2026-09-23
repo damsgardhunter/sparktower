@@ -63,11 +63,24 @@ test("a published step brings a stranger in, and they publish their own", async 
   expect(html).toContain("fridge");
   expect(html).toContain(`<a href="/projects/${project.id}">`);
 
-  // And the crawler is told the page exists at all.
+  /*
+   * And what the crawler is told — checked as the pair it is, because the two
+   * files now answer from one condition. An indexable deployment lists the
+   * page in the sitemap; one that isn't (a preview, a laptop, this test run)
+   * says "Disallow: /" and serves no sitemap at all, since a sitemap that
+   * disagrees with the robots.txt beside it reads as an invitation to index a
+   * site that shouldn't be indexed. Asserting only the first answer meant this
+   * test demanded the wrong one of the two.
+   */
   const robots = await (await author.api.get("/robots.txt")).text();
   expect(robots).toContain("User-agent: *");
-  const sitemap = await (await author.api.get("/sitemap.xml")).text();
-  expect(sitemap).toContain(`<loc>`);
+  const sitemapRes = await author.api.get("/sitemap.xml");
+  if (robots.includes("Disallow: /\n") || robots.trim().endsWith("Disallow: /")) {
+    expect(sitemapRes.status(), "robots says stay out, so there is no sitemap to follow").toBe(404);
+  } else {
+    expect(robots).toContain("Sitemap:");
+    expect(await sitemapRes.text()).toContain(`<loc>`);
+  }
 
   // A stranger, with no account, reads it and starts their own path.
   const strangerContext = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.92" } });

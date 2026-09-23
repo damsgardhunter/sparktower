@@ -422,28 +422,51 @@ export class ObjectStorageService {
    * The signed-URL flow exists for browser uploads; server-generated artefacts
    * (a rendered PDF, for one) have the bytes in hand already and shouldn't
    * have to round-trip through an HTTP PUT to store them.
+   *
+   * `aclPolicy` is the third argument and not an afterthought, because leaving
+   * it off is how a private document ends up readable by the internet:
+   * `GET /objects/...` only enforces access when an object carries a policy
+   * that says "private", so an object written with no policy at all is served
+   * to anybody holding the URL, signed out. Unguessable is not private. Every
+   * caller should say which of the two it means; callers that pass nothing get
+   * the old behaviour and a line in the log naming the omission.
    */
   async writeObjectBuffer(
     buffer: Buffer,
     contentType = "application/octet-stream",
+    aclPolicy?: ObjectAclPolicy,
   ): Promise<string> {
     const objectId = randomUUID();
+    const objectPath = `/objects/uploads/${objectId}`;
 
     if (isLocalFallback()) {
       const uploadsDir = path.join(LOCAL_OBJECT_ROOT, "uploads");
       await fsPromises.mkdir(uploadsDir, { recursive: true });
       await fsPromises.writeFile(path.join(uploadsDir, objectId), buffer);
-      return `/objects/uploads/${objectId}`;
+    } else {
+      const fullPath = `${this.getPrivateObjectDir()}/uploads/${objectId}`;
+      const { bucketName, objectName } = parseObjectPath(fullPath);
+      await objectStorageClient
+        .bucket(bucketName)
+        .file(objectName)
+        .save(buffer, { contentType, resumable: false });
     }
 
-    const fullPath = `${this.getPrivateObjectDir()}/uploads/${objectId}`;
-    const { bucketName, objectName } = parseObjectPath(fullPath);
-    await objectStorageClient
-      .bucket(bucketName)
-      .file(objectName)
-      .save(buffer, { contentType, resumable: false });
+    if (aclPolicy) {
+      /*
+       * Thrown, not swallowed. A private artefact whose policy failed to
+       * attach is a public artefact, and the caller needs to know that before
+       * it stores the path somewhere and tells someone it's safe.
+       */
+      await setObjectAclPolicy(await this.getObjectEntityFile(objectPath), aclPolicy);
+    } else {
+      console.warn(
+        `[objects] ${objectPath} was written with no ACL policy, so anyone with the URL can read it. ` +
+          "Pass an aclPolicy to writeObjectBuffer saying whether this is public or private.",
+      );
+    }
 
-    return `/objects/uploads/${objectId}`;
+    return objectPath;
   }
 
   // Gets the object entity file from the object path.

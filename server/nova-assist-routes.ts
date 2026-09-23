@@ -21,7 +21,10 @@ import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
+  parseOperation, knownIdsFor,
 } from "./project-operations";
+import { describeOp } from "@shared/audit-catchup";
+import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
 import { NOVA_SURFACES, type NovaSurfaceId, type NovaSurfaceConfig } from "@shared/nova-surfaces";
 import { parseModelJson, respondToAiError } from "./ai-json";
 import { rateLimit } from "./moderation";
@@ -206,14 +209,37 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
   // Ids belong in operations, never in the text the builder reads.
   const knownIds = await collectProjectIds(projectId).catch(() => []);
+  /*
+   * The model's operations are checked before anyone is shown them.
+   *
+   * This used to forward up to sixty arbitrary objects straight through, with
+   * the readable "items" as a parallel array that nothing compared against
+   * them. A verb that doesn't exist, an id from another project, a task with
+   * no title: all shown as changes about to be made, approved by the builder,
+   * then quietly dropped by the apply engine. The plan they read and the plan
+   * that ran were different plans, and the difference was invisible.
+   *
+   * So: parse every operation against the same vocabulary the apply engine
+   * uses, drop what can't run or names an unknown id, and build the items
+   * shown from the operations that survived — the model's own wording where it
+   * gave one for that operation, the vocabulary's description otherwise.
+   */
+  const ids = await knownIdsFor(projectId).catch(() => undefined);
+  const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+  const kept = (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60)
+    .map((o: unknown, i: number) => ({ op: parseOperation(o, ids), item: rawItems[i] }))
+    .filter((x: any) => x.op);
+  const dropped = (Array.isArray(parsed.operations) ? parsed.operations.slice(0, 60).length : 0) - kept.length;
   res.json({
     surface,
     summary: stripIdFragments(str(parsed.summary, 1500), knownIds),
-    items: (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 25).map((i: any) => ({
-      label: stripIdFragments(str(i?.label, 300), knownIds),
-      detail: stripIdFragments(str(i?.detail, 600), knownIds),
+    items: kept.slice(0, 25).map(({ op, item }: any) => ({
+      label: stripIdFragments(str(item?.label, 300), knownIds) || stripIdFragments(str(describeOp(op), 300), knownIds),
+      detail: stripIdFragments(str(item?.detail, 600), knownIds),
     })).filter((i: any) => i.label),
-    operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60),
+    operations: kept.map((x: any) => x.op),
+    /** How many of Nova's proposals couldn't be run and were left out. */
+    dropped,
     creditsCharged: CREDIT_COSTS.novaAssist,
   });
 }
@@ -295,15 +321,23 @@ export function registerNovaAssistRoutes(app: Express) {
         return res.status(400).json({ message: "There's nothing to apply." });
       }
 
-      const { changes, skipped } = await applyProjectOperations(projectId, userId, operations, {
-        canEditMilestones: ent.aiMilestones,
-        canEditRoadmap: ent.roadmapUpdates,
-        maxOperations: 80,
+      /*
+       * Applied once. A double click, or a client retrying a slow apply, used
+       * to run the whole batch a second time — duplicate tasks and milestones,
+       * and an update_scope replaying a stale array over work added since.
+       */
+      const result = await applyOperationsOnce({
+        projectId, userId, operations, source: "nova-assist",
+        key: idempotencyKeyFor(req, operations),
+        apply: { canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 80 },
       });
-      if (!changes.length) {
-        return res.status(422).json({ message: "None of that could be applied.", skipped });
+      if (result.replayed) {
+        return res.status(409).json({ message: "That was already applied.", changes: result.changes, skipped: result.skipped, replayed: true });
       }
-      res.json({ changes, skipped });
+      if (!result.changes.length) {
+        return res.status(422).json({ message: "None of that could be applied.", skipped: result.skipped });
+      }
+      res.json({ changes: result.changes, skipped: result.skipped });
     } catch (error) {
       console.error("Nova apply error:", error);
       res.status(500).json({ message: "Couldn't apply that" });

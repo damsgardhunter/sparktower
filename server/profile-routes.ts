@@ -451,7 +451,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.get("/api/looking-for", async (req: any, res) => {
     try {
       const role = str(req.query.role, 80);
-      const all = await storage.getProfilesLookingFor();
+      // Signed in or not: when there is a viewer, their blocks apply to this
+      // public list too, in both directions.
+      const all = await storage.getProfilesLookingFor(req.user?.id ?? null);
       const filtered = role
         ? all.filter((p) => (p.lookingFor as ProfileLookingFor)?.role === role)
         : all;

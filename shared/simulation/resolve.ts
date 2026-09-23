@@ -20,7 +20,7 @@ import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
 import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { shortfalls, expectationsFor, weightsOf } from "./criteria";
-import { assetEffects, ageAssets } from "./assets";
+import { assetEffects, ageAssets, stillHeld } from "./assets";
 import { brandLanding, capacityBuild, qualityLanding, staffing } from "./lag";
 import {
   EMERGENCY_REPUTATION, RATING_START, applyRepayment, boardChiefExecutive, creditMultiplier,
@@ -28,6 +28,29 @@ import {
 } from "./finance";
 import { reachOf, appealFor } from "./market";
 import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
+import {
+  BOND_TERM, COVENANT_COVER, COVENANT_PENALTY, COVENANT_RATING_HIT, FREE_SERVE_COST, PREPAID_SHARE,
+  annualPlans, bondTotal, capacityMoney, drawdown, forecastOutcome, freeTierBrand, fundYear, isUnlocked, priceFor, takings,
+  type Bond,
+} from "./responsibilities";
+import {
+  OVERRULE_LOYALTY, REVIEW_SERVICE, RESIGN_AT, STAFF_QUALITY_START, WARN_AT, effort, payEffect, personOf, poached,
+  reviewSaving, staffLeverage, staffQualityNext, yearLoyalty,
+} from "./people";
+import { ROLE_TITLES, type Role } from "./types";
+import {
+  OUTAGE, breachOf, dataEffects, dataNext, featureCost, featureMenu, outageChance, paceOf, placeBet, prOutcome,
+  referralBrand, securityNext, swingOf,
+} from "./product";
+import { rng } from "./random";
+import { automationCost, automationEffect, automationNext, shiftCapacity, sourcingOf, stockCost } from "./factory";
+import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./treasury";
+import {
+  DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers,
+  dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
+  statementCost, winBack, type Cover, type Shock, type ShockAnswer,
+} from "./world";
+import { valuation, applyAcquisition } from "./mergers";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -131,6 +154,16 @@ export interface ProfitAndLoss {
   operations: number;
   /** Capacity paid for and not used. */
   idleCapacity: number;
+  /** Building and leasing capacity. */
+  capacity?: number;
+  /** What the forecast saved (positive) or cost (negative). */
+  planning?: number;
+  /** Cleaning up after breaches and lawsuits, less what insurance paid. */
+  incidents?: number;
+  /** Distribution partners' share of revenue. */
+  partners?: number;
+  /** Insurance premiums. */
+  insurance?: number;
   interest: number;
   /** Before tax. */
   operatingProfit: number;
@@ -225,9 +258,11 @@ const money = (n: number): string => `£${Math.round(n).toLocaleString()}`;
  */
 function lossReason(me: Company, them: Company, segment: Niche["segments"][number]): string {
   const w = weightsOf(segment);
+  const mine = priceFor(me, segment.id);
+  const theirs = priceFor(them, segment.id);
   const candidates = [
-    { axis: "price", score: (w.price / 100) * Math.max(0, me.price - them.price) / Math.max(1, segment.referencePrice),
-      text: `who undercut you by ${money(me.price - them.price)}` },
+    { axis: "price", score: (w.price / 100) * Math.max(0, mine - theirs) / Math.max(1, segment.referencePrice),
+      text: `who undercut you by ${money(mine - theirs)}` },
     { axis: "quality", score: (w.quality / 100) * Math.max(0, them.quality - me.quality) / 100,
       text: `who were ahead on quality, ${Math.round(them.quality)} to your ${Math.round(me.quality)}` },
     { axis: "brand", score: (w.brand / 100) * Math.max(0, them.brand - me.brand) / 100,
@@ -356,6 +391,32 @@ export function resolveYear(
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
   const notesFor: Record<string, string[]> = {};
+  const segmentLabel = (id: string) => (niche.segments.find((s) => s.id === id)?.name ?? id).toLowerCase();
+  /** What the world's moves cost each company this year, charged at settlement. */
+  const worldSpend = new Map<string, { marketing: number; operations: number; cash: number }>();
+  /** Companies whose table accepted a buyer's offer this year. */
+  const sales = new Map<string, { buyerId: string; price: number }>();
+
+  /*
+   * 0. What each seat is actually allowed to spend, decided before anything
+   * reads a single figure.
+   *
+   * Three things can cut a seat's plan: the finance seat's floor (cash nobody
+   * may spend), the chief executive's split of what is left, and the finance
+   * seat's hold-back. They used to be applied to the bill only — the floor cut
+   * what a team was charged while every pound of the uncut plan still bought
+   * brand, quality and service, so holding cash back was a discount rather
+   * than a cost. Cutting the decisions themselves, here, makes one figure true
+   * everywhere: what was spent is what was charged is what it bought.
+   */
+  for (const company of world.companies) {
+    if (company.kind !== "player") continue;
+    const d = byCompany.get(company.id);
+    if (!d) continue;
+    const funded = fundYear(company, d, niche, economy ?? world.economy);
+    byCompany.set(company.id, funded.decisions);
+    if (funded.notes.length) notesFor[company.id] = funded.notes;
+  }
   const spendFor: Record<string, number> = {};
   /** What each company actually earned and spent trading, as opposed to what moved through its bank account. */
   const ledger: Record<string, { revenue: number; costs: number; profit: number }> = {};
@@ -374,7 +435,7 @@ export function resolveYear(
 
     const d = byCompany.get(company.id) ?? { companyId: company.id };
     const lock = interlock(company, d, niche);
-    notesFor[company.id] = [...lock.notes];
+    notesFor[company.id] = [...(notesFor[company.id] ?? []), ...lock.notes];
 
     /*
      * The chief executive's focus is a thumb on everyone else's scale rather
@@ -387,8 +448,37 @@ export function resolveYear(
       notesFor[company.id].push(FOCUS_NOTES[d.ceo.focus as Focus]);
     }
 
-    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * focus.marketing;
-    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * focus.marketing;
+    /*
+     * How far each seat's money goes: its loyalty, its skill and how hard it
+     * has been pushed (see `people.ts`). One for an ordinary seat, so a
+     * company that never touches any of it plays as it always has.
+     */
+    const eff = {
+      cmo: effort(personOf(company, "cmo")),
+      cto: effort(personOf(company, "cto")),
+      coo: effort(personOf(company, "coo")),
+    };
+    // Engineering pay: above market buys more, with diminishing returns; below invites the market in.
+    const pay = payEffect(d.cto?.engineerPay);
+    /*
+     * The chief executive's pace (ship it, or get it right) and the analytics
+     * the technology seat has built up both reach marketing: shipping gives it
+     * something new to shout about, and data aims it. See `product.ts`.
+     */
+    const pace = paceOf(d.ceo?.pace);
+    const aim = dataEffects(company.data).aim;
+    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * focus.marketing * eff.cmo * pace.marketing * aim;
+    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * focus.marketing * eff.cmo * pace.marketing * aim;
+    // PR is a coin flip; a referral programme only works if the product is worth recommending.
+    const seedOf = (what: string) => `${world.seasonId}:${world.year}:${company.id}:${what}`;
+    const pr = prOutcome(d.cmo?.prSpend, seedOf("pr"));
+    if (pr.landed === "hit") notesFor[company.id].push(`The PR push landed: ${pr.brand.toFixed(1)} points of brand for the money.`);
+    if (pr.landed === "miss") notesFor[company.id].push("The PR push went nowhere. It happens a little under half the time.");
+    if (pr.landed === "backfire") notesFor[company.id].push("The PR push backfired: the story people remembered was not the one that was pitched. Reputation took a knock.");
+    const referral = referralBrand(d.cmo?.referralSpend, company.quality);
+    if ((d.cmo?.referralSpend ?? 0) > 0 && referral < 1) {
+      notesFor[company.id].push("The referral programme paid people to recommend a product they did not rate. Almost nobody did.");
+    }
     /*
      * Half the saturation point and a higher ceiling than shipping: research
      * buys roughly half again as much quality per pound. It needs to, because
@@ -396,16 +486,17 @@ export function resolveYear(
      * merely equal to shipping would make patience strictly worse and the
      * lever a tax on thinking ahead.
      */
-    const researched = lift(d.cto?.researchSpend ?? 0, 150_000, 24) * niche.innovationPace;
+    const researched = lift(d.cto?.researchSpend ?? 0, 150_000, 24) * niche.innovationPace * eff.cto * pay.output;
     /*
      * What the company already owes itself. Carried debt means a share of
      * every engineer's year goes on working around what is already there, so
      * the same money buys less.
      */
     const drag = debtDrag(company.techDebt);
+    // Shipping fast is where debt comes from: the pace scales how much this year's features leave behind.
     const techDebt = nextTechDebt({
       current: company.techDebt,
-      featureSpend: d.cto?.featureSpend,
+      featureSpend: (d.cto?.featureSpend ?? 0) * pace.debt,
       paydown: d.cto?.techDebtPaydown,
     });
     if (techDebt > 55 && (company.techDebt ?? 0) <= 55) {
@@ -420,12 +511,46 @@ export function resolveYear(
     }
 
     /*
+     * The plant itself (see `factory.ts`): how automated it is, where the work
+     * is done, and the stock bought last year that arrives to serve people
+     * this year's room could not.
+     */
+    const automation = automationNext(company.automation, d.coo?.automationTarget);
+    const auto = automationEffect(automation.now);
+    const sourcing = sourcingOf(d.coo?.sourcing);
+    const stockHeld = Math.max(0, Math.round(company.stock ?? 0));
+    if (automation.building > 0) {
+      notesFor[company.id].push(`The plant is being automated to ${Math.round(automation.next)}. It runs that way from next year: cheaper to make each one, dearer to build more, and slower to change what it makes.`);
+    }
+    if (stockHeld > 0) {
+      notesFor[company.id].push(`${stockHeld.toLocaleString()} ${niche.voice.capacityShort} of stock held from last year served people the room alone would have turned away.`);
+    }
+    /*
      * Quality is felt a year after it is built. This year's shipping goes into
      * the pipeline; what arrives now is last year's shipping and research that
      * started two years ago. See `lag.ts`.
      */
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product;
-    const quality = qualityLanding(company, shipped, researched);
+    // An automated line is a line set up for what it already makes: product work buys less.
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product;
+    /*
+     * The pace again: shipping swings the year's result either way, and puts
+     * part of it in front of customers now rather than next year.
+     */
+    const swung = shipped * swingOf(d.ceo?.pace, seedOf("swing"));
+    const shippedNow = swung * pace.landsNow;
+    const landing = qualityLanding(company, swung - shippedNow, researched);
+    if (shippedNow > 0.5) notesFor[company.id].push(`Shipped fast: ${shippedNow.toFixed(1)} points of this year's work reached customers now instead of next year.`);
+    /*
+     * Paid below the market, and the market notices: some years a share of
+     * what the product team has in flight walks out with the people doing it.
+     */
+    const lost = poached(pay.pay, `${world.seasonId}:${world.year}:${company.id}:poach`);
+    const quality = lost.hit
+      ? { ...landing, pipeline: landing.pipeline * (1 - lost.share), pipelineLater: landing.pipelineLater * (1 - lost.share) }
+      : landing;
+    if (lost.hit) {
+      notesFor[company.id].push(`Engineers paid ${Math.round(pay.pay * 100)}% of the market were hired away: a quarter of the work in flight left with them.`);
+    }
     if (quality.landed > 0.5) {
       notesFor[company.id].push(`Last year's work reached customers: ${quality.landed.toFixed(1)} points of quality that no amount of spending this year could have bought.`);
     }
@@ -444,11 +569,25 @@ export function resolveYear(
         `${staff.newHires} new ${staff.newHires === 1 ? "hire" : "hires"} this year: on the payroll now, and not much use until next year.`,
       );
     }
+    // Staff are as good at service as they have been hired and trained to be.
     const serviceGain = lift(
-      (d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
+      (d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent * staffLeverage(company.staffQuality),
       150_000, 15,
-    ) * focus.quality;
-    const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18);
+    ) * focus.quality * eff.coo;
+    const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18) * eff.coo;
+    // Next year's staff: this year's hires, as recruited, and everybody else, as trained.
+    const staffQuality = staffQualityNext({
+      quality: company.staffQuality ?? STAFF_QUALITY_START,
+      established: staff.established,
+      newHires: staff.newHires,
+      recruiting: d.coo?.recruitingSpend ?? 0,
+      training: d.coo?.trainingSpend ?? 0,
+    });
+    // Last year's cost review, felt now.
+    const scar = Math.max(0, company.reviewScar ?? 0);
+    if (scar > 0) {
+      notesFor[company.id].push(`Last year's ${scar}% cost review is being felt: service slipped, and so did everybody's patience.`);
+    }
 
     // Everything decays. A company that stands still goes backwards, which is
     // what stops a good year in year two carrying a team to year fourteen.
@@ -473,7 +612,19 @@ export function resolveYear(
         `Room for ${build.building.toLocaleString()} more ${niche.voice.capacityShort} is being built. It opens next year; this year you serve with what you had.`,
       );
     }
-    const capacity = build.now;
+    /*
+     * Leased room is here this year and gone at the end of it — dearer than
+     * building, and the only way to have more room *now*.
+     */
+    const shift = shiftCapacity({ capacity: build.now, requested: d.coo?.shiftCapacity, niche });
+    if (shift.units > 0) {
+      notesFor[company.id].push(`A second shift added room for ${shift.units.toLocaleString()} more ${niche.voice.capacityShort} this year, at a premium, and the operation answered the phone worse for it.`);
+    }
+    const leased = Math.max(0, Math.round(d.coo?.leaseCapacity ?? 0));
+    if (leased > 0) {
+      notesFor[company.id].push(`Leased room for ${leased.toLocaleString()} more ${niche.voice.capacityShort} this year. It costs 40% more than building it, and it goes back at the end of the year.`);
+    }
+    const capacity = build.now + leased + shift.units + stockHeld;
     const price = Math.max(1, d.cmo?.price ?? company.price);
 
     /*
@@ -501,10 +652,145 @@ export function resolveYear(
     const cities = Array.from(new Set([...here, ...opened.map((c) => c.id)]));
     openedFor[company.id] = { cost: entryCost, names: opened.map((c) => c.name) };
 
+    /*
+     * Feature bets: one idea from this year's menu, built (a year, full
+     * effect, might flop) or copied from a rival (now, half the effect).
+     * Anything that reaches customers this year is announced, flop or not.
+     */
+    let features = [...(company.features ?? [])];
+    for (const f of features) {
+      if (f.lands !== world.year) continue;
+      notesFor[company.id].push(f.flopped
+        ? `${f.name} launched and nobody wanted it. It happens to about one feature in four.`
+        : `${f.name} reached customers: the ${segmentLabel(f.segment)} find the company ${Math.round(f.lift * 100)}% more appealing for it.`);
+    }
+    const menu = featureMenu(niche, world.seasonId, world.year);
+    const idea = d.cto?.featureBet ? menu.find((m) => m.id === d.cto!.featureBet) : undefined;
+    if (idea && !features.some((f) => f.id === idea.id)) {
+      const someoneHasIt = idea.rivalHas || world.companies.some((c) => c.id !== company.id && (c.features ?? []).some((f) => f.id === idea.id && !f.flopped));
+      const mode = d.cto?.featureMode === "copy" && someoneHasIt ? "copy" : "build";
+      const bet = placeBet({ idea, mode, pace: d.ceo?.pace, year: world.year, seed: seedOf(`feature:${idea.id}`) });
+      features = [...features, bet];
+      if (d.cto?.featureMode === "copy" && mode === "build") {
+        notesFor[company.id].push(`Nobody had ${idea.name} to copy, so it is being built from scratch instead.`);
+      }
+      notesFor[company.id].push(mode === "copy"
+        ? `Copied ${idea.name} from a rival: live now, worth half what building it would have been.`
+        : bet.lands === world.year
+          ? (bet.flopped ? `${idea.name} was shipped this year, fast, and did not land.` : `${idea.name} was shipped this year, fast: the ${segmentLabel(idea.segment)} find the company ${Math.round(bet.lift * 100)}% more appealing for it.`)
+          : `${idea.name} is being built. It reaches customers next year — and about one in four does not work.`);
+    }
+
+    /*
+     * The world, arriving (see `world.ts`). Money these moves cost is kept
+     * aside for settlement, in `worldSpend`, so the year's accounts can say
+     * what each was.
+     */
+    const spent = { marketing: 0, operations: 0, cash: 0 };
+    let people = company.people;
+    let reputationNow = 0;
+    // Last year's shock, answered — or, with no answer, met with silence.
+    if (company.shock) {
+      const answer = answerShock(company.shock, (d.ceo?.shockAnswer || undefined) as ShockAnswer | undefined);
+      reputationNow += answer.reputation;
+      if (d.ceo?.shockAnswer === "statement") spent.marketing += statementCost(niche);
+      if (answer.blamed && company.seats.includes(answer.blamed)) {
+        const person = personOf(company, answer.blamed);
+        people = { ...(people ?? {}), [answer.blamed]: { ...person, loyalty: Math.max(0, person.loyalty + answer.loyalty) } };
+      }
+      notesFor[company.id].push(
+        d.ceo?.shockAnswer === "statement" ? `The chief executive answered "${company.shock.headline}" with a statement: about half the reputation it cost has come back.`
+        : answer.blamed ? `The chief executive blamed the ${ROLE_TITLES[answer.blamed].toLowerCase()} for "${company.shock.headline}". Most of the reputation came back; that seat will not forget it.`
+        : `Nothing was said about "${company.shock.headline}", and the silence was noticed.`,
+      );
+    }
+    // Improvement programmes: a third of each, in each of the three years after it starts.
+    const yielded = programmeYield(company.programmes, world.year);
+    let programmes = company.programmes;
+    const programme = d.coo?.programme;
+    if (programme && PROGRAMMES[programme] && !(programmes ?? []).some((p) => p.id === programme)) {
+      programmes = [...(programmes ?? []), { id: programme, started: world.year }];
+      spent.operations += programmeCost(niche);
+      notesFor[company.id].push(`Started a ${PROGRAMMES[programme].name.toLowerCase()} programme. It pays out a third a year for the next three years.`);
+    }
+    // The year's offers: taken, turned down, or put to the table.
+    let assets = aged.assets;
+    let revenueShares = company.revenueShares;
+    let comarketingBrand = 0;
+    const offers = dealsFor({
+      seasonId: world.seasonId, year: world.year, company, niche,
+      incumbents: world.companies.filter((c) => c.kind === "incumbent"),
+      worth: valuation(company).fair,
+    });
+    for (const offer of offers) {
+      const votes = (["cmo", "cfo", "cto", "coo"] as const)
+        .map((r) => (d as any)[r]?.dealVotes?.[offer.id] as "yes" | "no" | undefined)
+        .filter((v): v is "yes" | "no" => v === "yes" || v === "no");
+      const answer = d.ceo?.deals?.[offer.id];
+      const out = dealOutcome(answer, votes);
+      if (answer === "vote") {
+        notesFor[company.id].push(`${offer.title}: put to the table, ${votes.filter((v) => v === "yes").length} for and ${votes.filter((v) => v === "no").length} against. ${out.accepted ? "Taken." : "Turned down."}`);
+      }
+      if (!out.accepted) continue;
+      if (offer.kind === "distribution") {
+        assets = [...assets, {
+          id: `deal-${offer.id}`, kind: "distribution", name: `${offer.from} distribution`,
+          effect: { capacity: offer.capacity, brand: offer.brand }, bookValue: 0, expiresIn: DEAL_YEARS,
+        }];
+        revenueShares = [...(revenueShares ?? []), { rate: offer.revenueShare ?? 0, until: world.year + DEAL_YEARS - 1, from: offer.from }];
+        notesFor[company.id].push(`Signed with ${offer.from}: ${offer.terms}`);
+      } else if (offer.kind === "comarketing") {
+        spent.marketing += offer.cost ?? 0;
+        comarketingBrand += lift((offer.cost ?? 0) * 2, 220_000, 16);
+        notesFor[company.id].push(`Ran a joint campaign with ${offer.from}: twice the reach for the money.`);
+      } else if (offer.kind === "buyout") {
+        sales.set(company.id, { buyerId: offer.buyerId!, price: offer.price ?? 0 });
+      }
+    }
+    // A region announced last year, opening now: reached only as far as the brand reaches.
+    let expanding = company.expanding;
+    let citiesNow = cities;
+    const ramp: Record<string, number> = {};
+    if (expanding && expanding.opensYear === world.year) {
+      if (!citiesNow.includes(expanding.cityId)) {
+        citiesNow = [...citiesNow, expanding.cityId];
+        ramp[expanding.cityId] = firstYearReach(company.brand);
+        notesFor[company.id].push(`Opened in ${niche.cities.find((c) => c.id === expanding!.cityId)?.name ?? "the new region"}, as announced. In its first year the company reaches ${Math.round(ramp[expanding.cityId] * 100)}% of it — as far as the brand does.`);
+      }
+      expanding = undefined;
+    }
+    // This year's announcement, taken up by operations: it opens next year, at a discount, paid now.
+    const announced = announcedRegion({ niche, seasonId: world.seasonId, year: world.year, open: citiesNow });
+    if (d.coo?.expand && announced && d.coo.expand === announced.id && !expanding) {
+      expanding = { cityId: announced.id, opensYear: world.year + 1 };
+      spent.cash += announced.entryCost * EXPANSION_DISCOUNT;
+      notesFor[company.id].push(`Committed to ${announced.name}, announced for next year, at ${Math.round(EXPANSION_DISCOUNT * 100)}% of the usual cost to open.`);
+    }
+    // A research report, and bringing back last year's leavers: both marketing's money.
+    if (d.cmo?.research && d.cmo.research !== "none") spent.marketing += researchCost(niche);
+    spent.marketing += Math.max(0, d.cmo?.winbackSpend ?? 0);
+    worldSpend.set(company.id, spent);
+
     return {
       ...company,
-      assets: aged.assets,
-      cities,
+      assets,
+      cities: citiesNow,
+      people,
+      programmes,
+      revenueShares,
+      expanding,
+      ramp: Object.keys(ramp).length ? ramp : undefined,
+      promo: d.cmo?.promo && d.cmo.promo !== "none" ? d.cmo.promo : undefined,
+      regionFocus: d.cmo?.regionFocus,
+      segmentFocus: d.cmo?.segmentFocus,
+      shock: undefined,
+      /** Leased room, kept apart so it is never charged as idle and never carried into next year. */
+      leased,
+      // A marketing seat that filed sets the tiers; one that did not leaves them as they were.
+      tiers: d.cmo ? d.cmo.tiers : company.tiers,
+      retention: annualPlans(d.cfo?.annualDiscount).retention,
+      // What customers are given to pay, which is part of the offer (see `treasury.ts`).
+      terms: d.cfo?.terms,
       pipeline: quality.pipeline,
       pipelineLater: quality.pipelineLater,
       brandPipeline: brand.next,
@@ -522,9 +808,21 @@ export function resolveYear(
       cash: company.cash - entryCost,
       price,
       capacity,
-      brand: clamp(company.brand + brand.now + perfGain - decay.brand),
-      quality: clamp(company.quality + quality.landed - decay.quality),
-      service: clamp(company.service + serviceGain - decay.service),
+      brand: clamp(company.brand + brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand - decay.brand),
+      quality: clamp(company.quality + quality.landed + shippedNow + yielded.quality + sourcing.quality - decay.quality),
+      reputation: clamp(company.reputation + reputationNow + yielded.reputation),
+      security: securityNext(company.security, d.cto?.securitySpend),
+      data: dataNext(company.data, d.cto?.dataSpend),
+      features,
+      /** This year's PR backfire, if any, for reputation at settlement. Never stored. */
+      prReputation: pr.reputation,
+      service: clamp(company.service + serviceGain + yielded.service - decay.service - scar * REVIEW_SERVICE - shift.service),
+      staffQuality,
+      automation: automation.now,
+      /** Next year's automation, applied once the year is settled, like capacity. */
+      automationNext: automation.next,
+      stock: Math.max(0, Math.round(d.coo?.stockTarget ?? 0)),
+      sourcing: d.coo?.sourcing === "outsourced" ? "outsourced" : "in_house",
       /*
        * Costs move by how much the index moved, not by the whole index.
        *
@@ -541,7 +839,8 @@ export function resolveYear(
        */
       unitCost: Math.max(
         niche.baseUnitCost * 0.45,
-        company.unitCost * (1 - costCut) * (nextEconomy.costIndex / (world.economy?.costIndex || 1)) * focus.cost,
+        company.unitCost * (1 - costCut) * yielded.unitCost * auto.unitCost * sourcing.unitCost
+          * (nextEconomy.costIndex / (world.economy?.costIndex || 1)) * focus.cost,
       ),
     };
   });
@@ -599,6 +898,45 @@ export function resolveYear(
 
   /* 3. The market decides. */
   const allocation = allocate(withIncumbents, niche, world.year, nextEconomy);
+
+  /*
+   * Win-back: last year's leavers, brought back from whoever took them — the
+   * biggest holder in that segment — as far as the money and the room go. It
+   * only fully works if the company got better at what they left over; see
+   * `winBack` in world.ts.
+   */
+  for (const company of withIncumbents) {
+    if (company.kind !== "player") continue;
+    const d = byCompany.get(company.id);
+    const spend = Math.max(0, d?.cmo?.winbackSpend ?? 0);
+    const left = company.leftLastYear ?? {};
+    const totalLeft = Object.values(left).reduce((a, n) => a + n, 0);
+    if (spend <= 0 || totalLeft <= 0) continue;
+    const was = company.lastStats;
+    const fixed = !was || company.quality > was.quality + 2 || company.service > was.service + 2 || company.price < was.price * 0.97;
+    let room = Math.max(0, company.capacity - Object.values(allocation.held[company.id] ?? {}).reduce((a, n) => a + n, 0));
+    let back = 0;
+    for (const segment of niche.segments) {
+      const gone = left[segment.id] ?? 0;
+      if (gone <= 0 || room <= 0) continue;
+      const holder = withIncumbents
+        .filter((c) => c.id !== company.id)
+        .sort((a, b) => (allocation.held[b.id]?.[segment.id] ?? 0) - (allocation.held[a.id]?.[segment.id] ?? 0))[0];
+      if (!holder) continue;
+      const want = winBack({ spend: spend * (gone / totalLeft), left: gone, referencePrice: segment.referencePrice, fixed });
+      const n = Math.min(want, room, allocation.held[holder.id]?.[segment.id] ?? 0);
+      if (n <= 0) continue;
+      allocation.held[holder.id][segment.id] -= n;
+      allocation.held[company.id][segment.id] = (allocation.held[company.id][segment.id] ?? 0) + n;
+      room -= n;
+      back += n;
+    }
+    if (back > 0 || spend > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), back > 0
+        ? `Won back ${back.toLocaleString()} of last year's leavers.${fixed ? "" : " Fewer than the money should have bought: nothing they left over had changed."}`
+        : "The win-back money found nobody to bring back — there was no room, or nobody had left."];
+    }
+  }
   const sharesAfter = marketShares(allocation.held);
 
   /* 4. Money. */
@@ -607,9 +945,34 @@ export function resolveYear(
     const units = Object.values(customers).reduce((sum, n) => sum + n, 0);
     const d = byCompany.get(company.id);
 
-    const revenue = units * company.price;
-    const variable = units * company.unitCost;
-    const marketing = (d?.cmo?.brandSpend ?? 0) + (d?.cmo?.performanceSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0);
+    /*
+     * What the customers paid. Tier by tier, once some have traded down to a
+     * cheaper tier than their own, less the discount on annual plans; for a
+     * company with neither it is customers times price, as it always was.
+     */
+    const plans = company.kind === "player" ? annualPlans(d?.cfo?.annualDiscount) : annualPlans(0);
+    const took = takings(company, customers, niche.segments);
+    /*
+     * A promotion: a free first month for everybody new, or a January sale
+     * for everybody. And a distribution partner's share, off the top.
+     */
+    const promo = promoOf(company.kind === "player" ? company.promo : undefined);
+    const freshUnits = niche.segments.reduce((a, s) => a + (allocation.fresh[s.id]?.[company.id] ?? 0), 0);
+    const heldUnits = Object.values(customers).reduce((a, n) => a + n, 0);
+    const promoFactor = promo.allRevenue * (1 - (1 - promo.newRevenue) * (heldUnits > 0 ? Math.min(1, freshUnits / heldUnits) : 0));
+    const revenue = took.revenue * plans.revenueFactor * promoFactor;
+    const shareRate = company.kind === "player"
+      ? (company.revenueShares ?? []).filter((r) => r.until >= world.year).reduce((a, r) => a + r.rate, 0)
+      : 0;
+    const partnerShare = revenue * shareRate;
+    const extra = worldSpend.get(company.id) ?? { marketing: 0, operations: 0, cash: 0 };
+    // Insurance: the premium, and later what it pays back on anything it covered.
+    const cover = (company.kind === "player" ? byCompany.get(company.id)?.cfo?.insurance : "none") as Cover | undefined;
+    const premium = revenue * (PREMIUM[cover ?? "none"] ?? 0);
+    // Free users are served too, more cheaply than paying ones.
+    const variable = (units - took.freeUsers) * company.unitCost + took.freeUsers * company.unitCost * FREE_SERVE_COST;
+    const marketing = (d?.cmo?.brandSpend ?? 0) + (d?.cmo?.performanceSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0)
+      + (d?.cmo?.prSpend ?? 0) + (d?.cmo?.referralSpend ?? 0) + extra.marketing;
     /*
      * Research is in here, and was not.
      *
@@ -619,12 +982,44 @@ export function resolveYear(
      * year into next year's product for free, for fourteen years. Every screen
      * said they were spending it; only the bank account disagreed.
      */
-    const product = (d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0)
-      + (d?.cto?.techDebtPaydown ?? 0) + (d?.cto?.researchSpend ?? 0);
-    const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0);
-    const fixed = company.kind === "player"
-      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * focusEffects(d?.ceo?.focus).fixed
+    // At the engineering pay the technology seat set: the same work, at a fifth over market, is a fifth dearer.
+    /*
+     * A feature bet is charged in the year it is placed, built or copied, at
+     * this market's price for one. Only a bet that was actually placed: one
+     * that is new on the company this year.
+     */
+    const before = world.companies.find((c) => c.id === company.id);
+    const placed = company.kind === "player"
+      ? (company.features ?? []).find((f) => !(before?.features ?? []).some((p) => p.id === f.id))
+      : undefined;
+    const betCost = placed ? featureCost(niche, placed.mode) : 0;
+    const product = ((d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0)
+      + (d?.cto?.techDebtPaydown ?? 0) + (d?.cto?.researchSpend ?? 0)
+      + (d?.cto?.securitySpend ?? 0) + (d?.cto?.dataSpend ?? 0) + betCost) * payEffect(d?.cto?.engineerPay).cost;
+    /*
+     * The plant's money: automating it, running a second shift on it, and the
+     * stock bought now for next year (see `factory.ts`). Building costs more
+     * on an automated line, which is the other half of that trade.
+     */
+    const plant = company.kind === "player"
+      ? automationCost({ from: before?.automation ?? 0, to: d?.coo?.automationTarget ?? before?.automation ?? 0, capacity: company.capacity, niche })
+        + shiftCapacity({ capacity: company.capacity, requested: d?.coo?.shiftCapacity, niche }).cost
+        + stockCost(d?.coo?.stockTarget, niche)
       : 0;
+    const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0)
+      + (d?.coo?.recruitingSpend ?? 0) + (d?.coo?.trainingSpend ?? 0) + extra.operations + plant;
+    // The finance seat's cost review comes off the overhead this year; the bill for it arrives next year.
+    const review = company.kind === "player" ? reviewSaving(d?.cfo?.costReview) : 0;
+    const fixed = company.kind === "player"
+      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche))
+        * focusEffects(d?.ceo?.focus).fixed * (1 - review) * sourcingOf(d?.coo?.sourcing).fixed
+      : 0;
+    if (review > 0) {
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `A ${Math.round(review * 100)}% cost review took overhead down this year. Service and morale find out next year.`,
+      ];
+    }
     /*
      * The finance seat's ring-fence, which now actually holds.
      *
@@ -640,37 +1035,51 @@ export function resolveYear(
      * spend, so nobody is surprised by it. Fixed costs are outside it: salaries
      * are owed whatever anybody decided.
      */
-    const buffer = Math.max(0, d?.cfo?.cashBuffer ?? 0);
     /*
-     * Measured against everything the table could actually spend, which is
-     * what the commitment meter has always shown: cash, plus anything drawn
-     * down, plus the credit still available, less what finance is holding
-     * back. Measuring the cut against cash alone meant a company could read as
-     * comfortably funded on every screen and still lose a third of its year —
-     * two numbers describing the same decision and disagreeing.
+     * The finance seat's floor, the chief executive's split and the hold-back
+     * were all applied to the decisions before the year began (step 0), so
+     * what is charged here is what was actually spent.
      */
-    const spendable = Math.max(
-      0,
-      company.cash + (d?.cfo?.borrow ?? 0) + Math.max(0, company.creditLimit - company.debt) - buffer,
-    );
-    const wanted = marketing + product + ops;
-    const allowed = wanted > spendable && wanted > 0 ? spendable / wanted : 1;
-    if (company.kind === "player" && allowed < 1) {
-      notesFor[company.id] = [
-        ...(notesFor[company.id] ?? []),
-        `Finance held ${Math.round(buffer).toLocaleString()} back, so ${Math.round(wanted).toLocaleString()} of planned spending became ${Math.round(wanted * allowed).toLocaleString()}. Everyone's year was cut by the same fraction.`,
-      ];
-    }
+    const allowed = 1;
+
+    /*
+     * Capacity is a contract rather than a budget line: building is paid for
+     * in the year it is ordered, leased room for the year it is used, and room
+     * given up is sold back at a loss.
+     */
+    const base0 = baseById.get(company.id);
+    const automated = automationEffect(before?.automation ?? 0).buildCost;
+    const room = company.kind === "player"
+      ? capacityMoney({
+          current: world.companies.find((c) => c.id === company.id)?.capacity ?? 0,
+          target: (base0 as (Company & { capacityNext?: number }) | undefined)?.capacityNext ?? company.capacity,
+          lease: base0?.leased ?? 0,
+          niche,
+        })
+      : { build: 0, lease: 0, sold: 0 };
+    room.build *= automated;
 
     const discretionary = company.kind === "player"
-      ? (marketing + product + ops) * allowed + fixed
+      ? (marketing + product + ops) * allowed + fixed + room.build + room.lease
       : (spendFor[company.id] ?? 0);
     visibleSpend[company.id] = company.kind === "player"
       ? (marketing + product + ops) * allowed
       : (spendFor[company.id] ?? 0);
 
-    const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);
-    const repaid = Math.max(0, d?.cfo?.repay ?? 0);
+    // Never more than the bank will lend, whatever was filed (see `drawdown`).
+    const borrowed = company.kind === "player" ? drawdown(company, d?.cfo?.borrow) : Math.max(0, d?.cfo?.borrow ?? 0);
+    /*
+     * A long-term loan cannot be paid off early — that is what its lower rate
+     * was bought with — so repayment only reaches the credit line.
+     */
+    const repayable = Math.max(0, company.debt - bondTotal(company));
+    const repaid = Math.min(repayable, Math.max(0, d?.cfo?.repay ?? 0));
+    if (company.kind === "player" && (d?.cfo?.repay ?? 0) > repaid + 1) {
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `Only ${Math.round(repaid).toLocaleString()} could be repaid: the rest of what the company owes is long-term, and is repaid when it matures.`,
+      ];
+    }
     const raised = Math.max(0, d?.cfo?.raiseAmount ?? d?.cfo?.raise?.amount ?? 0);
 
     /*
@@ -679,7 +1088,8 @@ export function resolveYear(
      * the point of buying one is that you do not pay for its empty shelves.
      */
     const ownCapacity = (baseById.get(company.id) ?? company).capacity;
-    const idle = company.kind === "player" ? Math.max(0, ownCapacity - units) : 0;
+    // Leased room is paid for in full already; only the company's own room sits idle at a cost.
+    const idle = company.kind === "player" ? Math.max(0, ownCapacity - (base0?.leased ?? 0) - units) : 0;
     const idleCost = company.kind === "player" ? idleCapacityCost(idle, niche) : 0;
     if (company.kind === "player" && idleCost > 50_000 && idle > ownCapacity * 0.25) {
       notesFor[company.id] = [
@@ -695,11 +1105,63 @@ export function resolveYear(
      */
     const rates = company.kind === "player"
       ? interestOn(company, nextEconomy.interestRate)
-      : { interest: company.debt * nextEconomy.interestRate, rate: nextEconomy.interestRate, emergencyRate: nextEconomy.interestRate };
+      : { interest: company.debt * nextEconomy.interestRate, rate: nextEconomy.interestRate, emergencyRate: nextEconomy.interestRate, bondRate: nextEconomy.interestRate };
     const interest = rates.interest;
-    const operatingProfit = revenue - (variable + discretionary + interest + idleCost);
+    /*
+     * The marketing seat's forecast, which everybody else planned on. Right,
+     * it saves money; badly wrong, it costs it. See `forecastOutcome`.
+     */
+    // Good data lets the marketing seat be a little further off and still have planned well.
+    const forecast = company.kind === "player" ? forecastOutcome(d?.cmo?.forecast, units, revenue, dataEffects(base0?.data).tolerance) : null;
+    const planning = forecast?.effect ?? 0;
+    if (forecast) {
+      const pct = Math.round(forecast.error * 100);
+      const said = `The marketing seat forecast ${Math.round(d!.cmo!.forecast!).toLocaleString()} and ${units.toLocaleString()} came (${pct >= 0 ? "+" : ""}${pct}%).`;
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        forecast.verdict === "good"
+          ? `${said} Everyone planned on a good number, and it saved ${money(planning)}.`
+          : forecast.verdict === "bad"
+            ? `${said} Everybody planned on it, and ${pct > 0 ? "rushing to serve the ones nobody expected" : "paying for the ones who never came"} cost ${money(-planning)}.`
+            : `${said} Close enough to plan on; not close enough to save anything.`,
+      ];
+    }
+    /*
+     * What can go wrong: a breach, less likely and less damaging the more
+     * security has been built, more likely the more debt is carried; and an
+     * outage, the debt itself coming due, made rarer by reliability work.
+     */
+    // Not before the technology seat has a security lever to answer it with.
+    const breach = company.kind === "player" && isUnlocked("cto", "securitySpend", world.year)
+      ? breachOf({ security: base0?.security, techDebt: base0?.techDebt, seed: `${world.seasonId}:${world.year}:${company.id}:breach` })
+      : null;
+    const outage = company.kind === "player"
+      && rng(`${world.seasonId}:${world.year}:${company.id}:outage`)() < outageChance(base0?.techDebt, d?.cto?.reliabilitySpend);
+    // A lawsuit, from year three: more likely for a company that has let service slide.
+    const lawsuit = company.kind === "player"
+      ? lawsuitOf({ service: company.service, seed: `${world.seasonId}:${world.year}:${company.id}:lawsuit`, year: world.year })
+      : null;
+    if (lawsuit) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `A lawsuit, settled for ${money(revenue * lawsuit.cost)}.${covers(cover, "lawsuit") ? " Insurance paid most of it." : ""}`];
+    }
+    const grossIncident = (breach ? revenue * breach.cost : 0) + (lawsuit ? revenue * lawsuit.cost : 0);
+    const recovered = (breach && covers(cover, "breach") ? revenue * breach.cost * PAYOUT : 0)
+      + (lawsuit && covers(cover, "lawsuit") ? revenue * lawsuit.cost * PAYOUT : 0);
+    if (breach && covers(cover, "breach")) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), "The breach was insured: most of the clean-up was paid for. The reputation was not."];
+    }
+    const incidentCost = grossIncident - recovered;
+    const incidentService = (breach?.service ?? 0) + (outage ? OUTAGE.service : 0);
+    const incidentReputation = (breach?.reputation ?? 0) + (lawsuit?.reputation ?? 0) + (outage ? OUTAGE.reputation : 0) - (base0?.prReputation ?? 0);
+    if (breach) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `A data breach. Cleaning it up cost ${money(incidentCost)}, customers trust the company less, and support spent the year apologising.${(base0?.security ?? 0) > 40 ? " The security work kept it smaller than it would have been." : ""}`];
+    }
+    if (outage) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `An outage. Technical debt at ${Math.round(base0?.techDebt ?? 0)} came due on a busy evening; service and reputation paid for it.`];
+    }
+    const operatingProfit = revenue + planning - (variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium);
     const taxed = company.kind === "player" ? taxOn(operatingProfit, company.taxLosses ?? 0) : { tax: 0, carried: 0 };
-    const costs = variable + discretionary + interest + idleCost + taxed.tax;
+    const costs = variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium + taxed.tax - planning;
     const profit = revenue - costs;
     /*
      * Kept, because the report used to throw this away and recompute profit as
@@ -707,8 +1169,73 @@ export function resolveYear(
      */
     ledger[company.id] = { revenue, costs, profit };
 
-    let cash = company.cash + profit + borrowed + raised - repaid;
-    let debt = Math.max(0, company.debt + borrowed - repaid);
+    /*
+     * Annual plans: this year, cash for next year's service arrives early; and
+     * last year's early cash is revenue this year that brings no money in.
+     */
+    const prepaidIn = company.kind === "player" ? plans.uptake * revenue * PREPAID_SHARE : 0;
+    const prepaidOut = company.kind === "player" ? Math.max(0, company.prepaid ?? 0) : 0;
+
+    /*
+     * Long-term loans: issued when the finance seat borrows on long terms, and
+     * repaid in full, from cash, in the year they mature.
+     */
+    let bonds: Bond[] = company.kind === "player" ? [...(company.bonds ?? [])] : [];
+    const maturing = bonds.filter((b) => b.maturesYear <= world.year).reduce((sum, b) => sum + b.amount, 0);
+    bonds = bonds.filter((b) => b.maturesYear > world.year);
+    if (maturing > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `A long-term loan of ${money(maturing)} matured and was repaid from cash.`];
+    }
+    if (company.kind === "player" && borrowed > 0 && d?.cfo?.borrowTerm === "long") {
+      bonds.push({ amount: borrowed, rate: rates.bondRate ?? rates.rate, maturesYear: world.year + BOND_TERM });
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `Borrowed ${money(borrowed)} long-term at ${Math.round((rates.bondRate ?? rates.rate) * 1000) / 10}%, fixed for ${BOND_TERM} years. It cannot be repaid early, and it comes with a covenant: profit must cover the interest ${COVENANT_COVER} times over.`,
+      ];
+    }
+
+    /*
+     * Dividends: out of this year's profit, as the finance seat set. The
+     * founders' share is banked for good; the investors' share keeps them
+     * patient. See `dividend` in world.ts.
+     */
+    const payout = company.kind === "player"
+      ? dividend({ profit, payoutPct: d?.cfo?.dividendPct, founderShare: company.founderShare ?? 1 })
+      : { paid: 0, founders: 0, investors: 0 };
+    if (payout.paid > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Paid out ${money(payout.paid)} of the year's profit${payout.investors > 0 ? `: ${money(payout.founders)} to the founders and ${money(payout.investors)} to the investors` : " to the founders, banked for good"}.`];
+    }
+    /*
+     * What customers were given to pay, and what that does to the money: a
+     * share of this year's takings is still owed at the year's end, and last
+     * year's is collected now. A factor will buy what is owed for cash today,
+     * at a price (see `treasury.ts`).
+     */
+    const terms = company.kind === "player" ? termsOf(d?.cfo?.terms) : termsOf(0);
+    const owedNow = revenue * terms.deferred;
+    const collected = company.kind === "player" ? Math.max(0, company.receivables ?? 0) : 0;
+    const sold = company.kind === "player" ? factoring({ receivables: owedNow, share: d?.cfo?.factorPct }) : { sold: 0, cash: 0, cost: 0 };
+    const receivables = Math.max(0, owedNow - sold.sold);
+    if (sold.sold > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Sold ${money(sold.sold)} of what customers owed to a factor for ${money(sold.cash)} today. The difference, ${money(sold.cost)}, is what speed costs.`];
+    }
+
+    /*
+     * Refinancing: what is on the credit line moved onto fixed terms at the
+     * rate this year's rating earns, for a fee.
+     */
+    const onLine = Math.max(0, company.debt - bondTotal(company) - (company.emergencyDebt ?? 0));
+    const moved = company.kind === "player"
+      ? refinance({ onLine, amount: d?.cfo?.refinance, rate: rates.bondRate ?? rates.rate, year: world.year, term: REFINANCE_TERM_YEARS })
+      : { moved: 0, fee: 0, bond: null };
+    if (moved.bond) {
+      bonds.push(moved.bond);
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Moved ${money(moved.moved)} off the credit line and onto a ${REFINANCE_TERM_YEARS}-year loan at ${Math.round(moved.bond.rate * 1000) / 10}%, for a ${money(moved.fee)} fee. The line can be pulled; this cannot.`];
+    }
+
+    let cash = company.cash + profit + borrowed + raised - repaid + room.sold + prepaidIn - prepaidOut - maturing - extra.cash - payout.paid
+      - owedNow + collected + sold.cash - moved.fee;
+    let debt = Math.max(0, company.debt + borrowed - repaid - maturing);
 
     /*
      * Running out of money does not end a season. The brief is explicit and it
@@ -780,12 +1307,29 @@ export function resolveYear(
       }
     }
 
+    /*
+     * The covenant on long-term loans: operating profit must cover interest.
+     * Broken, the lenders mark the company down and reprice what it owes them.
+     */
+    let ratedScore = creditScore;
+    if (company.kind === "player" && bonds.length > 0 && interest > 0) {
+      const cover = (operatingProfit + interest) / interest;
+      if (cover < COVENANT_COVER) {
+        ratedScore = Math.max(0, (creditScore ?? RATING_START) - COVENANT_RATING_HIT);
+        bonds = bonds.map((b) => ({ ...b, rate: b.rate + COVENANT_PENALTY }));
+        notesFor[company.id] = [
+          ...(notesFor[company.id] ?? []),
+          `The long-term loan's covenant was broken: profit covered interest ${Math.max(0, Math.round(cover * 10) / 10)} times, not ${COVENANT_COVER}. The lenders marked the rating down and added ${COVENANT_PENALTY * 100} points to what those loans cost.`,
+        ];
+      }
+    }
+
     // What a bank will lend against reputation and what the company holds.
     const assetValue = company.assets.reduce((sum, a) => sum + a.bookValue, 0);
     const creditLimit = Math.max(0, Math.round(
       (revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000)
       // A lender lends more to a company it rates, and far less to one it does not.
-      * (company.kind === "player" ? creditMultiplier(creditScore ?? RATING_START) : 1),
+      * (company.kind === "player" ? creditMultiplier(ratedScore ?? RATING_START) : 1),
     ));
 
     /*
@@ -819,10 +1363,13 @@ export function resolveYear(
      * the better its reputation got.
      */
     const marketPrice = marketPriceOf(niche);
-    const valueForMoney = company.price > 0
-      ? Math.min(2, (company.quality / 100) / (company.price / marketPrice))
+    // What customers actually paid on average, which with tiers is not the list price.
+    const paidOnAverage = units > 0 ? revenue / units : company.price;
+    const valueForMoney = paidOnAverage > 0
+      ? Math.min(2, (company.quality / 100) / (paidOnAverage / marketPrice))
       : 0;
     const repChange =
+      -incidentReputation +
       (company.service - 50) * 0.06 +
       (valueForMoney - 0.8) * 6 -
       letDown * 26 -
@@ -858,12 +1405,26 @@ export function resolveYear(
     let founderShare = base.founderShare ?? 1;
     if (raised > 0) {
       const units = Object.values(customers).reduce((sum, n) => sum + n, 0);
-      const worth = Math.max(500_000, units * company.price * 1.2 + assetValue - debt);
+      const worth = Math.max(500_000, revenue * 1.2 + assetValue - debt);
       founderShare = Math.max(0.05, founderShare * (worth / (worth + raised)));
       notesFor[company.id] = [
         ...(notesFor[company.id] ?? []),
         `Raised ${Math.round(raised).toLocaleString()} against a company worth about ${Math.round(worth).toLocaleString()}. The founders now hold ${Math.round(founderShare * 100)}% of whatever this becomes.`,
       ];
+    }
+
+    /*
+     * Buying the company back, which is the only way a founder's share goes
+     * up — and money not spent on the year to do it.
+     */
+    const bought = company.kind === "player"
+      // Never with money the company does not have: a buyback is not a way to go insolvent.
+      ? buyback({ spend: Math.min(Math.max(0, cash), d?.cfo?.buyback ?? 0), worth: Math.max(0, revenue * 1.2 + assetValue - debt), founderShare })
+      : { paid: 0, bought: 0, share: founderShare };
+    if (bought.paid > 0) {
+      founderShare = bought.share;
+      cash -= bought.paid;
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Bought back ${(bought.bought * 100).toFixed(1)}% of the company for ${money(bought.paid)}. The founders now hold ${Math.round(founderShare * 100)}%.`];
     }
 
     /*
@@ -873,7 +1434,9 @@ export function resolveYear(
      */
     let investors = company.kind === "player" ? company.investors : undefined;
     if (investors) {
-      const review = reviewInvestors(investors, revenue, world.year);
+      // Investors paid a twentieth of their stake this year do not hold a missed target against the company.
+      const patient = payout.investors >= (investors.raised ?? 0) * PATIENT_INVESTORS && payout.investors > 0;
+      const review = reviewInvestors(investors, revenue, world.year, { patient });
       investors = review.investors;
       if (review.note) notesFor[company.id] = [...(notesFor[company.id] ?? []), review.note];
     }
@@ -898,7 +1461,23 @@ export function resolveYear(
       const lines: CashLine[] = [];
       if (opened && opened.cost > 0) lines.push({ label: `Opened in ${opened.names.join(", ")}`, amount: -opened.cost });
       lines.push({ label: "Sales", amount: revenue });
-      lines.push({ label: "Running the business", amount: -(variable + discretionary + idleCost) });
+      lines.push({ label: "Running the business", amount: -(variable + discretionary - room.build - room.lease + idleCost) + planning });
+      if (incidentCost > 0) lines.push({ label: "Breaches and lawsuits", amount: -incidentCost });
+      if (partnerShare > 0) lines.push({ label: "Distribution partners' share", amount: -partnerShare });
+      if (premium > 0) lines.push({ label: "Insurance", amount: -premium });
+      if (extra.cash > 0) lines.push({ label: "Committing to a new region", amount: -extra.cash });
+      if (payout.paid > 0) lines.push({ label: "Dividends", amount: -payout.paid });
+      if (owedNow > 0) lines.push({ label: "Still owed by customers", amount: -owedNow });
+      if (collected > 0) lines.push({ label: "Collected from last year", amount: collected });
+      if (sold.cash > 0) lines.push({ label: "Sold to a factor", amount: sold.cash });
+      if (moved.fee > 0) lines.push({ label: "Refinancing fee", amount: -moved.fee });
+      if (bought.paid > 0) lines.push({ label: "Bought the company back", amount: -bought.paid });
+      if (room.build > 0) lines.push({ label: "Building capacity", amount: -room.build });
+      if (room.lease > 0) lines.push({ label: "Leased capacity", amount: -room.lease });
+      if (room.sold > 0) lines.push({ label: "Capacity sold back", amount: room.sold });
+      if (prepaidIn > 0) lines.push({ label: "Annual plans paid up front", amount: prepaidIn });
+      if (prepaidOut > 0) lines.push({ label: "Paid up front last year", amount: -prepaidOut });
+      if (maturing > 0) lines.push({ label: "Long-term loan repaid", amount: -maturing });
       if (interest > 0) lines.push({ label: "Interest", amount: -interest });
       if (taxed.tax > 0) lines.push({ label: "Tax", amount: -taxed.tax });
       if (borrowed > 0) lines.push({ label: "Borrowed", amount: borrowed });
@@ -916,6 +1495,11 @@ export function resolveYear(
           marketing: allowedShare(marketing),
           product: allowedShare(product),
           operations: allowedShare(ops),
+          capacity: room.build + room.lease + plant,
+          planning,
+          incidents: incidentCost,
+          partners: partnerShare,
+          insurance: premium,
           idleCapacity: idleCost,
           interest,
           operatingProfit,
@@ -926,32 +1510,108 @@ export function resolveYear(
       };
     }
 
+    /*
+     * The people: a year's worth of loyalty, and the stretch the chief
+     * executive set on each seat's next objective. See `people.ts`.
+     */
+    let people = company.kind === "player" ? company.people : undefined;
+    if (company.kind === "player") {
+      const overruled = d?.ceo?.overrule || null;
+      const next: NonNullable<Company["people"]> = {};
+      for (const role of company.seats) {
+        if (role === "ceo") continue;
+        const person = personOf(company, role);
+        const loyalty = yearLoyalty({
+          person, role,
+          profitable: profit > 0,
+          rescued: emergencyDrawn > 0,
+          overruled: overruled === role,
+          scar: base0?.reviewScar ?? 0,
+          pay: payEffect(d?.cto?.engineerPay).pay,
+        });
+        next[role] = { ...person, loyalty, stretch: d?.ceo?.targets?.[role] ?? person.stretch ?? "fair" };
+        if (loyalty < WARN_AT && person.loyalty >= WARN_AT) {
+          notesFor[company.id] = [...(notesFor[company.id] ?? []), `The ${ROLE_TITLES[role].toLowerCase()} is thinking about leaving: loyalty is down to ${Math.round(loyalty)}. At ${RESIGN_AT} they go.`];
+        }
+      }
+      if (overruled) {
+        notesFor[company.id] = [
+          ...(notesFor[company.id] ?? []),
+          `The chief executive overruled the ${ROLE_TITLES[overruled as Role].toLowerCase()}: last year's plan ran in that chair instead. It cost ${OVERRULE_LOYALTY} points of their loyalty.`,
+        ];
+      }
+      people = next;
+    }
+
     // Capacity ordered this year opens now that the year is over.
-    const { capacityNext, ...rest } = company as Company & { capacityNext?: number };
+    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
     return {
       ...rest,
+      ...(company.kind === "player"
+        ? {
+            tiers: (base0 ?? company).tiers, bonds: bonds.length ? bonds : undefined, prepaid: prepaidIn,
+            people, staffQuality: (base0 ?? company).staffQuality, reviewScar: Math.round(review * 100),
+            banked: (company.banked ?? 0) + payout.founders,
+            receivables,
+            terms: terms.days,
+            revenueShares: (company.revenueShares ?? []).filter((r) => r.until > world.year),
+            // Who the promotion brought in, for next year's churn; who left, and where the company stood, for win-back.
+            dealChasers: company.promo
+              ? Object.fromEntries(niche.segments.map((s) => [s.id, allocation.fresh[s.id]?.[company.id] ?? 0]))
+              : undefined,
+            leftLastYear: Object.fromEntries(niche.segments.map((s) => [s.id,
+              Object.values(allocation.flows[s.id]?.[company.id] ?? {}).reduce((a, n) => a + n, 0)])),
+            lastStats: { quality: company.quality, service: company.service, price: company.price },
+            // A shock this year, waiting for the chief executive's answer next year.
+            shock: breach
+              ? { kind: "breach", year: world.year, reputation: breach.reputation, headline: "A data breach" } as Shock
+              : lawsuit ? { kind: "lawsuit", year: world.year, reputation: lawsuit.reputation, headline: "A lawsuit" } as Shock
+              : undefined,
+          }
+        : {}),
+      // An asset whose last year this was leaves with it (see ageAssets).
+      assets: stillHeld(rest.assets ?? []),
       ...(company.kind === "player" ? { taxLosses: taxed.carried } : {}),
       founderShare,
-      brand: base.brand,
+      // A free tier is talked about: people who use it for nothing tell people.
+      brand: clamp(base.brand + (company.kind === "player" ? freeTierBrand(took.freeUsers, niche) : 0)),
       quality: base.quality,
-      service: base.service,
+      service: clamp(base.service - incidentService),
       capacity: (base as Company & { capacityNext?: number }).capacityNext ?? base.capacity,
+      // Automation ordered this year runs from now, like the room built this year.
+      ...(company.kind === "player" ? { automation: (base as Company & { automationNext?: number }).automationNext ?? base.automation } : {}),
       unitCost: base.unitCost,
       customers,
       cash,
       debt,
       creditLimit,
       bankruptSince,
-      ...(company.kind === "player" ? { creditScore, emergencyDebt, investors } : {}),
+      ...(company.kind === "player" ? { creditScore: ratedScore, emergencyDebt, investors } : {}),
       reputation: clamp(base.reputation + repChange),
     };
   });
 
   /*
+   * A buyer's offer the table accepted: the business changes hands now that
+   * the year is settled. The seller keeps the company, the seats and the
+   * money, and starts again from in front (see `applyAcquisition`).
+   */
+  let sold = settled;
+  for (const [sellerId, sale] of sales) {
+    const seller = sold.find((c) => c.id === sellerId);
+    const buyer = sold.find((c) => c.id === sale.buyerId);
+    if (!seller || !buyer) continue;
+    const out = applyAcquisition({ buyer, seller, amount: sale.price, year: world.year });
+    sold = sold.map((c) => (c.id === buyer.id ? out.buyer : c.id === seller.id ? out.seller : c));
+    notesFor[sellerId] = [...(notesFor[sellerId] ?? []), ...out.sellerNotes];
+    if (accounts[sellerId]) accounts[sellerId].lines.push({ label: `Sold the business to ${buyer.name}`, amount: sale.price });
+  }
+
+  /*
    * The year's news lands on whoever it happened to, after the market has
    * resolved. A scandal is a consequence of the year, not a condition of it.
    */
-  const afterEvent = settled.map((c) => {
+  const afterEvent = sold.map((c) => {
     const touched = companyWithEvent(c, event);
     const moved = touched.cash - c.cash;
     if (Math.abs(moved) >= 1 && accounts[c.id] && event) {
@@ -972,6 +1632,17 @@ export function resolveYear(
     if (heard && c.kind === "player") {
       notesFor[c.id] = [...(notesFor[c.id] ?? []), `${event!.headline}. ${event!.body} ${event!.advice}`];
     }
+    /*
+     * A company event that cost reputation is a shock the chief executive can
+     * answer next year — a statement, silence, or somebody to blame. A breach
+     * or a lawsuit set one at settlement; this is the scandal and the recall.
+     */
+    if (c.kind === "player" && event?.scope === "company" && event.companyId === c.id && (event.effect.reputation ?? 0) < 0) {
+      return {
+        ...touched,
+        shock: { kind: /recall/i.test(event.headline) ? "recall" : "scandal", year: world.year, reputation: -(event.effect.reputation ?? 0), headline: event.headline } as Shock,
+      };
+    }
     return touched;
   });
 
@@ -987,11 +1658,17 @@ export function resolveYear(
    * with a visible cost.
    */
   const valueOf = (c: Company): number => {
-    const units = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
+    // A year of what its customers actually pay, tier by tier.
+    const sales = takings(c, c.customers, niche.segments).revenue;
     const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
-    return Math.max(0, Math.round(units * c.price * 1.2 + assets - c.debt));
+    return Math.max(0, Math.round(sales * 1.2 + assets - c.debt));
   };
-  const founderValueOf = (c: Company): number => Math.round(valueOf(c) * (c.founderShare ?? 1));
+  /*
+   * What the founders hold: their share of the company, plus every dividend
+   * they have taken out, which is theirs whatever happens next. Paying out is
+   * how a team banks a good year against a bad one.
+   */
+  const founderValueOf = (c: Company): number => Math.round(valueOf(c) * (c.founderShare ?? 1) + (c.banked ?? 0));
 
   const ordered = [...afterEvent].sort((a, b) => founderValueOf(b) - founderValueOf(a));
 
@@ -1041,7 +1718,7 @@ export function resolveYear(
      * The engine has always known the real figures at settlement. It just
      * threw them away here.
      */
-    const traded = ledger[company.id] ?? { revenue: units * company.price, costs: 0, profit: 0 };
+    const traded = ledger[company.id] ?? { revenue: takings(company, company.customers, niche.segments).revenue, costs: 0, profit: 0 };
     return {
       companyId: company.id,
       name: company.name,

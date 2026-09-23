@@ -38,6 +38,7 @@ import { resolveYear, type CompanyReport } from "./resolve";
 import { decisionsForYear } from "./season";
 import { forecastDemand, type Forecast } from "./forecast";
 import { reviewInvestors } from "./finance";
+import { ageAssets, assetEffects, servingCapacity } from "./assets";
 import type { TeamDecisions } from "./decisions";
 import type { Company, Economy, Role, World } from "./types";
 
@@ -136,8 +137,16 @@ function run(input: {
       year: world.year,
       customers: report.customers,
       turnedAway: report.turnedAway,
-      capacityNow: Math.min(company.capacity, Math.max(0, Math.round(decisions.coo?.capacityTarget ?? company.capacity))),
-      capacityNext: next.capacity,
+      /*
+       * Room, the way the engine serves from it: what was built (a cut lands
+       * now, growth next year) plus what the company's assets add. Assets
+       * lapse at the start of a year, so this year counts the ones that
+       * survive it, and next year counts what is held once it is over —
+       * including anything won at this year's market.
+       */
+      capacityNow: Math.min(company.capacity, Math.max(0, Math.round(decisions.coo?.capacityTarget ?? company.capacity)))
+        + assetEffects(ageAssets(company.assets ?? []).assets).capacity,
+      capacityNext: servingCapacity(next),
       revenue: report.revenue,
       profit: report.profit,
       cashStart: report.cashBridge?.opening ?? company.cash,

@@ -77,6 +77,7 @@ export const SURFACES: SurfaceDef[] = [
   { id: "investor",   label: "Investor tools",       cls: "later", defaultEnabled: true, note: "In use, and squarely on the mission.", sequence: "supports" },
   { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: true, note: "Real money and an escrow obligation. Pledges are held until a reviewer approves the project. Turn off here if the payment path misbehaves.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and a project on the Fund path asks for backers." },
   { id: "launch",     label: "Launch, legal, pricing", cls: "later", defaultEnabled: true, note: "Pre-launch tooling.", sequence: "supports" },
+  { id: "companies",  label: "Companies & Run a company", cls: "later", defaultEnabled: true, note: "Company accounts — private training seasons, recruiting from track records, sponsored challenges, scouting — and the weekly rhythm of the Run a company path. Recruiting and challenges reach other people; turn off here if either is abused.", sequence: "supports" },
   { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output, including the AI visuals on project pages.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and published steps show builders want marketing output." },
 
   // --- Network: needs other people to mean anything ---------------------
@@ -119,8 +120,17 @@ export const SURFACE_CLASS_LABEL: Record<SurfaceClass, string> = {
  * it belongs to.
  */
 export const SURFACE_ROUTES: Record<string, string[]> = {
-  contests: ["/contests"],
-  sprints: ["/sprints"],
+  // `/admin/contests` too: the page that makes them is part of the surface,
+  // the same way `/admin/backing` belongs to backing.
+  contests: ["/contests", "/admin/contests"],
+  /*
+   * `/simulation` as well as `/sprints`. The surface is labelled "Sprints &
+   * simulations" and its note names the market simulation, but the simulation's
+   * pages live at `/simulation/*` and nothing here claimed them — so an admin
+   * who turned the surface off hid the sprint pages and left the whole
+   * simulation reachable, which is the opposite of what the switch says it does.
+   */
+  sprints: ["/sprints", "/simulation"],
   messages: ["/messages"],
   discover: ["/discover"],
   /*
@@ -135,6 +145,7 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
    */
   feed: ["/posts", "/a/"],
   backing: ["/admin/backing"],
+  companies: ["/companies", "/challenges", "/talent", "/join-season"],
 };
 
 /**
@@ -146,7 +157,13 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
  * covers "/api/projects/x/nova/apply" and not "/api/projects/x/nova-notes".
  */
 export const SURFACE_API_PREFIXES: Record<string, string[]> = {
-  signup: ["/api/auth/register", "/api/auth/mobile/register", "/api/auth/mobile/google"],
+  /*
+   * Not "/api/auth/mobile/google": that route signs existing accounts in too,
+   * and gating all of it locked every Google user out of the app. Both Google
+   * handlers (web callback and mobile) check `surfaceEnabled("signup")` on the
+   * one branch that creates an account instead.
+   */
+  signup: ["/api/auth/register", "/api/auth/mobile/register"],
   uploads: ["/api/uploads", "/internal-local-upload"],
   nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/health-check"],
   roadmap: ["/api/projects/:id/roadmap"],
@@ -162,19 +179,27 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches", "/api/projects/:id/recommend-people"],
   /*
-   * The market simulation lives under /api/sim, and was not listed here —
-   * so "Sprints & simulations", whose note says it covers the simulation,
-   * switched off the sprint games and left fourteen-day seasons, sealed-bid
-   * auctions and the bot table running and reachable. A kill switch that
-   * leaves the heaviest thing behind it running is not a kill switch.
+   * `/api/sim` as well as `/api/games`. This surface said "Sprints &
+   * simulations" and covered only the sprint games: every simulation
+   * endpoint — the desk, the market, offers, standings, advancing a season —
+   * is under `/api/sim`, and none of it was behind the switch. Turning the
+   * surface off closed the sprints and left the entire simulation serving,
+   * writes included, which made the kill switch a claim rather than a control.
+   *
+   * It sits before `companies` on purpose. `/api/sim/join-code` is also listed
+   * under `companies` (a company season's join code), and both guards mount, so
+   * either surface being off closes it. That is the right answer: a join code
+   * whose only destination is the simulation is worth nothing while the
+   * simulation is off.
    */
   sprints: ["/api/games", "/api/sim"],
   connections: ["/api/connections"],
   messages: ["/api/messages"],
   leaderboard: ["/api/leaderboard", "/api/reputation"],
-  contests: ["/api/contests"],
+  contests: ["/api/contests", "/api/admin/contests"],
   communities: ["/api/communities"],
   liveChat: ["/api/projects/:id/live-chat"],
+  companies: ["/api/companies", "/api/company-invites", "/api/challenges", "/api/talent", "/api/sim/join-code", "/api/projects/:id/rhythm"],
 };
 
 /** True when a path belongs to a surface that's currently off. */

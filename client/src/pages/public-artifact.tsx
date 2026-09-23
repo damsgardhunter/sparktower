@@ -8,6 +8,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import NotFound from "@/pages/not-found";
+import { ReportButton } from "@/components/report-button";
 import { ArrowRight, Check, Compass, Copy, FileCode2, Loader2, MessageSquare } from "lucide-react";
 import { PENDING_PATH_KEY, afterOnboardingPath, artifactPath, pendingPathQuery, type PendingPath } from "@shared/path-artifacts";
 import { PATH_FUNNEL_EVENTS } from "@shared/path-funnel";
@@ -98,9 +99,28 @@ export default function PublicArtifactPage() {
       <div className="mx-auto max-w-2xl space-y-4">
         <header className="flex items-center justify-between gap-2">
           <a href="/" className="font-bold text-xs tracking-widest uppercase">SparkTower</a>
-          <Button variant="ghost" size="sm" className="gap-1.5" onClick={copy} data-testid="button-copy-artifact-link">
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy link"}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={copy} data-testid="button-copy-artifact-link">
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy link"}
+            </Button>
+            {/*
+              * A way to report the page, with or without an account. This is
+              * the one page built for people who have never signed in, and it
+              * had no control at all: the only answer to something abusive on
+              * it was to close the tab. What it reports is the artifact's
+              * published post, which is what the moderation queue already
+              * knows how to take down — and taking the post down takes this
+              * page with it.
+              */}
+            {data.postId && (
+              <ReportButton
+                targetType="feed_post"
+                targetId={data.postId}
+                anonymousArtifactId={data.id}
+                variant="action"
+              />
+            )}
+          </div>
         </header>
 
         <article className="space-y-3" data-testid="public-artifact">

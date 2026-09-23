@@ -110,7 +110,7 @@ export function Milestones({ projectId, goal, primary }: { projectId: string; go
                     </Row>
                     {!!m.description && <Body muted numberOfLines={3}>{m.description}</Body>}
                     <Row between>
-                      {m.targetDate ? <Row center gap={4}><Icon name="calendar-outline" size={12} color={colors.textTertiary} /><Meta>Target {new Date(m.targetDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</Meta></Row> : <View />}
+                      {m.targetDate ? <Row center gap={4}><Icon name="calendar-outline" size={12} color={colors.textTertiary} /><Meta>Target {new Date(m.targetDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}</Meta></Row> : <View />}
                       {nextStatus && (
                         <Pressable hitSlop={6} onPress={() => setStatus.mutate({ id: m.id, status: nextStatus })}>
                           <Text style={{ color: colors.primary, fontSize: font.xs + 1, fontFamily: fontFamily.semibold }}>{nextStatus === "completed" ? "Complete" : "Start"}</Text>

@@ -26,6 +26,7 @@
  * what the year will cost before it is filed.
  */
 import type { Company } from "./types";
+import { BOND_DISCOUNT } from "./responsibilities";
 
 // ─── The credit rating ──────────────────────────────────────────────────────
 
@@ -118,16 +119,31 @@ export const creditMultiplier = (score: number): number => 0.4 + Math.max(0, Mat
  * Charged on the debt it started the year with. The emergency part of it pays
  * the premium; the rest pays the company's own rate.
  */
-export function interestOn(company: Pick<Company, "debt" | "emergencyDebt" | "creditScore">, marketRate: number): {
+export function interestOn(company: Pick<Company, "debt" | "emergencyDebt" | "creditScore" | "bonds">, marketRate: number): {
   interest: number;
   rate: number;
   emergencyRate: number;
+  /** What a long-term loan issued now would be fixed at. */
+  bondRate: number;
 } {
   const rate = marketRate + spreadFor(company.creditScore ?? RATING_START);
   const emergencyRate = rate + EMERGENCY_PREMIUM;
   const emergency = Math.max(0, Math.min(company.emergencyDebt ?? 0, company.debt));
-  const ordinary = Math.max(0, company.debt - emergency);
-  return { interest: ordinary * rate + emergency * emergencyRate, rate, emergencyRate };
+  /*
+   * Long-term loans pay the rate they were issued at, whatever the rating has
+   * done since — which is the whole reason to lock one in. The rest of the
+   * debt pays today's line rate.
+   */
+  const bonds = (company.bonds ?? []).filter((b) => b.amount > 0);
+  const bonded = Math.min(Math.max(0, company.debt - emergency), bonds.reduce((sum, b) => sum + b.amount, 0));
+  const bondInterest = bonds.reduce((sum, b) => sum + b.amount * b.rate, 0) * (bonded > 0 ? bonded / bonds.reduce((sum, b) => sum + b.amount, 0) : 0);
+  const ordinary = Math.max(0, company.debt - emergency - bonded);
+  return {
+    interest: ordinary * rate + emergency * emergencyRate + bondInterest,
+    rate,
+    emergencyRate,
+    bondRate: Math.max(0.005, rate - BOND_DISCOUNT),
+  };
 }
 
 /** Repayment clears the emergency loan first — the expensive money goes first. */
@@ -197,7 +213,13 @@ export interface Review {
  * the company now is. A miss is a strike; two in a row and the board removes
  * the chief executive.
  */
-export function reviewInvestors(investors: Investors, revenue: number, year: number): Review {
+export function reviewInvestors(
+  investors: Investors,
+  revenue: number,
+  year: number,
+  /** Paid a dividend worth having this year: a missed target is not held against the company. */
+  options: { patient?: boolean } = {},
+): Review {
   if (investors.targetYear !== year) {
     return { investors, note: null, removed: false, reinstated: false };
   }
@@ -214,6 +236,15 @@ export function reviewInvestors(investors: Investors, revenue: number, year: num
         : `The investors' target was met: ${money(revenue)} against ${money(investors.target)}. Next year they expect ${money(next)}.`,
       removed: false,
       reinstated,
+    };
+  }
+
+  if (options.patient) {
+    return {
+      investors: { ...investors, target: next, targetYear: year + 1 },
+      note: `The investors wanted ${money(investors.target)} and got ${money(revenue)} — but they were paid a dividend this year, and they are letting it go. Next year they want ${money(next)}.`,
+      removed: false,
+      reinstated: false,
     };
   }
 

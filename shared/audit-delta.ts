@@ -44,7 +44,13 @@ export function computeAuditDelta(prev: AuditLike | null | undefined, next: Audi
   const pc = new Map<string, string>(((prev?.findings?.capabilities ?? []) as CapabilityEntry[]).map((c) => [c.area, c.status]));
   const areas = ((next.findings?.capabilities ?? []) as CapabilityEntry[])
     .map((c) => ({ area: c.area, from: pc.get(c.area) ?? "unreported", to: c.status }))
-    .filter((a) => prev && a.from !== a.to && a.to !== "unreported");
+    /*
+     * Movement in the code, not movement in what the audit managed to read.
+     * "unknown" means this run never opened the area's files, so "Payments
+     * built→not read" is a fact about a clipped digest; showing it beside real
+     * gains and losses would read as a regression the builder has to explain.
+     */
+    .filter((a) => prev && a.from !== a.to && a.to !== "unreported" && a.to !== "unknown");
   const cov = ps.routeCoverage?.summary && ns.routeCoverage?.summary
     ? {
         writesRateLimited: [ps.routeCoverage.summary.writesRateLimited, ns.routeCoverage.summary.writesRateLimited] as [number, number],

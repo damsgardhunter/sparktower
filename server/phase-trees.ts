@@ -13,6 +13,7 @@
  */
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
+import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
 import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
 import {
@@ -24,7 +25,8 @@ import {
 import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { describeOp } from "@shared/audit-catchup";
 import { afterPathStepDone } from "./path-return";
-import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal } from "@shared/goals";
+import { withProjectLock } from "./project-lock";
+import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
@@ -59,7 +61,8 @@ const minutesOf = (t: { estimateHours: number | null }) => (t.estimateHours ?? 1
  */
 export function trackOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal {
   const tagged = tagValue(tags, "track:");
-  if (isProjectGoal(tagged)) return tagged;
+  const known = normaliseGoal(tagged);
+  if (known) return known;
   return goalOfBackboneId(backboneIdOf(tags) ?? parentOf(tags)) ?? primary;
 }
 
@@ -106,7 +109,8 @@ async function setTrackFields(projectId: string, goal: ProjectGoal, patch: { cap
 async function goalFor(projectId: string, opts: { backboneId?: string | null; goal?: unknown }): Promise<ProjectGoal | null> {
   const fromId = goalOfBackboneId(opts.backboneId);
   if (fromId) return fromId;
-  if (isProjectGoal(opts.goal)) return opts.goal;
+  const asked = normaliseGoal(opts.goal);
+  if (asked) return asked;
   const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
   return (project?.goal as ProjectGoal | undefined) ?? null;
 }
@@ -242,6 +246,20 @@ const loopSourcesOf = (phases: { optional?: boolean; milestones: ResolvedMilesto
  * A project with no path yet is left for adoption.
  */
 export async function syncPathTree(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
+  /*
+   * Serialized per project. Everything below is read-modify-write across a set
+   * of rows — read the tasks, work out which milestones have none, insert them
+   * — and it runs from plain GETs (the dashboard, the home screen's card). Two
+   * requests in flight at once both read the same "missing" set and both
+   * insert it, and from then on a lookup by backbone id picks one of the twins
+   * at random: finishing the milestone leaves a phantom copy open on the board.
+   * With the lock, the second caller re-reads after the first commits and
+   * finds nothing missing.
+   */
+  return withProjectLock("path-sync", projectId, () => syncPathTreeInner(projectId, goal, subcategory, route));
+}
+
+async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
   // One section's tasks only: the other sections' milestones aren't on this tree, and must never read as retired.
   const [owner] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
   const primary = (owner?.goal ?? goal) as ProjectGoal;
@@ -405,7 +423,7 @@ export async function refreshPace(projectId: string, effort?: {
   // already counted. Its age is worked out by the database: its timestamps read back into JS
   // are off by the server's timezone.
   const [lastPost] = await db.select({ ageSeconds: sql<number | null>`extract(epoch from (now() - max(${feedPosts.createdAt})))::float8` })
-    .from(feedPosts).where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)));
+    .from(feedPosts).where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()));
   const postActivity = lastPost?.ageSeconds != null ? [new Date(Date.now() - Number(lastPost.ageSeconds) * 1000)] : [];
   // Code evidence: an audit whose delta shows the code moved is a day of activity.
   const audits = await db.select({ at: projectCodeAudits.createdAt, delta: projectCodeAudits.delta }).from(projectCodeAudits).where(eq(projectCodeAudits.projectId, projectId));
@@ -506,6 +524,36 @@ export async function onPathTaskDone(task: { id: string; projectId: string; titl
     taskId: task.id, backboneId, title: task.title,
     estimateMinutes: task.estimateHours ? task.estimateHours * 60 : null, actualMinutes: actual,
   }, owner ? trackOfTask(task.tags, owner.goal as ProjectGoal) : null);
+}
+
+/**
+ * The one way to write a task when the write might finish it.
+ *
+ * `storage.updateKanbanTask` is a bare UPDATE with no hook, so work closed by
+ * anything other than the task board's own PATCH route — an audit applying its
+ * catch-up, Nova's operations, `reconcileMilestones` — moved the row and
+ * nothing else. No path_step_done notification to the team, no scouting
+ * update, and no pace event. The last of those is the one that bites: the
+ * share-and-publish affordance is driven by the pace event log, so a milestone
+ * finished by an audit could never afterwards be published or shared. It was
+ * done, and the product had no record that it had happened.
+ *
+ * Reads the row first so "became done" is a transition rather than a state:
+ * re-applying the same operation to an already-finished task must not
+ * re-notify the team.
+ */
+export async function updateTaskWithPath(
+  taskId: string,
+  updates: Record<string, unknown>,
+  opts: { completedById?: string | null } = {},
+) {
+  const before = await storage.getKanbanTask(taskId);
+  const updated = await storage.updateKanbanTask(taskId, updates as any);
+  if (updated?.status === "done" && before?.status !== "done") {
+    await onPathTaskDone({ ...(updated as any), completedById: updated.completedById ?? opts.completedById ?? null })
+      .catch((e) => console.error("[phase-trees] path advance after a task was finished failed (non-fatal):", e));
+  }
+  return updated;
 }
 
 /**
@@ -854,16 +902,58 @@ export async function reconcileMilestones(projectId: string, done: { id: string;
       }
       continue;
     }
-    await storage.updateKanbanTask(t.id, {
+    // Through the path helper, not a bare update: a milestone recognised here
+    // is finished work, and has to reach the pace log and the team like any
+    // other finished step — otherwise it can never be shared or published.
+    await updateTaskWithPath(t.id, {
       status: "done", completedAt: new Date(),
       description: answer && !hasAnswer ? answer : `${t.description ?? ""}\n\n${source === "nova" ? "Nova recognised this as already done" : "Marked done by you"}: ${d.evidence}`.trim(),
       tags: [...(t.tags ?? []), `carried:${source === "nova" ? "reconciled" : "builder"}`],
-    } as any);
+    });
     marked.push(d.id);
     if (answer && !hasAnswer) filled.push(d.id);
   }
   for (const g of new Set(marked.map((id) => goalOfBackboneId(id)).filter(Boolean) as ProjectGoal[])) await refreshPace(projectId, undefined, g);
   return { marked, filled };
+}
+
+/**
+ * How many milestones one catch-up call may tick. Both the map and the editor
+ * bridge use it, so neither can quietly become the generous one.
+ */
+export const PATH_MARK_LIMIT = 40;
+
+/**
+ * Undoing a mark.
+ *
+ * Marking milestones done from the map is one tap per milestone and takes
+ * canned evidence, so it is easy to tick the wrong one — and until this there
+ * was no way back: the milestone read done forever, the path's count was
+ * wrong, and the only remedy was to finish it again for real. Only work that
+ * was *claimed* rather than done can be reversed (a `carried:` tag): a step
+ * the builder actually completed, or one an audit verified, is history and
+ * stays. The evidence sentence the mark appended is taken off with it, so the
+ * milestone reads as it did before.
+ */
+export async function unmarkMilestones(projectId: string, ids: string[]) {
+  const tasks = await pathTasks(projectId);
+  const unmarked: string[] = [];
+  for (const id of ids) {
+    const t = tasks.find((x) => backboneIdOf(x.tags) === id);
+    if (!t || t.status !== "done") continue;
+    const carried = (t.tags ?? []).filter((x) => x.startsWith("carried:"));
+    if (!carried.length) continue;
+    const description = (t.description ?? "")
+      .replace(/\n*(Nova recognised this as already done|Marked done by you): [^\n]*$/s, "")
+      .trim();
+    await storage.updateKanbanTask(t.id, {
+      status: "todo", completedAt: null, completedById: null,
+      description, tags: (t.tags ?? []).filter((x) => !x.startsWith("carried:")),
+    } as any);
+    unmarked.push(id);
+  }
+  for (const g of new Set(unmarked.map((id) => goalOfBackboneId(id)).filter(Boolean) as ProjectGoal[])) await refreshPace(projectId, undefined, g);
+  return { unmarked };
 }
 
 /** The task a work request is about, with its actor and tier read off the path. */
@@ -1101,8 +1191,8 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
       out.push({ label: `milestone:${id}`, kind: "milestone", text: `${t.title}: ${t.description.slice(0, 600)}` });
     }
   }
-  // On the funding path, the scored profile and chosen route: what every funding plan is built on.
-  const funding = await trackState(projectId, "raise_funding");
+  // On Systemize — which now holds the funding routes — the scored profile and chosen route: what every funding plan is built on.
+  const funding = await trackState(projectId, "systemize_business");
   if (funding) {
     const profile = await capitalProfileFor(projectId);
     if (profile.answered > 0) out.push({ label: "capital-profile", kind: "milestone", text: renderCapitalProfile(profile).slice(0, 2000) });
@@ -1110,7 +1200,7 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   }
   // The project's latest update posts: what the builder has written, in public, that they did.
   const updates = await db.select({ id: feedPosts.id, content: feedPosts.content }).from(feedPosts)
-    .where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+    .where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()))
     .orderBy(desc(feedPosts.createdAt)).limit(4);
   for (const u of updates) out.push({ label: `update:${u.id}`, kind: "update", text: u.content.slice(0, 600) });
   const decisions = await storage.getProjectDecisions(projectId).catch(() => []);
@@ -1200,7 +1290,7 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
  * progress within it as "step 4 of 7", the one next action with who acts,
  * pace, the recalculation log, and — at the end — Nova's case for what's next.
  */
-export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null) {
+export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null, opts: { sync?: boolean } = {}) {
   const [row] = await db.select({ novaNotes: projects.novaNotes, rejectedLoops: projects.rejectedLoops }).from(projects).where(eq(projects.id, projectId));
   if (!row) return null;
   const state = await trackState(projectId, goalArg);
@@ -1214,7 +1304,13 @@ export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null
   const goal = project.goal;
   const phases = resolveTree(goal, project.subcategory, project.capitalRoute);
   const tree = treeFor(goal);
-  await syncPathTree(projectId, goal, project.subcategory, project.capitalRoute);
+  /*
+   * Bringing the tree up to date is a write, and this function is read by
+   * plain GETs — including the home screen's card, which asks it once per
+   * section of every project someone belongs to. Callers that only want to
+   * read pass `sync: false`, so a fan-out read can never insert anything.
+   */
+  if (opts.sync !== false) await syncPathTree(projectId, goal, project.subcategory, project.capitalRoute);
   const tasks = await pathTasks(projectId, goal);
   if (tasks.length === 0) {
     // Made before paths existed. The dashboard offers adoption rather than
@@ -1381,7 +1477,11 @@ export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null
     rejectedLoops: project.rejectedLoops ?? [],
     auditUpdate: auditUpdateOf(latestAudit),
     proposal: complete ? NEXT_PATHS[goal] : null,
-    /** The funding path's capital profile: the fundability score, its parts, and how each route fits. */
-    capital: goal === "raise_funding" ? { ...(await capitalProfileFor(projectId)), route: project.capitalRoute ?? null } : null,
+    /**
+     * The capital profile: the fundability score, its parts, what raises each,
+     * and how each route fits. It was the funding path's; it now belongs to
+     * Systemize, which took the funding routes over.
+     */
+    capital: goal === "systemize_business" ? { ...(await capitalProfileFor(projectId)), route: project.capitalRoute ?? null } : null,
   };
 }

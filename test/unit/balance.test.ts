@@ -23,6 +23,7 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { forecastDemand } from "@shared/simulation/forecast";
 import { buildWorld, economyFor, decisionsForYear, SEASON_YEARS } from "@shared/simulation/season";
 import { NICHES, nicheById } from "@shared/simulation/niches";
+import { marketPotential } from "@shared/simulation/world";
 import { ROLES, type Company, type Niche, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
@@ -95,8 +96,28 @@ function season(niche: Niche, play: Play, seasonId = "bal") {
   };
 }
 
+/*
+ * The broad strategies open as far as the market goes; the focused ones stay
+ * deliberately narrow, which is their whole identity. The caps used to be the
+ * literal 6, which was "everywhere" when every market had six regions and
+ * became "most of it" when they grew to ten.
+ */
 const cities = (niche: Niche, n: number) =>
   [...niche.cities].sort((a, b) => b.weight - a.weight).slice(0, n).map((c) => c.id);
+
+/**
+ * The biggest regions for one segment rather than the biggest regions.
+ *
+ * Regions differ in who lives in them (`City.mix`), so a company selling to
+ * one segment picks its places by where those people are. A national play
+ * still takes the biggest; a focused one that ignored the difference would be
+ * a strategy nobody would actually run.
+ */
+const citiesFor = (niche: Niche, segmentId: string, n: number) =>
+  [...niche.cities]
+    .sort((a, b) => b.weight * (b.mix?.[segmentId] ?? 1) - a.weight * (a.mix?.[segmentId] ?? 1))
+    .slice(0, n)
+    .map((c) => c.id);
 const cheapest = (niche: Niche) => [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
 const dearest = (niche: Niche) => [...niche.segments].sort((a, b) => b.referencePrice - a.referencePrice)[0];
 
@@ -105,7 +126,7 @@ const grower: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(250_000, c.cash * 0.07));
   return {
     companyId: c.id,
-    cmo: { price: Math.round(dearest(niche).referencePrice * 0.55), brandSpend: s, performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(6, 1 + year)) },
+    cmo: { price: Math.round(dearest(niche).referencePrice * 0.55), brandSpend: s, performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(niche.cities.length, 1 + year)) },
     cto: { featureSpend: s, reliabilitySpend: s, techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.35), supportSpend: s, efficiencySpend: 0, headcount: 6 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
@@ -119,7 +140,7 @@ const premium: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const target = dearest(niche);
   return {
     companyId: c.id,
-    cmo: { price: Math.round(target.referencePrice * 1.05), brandSpend: Math.round(s * 0.6), performanceSpend: 0, celebritySpend: 0, targetCities: cities(niche, 2) },
+    cmo: { price: Math.round(target.referencePrice * 1.05), brandSpend: Math.round(s * 0.6), performanceSpend: 0, celebritySpend: 0, targetCities: citiesFor(niche, target.id, 2) },
     cto: { featureSpend: Math.round(s * 0.5), reliabilitySpend: Math.round(s * 0.5), techDebtPaydown: 0, researchSpend: s },
     coo: { capacityTarget: Math.round(c.capacity * 1.1), supportSpend: s, efficiencySpend: 0, headcount: 4 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
@@ -133,7 +154,7 @@ const cheap: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const target = cheapest(niche);
   return {
     companyId: c.id,
-    cmo: { price: Math.max(2, Math.round(target.referencePrice * 0.8)), brandSpend: Math.round(s * 0.5), performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(6, 2 + year)) },
+    cmo: { price: Math.max(2, Math.round(target.referencePrice * 0.8)), brandSpend: Math.round(s * 0.5), performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(niche.cities.length, 2 + year)) },
     cto: { featureSpend: Math.round(s * 0.3), reliabilitySpend: Math.round(s * 0.3), techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.4), supportSpend: Math.round(s * 0.3), efficiencySpend: s, headcount: 5 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
@@ -146,7 +167,7 @@ const local: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(200_000, c.cash * 0.06));
   return {
     companyId: c.id,
-    cmo: { price: Math.round(dearest(niche).referencePrice * 0.7), brandSpend: s, performanceSpend: Math.round(s * 0.5), celebritySpend: 0, targetCities: cities(niche, 1) },
+    cmo: { price: Math.round(dearest(niche).referencePrice * 0.7), brandSpend: s, performanceSpend: Math.round(s * 0.5), celebritySpend: 0, targetCities: citiesFor(niche, dearest(niche).id, 1) },
     cto: { featureSpend: Math.round(s * 0.6), reliabilitySpend: s, techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.2), supportSpend: s, efficiencySpend: Math.round(s * 0.4), headcount: 3 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
@@ -316,8 +337,17 @@ describe("five teams in one market, which is the actual game", () => {
     const best = players[0];
     expect(best.marketShare, `${best.name} took the lot`).toBeLessThan(0.6);
 
+    /*
+     * "Worth something" as a share of the market rather than a figure in
+     * pounds. It was 20m, which was about a twentieth of this market when it
+     * was written — and the moment the markets grew (regions ten deep rather
+     * than six) that number started measuring the market's size as much as
+     * the also-rans' companies. A twentieth of a year of the market is the
+     * claim: a business, not a crater.
+     */
+    const worthSomething = marketPotential(niche) * 0.04;
     const alsoRans = players.slice(1);
-    const standing = alsoRans.filter((p) => p.founderValue > 20_000_000);
+    const standing = alsoRans.filter((p) => p.founderValue > worthSomething);
     expect(standing.length, `only ${best.name} came out of this with a company`).toBeGreaterThanOrEqual(2);
   });
 

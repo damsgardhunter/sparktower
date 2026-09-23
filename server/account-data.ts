@@ -15,6 +15,7 @@
  * `deletedAt` set, nothing able to sign in as it again.
  */
 import { pool } from "./db";
+import { companiesOnAccountClose } from "./company-lifecycle";
 
 /** A table holding the person's own rows, and the column that says so. */
 interface Owned { table: string; column: string }
@@ -97,6 +98,37 @@ export const MINE: Owned[] = [
   { table: "sprint_messages", column: "user_id" },
   { table: "sprint_behavioral_metrics", column: "user_id" },
   { table: "sprint_matchmaking_queue", column: "user_id" },
+  // Companies: their place in one (handed on first, in companiesOnAccountClose), their talent profile, invites addressed to them.
+  { table: "company_members", column: "user_id" },
+  { table: "talent_profiles", column: "user_id" },
+  { table: "recruit_invites", column: "user_id" },
+  /*
+   * Found once the coverage test looked for every column pointing at a user
+   * rather than for a handful of names: an investor's application (their
+   * phone number, LinkedIn and message to the founder), their connections and
+   * the notes on them, matches suggesting them, ratings of them, and the
+   * sign-in tokens still carrying their email address.
+   */
+  { table: "investment_applications", column: "investor_id" },
+  { table: "connections", column: "requester_id" },
+  { table: "connections", column: "receiver_id" },
+  { table: "user_matches", column: "matched_user_id" },
+  { table: "sprint_ratings", column: "ratee_id" },
+  { table: "email_verification_tokens", column: "user_id" },
+  { table: "password_reset_tokens", column: "user_id" },
+  { table: "web_handoff_tokens", column: "user_id" },
+  /*
+   * Blocks, both ways round.
+   *
+   * A block the person made is plainly theirs — including the private reason
+   * they wrote for themselves, which is why it's in the export as well as the
+   * deletion. A block held *against* them goes too, and that is not a gap in
+   * anyone's protection: an account that no longer exists cannot reach
+   * anybody, and keeping the row would leave the blocker a list entry naming a
+   * tombstone they can't do anything about.
+   */
+  { table: "user_blocks", column: "blocker_id" },
+  { table: "user_blocks", column: "blocked_id" },
 ];
 
 export const CHOICE: Owned[] = [
@@ -104,6 +136,10 @@ export const CHOICE: Owned[] = [
   { table: "feed_comments", column: "author_id" },
   { table: "project_comments", column: "author_id" },
   { table: "path_artifacts", column: "author_id" },
+  // A company judged it and may have announced it, so it goes or stays with their posts.
+  { table: "challenge_entries", column: "user_id" },
+  // A rating they gave a sprint partner: part of that partner's record, so it goes or stays with their posts.
+  { table: "sprint_ratings", column: "rater_id" },
 ];
 
 export const KEPT: Owned[] = [
@@ -112,6 +148,63 @@ export const KEPT: Owned[] = [
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },
+  /*
+   * A company's own records, which it goes on running on after one of its
+   * people leaves: who did what in it, the weekly numbers someone filed, and
+   * the jobs and goals they owned (unassigned on the way out, so the job's
+   * reminder goes to somebody still there).
+   */
+  { table: "company_audit_log", column: "actor_id" },
+  { table: "company_audit_log", column: "target_user_id" },
+  { table: "project_checkins", column: "user_id" },
+  { table: "recurring_jobs", column: "owner_id" },
+  { table: "quarter_goals", column: "owner_id" },
+  /*
+   * Other people's records that name them: a message someone sent them is
+   * that person's conversation; a pledge is money (tax, disputes); a team's
+   * tasks, documents, files and audits are the team's work; a sprint, a game,
+   * an offer and a company's own rows belong to the others who were in them;
+   * and review and moderation decisions outlive whoever made them.
+   */
+  { table: "direct_messages", column: "receiver_id" },
+  { table: "donations", column: "donor_id" },
+  { table: "project_invites", column: "created_by_id" },
+  { table: "project_invites", column: "accepted_by_id" },
+  { table: "project_kanban_tasks", column: "assignee_id" },
+  { table: "project_kanban_tasks", column: "started_by_id" },
+  { table: "project_kanban_tasks", column: "completed_by_id" },
+  { table: "project_task_completions", column: "completed_by_id" },
+  { table: "project_documents", column: "created_by_id" },
+  { table: "project_files", column: "uploader_id" },
+  { table: "code_audit_runs", column: "started_by_id" },
+  { table: "project_code_audits", column: "created_by_id" },
+  { table: "cofounder_sprints", column: "user1_id" },
+  { table: "cofounder_sprints", column: "user2_id" },
+  { table: "cofounder_sprints", column: "abandoned_by_id" },
+  { table: "sprint_kanban_tasks", column: "assignee_id" },
+  { table: "startup_games", column: "abandoned_by_id" },
+  { table: "sim_offers", column: "responded_by_id" },
+  { table: "companies", column: "created_by" },
+  { table: "company_challenges", column: "created_by" },
+  { table: "company_follows", column: "created_by" },
+  { table: "recruit_invites", column: "sent_by" },
+  { table: "recurring_jobs", column: "backup_id" },
+  { table: "recurring_job_runs", column: "done_by" },
+  { table: "project_backing_campaigns", column: "reviewed_by_id" },
+  { table: "content_reports", column: "reporter_id" },
+  { table: "content_reports", column: "target_owner_id" },
+  { table: "content_reports", column: "reviewed_by_id" },
+  { table: "surface_flags", column: "updated_by_id" },
+  { table: "promotion_settings", column: "updated_by_id" },
+  // A reviewer's decision to hide a project, and which account applied a batch of operations to one.
+  { table: "projects", column: "hidden_by_id" },
+  // Who ticked a milestone off: part of the project's history, and the Builder Index reads it.
+  { table: "project_milestones", column: "completed_by_id" },
+  // The reviewer who took a published page down: a moderation record, like the rest of them.
+  { table: "path_artifacts", column: "hidden_by_id" },
+  { table: "project_operation_applications", column: "user_id" },
+  // Who asked what it would take to reach a target: the roadmap is the company's, the name on it is a record.
+  { table: "what_would_it_take_roadmaps", column: "generated_by" },
 ];
 
 /**
@@ -235,6 +328,17 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
   try {
     await client.query("BEGIN");
 
+    // Companies first: their Run projects go to the company's next owner, not to the loop below.
+    await companiesOnAccountClose(client, userId);
+
+    /*
+     * Their open tasks go back to the team, unassigned. A task assigned to a
+     * closed account sits on the board as somebody's forever, and nobody else
+     * picks it up. Finished tasks keep the name: that's who did the work.
+     */
+    await client.query("UPDATE project_kanban_tasks SET assignee_id = NULL WHERE assignee_id = $1 AND status <> 'done'", [userId]);
+    await client.query("UPDATE sprint_kanban_tasks SET assignee_id = NULL WHERE assignee_id = $1", [userId]);
+
     const owned = await client.query<{ id: string; title: string }>("SELECT id, title FROM projects WHERE owner_id = $1", [userId]);
     for (const project of owned.rows) {
       /*
@@ -247,6 +351,16 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
       if (heir.rows[0]) {
         await client.query("UPDATE projects SET owner_id = $1 WHERE id = $2", [heir.rows[0].user_id, project.id]);
         await client.query("UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2", [project.id, heir.rows[0].user_id]);
+        /*
+         * An approval vouched for the person who ran the project, and release
+         * pays whoever owns it now. Left standing, the next release would send
+         * held pledges to a new owner no reviewer ever looked at. Back to the
+         * queue: a reviewer decides again, and nothing is paid out until then.
+         */
+        await client.query(
+          "UPDATE project_backing_campaigns SET review_status = 'pending', submitted_for_review_at = (now() at time zone 'utc') WHERE project_id = $1 AND review_status = 'approved'",
+          [project.id],
+        );
         outcome.transferred.push({ projectId: project.id, title: project.title, newOwnerId: heir.rows[0].user_id });
       } else {
         await client.query("DELETE FROM projects WHERE id = $1", [project.id]);
