@@ -51,7 +51,7 @@ vi.mock("openai", () => {
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { verifyEmail } = await import("../helpers/verify-email");
 const { db } = await import("../../server/db");
-const { projectKanbanTasks, users, whatWouldItTakeRoadmaps } = await import("@shared/schema");
+const { novaBuildPasses, projectKanbanTasks, users, whatWouldItTakeRoadmaps } = await import("@shared/schema");
 const { weekOf, todayYmd, addDays } = await import("@shared/company-rhythm");
 const { OUTCOME_PRICE_CENTS } = await import("@shared/plans");
 const { eq: eqOp } = await import("drizzle-orm");
@@ -396,6 +396,35 @@ describe("what it costs", () => {
     // Nothing leaked into the month's free Nova actions either.
     const wallet = await owner.agent.get("/api/nova/wallet");
     expect(wallet.body.wallet.allowanceUsed, "a free re-run must not quietly eat an allowance action").toBe(0);
+  });
+
+  it("does not spend the month's free actions on a project the whole build was bought for", async () => {
+    /*
+     * The trap under every priced route, found here because this is the one
+     * whose free paths are newest: when the $30 build pass covers an outcome,
+     * requireCredits returns without taking a hold — and the route then calls
+     * deductCredits as every route does, which falls back to taking an
+     * allowance action when it finds no hold to settle. The person who paid
+     * most would have paid twice.
+     */
+    mode = "ok";
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner, "service", "The Firm");
+    await fileWeeks(owner.agent, id, 3, { jobs_done: 20, invoiced: 12_000 });
+
+    await db.insert(novaBuildPasses).values({ userId: owner.id, projectId: id, paidCents: 3000 } as any);
+    await db.update(users).set({ balanceCents: 0, creditsUsed: 0 }).where(eqOp(users.id, owner.id));
+
+    const quoted = await owner.agent.get(`/api/projects/${id}/what-would-it-take`);
+    expect(quoted.body.price, "the whole-business build includes it").toMatchObject({ cents: 0, unlocked: true });
+
+    const res = await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`);
+    expect(res.status, res.text).toBe(200);
+    expect(await balanceOf(owner.id), "no money").toBe(0);
+
+    const wallet = await owner.agent.get("/api/nova/wallet");
+    expect(wallet.body.wallet.allowanceUsed, "and not one of the month's free actions either").toBe(0);
   });
 
   it("does not ask a company that already built one before there was a price", async () => {

@@ -8,7 +8,7 @@ import {
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
-import { holdCredits, holdMoney } from "./credit-reservations";
+import { holdCredits, holdMoney, holdCovered } from "./credit-reservations";
 import { spend, walletOf, dayPassActive, hasBuildPass } from "./wallet";
 
 export interface UserEntitlements extends Entitlements {
@@ -160,7 +160,8 @@ export async function requireCredits(
 
   // --- A priced outcome: dollars. ---
   if (outcome) {
-    if (await hasBuildPass(userId, projectId)) return ent;
+    // Covered by the $30 build, and marked so the route's settle takes nothing.
+    if (await hasBuildPass(userId, projectId)) { holdCovered(res, userId, outcome); return ent; }
     const cents = OUTCOME_PRICE_CENTS[outcome];
     const taken = await spend(userId, cents, { outcome, note: label, projectId });
     if (taken) {
@@ -184,10 +185,13 @@ export async function requireCredits(
   }
   if (await dayPassActive(userId)) {
     /*
-     * Free under the pass, and nothing is held: there is no charge to give
-     * back. The fair-use ceiling still applies through the AI burst limit
-     * above, which is what keeps "unlimited" honest.
+     * Free under the pass. A hold worth nothing is left so that the route's
+     * own deductCredits settles against it rather than falling back to taking
+     * an action off the allowance — "unlimited for 24 hours" has to mean the
+     * allowance stops moving. The fair-use ceiling still applies through the
+     * AI burst limit above, which is what keeps "unlimited" honest.
      */
+    holdCovered(res, userId);
     return ent;
   }
 

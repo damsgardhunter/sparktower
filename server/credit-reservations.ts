@@ -136,6 +136,8 @@ async function releaseMoney(hold: MoneyHold): Promise<void> {
   if (!hold.open) return;
   hold.open = false;
   forgetMoney(hold);
+  // Nothing was taken, so there is nothing to give back (see holdCovered).
+  if (hold.cents <= 0) return;
   try {
     const { refund } = await import("./wallet");
     await refund(hold.userId, hold.cents, { outcome: hold.outcome, projectId: hold.projectId });
@@ -177,6 +179,26 @@ export function holdMoney(
  * Closes the oldest open money hold for this user and reports that it existed.
  * True means "the outcome was delivered; the money stays spent".
  */
+/**
+ * Marks this response as already paid for.
+ *
+ * Some actions are free at the point of use and still run the same code:
+ * an outcome on a project the $30 whole-business build covers, a small action
+ * under a day pass. Those return from requireCredits without taking anything —
+ * and the route then settles the way every route settles, by calling
+ * storage.deductCredits once the answer is in hand. With no hold to find, that
+ * falls back to taking an action off the month's free allowance: the person
+ * who paid the most would have paid twice.
+ *
+ * So the free paths leave a hold worth nothing. The settle finds it, closes it
+ * and stops, and the release refunds nothing because nothing was taken. The
+ * alternative was teaching thirty call sites when not to settle, which is the
+ * kind of rule that holds until the thirty-first.
+ */
+export function holdCovered(res: Response, userId: string, outcome: PricedOutcomeId = "dayPass"): void {
+  holdMoney(res, userId, 0, outcome, null);
+}
+
 export function settleMoney(userId: string): boolean {
   const hold = moneyHolds.get(userId)?.find((h) => h.open);
   if (!hold) return false;
