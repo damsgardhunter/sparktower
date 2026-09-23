@@ -91,8 +91,12 @@ async function finish(agent: any, id: string, backboneId: string) {
 /**
  * Walk `count` milestones of one path, checking after each that the next one
  * is the next one the tree says, on both surfaces.
+ *
+ * `viaHome` is off when the project has another section open: the home card
+ * carries one row per project — the section it is furthest along — so it is
+ * only the right place to ask about this path while this path is that section.
  */
-async function walk(agent: any, id: string, goal: ProjectGoal, subcategory: string, count: number) {
+async function walk(agent: any, id: string, goal: ProjectGoal, subcategory: string, count: number, viaHome = true) {
   const main = mainLineMilestones(resolveTree(goal, subcategory));
   const seen: string[] = [];
 
@@ -102,9 +106,11 @@ async function walk(agent: any, id: string, goal: ProjectGoal, subcategory: stri
     expect(before.next?.id, `step ${i + 1} of ${goal}`).toBe(expected.id);
 
     // The home card is asked the same question, and must answer the same way.
-    const home = await nextOnHome(agent, id);
-    expect(home?.next?.id, `home card at step ${i + 1} of ${goal}`).toBe(expected.id);
-    expect(home?.progress.done).toBe(i);
+    if (viaHome) {
+      const home = await nextOnHome(agent, id);
+      expect(home?.next?.id, `home card at step ${i + 1} of ${goal}`).toBe(expected.id);
+      expect(home?.progress.done).toBe(i);
+    }
 
     await finish(agent, id, expected.id);
     seen.push(expected.id);
@@ -218,25 +224,53 @@ describe("a project with no path", () => {
     expect(after?.next?.id, "and there is a step to take").toBeTruthy();
   }, 180_000);
 
-  it("offers to start a section that was never started, rather than leaving it out", async () => {
+  it("shows one row per project, on the section it is furthest along", async () => {
     const app = await getTestApp();
     const agent = await builder(app);
     const id = (await create(agent, "ship_mvp", "saas")).body.id;
 
-    // Systemize has never been started here, so it is not on the card at all…
-    const items = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === id);
-    expect(items.every((i: any) => i.track.goal !== "systemize_business")).toBe(true);
+    // One section started, so one row, and it is that one.
+    const before = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === id);
+    expect(before).toHaveLength(1);
+    expect(before[0].track.goal).toBe("ship_mvp");
+
+    // A step taken on it, so "furthest along" has something to measure.
+    const walked = await walk(agent, id, "ship_mvp", "saas", 1);
+    expect(walked).toHaveLength(1);
 
     /*
-     * …until it is, and then it has a step of its own. Started here under the
-     * old `raise_funding` id on purpose: funding folded into Systemize, the
-     * alias is what keeps an open tab and the phone working, and this is the
-     * write path where that used to be refused.
+     * A second section, started under the old `raise_funding` id on purpose:
+     * funding folded into Systemize, and the alias is what keeps an open tab
+     * and the phone working. This is the write path where that used to be
+     * refused.
      */
     const started = await agent.post(`/api/projects/${id}/tracks`).send({ goal: "raise_funding", subcategory: "other" });
     expect(started.status, JSON.stringify(started.body).slice(0, 200)).toBe(200);
-    const withFunding = (await agent.get("/api/me/next-steps")).body.items
-      .find((i: any) => i.project.id === id && i.track.goal === "systemize_business");
-    expect(withFunding?.next?.id).toBe("SYS.F1.1");
-  }, 180_000);
+
+    /*
+     * Still one row — the company appears once on the screen that answers
+     * "what next", not once per section it happens to have open — and it is
+     * the section with work behind it rather than the one just started.
+     */
+    const after = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === id);
+    expect(after, "one company, one row").toHaveLength(1);
+    expect(after[0].track.goal).toBe("ship_mvp");
+    expect(after[0].progress.done).toBeGreaterThan(0);
+  }, 240_000);
+
+  it("moves the row to the other section once that one is further along", async () => {
+    const app = await getTestApp();
+    const agent = await builder(app);
+    const id = (await create(agent, "systemize_business", "restaurant")).body.id;
+    const started = await agent.post(`/api/projects/${id}/tracks`).send({ goal: "run_company", subcategory: "software" });
+    expect(started.status, JSON.stringify(started.body).slice(0, 200)).toBe(200);
+
+    // Two steps on Run, none on Systemize: the row follows the work.
+    const walked = await walk(agent, id, "run_company", "software", 2, false);
+    expect(walked).toHaveLength(2);
+
+    const items = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === id);
+    expect(items).toHaveLength(1);
+    expect(items[0].track.goal).toBe("run_company");
+  }, 240_000);
 });

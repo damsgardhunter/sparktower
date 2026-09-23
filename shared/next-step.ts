@@ -44,7 +44,14 @@ export interface NeedsPath {
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
-  /** The section this step is on: each started section of a project is its own item. */
+  /**
+   * The section this step is on.
+   *
+   * One item per project, and this is the section it is furthest along — a
+   * company running Ship, Systemize and Run at once is one row here, not three
+   * of itself. The other sections are on the project's own page, which is
+   * where somebody goes to change which one they are working.
+   */
   track: { goal: ProjectGoal; label: string; short: string; primary: boolean };
   phase: string;
   progress: { done: number; total: number };

@@ -60,7 +60,20 @@ describe("secret box", () => {
     const sealed = seal(plain);
     expect(sealed).not.toContain("example.com");
     expect(open(sealed)).toBe(plain);
-    expect(open(sealed.slice(0, -2) + "zz")).toBeNull();
+    /*
+     * Tampering, in the three places it can happen. The end-of-string case
+     * used to pass about sixty-three times in sixty-four: base64url drops
+     * characters that don't complete a byte, so replacing the last two
+     * sometimes decoded to the very same bytes and opened cleanly. It was a
+     * flake in the test and a laxness in `open`, which now insists on the one
+     * canonical spelling of the bytes it is given.
+     */
+    expect(open(sealed.slice(0, -2) + "zz"), "the tail").toBeNull();
+    const middle = Math.floor(sealed.length / 2);
+    const flipped = sealed.slice(0, middle) + (sealed[middle] === "a" ? "b" : "a") + sealed.slice(middle + 1);
+    expect(open(flipped), "a byte in the body").toBeNull();
+    const [v, iv, tag, body] = sealed.split(".");
+    expect(open([v, iv, tag, `${body}A`].join(".")), "a character appended").toBeNull();
     expect(open("nonsense")).toBeNull();
   });
 });

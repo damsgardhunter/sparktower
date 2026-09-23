@@ -407,14 +407,27 @@ export const yearClosing = (season: { nextTickAt: Date | null }, now = new Date(
  * Keyed with a prefix of its own so it never collides with the join paths'
  * `season:<id>` transaction lock, which guards something else entirely.
  */
-export async function tickSeason(seasonId: string, now = new Date()): Promise<number | null> {
+/**
+ * `onlyYear`: resolve that year or nothing.
+ *
+ * Without it, a caller that waited on the lock resolves whatever year it finds
+ * when it gets in — which is how a double-click on "resolve this year now"
+ * moved a room two years. Both requests passed the route's guard (it tested a
+ * column the update didn't change), the first resolved year 2 and set the
+ * clock, the second took the lock, found the season due and on year 3, and
+ * resolved that one too. The second year was resolved by somebody who was
+ * asking about the first.
+ *
+ * The periodic pass leaves it unset on purpose: its job is "whatever is due".
+ */
+export async function tickSeason(seasonId: string, now = new Date(), opts: { onlyYear?: number } = {}): Promise<number | null> {
   const key = `sim_tick:${seasonId}`;
   const client = await pool.connect();
   let broken: Error | undefined;
   try {
     await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key]);
     try {
-      return await resolveSeasonYear(seasonId, now);
+      return await resolveSeasonYear(seasonId, now, opts.onlyYear);
     } finally {
       try {
         await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
@@ -429,10 +442,12 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   }
 }
 
-async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | null> {
+async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number): Promise<number | null> {
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
   if (!season || season.status !== "running" || !season.world) return null;
   if (!season.nextTickAt || season.nextTickAt > now) return null;
+  // Asked for a particular year: if the season has moved past it, somebody else resolved it.
+  if (onlyYear !== undefined && season.year !== onlyYear) return null;
 
   const niche = nicheById(season.nicheId);
   if (!niche) return null;

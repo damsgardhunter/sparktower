@@ -248,18 +248,44 @@ describe("a private season's clock", () => {
     expect(again.players.filter((p: any) => p.userId === cmo.id)).toEqual([expect.objectContaining({ ventureId, role: "cmo", teamName: "Blue Harbour" })]);
 
     /*
-     * A double-click: two presses at once resolve one year, not two, and the
-     * one that lost is told so rather than handed a second result.
+     * A double-click: two presses at once resolve one year, not two.
+     *
+     * Asserted on the season rather than on the two statuses. Two presses that
+     * genuinely overlap give a 200 and a 409; two that don't — a loaded runner
+     * serialises them — give two 200s and two years, which is not the bug and
+     * is what the endpoint is for. Demanding [200, 409] made this test a
+     * measure of how busy the machine was, and it failed three times on an
+     * unrelated branch saying nothing true about the code.
      */
     const [a, b] = await Promise.all([
       owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/resolve-year-now`).send({}),
       owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/resolve-year-now`).send({}),
     ]);
-    expect([a.status, b.status].sort()).toEqual([200, 409]);
-    expect((a.status === 200 ? a : b).body).toMatchObject({ resolvedYear: 2, year: 3 });
-    expect((a.status === 409 ? a : b).body.code).toBe("already_resolved");
+    const statuses = [a.status, b.status].sort();
+    expect(statuses[0], "at least one press resolves a year").toBe(200);
     const [twice] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
-    expect(twice.year, "one year resolved, not two").toBe(3);
+    if (statuses[1] === 409) {
+      expect((a.status === 200 ? a : b).body).toMatchObject({ resolvedYear: 2, year: 3 });
+      expect((a.status === 409 ? a : b).body.code).toBe("already_resolved");
+      expect(twice.year, "the overlapping press resolved nothing of its own").toBe(3);
+    } else {
+      // They did not overlap: the second press ended the next year, deliberately.
+      expect(statuses[1]).toBe(200);
+      expect(twice.year).toBe(4);
+    }
+
+    /*
+     * And the mechanism itself, which is what the overlap was standing in for:
+     * a tick asked about a year that is over does nothing at all. This is the
+     * losing request's exact position — it has waited for the lock, and by the
+     * time it has it the season has moved on — and it is deterministic, so it
+     * fails when the guard is removed rather than when the runner is busy.
+     */
+    const [before] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    await db.update(simSeasons).set({ nextTickAt: new Date(Date.now() - 1000) }).where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId, new Date(), { onlyYear: before.year - 1 }), "a year that is already over").toBeNull();
+    const [unmoved] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(unmoved.year, "and the season did not move").toBe(before.year);
   }, 180_000);
 
   it("leaves a public season on a day a year", async () => {

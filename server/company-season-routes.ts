@@ -297,7 +297,15 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * moment waits for this one and then finds nothing to do — reported as
        * the 409 below rather than as a second year resolved.
        */
-      const resolved = await tickSeason(season.id, now);
+      /*
+       * The year this request was about, and no other. The conditional update
+       * above reads like a compare-and-swap and is not one — it tests `year`
+       * and does not change it — so two presses both get through it. The lock
+       * inside tickSeason then serialises them, and without this the loser
+       * would find the season due (the winner set the clock) on the next year
+       * and resolve that one as well: one double-click, two years gone.
+       */
+      const resolved = await tickSeason(season.id, now, { onlyYear: season.year });
       if (resolved == null) return res.status(409).json({ message: "That year has just been resolved.", code: "already_resolved" });
       const [after] = await db.select({ year: simSeasons.year, status: simSeasons.status, nextTickAt: simSeasons.nextTickAt })
         .from(simSeasons).where(eq(simSeasons.id, season.id));

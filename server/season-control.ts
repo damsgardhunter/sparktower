@@ -146,7 +146,14 @@ export async function advanceSeasonNow(seasonId: string, userId: string, { now =
     return { ok: false, status: 409, code: "already_resolved", message: "That year has just been resolved." };
   }
 
-  const resolved = await tickSeason(season.id, now);
+  /*
+   * The year this request meant, like the company route. Same handler written
+   * twice, same guard that tests `year` and doesn't change it — so without
+   * this, two developers advancing the same public season at once (or one
+   * impatient double-click) move it two years, the second resolved by
+   * somebody who was asking about the first.
+   */
+  const resolved = await tickSeason(season.id, now, { onlyYear: season.year });
   const [after] = await db.select({ year: simSeasons.year, status: simSeasons.status, nextTickAt: simSeasons.nextTickAt })
     .from(simSeasons).where(eq(simSeasons.id, season.id));
 

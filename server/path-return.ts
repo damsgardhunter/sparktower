@@ -216,9 +216,17 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
   const items: NextStepItem[] = [];
   for (const p of candidates) {
     const sections = (await listTracks(p.id).catch(() => null))?.tracks.filter((s) => s.started) ?? [];
-    // The weekly update is the project's, not a section's: offered once, on its first item.
+    // The weekly update is the project's, not a section's: offered on the one item the project gets.
     const weekly = await weeklyUpdateFor(p.id);
-    let first = true;
+    /*
+     * One row per project, not one per section.
+     *
+     * A company running Ship, Systemize and Run at once filled this screen
+     * with three of itself, and the question the screen answers — what do I do
+     * next — has one answer per company, not three. The others are still there
+     * on the project's own page, which is where you go to change section.
+     */
+    const forProject: NextStepItem[] = [];
 
     /*
      * A project with no section started at all still belongs on this list.
@@ -247,16 +255,15 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
      * than a step that would pretend the project is on week one.
      */
     if (!status.adopted) {
-      items.push(pathlessItem(p, section, {
+      forProject.push(pathlessItem(p, section, {
         kind: status.started ? "adopt" : "start",
         existingTasks: status.existingTasks ?? 0,
         existingDone: status.existingDone ?? 0,
-      }, first ? weekly : { due: false, steps: [] }));
-      first = false;
+      }, NO_WEEKLY));
       continue;
     }
     const lastDone = await lastDoneStep(p.id, status.events);
-    items.push({
+    forProject.push({
       project: { id: p.id, title: p.title, logoUrl: p.logoUrl },
       track: { goal: section.goal, label: section.label, short: section.short, primary: section.primary },
       phase: status.current.title,
@@ -268,13 +275,44 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
       daysSinceActivity: Math.floor(status.pace?.daysSinceActivity ?? 0),
       projectedAt: status.pace?.projectedAt ? new Date(status.pace.projectedAt).toISOString() : null,
       lastDone,
-      weekly: first ? weekly : { due: false, steps: [] },
+      weekly: NO_WEEKLY,
     });
-    first = false;
     }
+
+    const chosen = furthestAlong(forProject);
+    // The project's own update, offered on whichever section was picked.
+    if (chosen) items.push({ ...chosen, weekly });
   }
   // Most recently worked first: the path someone is in the middle of leads.
   return items.sort((a, b) => a.daysSinceActivity - b.daysSinceActivity).slice(0, MAX_ITEMS);
+}
+
+const NO_WEEKLY: WeeklyUpdate = { due: false, steps: [] };
+
+/**
+ * Of a project's sections, the one it is furthest along.
+ *
+ * Furthest along means what it says: the most main-line steps finished. The
+ * tie-breaks matter more than they look — a company that has just started its
+ * second section has two rows with nothing done in either, and picking by
+ * proportion would put a 0/4 section above a 0/12 one for no reason anybody
+ * could see. So: steps done, then the proportion of the line, then whichever
+ * was worked on most recently, and finally the project's primary section, so
+ * two sections started the same minute resolve the same way every time rather
+ * than on whatever order the query returned. A section with a path always
+ * beats one that still needs setting up, because "take this step" is a better
+ * answer than "set this up" when both are on offer.
+ */
+export function furthestAlong(items: NextStepItem[]): NextStepItem | null {
+  if (items.length <= 1) return items[0] ?? null;
+  const ratio = (i: NextStepItem) => (i.progress.total > 0 ? i.progress.done / i.progress.total : 0);
+  return [...items].sort((a, b) =>
+    Number(!!a.needsPath) - Number(!!b.needsPath)
+    || b.progress.done - a.progress.done
+    || ratio(b) - ratio(a)
+    || a.daysSinceActivity - b.daysSinceActivity
+    // Nothing left to tell them apart: the section the project calls its own.
+    || Number(!!b.track.primary) - Number(!!a.track.primary))[0];
 }
 
 /**
