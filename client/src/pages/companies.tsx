@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Building2, Loader2, Plus, Users } from "lucide-react";
+import { VerifyDomain } from "@/components/company/verify-domain";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -144,17 +145,27 @@ function AcceptInvite({ token }: { token: string }) {
   );
 }
 
+/**
+ * Two steps, in this order: prove the website, then describe the company.
+ *
+ * The proof comes first because the server will not create a company without
+ * one — a company that exists before anything is proved is a company that can
+ * be named "Stripe" and left sitting there. Putting the details first would
+ * mean filling in a form and then being told the real work hadn't started.
+ */
 function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreated: (id: string) => void }) {
   const [name, setName] = useState("");
   const [industry, setIndustry] = useState(NONE);
   const [size, setSize] = useState(NONE);
-  const [website, setWebsite] = useState("");
+  const [proved, setProved] = useState<{ id: string; domain: string } | null>(null);
   const [description, setDescription] = useState("");
   const [error, setError] = useState<{ field?: string; message: string } | null>(null);
 
   const create = useMutation({
     mutationFn: () => apiRequest("POST", "/api/companies", {
-      name, website, description,
+      name, description,
+      /* The website is the proven domain; the server ignores anything else. */
+      verificationId: proved?.id,
       industry: industry === NONE ? "" : industry,
       size: size === NONE ? "" : size,
     }).then((r) => r.json()),
@@ -177,7 +188,9 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
           className="space-y-4"
           onSubmit={(e) => { e.preventDefault(); setError(null); create.mutate(); }}
         >
-          <div>
+          <VerifyDomain onVerified={setProved} />
+
+          <div className={proved ? undefined : "pointer-events-none opacity-40"} aria-hidden={!proved}>
             <Label htmlFor="company-name">Name</Label>
             <Input id="company-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Acme Ltd" data-testid="input-company-name" />
             {fieldError("name")}
@@ -206,11 +219,7 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
               {fieldError("size")}
             </div>
           </div>
-          <div>
-            <Label htmlFor="company-website">Website</Label>
-            <Input id="company-website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="acme.com" data-testid="input-company-website" />
-            {fieldError("website")}
-          </div>
+          {fieldError("website")}
           <div>
             <Label htmlFor="company-description">What the company does</Label>
             <Textarea id="company-description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={600} rows={3} data-testid="input-company-description" />
@@ -221,7 +230,8 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
             <p className="text-sm text-destructive">{error.message}</p>
           )}
           <div className="flex gap-2">
-            <Button type="submit" disabled={create.isPending || name.trim().length < 2} data-testid="button-create-company">
+            {/* Nothing to submit until the domain is proved: the server would only refuse it. */}
+            <Button type="submit" disabled={create.isPending || !proved || name.trim().length < 2} data-testid="button-create-company">
               {create.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />} Create company
             </Button>
             <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>

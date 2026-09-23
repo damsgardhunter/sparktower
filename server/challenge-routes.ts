@@ -34,7 +34,7 @@ import {
 } from "@shared/challenges";
 import { INDUSTRIES, hasPower } from "@shared/companies";
 import { CHALLENGE_FEE_CENTS, formatPrize, readPrize } from "@shared/challenges-money";
-import { recordPrize, releasePrize, takePrize } from "./challenge-prizes";
+import { prizeFor, prizesFor, recordPrize, releasePrize, takePrize } from "./challenge-prizes";
 
 type Challenge = typeof companyChallenges.$inferSelect;
 type Entry = typeof challengeEntries.$inferSelect;
@@ -79,13 +79,21 @@ async function isCompanyMember(companyId: string, userId: string): Promise<boole
 }
 
 /** A challenge as a founder sees it: the company's public face, never its members. */
-function publicChallenge(c: Challenge, company: Pick<Company, "id" | "name" | "industry" | "website">, now: number) {
+function publicChallenge(c: Challenge, company: Pick<Company, "id" | "name" | "industry" | "website" | "verifiedDomain">, now: number) {
   return {
     id: c.id, title: c.title, brief: c.brief, criteria: c.criteria, prize: c.prize, terms: c.terms,
     industry: c.industry, deadline: c.deadline, createdAt: c.createdAt,
     status: effectiveStatus(c, now),
     acceptingEntries: acceptsEntries(c, now),
-    company: { id: company.id, name: company.name, industry: company.industry, website: company.website },
+    company: {
+      id: company.id, name: company.name, industry: company.industry, website: company.website,
+      /*
+       * The proven domain, on every card and page. It is the one fact that
+       * tells an entrant who is actually asking — a name can be anything, and
+       * a domain has been checked.
+       */
+      verifiedDomain: company.verifiedDomain,
+    },
   };
 }
 
@@ -400,7 +408,7 @@ export function registerChallengeRoutes(app: Express): void {
         : eq(companyChallenges.status, "closed");
     const conds = [byStatus!];
     if (industry) conds.push(eq(companyChallenges.industry, industry));
-    const rows = await db.select({ c: companyChallenges, company: { id: companies.id, name: companies.name, industry: companies.industry, website: companies.website } })
+    const rows = await db.select({ c: companyChallenges, company: { id: companies.id, name: companies.name, industry: companies.industry, website: companies.website, verifiedDomain: companies.verifiedDomain } })
       .from(companyChallenges)
       .innerJoin(companies, eq(companies.id, companyChallenges.companyId))
       .where(and(...conds))
@@ -414,10 +422,14 @@ export function registerChallengeRoutes(app: Express): void {
         .where(and(inArray(challengeEntries.challengeId, ids), eq(challengeEntries.userId, req.user.id)))
       : [];
     const myStatus = new Map(mine.map((m) => [m.challengeId, m.status]));
+    /* What is actually in the safe, so a card can say "held" rather than "the company says". */
+    const held = await prizesFor(ids);
     res.json(visible.map((r) => {
       const { terms: _terms, ...pub } = publicChallenge(r.c, r.company, now);
       const s = myStatus.get(r.c.id);
+      const prize = held.get(r.c.id);
       return {
+        prizeHeld: prize ? { amountCents: prize.amountCents, state: prize.state } : null,
         ...pub,
         entryCount: counts.get(r.c.id) ?? 0,
         entered: !!s && s !== "withdrawn",
@@ -428,15 +440,16 @@ export function registerChallengeRoutes(app: Express): void {
 
   app.get("/api/challenges/:cid", isAuthenticated, async (req: any, res) => {
     const now = Date.now();
-    const [row] = await db.select({ c: companyChallenges, company: { id: companies.id, name: companies.name, industry: companies.industry, website: companies.website } })
+    const [row] = await db.select({ c: companyChallenges, company: { id: companies.id, name: companies.name, industry: companies.industry, website: companies.website, verifiedDomain: companies.verifiedDomain } })
       .from(companyChallenges)
       .innerJoin(companies, eq(companies.id, companyChallenges.companyId))
       .where(eq(companyChallenges.id, req.params.cid));
     if (!row) return res.status(404).json({ message: "No such challenge." });
-    const [[mine], counts, sponsorMember] = await Promise.all([
+    const [[mine], counts, sponsorMember, heldPrize] = await Promise.all([
       db.select().from(challengeEntries).where(and(eq(challengeEntries.challengeId, row.c.id), eq(challengeEntries.userId, req.user.id))),
       entryCounts([row.c.id]),
       isCompanyMember(row.c.companyId, req.user.id),
+      prizeFor(row.c.id),
     ]);
     // Winners are public once announced — that's the point of announcing — but never before.
     let winners: { entryId: string; title: string; entrantName: string; link: string | null; project: { id: string; title: string | null } | null }[] = [];
@@ -459,6 +472,12 @@ export function registerChallengeRoutes(app: Express): void {
       myEntry: myEntryView(mine),
       isSponsor: sponsorMember,
       winners,
+      /*
+       * The money, as it actually stands. This is the claim the whole escrow
+       * exists to let the page make — so it is the row's real state, not the
+       * company's description of it.
+       */
+      prizeHeld: heldPrize ? { amountCents: heldPrize.amountCents, state: heldPrize.state } : null,
     });
   });
 

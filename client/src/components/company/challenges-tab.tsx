@@ -24,6 +24,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
 import { INDUSTRIES } from "@shared/companies";
+import { CHALLENGE_FEE_CENTS, formatPrize, readPrize, totalToPost } from "@shared/challenges-money";
 import {
   CHALLENGE_DISCLAIMER, CHALLENGE_LIMITS, CHALLENGE_STATUS_LABEL, deadlineLabel, ENTRY_STATUS_LABEL,
   type ChallengeStatus, type EntryStatus,
@@ -79,10 +80,14 @@ export function ChallengesTab({ companyId, canManage }: { companyId: string; can
 function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () => void }) {
   const { toast } = useToast();
   const [f, setF] = useState({ title: "", brief: "", criteria: "", prize: "", terms: "", industry: NO_INDUSTRY, deadline: "" });
+  /** The prize in whole dollars, which is how anybody thinks about it. Cents on the wire. */
+  const [prizeDollars, setPrizeDollars] = useState("500");
+  const prizeCents = Math.round(Number(prizeDollars) * 100);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const create = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/companies/${companyId}/challenges`, {
       title: f.title, brief: f.brief, criteria: f.criteria || null, prize: f.prize || null, terms: f.terms,
+      prizeCents,
       industry: f.industry === NO_INDUSTRY ? null : f.industry,
       // The end of the chosen day, where the company is: "closes on the 30th" should include the 30th.
       deadline: f.deadline ? new Date(`${f.deadline}T23:59:59`).toISOString() : null,
@@ -91,12 +96,16 @@ function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () 
       queryClient.invalidateQueries({ queryKey: listKey(companyId) });
       // The public list and pages too: an admin who looked at them earlier would otherwise not see this one there.
       queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/challenges") });
-      toast({ title: "Challenge posted", description: "Founders can see it and enter now." });
+      toast({
+        title: "Challenge posted",
+        description: `${formatPrize(prizeCents)} is held by SparkTower until you pick a winner.`,
+      });
       onDone();
     },
     onError: (err) => toast({ title: "Couldn't post it", description: errorText(err), variant: "destructive" }),
   });
   const L = CHALLENGE_LIMITS;
+  const prizeRead = readPrize(prizeCents);
   // The date input speaks the viewer's calendar, and so does the deadline built
   // from it above; toISOString would give tomorrow's date to anyone west of UTC
   // in the evening, and refuse today.
@@ -118,13 +127,28 @@ function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () 
         <p className="text-xs text-muted-foreground">At least {L.brief.min} characters.</p>
       </div>
       <div className="space-y-1.5">
+        <Label htmlFor="ch-prize">Anything else the winner gets (optional)</Label>
+        <Input id="ch-prize" value={f.prize} maxLength={L.prize.max} onChange={set("prize")} placeholder="A paid pilot and a call with our CTO" data-testid="input-challenge-prize" />
+        <p className="text-[11px] text-muted-foreground">The money above is held and paid automatically. This is for anything it can't say.</p>
+      </div>
+      <div className="space-y-1.5">
         <Label htmlFor="ch-criteria">How you'll judge entries (optional)</Label>
         <Textarea id="ch-criteria" rows={3} value={f.criteria} maxLength={L.criteria.max} onChange={set("criteria")} data-testid="input-challenge-criteria" />
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5 sm:col-span-1">
-          <Label htmlFor="ch-prize">Prize</Label>
-          <Input id="ch-prize" value={f.prize} maxLength={L.prize.max} onChange={set("prize")} placeholder="$5,000 and a paid pilot" data-testid="input-challenge-prize" />
+          <Label htmlFor="ch-prize-cents">Prize, in dollars</Label>
+          <Input
+            id="ch-prize-cents" type="number" min={50} step={50}
+            value={prizeDollars} onChange={(e) => setPrizeDollars(e.target.value)}
+            data-testid="input-challenge-prize-amount"
+          />
+          {/* Said before it is taken, not after. */}
+          <p className="text-[11px] text-muted-foreground">
+            {prizeRead.ok
+              ? <>Held by SparkTower until you pick a winner.</>
+              : <span className="text-destructive">{prizeRead.message}</span>}
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label>Industry</Label>
@@ -149,10 +173,22 @@ function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () 
       </div>
       <p className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">{CHALLENGE_DISCLAIMER} You pay your winners yourselves.</p>
       <div className="flex gap-2">
-        <Button disabled={!ready || create.isPending} onClick={() => create.mutate()} data-testid="button-post-challenge">
-          {create.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Post challenge
+        {/*
+          * What it costs, on the button, before it is pressed. The fee and the
+          * prize are separate numbers because they are separate things: one is
+          * ours and one comes back if nobody wins.
+          */}
+        <Button disabled={!ready || !prizeRead.ok || create.isPending} onClick={() => create.mutate()} data-testid="button-post-challenge">
+          {create.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+          Post challenge
+          {prizeRead.ok && <span className="ml-1.5 text-xs opacity-80">{formatPrize(totalToPost(prizeCents))}</span>}
         </Button>
         <Button variant="ghost" onClick={onDone}>Cancel</Button>
+        {prizeRead.ok && (
+          <p className="w-full text-xs text-muted-foreground" data-testid="challenge-cost-breakdown">
+            {formatPrize(CHALLENGE_FEE_CENTS)} to post, and {formatPrize(prizeCents)} held for the prize — returned if you close without picking a winner.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "wouter";
-import { ArrowLeft, Building2, CalendarClock, ChevronDown, ExternalLink, Loader2, Trophy, Users } from "lucide-react";
+import { ArrowLeft, Building2, CalendarClock, ChevronDown, ExternalLink, Loader2, ShieldCheck, Trophy, Users } from "lucide-react";
+import { formatPrize, prizeAssurance, type PrizeState } from "@shared/challenges-money";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -34,7 +35,9 @@ interface MyEntry {
 interface ChallengeDetail {
   id: string; title: string; brief: string; criteria: string | null; prize: string | null; terms: string | null;
   industry: string | null; deadline: string; status: ChallengeStatus; acceptingEntries: boolean;
-  company: { id: string; name: string; industry: string | null; website: string | null };
+  company: { id: string; name: string; industry: string | null; website: string | null; verifiedDomain: string | null };
+  /** The safe's row: what is actually there, not what the company wrote. */
+  prizeHeld: { amountCents: number; state: PrizeState } | null;
   entryCount: number; myEntry: MyEntry | null; isSponsor: boolean;
   winners: { entryId: string; title: string; entrantName: string; link: string | null; project: { id: string; title: string | null } | null }[];
 }
@@ -61,18 +64,37 @@ export default function ChallengePage() {
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Building2 className="h-4 w-4" />
             <span>{c.company.name}</span>
+            {/* Who is actually asking. A name can be anything; this has been checked. */}
+            {c.company.verifiedDomain && (
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400" data-testid="company-verified">
+                <ShieldCheck className="h-3.5 w-3.5" />{c.company.verifiedDomain}
+              </span>
+            )}
             {c.industry && <Badge variant="outline">{c.industry}</Badge>}
             <Badge variant="secondary" className="ml-auto">{CHALLENGE_STATUS_LABEL[c.status]}</Badge>
           </div>
           <h1 className="text-2xl font-bold tracking-tight mt-2" data-testid="text-challenge-title">{c.title}</h1>
           <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-            {c.prize && <span className="inline-flex items-center gap-1.5 font-medium"><Trophy className="h-4 w-4 text-amber-500" />{c.prize}</span>}
+            {c.prizeHeld && (
+              <span className="inline-flex items-center gap-1.5 font-medium" data-testid="prize-held">
+                <Trophy className="h-4 w-4 text-amber-500" />
+                {formatPrize(c.prizeHeld.amountCents)}
+              </span>
+            )}
+            {c.prize && <span className="inline-flex items-center gap-1.5 text-muted-foreground">{c.prize}</span>}
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <CalendarClock className="h-4 w-4" />
               {c.acceptingEntries ? `${deadlineLabel(c.deadline, Date.now())} · closes ${new Date(c.deadline).toLocaleDateString()}` : `Closed for entries ${new Date(c.deadline).toLocaleDateString()}`}
             </span>
             <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Users className="h-4 w-4" />{c.entryCount} {c.entryCount === 1 ? "entry" : "entries"}</span>
           </div>
+
+          {c.prizeHeld && (
+            <p className="mt-3 inline-flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 text-sm" data-testid="prize-assurance">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              <span>{prizeAssurance(c.prizeHeld.state, c.prizeHeld.amountCents)}</span>
+            </p>
+          )}
         </div>
 
         <section>
