@@ -310,5 +310,23 @@ export function announcedRegion(input: { niche: Niche; seasonId: string; year: n
 
 export const EXPANSION_DISCOUNT = 0.7;
 
+/**
+ * Whether the table agreed to open the announced region.
+ *
+ * Opening a region is the decision that commits the company for years — the
+ * entry cost now, the rent for ever, and a year of reaching almost nobody —
+ * so it is not one seat's to take. Operations puts it up; every seat votes;
+ * a majority of the votes actually cast carries it.
+ *
+ * Operations proposing counts as a vote for, which is what makes a table of
+ * one (or a table where nobody else looked) still able to expand. Silence
+ * from the rest is silence, not opposition. A tie fails: a company that
+ * cannot agree to open a region has not agreed to open it.
+ */
+export function expansionOutcome(votes: ("yes" | "no")[]): { carried: boolean; yes: number; no: number } {
+  const yes = votes.filter((v) => v === "yes").length;
+  return { carried: yes > votes.length - yes && yes > 0, yes, no: votes.length - yes };
+}
+
 /** How much of a newly opened region a company reaches in its first year there: as far as its brand does. */
 export const firstYearReach = (brand: number): number => Math.max(0.15, Math.min(1, brand / 60));

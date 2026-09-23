@@ -70,6 +70,8 @@ export interface MarketingDecision {
   segmentFocus?: Record<string, number>;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
 }
 
 /** Money: where it comes from and what it costs. */
@@ -116,6 +118,8 @@ export interface FinanceDecision {
   buyback?: number;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
 }
 
 /** The product itself. */
@@ -147,6 +151,8 @@ export interface TechDecision {
   featureMode?: "build" | "copy";
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
 }
 
 /** Making and serving what is sold. */
@@ -217,6 +223,8 @@ export interface ExecutiveDecision {
   pace?: "ship" | "balanced" | "right";
   /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year five. */
   deals?: Record<string, "accept" | "decline" | "vote">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
   /** How to answer last year's shock. From year two, and only when there is one. */
   shockAnswer?: string;
 }
@@ -407,6 +415,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     regionFocus: cleanNumbers(d.cmo.regionFocus, 0, 100),
     segmentFocus: cleanNumbers(d.cmo.segmentFocus, 0, 100),
     dealVotes: cleanVotes(d.cmo.dealVotes),
+    expandVote: cleanVotes(d.cmo.expandVote),
   };
 
   if (d.cto) out.cto = {
@@ -420,6 +429,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     featureBet: typeof d.cto.featureBet === "string" ? d.cto.featureBet.slice(0, 64) : "",
     featureMode: d.cto.featureMode === "copy" ? "copy" : "build",
     dealVotes: cleanVotes(d.cto.dealVotes),
+    expandVote: cleanVotes(d.cto.expandVote),
   };
 
   if (d.coo) out.coo = {
@@ -458,6 +468,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     refinance: Math.max(0, clean(d.cfo.refinance)),
     buyback: Math.max(0, clean(d.cfo.buyback)),
     dealVotes: cleanVotes(d.cfo.dealVotes),
+    expandVote: cleanVotes(d.cfo.expandVote),
   };
 
   if (d.ceo) out.ceo = {
@@ -473,6 +484,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     replaceBid: Math.max(0, clean(d.ceo.replaceBid)),
     pace: d.ceo.pace === "ship" || d.ceo.pace === "right" ? d.ceo.pace : "balanced",
     deals: cleanAnswers(d.ceo.deals),
+    expandVote: cleanVotes(d.ceo.expandVote),
     shockAnswer: typeof d.ceo.shockAnswer === "string" && /^(statement|silence|blame_(cmo|cfo|cto|coo))$/.test(d.ceo.shockAnswer) ? d.ceo.shockAnswer : "",
   };
 

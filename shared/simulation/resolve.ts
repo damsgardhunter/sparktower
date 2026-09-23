@@ -46,7 +46,7 @@ import { rng } from "./random";
 import { automationCost, automationEffect, automationNext, shiftCapacity, sourcingOf, stockCost } from "./factory";
 import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./treasury";
 import {
-  DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers,
+  DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers, expansionOutcome,
   dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
   statementCost, winBack, type Cover, type Shock, type ShockAnswer,
 } from "./world";
@@ -774,12 +774,29 @@ export function resolveYear(
       }
       expanding = undefined;
     }
-    // This year's announcement, taken up by operations: it opens next year, at a discount, paid now.
+    /*
+     * This year's announcement, put up by operations and settled by the
+     * table: it opens next year, at a discount, paid now.
+     *
+     * Operations putting it up is its vote for. The other four vote, and a
+     * majority of what is actually cast carries it — so a table that says
+     * nothing lets operations have it, and a table that splits does not
+     * open the region. The note names the count either way, because the
+     * argument about who wanted this is the point of voting on it.
+     */
     const announced = announcedRegion({ niche, seasonId: world.seasonId, year: world.year, open: citiesNow });
     if (d.coo?.expand && announced && d.coo.expand === announced.id && !expanding) {
-      expanding = { cityId: announced.id, opensYear: world.year + 1 };
-      spent.cash += announced.entryCost * EXPANSION_DISCOUNT;
-      notesFor[company.id].push(`Committed to ${announced.name}, announced for next year, at ${Math.round(EXPANSION_DISCOUNT * 100)}% of the usual cost to open.`);
+      const votes: ("yes" | "no")[] = ["yes", ...(["ceo", "cmo", "cfo", "cto"] as const)
+        .map((r) => (d as any)[r]?.expandVote?.[announced.id] as "yes" | "no" | undefined)
+        .filter((v): v is "yes" | "no" => v === "yes" || v === "no")];
+      const vote = expansionOutcome(votes);
+      if (vote.carried) {
+        expanding = { cityId: announced.id, opensYear: world.year + 1 };
+        spent.cash += announced.entryCost * EXPANSION_DISCOUNT;
+        notesFor[company.id].push(`${announced.name} went to the table, ${vote.yes} for and ${vote.no} against: committed for next year, at ${Math.round(EXPANSION_DISCOUNT * 100)}% of the usual cost to open.`);
+      } else {
+        notesFor[company.id].push(`${announced.name} went to the table, ${vote.yes} for and ${vote.no} against: not opened. The announcement stands; somebody else may take it.`);
+      }
     }
     // A research report, and bringing back last year's leavers: both marketing's money.
     if (d.cmo?.research && d.cmo.research !== "none") spent.marketing += researchCost(niche);

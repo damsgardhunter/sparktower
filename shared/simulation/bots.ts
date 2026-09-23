@@ -371,6 +371,13 @@ export function botDecision(input: {
      * humans at the table should get the call.
      */
     if (field.id === "deals" || field.id === "dealVotes") { delete draft[field.id]; continue; }
+    /*
+     * A bot table never votes on the announced region, because a bot
+     * operations seat never puts one up: bot companies open regions through
+     * `targetCities` below, on their own purse. A vote on a proposal that
+     * cannot exist is noise in the filed decision.
+     */
+    if (field.id === "expandVote") { delete draft[field.id]; continue; }
     if (field.id === "shockAnswer") { draft[field.id] = "statement"; continue; }
     /*
      * An offer wins the people who watch the price, and costs margin on

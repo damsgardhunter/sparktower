@@ -94,7 +94,12 @@ export const UNLOCKS: Unlock[] = [
   { role: "ceo", field: "overrule", year: 4 },
   { role: "cfo", field: "costReview", year: 4 },
   { role: "cmo", field: "promo", year: 4 },
+  // Operations puts the announced region up; the other four vote on it.
   { role: "coo", field: "expand", year: 4 },
+  { role: "ceo", field: "expandVote", year: 4 },
+  { role: "cmo", field: "expandVote", year: 4 },
+  { role: "cfo", field: "expandVote", year: 4 },
+  { role: "cto", field: "expandVote", year: 4 },
   { role: "cmo", field: "winbackSpend", year: 4 },
   { role: "cmo", field: "research", year: 4 },
   { role: "cfo", field: "insurance", year: 4 },

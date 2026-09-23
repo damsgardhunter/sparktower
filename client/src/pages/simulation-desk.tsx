@@ -57,6 +57,7 @@ import {
 } from "lucide-react";
 
 import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
+import { ExpansionVote, type ExpansionVoteData } from "@/components/sim/expansion-vote";
 
 interface Desk {
   phase: "not_started" | "over" | "running" | "finished";
@@ -114,8 +115,12 @@ interface Desk {
   valuation: number;
   /** How fast this market's products move, which scales what research buys. */
   innovationPace: number;
+  /** The region operations may put to the table this year, and where the vote stands. */
+  expansion: ExpansionVoteData | null;
   table: {
     userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean;
+    /** For putting a face against a vote. */
+    avatarUrl?: string | null;
     /** The chair's standing with the room. Not tracked for the chief executive. */
     person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
   }[];
@@ -566,6 +571,12 @@ export default function SimulationDeskPage() {
         )}
         {/* Your own thing to win, and how last year's went. */}
         {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+        {/*
+          * The region on the table. Shown to every seat, not only the one
+          * whose lever it is, because it is the one decision here the five of
+          * them settle between them.
+          */}
+        {desk.expansion && <ExpansionVote data={desk.expansion} seats={desk.table} />}
         {/* 3. The decision. */}
         {desk.phase === "finished" ? (
           <Card><CardContent className="p-6 text-sm text-muted-foreground">
@@ -1538,6 +1549,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
                 : field.id === "overrule" ? "Nothing to overrule — every seat's own decision stands."
                   : field.id === "replaceSeat" ? "Nobody to replace — the table is as you want it."
                     : field.id === "deals" ? "No offers on the table this year."
+                      : field.id === "expand" ? "Nowhere new announced this year, or you are already committed to one."
+                        : field.id === "expandVote" ? "No region on the table — operations has to put one up."
                       : "Nothing to choose here this year."}
           </p>
         )}

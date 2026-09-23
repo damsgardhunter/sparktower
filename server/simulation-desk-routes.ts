@@ -43,7 +43,7 @@ import { STAFF_QUALITY_START, WARN_AT, overrulable, personOf } from "@shared/sim
 import { breachChance, featureCost, featureMenu, outageChance } from "@shared/simulation/product";
 import { AUTOMATION_RATE, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
 import {
-  EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, programmeCost, researchCost, statementCost,
+  EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, expansionOutcome, programmeCost, researchCost, statementCost,
   type ProgrammeId,
 } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
@@ -212,7 +212,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
 
     const seats = await db
-      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, lastName: users.lastName, isBot: users.isBot, displayName: userProfiles.displayName })
+      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, lastName: users.lastName, isBot: users.isBot, displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl })
       .from(simSeats)
       .leftJoin(users, eq(users.id, simSeats.userId))
       .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
@@ -378,17 +378,35 @@ export function registerSimulationDeskRoutes(app: Express): void {
             ],
           };
         }
-        // The region announced for next year, if the company has not committed to one already.
-        if (field.id === "expand") {
-          const announced = company.expanding ? null : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+        /*
+         * The region announced for next year, if the company has not
+         * committed to one already — put up by operations, voted on by the
+         * other four. The same region and the same price on both levers, so
+         * a seat voting is reading exactly what it is voting on.
+         */
+        if (field.id === "expand" || field.id === "expandVote") {
+          // No operations seat, no proposal, so nothing for anyone to vote on.
+          const announced = company.expanding || !company.seats.includes("coo")
+            ? null
+            : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+          const price = announced ? Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString() : "";
+          if (!announced) return { ...field, options: [] };
+          if (field.id === "expandVote") {
+            return {
+              ...field,
+              options: [{
+                value: announced.id,
+                label: `Open ${announced.name}`,
+                help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Operations has to put it up for your vote to count.`,
+              }],
+            };
+          }
           return {
             ...field,
-            options: announced
-              ? [
-                  { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
-                  { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString()} now, opening next year — and in its first year you reach only as far as the brand does.` },
-                ]
-              : [],
+            options: [
+              { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
+              { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Putting it up counts as your vote for it.` },
+            ],
           };
         }
         /*
@@ -661,6 +679,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         // spend a fortnight deciding things with.
         isBot: !!s.isBot,
         isYou: s.userId === req.user.id,
+        /** For showing a face against a vote, which is the point of voting at a table. */
+        avatarUrl: s.avatarUrl ?? null,
         /** How this chair stands with the room: loyalty, how good, how hard pushed. The chief executive's own is not tracked. */
         person: s.role && s.role !== "ceo" ? (() => {
           const p = personOf(company, s.role as Role);
@@ -669,6 +689,53 @@ export function registerSimulationDeskRoutes(app: Express): void {
       })),
       /** What the world is offering this year, in full, for every seat to read. */
       offers,
+      /*
+       * The region on the table, and where the vote stands right now.
+       *
+       * Counted here rather than on the screen so that what a seat is shown
+       * before the year runs and what the engine does when it runs are the
+       * same rule. The screen's job is to put a face next to each vote.
+       */
+      expansion: (() => {
+        /*
+         * Nothing at all if the operations seat is gone.
+         *
+         * Dissolving a seat stops that seat's decisions "this year or any year
+         * after" (see `dissolve_seat` in `shared/simulation/recovery.ts`), and
+         * putting the region up is operations'. Without this the other four
+         * would be shown a region and asked to vote on a proposal that can
+         * never be made — a card that says "operations has not put it up"
+         * about a seat that no longer exists.
+         */
+        const announced = company.expanding
+          || !company.seats.includes("coo")
+          || !isUnlocked("coo", "expand", year)
+          ? null
+          : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+        if (!announced) return null;
+        const proposed = decisions.coo?.expand === announced.id;
+        /*
+         * Nothing is counted until operations has put the region up, which is
+         * what the engine does: a vote filed against a proposal that does not
+         * exist is not a vote. Sending it anyway would draw a tally on the
+         * desk that the year would then ignore.
+         */
+        const votes: Record<string, "yes" | "no"> = {};
+        if (proposed) {
+          votes.coo = "yes";
+          for (const r of ["ceo", "cmo", "cfo", "cto"] as const) {
+            const v = (decisions as any)[r]?.expandVote?.[announced.id];
+            if (v === "yes" || v === "no") votes[r] = v;
+          }
+        }
+        return {
+          region: { id: announced.id, name: announced.name, note: announced.note },
+          cost: Math.round(announced.entryCost * EXPANSION_DISCOUNT),
+          proposed,
+          votes,
+          ...expansionOutcome(Object.values(votes)),
+        };
+      })(),
       /** A shock the chief executive has still to answer, if there is one. */
       shock: company.shock ?? null,
       /** What the table bought: a research report, if the marketing seat filed for one. */
