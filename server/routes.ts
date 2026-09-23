@@ -51,6 +51,7 @@ import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
 import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
 import { registerAnalyticsRoutes } from "./analytics-routes";
+import { registerAiSpendRoutes } from "./ai-spend-routes";
 import { captureAttribution } from "./attribution";
 import { registerNovaAssistRoutes } from "./nova-assist-routes";
 import { registerMcpRoutes } from "./mcp-routes";
@@ -387,6 +388,7 @@ export async function registerRoutes(
   app.use(captureWrites);
   registerAnalyticsIngest(app);
   registerAnalyticsRoutes(app);
+  registerAiSpendRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   // The app's way into web pages it doesn't have yet, signed in (server/web-handoff.ts).

@@ -58,6 +58,7 @@ import AdminReports from "@/pages/admin-reports";
 import AdminSafety from "@/pages/admin-safety";
 import AdminSecurity from "@/pages/admin-security";
 import AdminAnalytics from "@/pages/admin-analytics";
+import AdminAiSpend from "@/pages/admin-ai-spend";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
@@ -338,6 +339,7 @@ function Router() {
             <Route path="/admin/safety" component={AdminSafety} />
             <Route path="/admin/security" component={AdminSecurity} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
+            <Route path="/admin/ai-spend" component={AdminAiSpend} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />
