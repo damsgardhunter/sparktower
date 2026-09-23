@@ -303,7 +303,7 @@ function Router() {
             <Route path="/contests" component={Contests} />
             <Route path="/contests/:slug" component={ContestDetail} />
             <Route path="/sprints" component={Sprints} />
-            {/* The market simulation lives under sprints, which is now "Sprints & simulations". */}
+            {/* The market simulation lives under /sprints, the page now called "Simulations". */}
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />

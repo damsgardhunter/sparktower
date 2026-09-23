@@ -14,7 +14,7 @@ import { startupGames, startupGameVerdicts, users } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import {
-  activeGamesFor, gameState, isPlayer, leaveGame,
+  activeGamesFor, dailyGameStatus, gameState, isPlayer, leaveGame,
   messagesOf, pastGamesFor, postMessage, settleIfReady, startGameFor, submitRound, saveDraft,
 } from "./startup-game";
 import { valueGame } from "./startup-game-verdict";
@@ -26,7 +26,7 @@ import { MAX_CLAIMS, MAX_CORE_CLAIMS } from "@shared/sprints/product";
 import {
   DIMENSIONS, scoreBand,
 } from "@shared/sprints/scoring";
-import { ROUND_COPY, ROUND_SECONDS, TOTAL_SECONDS, dealOrder } from "@shared/sprints/game";
+import { GAMES_PER_DAY, ROUND_COPY, ROUND_SECONDS, TOTAL_SECONDS, dealOrder, playAgainIn } from "@shared/sprints/game";
 
 export function registerStartupGameRoutes(app: Express) {
   /**
@@ -211,6 +211,25 @@ export function registerStartupGameRoutes(app: Express) {
       return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: open[0].id });
     }
 
+    /*
+     * One a day. Checked here, and checked again inside `startGameFor`'s
+     * transaction under the same advisory lock that stops two taps making two
+     * games — this one is the sentence, that one is the guarantee.
+     *
+     * Refused with the exact time it opens rather than a bare "come back
+     * later", because a limit whose end nobody can see reads as the product
+     * being broken. See GAME_COOLDOWN_MS for why a rolling day and not
+     * midnight.
+     */
+    const daily = await dailyGameStatus(req.user.id);
+    if (daily.spent) {
+      return res.status(429).json({
+        code: "played_today",
+        message: `You've had today's game. The next one opens ${playAgainIn(daily.unlocksAt) ?? "shortly"} — one a day, so the number at the end is worth something.`,
+        unlocksAt: daily.unlocksAt,
+      });
+    }
+
     // Seeded on the player, so somebody replaying gets a different partner
     // rather than the same name every time.
     const bot = botsFor(`solo:${req.user.id}:${Date.now()}`, 1)[0];
@@ -219,15 +238,46 @@ export function registerStartupGameRoutes(app: Express) {
 
     const started = await startGameFor({ playerId: req.user.id, partnerId: botUserId, era });
     if (!started.ok) {
+      /*
+       * Two ways to lose the race, and they are different sentences: somebody
+       * already has a game open (go to it), or they used the day's allowance
+       * between the check above and this one (come back, at this time).
+       */
+      if ("spent" in started) {
+        return res.status(429).json({
+          code: "played_today",
+          message: `You've had today's game. The next one opens ${playAgainIn(started.unlocksAt) ?? "shortly"}.`,
+          unlocksAt: started.unlocksAt,
+        });
+      }
       return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: started.existingId });
     }
     res.status(201).json({ id: started.id });
   });
 
-  /** Whatever game you're in the middle of, if any. */
+  /**
+   * Whatever game you're in the middle of, and whether you may start another.
+   *
+   * The allowance rides along with the active game because the entry card
+   * needs both to decide what its one button says, and two requests to answer
+   * one question is two chances for the screen to show a "Play now" that the
+   * server is about to refuse.
+   */
   app.get("/api/games/active", isAuthenticated, async (req: any, res) => {
     const open = await activeGamesFor(req.user.id);
-    res.json({ games: open });
+    const daily = await dailyGameStatus(req.user.id);
+    res.json({
+      games: open,
+      daily: {
+        perDay: GAMES_PER_DAY,
+        startedToday: daily.startedToday,
+        /** False when a new game would be refused. A game in progress is not a refusal. */
+        canStart: !daily.spent,
+        unlocksAt: daily.unlocksAt,
+        /** "in about 9 hours", or null when one is available now. */
+        opensIn: playAgainIn(daily.unlocksAt),
+      },
+    });
   });
 
   /**

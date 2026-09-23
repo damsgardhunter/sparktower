@@ -44,7 +44,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="messages" options={{ title: "Messages" }} />
       {/* Sprints has the bar slot Notifications had: notifications are reached
           from the bell in the header, which is where the unread count lives. */}
-      <Tabs.Screen name="sprints" options={{ title: "Sprints & simulations" }} />
+      <Tabs.Screen name="sprints" options={{ title: "Simulations" }} />
       {/* More lives in this group so its URL stays `/more` — a group's name is
           not part of the path, so every existing link to /more lands on the tab
           rather than a pushed screen. It has no button of its own: the dome in

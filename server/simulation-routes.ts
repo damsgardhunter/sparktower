@@ -537,6 +537,8 @@ function pgErrorCode(err: unknown): string | undefined {
         nicheId: simSeasons.nicheId,
         role: simSeats.role,
         seasonStatus: simSeasons.status,
+        year: simSeasons.year,
+        totalYears: simSeasons.totalYears,
       })
       .from(simSeats)
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
@@ -564,6 +566,14 @@ function pgErrorCode(err: unknown): string | undefined {
          * that says whether there is still a game to go back to.
          */
         seasonStatus: r.seasonStatus,
+        /*
+         * How far through the fortnight this company is. A list of running
+         * companies with no year on it is a list of identical rows: "year 9 of
+         * 14" is the single thing that says which one is nearly over and which
+         * one you have only just started.
+         */
+        year: r.year,
+        totalYears: r.totalYears,
         secondsLeft: r.phaseEndsAt ? Math.max(0, secondsLeft(r.phaseEndsAt)) : null,
       })),
     });
@@ -621,6 +631,9 @@ function pgErrorCode(err: unknown): string | undefined {
       name: venture.name,
       product: venture.product,
       niche: season ? { id: season.nicheId, name: nicheById(season.nicheId)?.name } : null,
+      /** Which year the next tick resolves, and how many there are. Null before the season starts. */
+      year: season?.year ?? null,
+      totalYears: season?.totalYears ?? null,
       lobbySize: LOBBY_SIZE,
       openRoles: openRoles(seats),
       /** Who's here, what they hold, and whether they chose it. */
