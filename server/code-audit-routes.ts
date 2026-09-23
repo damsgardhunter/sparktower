@@ -30,7 +30,7 @@ import {
 } from "./code-ingest";
 import { buildCodeDigest, type CodeDigest } from "./code-digest";
 import { summarizeWebScreens } from "./audit-evidence";
-import { buildClaimIndex, verifyFindings } from "./audit-claims";
+import { buildClaimIndex, verifyFindings, correct, sanitizeRisks, sanitizeMissing, flagUnreadFiles } from "./audit-claims";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
@@ -101,7 +101,7 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
     { "item": "", "exists": "what is there", "missing": "what still isn't", "evidence": ["path"] }
   ],
   "missing": [
-    { "item": "something the plan calls for with no trace in the code", "matters": "one sentence on why it blocks progress" }
+    { "item": "something the plan calls for with no trace in the code", "matters": "one sentence on why it blocks progress", "searched": ["the exact files or lists you checked before concluding it isn't there — paths from the file tree, the route inventory, the test list"] }
   ],
   "undocumented": [
     { "item": "something substantial in the code that appears nowhere in the plan", "evidence": ["path"] }
@@ -139,7 +139,9 @@ export function auditSystemPrompt(ent: Parameters<typeof coachingDirectiveFor>[0
 
 Your job is reconciliation, not code review. The plan says what they intend; the code says what exists. Where those disagree, the code wins and you say so.
 
-Ground every claim in the digest. Cite file paths as evidence. If the digest doesn't show something, say it isn't there rather than assuming it is — and remember the digest is a partial view: it lists every file but only excerpts some, so absence of an excerpt is not absence of a file. Never invent a path.
+Ground every claim in the digest. Cite file paths as evidence. Never invent a path.
+
+The digest is a partial view, and the difference between "this isn't built" and "I wasn't shown it" is the difference between a useful audit and a week of somebody's work. The file tree excerpts a couple of dozen files and clips long directories ("…12 more"); a clipped directory is not an empty one. What IS complete: the route inventory, the test file list, the data models and the screen lists — count from those and say so. Anywhere else, if a judgement depends on something you were not shown, say what you would need to look at instead of reporting it missing, and put what you did check in "searched".
 
 Be specific and be honest. "No tests exist anywhere in the repository" is useful. "Consider adding tests" is not. If the project is further along than the board suggests, lead with that; if it's a scaffold with a README, say that plainly instead of being encouraging about it.
 
@@ -363,6 +365,10 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     digest.signals.routeCoverage,
     dataShape,
   );
+  /** One answer to "is this path in the repository", for every list that cites one. */
+  const realFiles = new Set(snapshot.files.map((f) => f.path));
+  const isRealFile = (path: string) => realFiles.has(path);
+
   const findings = {
     stackSummary: str(parsed.stackSummary, 400),
     capabilities,
@@ -373,19 +379,16 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       item: str(b?.item, 300), exists: str(b?.exists, 400),
       missing: str(b?.missing, 400), evidence: strList(b?.evidence, 8, 200),
     })).filter((b: any) => b.item),
-    missing: (Array.isArray(parsed.missing) ? parsed.missing : []).slice(0, 30).map((b: any) => ({
-      item: str(b?.item, 300), matters: str(b?.matters, 400),
-    })).filter((b: any) => b.item),
+    /*
+     * Two lists whose citations are held to the repository, in audit-claims.ts
+     * with the rest of the "prove it" rules: the missing list has to say where
+     * it looked, and a risk cannot cite a path that isn't there.
+     */
+    missing: sanitizeMissing(parsed.missing, isRealFile),
     undocumented: (Array.isArray(parsed.undocumented) ? parsed.undocumented : []).slice(0, 20).map((b: any) => ({
       item: str(b?.item, 300), evidence: strList(b?.evidence, 6, 200),
     })).filter((b: any) => b.item),
-    risks: (Array.isArray(parsed.risks) ? parsed.risks : []).slice(0, 20).map((r: any) => ({
-      area: str(r?.area, 80),
-      severity: SEVERITIES.includes(r?.severity) ? r.severity : "medium",
-      finding: str(r?.finding, 800),
-      evidence: strList(r?.evidence, 6, 200),
-      recommendation: str(r?.recommendation, 600),
-    })).filter((r: any) => r.finding),
+    risks: sanitizeRisks(parsed.risks, isRealFile),
     taskReconciliation: {
       looksDone: (Array.isArray(parsed.taskReconciliation?.looksDone) ? parsed.taskReconciliation.looksDone : [])
         .slice(0, 30).map((t: any) => ({ title: str(t?.title, 200), evidence: strList(t?.evidence, 6, 200) }))
@@ -463,14 +466,35 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
    * that was right there. The claim is kept and the fact is attached to it,
    * because the model may have meant something true and said it badly.
    */
-  const claims = verifyFindings(findings, buildClaimIndex(snapshot.files, digest.signals.routeCoverage.rows));
+  const claimIndex = buildClaimIndex(snapshot.files, digest.signals.routeCoverage.rows);
+  const claims = verifyFindings(findings, claimIndex);
+  /*
+   * The paragraph at the top of the page is the part everybody reads, and it
+   * was the one part this never touched: it sat in its own column rather than
+   * inside `findings`, so "there is no test suite" led the audit uncorrected
+   * while the same sentence three sections down carried the correction.
+   */
+  const checkedSummary = correct(str(parsed.summary, 2000), claimIndex);
+  claims.corrections.push(...checkedSummary.corrections);
   if (claims.corrected) {
     console.warn(`[audit] ${claims.corrected} claim(s) contradicted by the repository and annotated:`,
       claims.corrections.slice(0, 5).map((c) => `${c.claimed} → ${c.found}`));
   }
+  /*
+   * And the other half of the same problem: a claim about what a file *does*,
+   * made about a file this audit never opened. The close reads are exempt —
+   * they are handed whole files — so this is the first pass judging the tree.
+   */
+  const unread = flagUnreadFiles(findings, {
+    read: new Set([...digest.excerptedPaths, ...capabilities.flatMap((c) => c.evidence.map((e) => e.file))]),
+    inRepo: realFiles,
+  });
+  (findings.scan as any).claimsUnread = unread;
+  if (unread) console.warn(`[audit] ${unread} claim(s) judged a file the digest never excerpted`);
+
   // Counted where the builder can see it: an audit that had to correct itself
   // five times is telling you something about the audit.
-  (findings.scan as any).claimsContradicted = claims.corrected;
+  (findings.scan as any).claimsContradicted = claims.corrections.length;
 
   // The catch-up: the audit's edits, down to what's new and worth doing.
   const board = await storage.getProjectKanbanTasks(projectId).catch(() => []);
@@ -483,7 +507,8 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     declined,
   });
   (findings as any).catchUp = {
-    note: clipToSentence(str(parsed.catchUpNote, 2000), 900),
+    // Written after the check above ran, so it is checked here rather than shipped unread.
+    note: correct(clipToSentence(str(parsed.catchUpNote, 2000), 900), claimIndex).text,
     summary: summarizeCatchUp(tidied.operations),
     since: since?.toISOString() ?? null,
     files: fileChanges ? { added: fileChanges.added.length, modified: fileChanges.modified.length, removed: fileChanges.removed.length } : null,
@@ -505,7 +530,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     sourceKind,
     stage: str(parsed.stage, 40) || "prototype",
     completionPercent,
-    summary: str(parsed.summary, 2000),
+    summary: checkedSummary.text,
     signals: digest.signals as any,
     findings: findings as any,
     delta: delta as any,

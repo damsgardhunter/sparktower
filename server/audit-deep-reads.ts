@@ -152,9 +152,10 @@ export async function deepReadArea(
       messages: [
         { role: "system", content: `You are Nova, doing a close read of one area of a builder's codebase. ${coachingDirectiveFor(ent)}
 Area: ${area.label}. What counts: ${area.counts}.
-First-pass verdict: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.
+First-pass verdict: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.${entry.status === "missing" ? `
+The first pass read a digest — a file tree and excerpts of a few dozen files — so it could not tell "this area isn't built" apart from "I wasn't shown it". You have the files themselves. Answer "present" first: true if anything in this area is implemented here at all, even partly; false only if you looked at these files and this area genuinely isn't built. If it is present, say what exists, with paths.` : ""}
 Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES, MOBILE SCREENS and WEB SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file; every web route declared in the client router): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
-Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}` },
+Respond ONLY with JSON: {${entry.status === "missing" ? `"present":true|false,` : ""}"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}` },
         { role: "user", content: `QUESTION\n${AREA_QUESTIONS[entry.area]}\n\n${cov ? `${cov}\n\n` : ""}FILES\n${fileText}` },
       ],
     }, { timeout: opts.timeoutMs ?? 120_000 });
@@ -165,12 +166,52 @@ Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{
   }
 }
 
-/** Second reads for every built or partial area, in parallel, each independent. */
-export async function deepReadAll(ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null, dataShape: DataShape | null = null): Promise<CapabilityEntry[]> {
+/**
+ * Does the repository hold files this area would be built out of?
+ *
+ * The question a second read of a "missing" area is worth asking about. If
+ * nothing matches the area's own names, the first pass is probably right and a
+ * second model call would be spent confirming it; if `server/moderation.ts` is
+ * sitting there while the audit says moderation is missing, that verdict came
+ * from what the read was shown rather than from the code.
+ */
+export function hasCandidateFiles(area: CapabilityArea, files: RepoFile[]): boolean {
+  const must = AREA_MUST_READ[area], hint = AREA_FILE_HINTS[area];
+  return files.some((f) => !!f.content && ((must?.test(f.path) ?? false) || (!!hint && hint.test(f.path) && !isTest(f.path))));
+}
+
+/**
+ * Second reads, in parallel, each independent.
+ *
+ * Built and partial areas are read to put numbers and named gaps behind a
+ * verdict. Areas called **missing** are read for a different reason: to find
+ * out whether they are missing at all. That verdict is the one a builder acts
+ * on hardest — it says write this from scratch — and it was the one verdict
+ * nothing ever checked, because second reads ran only where the first pass had
+ * already found something. A close read that says otherwise moves the area to
+ * partial and says, in the note, which read to believe.
+ */
+export async function deepReadAll(
+  ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null,
+  dataShape: DataShape | null = null,
+  /** The one read, injectable so the rules around it can be tested without a model. */
+  opts: { readArea?: typeof deepReadArea } = {},
+): Promise<CapabilityEntry[]> {
+  const readArea = opts.readArea ?? deepReadArea;
   const results = await Promise.all(caps.map(async (c) => {
-    if (c.status !== "built" && c.status !== "partial") return c;
-    const detail = await deepReadArea(ent, c, files, coverage, { dataShape });
-    return detail ? { ...c, detail } : c;
+    const rereadMissing = c.status === "missing" && hasCandidateFiles(c.area, files);
+    if (c.status !== "built" && c.status !== "partial" && !rereadMissing) return c;
+    const detail = await readArea(ent, c, files, coverage, { dataShape });
+    if (!detail) return c;
+    if (c.status === "missing" && detail.present) {
+      return {
+        ...c,
+        status: "partial" as const,
+        detail,
+        note: `The first pass called this missing from a digest of excerpts; a close read of the area's own files found it. ${c.note ? `${c.note} ` : ""}What follows is the close read.`,
+      };
+    }
+    return { ...c, detail };
   }));
   return results;
 }
