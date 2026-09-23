@@ -147,6 +147,7 @@ describe("authentication on the write surface", () => {
    */
   const PUBLIC_WRITES: Record<string, string> = {
     "POST /api/auth/login": "signing in; limited per address",
+    "POST /api/client-errors": "a browser reporting its own render crash, including before anybody could sign in — which is the report most worth having; redacted, stored nowhere, ten per address per ten minutes",
     "POST /api/auth/register": "signing up; limited per address",
     "POST /api/auth/mobile/login": "signing in; limited per address",
     "POST /api/auth/mobile/register": "signing up; limited per address",

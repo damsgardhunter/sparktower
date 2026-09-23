@@ -59,6 +59,7 @@ import AdminReports from "@/pages/admin-reports";
 import AdminSafety from "@/pages/admin-safety";
 import AdminSecurity from "@/pages/admin-security";
 import AdminConsole from "@/pages/admin-console";
+import { ErrorBoundary } from "@/components/error-boundary";
 import AdminAnalytics from "@/pages/admin-analytics";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
@@ -254,6 +255,12 @@ function Router() {
         <TopUpReturn />
         {/* Room for the logo hanging below the bar, so it never covers the top of a page — inside each page's own background. */}
         <main className="flex-1 overflow-y-auto [&>*]:pt-6">
+          {/*
+            * Around the routed page, so a screen that throws loses that screen
+            * and not the product: the sidebar, the header and the navigation
+            * stay, and one click gets somewhere that works.
+            */}
+          <ErrorBoundary where="page">
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
@@ -349,6 +356,7 @@ function Router() {
             <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />
           </Switch>
+          </ErrorBoundary>
         </main>
       </div>
     </div>
@@ -369,7 +377,18 @@ function App() {
             {/* Anything priced asks before it spends. See payment-dialog. */}
             <PurchaseConfirmProvider>
               <div className="w-full min-h-screen bg-background text-foreground">
-                <Router />
+                {/*
+                  * The backstop. React unmounts the whole tree when a render
+                  * throws, so without this one bad value anywhere replaced the
+                  * entire product with a blank white page — no message, no
+                  * navigation, and no report. The inner boundary around the
+                  * routed page catches almost everything and keeps the sidebar
+                  * and the header alive; this one is for a throw in the shell
+                  * itself, where there is nothing left to navigate with.
+                  */}
+                <ErrorBoundary where="app">
+                  <Router />
+                </ErrorBoundary>
                 <Toaster />
               </div>
             </PurchaseConfirmProvider>

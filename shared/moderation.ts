@@ -236,6 +236,18 @@ export const RATE_LIMITS = {
     message: "You've sent a lot of applications this hour. Try again later.",
   },
   /**
+   * A browser telling us one of its screens threw.
+   *
+   * Low, because a report is a symptom and one broken screen in a render loop
+   * can produce them as fast as the machine can send. The first few are all
+   * anybody needs to find the bug; the next thousand are a denial of service
+   * with our own error handler as the weapon.
+   */
+  clientError: {
+    max: 10, windowMinutes: 10,
+    message: "That's a lot of error reports. The first ones were enough.",
+  },
+  /**
    * Drawing an image on demand: the merch preview and the print file.
    *
    * Both are reads, so the global write floor never sees them, and both are

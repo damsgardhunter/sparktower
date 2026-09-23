@@ -55,7 +55,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup", "reportAnon", "render"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup", "reportAnon", "render", "clientError"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -134,6 +134,7 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   apply: [hitSource("apply")],
   sprint: [hitSource("sprint")],
   render: [hitSource("render")],
+  clientError: [hitSource("clientError")],
   checkout: [hitSource("checkout")],
   external: [hitSource("external")],
 };
