@@ -140,13 +140,17 @@ describe("what reaches the log when a resize fails", () => {
     const { readFileSync } = await import("fs");
     const { join } = await import("path");
     const routes = readFileSync(join(__dirname, "..", "..", "server", "replit_integrations", "object_storage", "routes.ts"), "utf8");
-    const logs = [...routes.matchAll(/console\.(?:error|warn|log)\(`\[objects\][^`]*`/g)].map((m) => m[0]);
+    const logs = [...routes.matchAll(/console\.(?:error|warn|log)\(`\[objects\][^`]*`[^)]*\)/g)].map((m) => m[0]);
     expect(logs.length, "the derivative path logs are still there").toBeGreaterThan(0);
     for (const line of logs) {
-      const interpolations = [...line.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]);
-      for (const expr of interpolations) {
-        if (!/objectPath|req\./.test(expr)) continue;
-        expect(expr, `a request value goes through forLog: ${line}`).toContain("forLog(");
+      // Nothing off the request may sit inside the template: the first argument
+      // of console.error is a format string, and a value there has a say in how
+      // the rest of the line is read.
+      const template = /`[^`]*`/.exec(line)![0];
+      expect(template, `no request value in the format string: ${line}`).not.toMatch(/\$\{[^}]*(objectPath|req\.)/);
+      // And where one is passed as an argument, it is sanitised first.
+      if (/objectPath|req\./.test(line.slice(template.length))) {
+        expect(line, `a request value goes through forLog: ${line}`).toContain("forLog(");
       }
     }
   });

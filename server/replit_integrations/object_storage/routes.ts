@@ -64,7 +64,7 @@ async function serveDerivative(
      * front of somebody.
      */
     await objects.writeObjectAtPath(derivedPath, made.buffer, made.contentType).catch((err) => {
-      console.error(`[objects] couldn't keep the ${width}px copy of ${forLog(objectPath)}:`, (err as Error)?.message ?? err);
+      console.error(`[objects] couldn't keep the ${width}px copy of`, forLog(objectPath), (err as Error)?.message ?? err);
     });
     res.set({
       "Content-Type": made.contentType,
@@ -74,7 +74,7 @@ async function serveDerivative(
     res.end(made.buffer);
     return true;
   } catch (err) {
-    console.error(`[objects] couldn't build the ${width}px copy of ${forLog(objectPath)}:`, (err as Error)?.message ?? err);
+    console.error(`[objects] couldn't build the ${width}px copy of`, forLog(objectPath), (err as Error)?.message ?? err);
     return false;
   }
 }
@@ -90,6 +90,12 @@ const DERIVATIVE_TTL = 86_400;
  * clear" under a real error is the cheap version — and anything a log reader
  * treats as markup is the expensive one. Only the characters an object path is
  * made of survive, and only so many of them.
+ *
+ * It is also passed as an argument rather than built into the message. The
+ * first argument of `console.error` is a format string — `%s` and `%d` in it
+ * mean something — so a value interpolated there is a value with a say in how
+ * the rest of the line is read. The sanitiser above allows no `%`, and this
+ * way the question doesn't arise.
  */
 const forLog = (path: string): string => path.replace(/[^A-Za-z0-9/_.-]/g, "?").slice(0, 120);
 
