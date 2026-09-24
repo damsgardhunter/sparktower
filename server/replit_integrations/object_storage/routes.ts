@@ -64,7 +64,7 @@ async function serveDerivative(
      * front of somebody.
      */
     await objects.writeObjectAtPath(derivedPath, made.buffer, made.contentType).catch((err) => {
-      console.error(`[objects] couldn't keep the ${width}px copy of ${objectPath}:`, (err as Error)?.message ?? err);
+      console.error(`[objects] couldn't keep the ${width}px copy of ${forLog(objectPath)}:`, (err as Error)?.message ?? err);
     });
     res.set({
       "Content-Type": made.contentType,
@@ -74,13 +74,24 @@ async function serveDerivative(
     res.end(made.buffer);
     return true;
   } catch (err) {
-    console.error(`[objects] couldn't build the ${width}px copy of ${objectPath}:`, (err as Error)?.message ?? err);
+    console.error(`[objects] couldn't build the ${width}px copy of ${forLog(objectPath)}:`, (err as Error)?.message ?? err);
     return false;
   }
 }
 
 /** A day. A derivative is immutable — its path names the width it is — so this could be longer. */
 const DERIVATIVE_TTL = 86_400;
+
+/**
+ * An object path, safe to put in a log line.
+ *
+ * The path comes off the request, so it is whatever somebody typed. A newline
+ * in it writes a second log line of their choosing — a forged "[objects] all
+ * clear" under a real error is the cheap version — and anything a log reader
+ * treats as markup is the expensive one. Only the characters an object path is
+ * made of survive, and only so many of them.
+ */
+const forLog = (path: string): string => path.replace(/[^A-Za-z0-9/_.-]/g, "?").slice(0, 120);
 
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();

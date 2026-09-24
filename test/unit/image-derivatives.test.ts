@@ -128,3 +128,27 @@ describe("the copy itself", () => {
     expect(meta.width, "the long side is now the short one").toBeLessThan(meta.height!);
   }, 30_000);
 });
+
+describe("what reaches the log when a resize fails", () => {
+  it("keeps a request's own characters out of it", async () => {
+    /*
+     * The object path comes off the request. A newline in it writes a second
+     * log line of somebody else's choosing — a forged "all clear" under a real
+     * error being the cheap version — so only the characters an object path is
+     * made of survive into the line.
+     */
+    const { readFileSync } = await import("fs");
+    const { join } = await import("path");
+    const routes = readFileSync(join(__dirname, "..", "..", "server", "replit_integrations", "object_storage", "routes.ts"), "utf8");
+    const logs = [...routes.matchAll(/console\.(?:error|warn|log)\(`\[objects\][^`]*`/g)].map((m) => m[0]);
+    expect(logs.length, "the derivative path logs are still there").toBeGreaterThan(0);
+    for (const line of logs) {
+      const interpolations = [...line.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]);
+      for (const expr of interpolations) {
+        if (!/objectPath|req\./.test(expr)) continue;
+        expect(expr, `a request value goes through forLog: ${line}`).toContain("forLog(");
+      }
+    }
+  });
+});
+
