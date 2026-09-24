@@ -224,6 +224,76 @@ describe("opening a company", () => {
   }, 300_000);
 });
 
+/*
+ * Who is behind a rival, and behind your own table.
+ *
+ * A rival team used to be a name and a share. The point of a public lobby is
+ * that real people are playing it, and until the roster went on this route
+ * there was no way to find out who — let alone to follow one of them after the
+ * season. The user id is the part that matters: it is what lets a name on this
+ * screen reach that person's real profile.
+ */
+describe("who is at a table", () => {
+  it("names the people behind a rival, with ids that reach their profiles", async () => {
+    const app = await getTestApp();
+    const { ventureId, rivalVentureId, seat } = await readyRoom(app, { withRival: true });
+
+    const res = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/companies/${rivalVentureId}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(Array.isArray(res.body.roster)).toBe(true);
+    expect(res.body.roster.length).toBeGreaterThan(0);
+
+    for (const person of res.body.roster) {
+      expect(typeof person.userId, "a name with no id cannot be linked anywhere").toBe("string");
+      expect(person.userId.length).toBeGreaterThan(0);
+      expect(typeof person.name).toBe("string");
+      expect(person.name).not.toBe("");
+      // Nobody at a rival table is you.
+      expect(person.isYou).toBe(false);
+    }
+
+    /* The chief executive reads first, whoever joined first. */
+    const roles = res.body.roster.map((p: any) => p.role).filter(Boolean);
+    if (roles.includes("ceo")) expect(roles[0]).toBe("ceo");
+  }, 300_000);
+
+  it("marks you on your own roster", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await readyRoom(app);
+
+    const res = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/companies/${ventureId}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const you = res.body.roster.filter((p: any) => p.isYou);
+    expect(you, "exactly one person on your own roster is you").toHaveLength(1);
+    expect(you[0].role).toBe("cmo");
+  }, 300_000);
+
+  /* Nobody is behind an incumbent, and pretending otherwise would be a lie. */
+  it("gives an incumbent no roster at all", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await readyRoom(app);
+
+    const res = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/companies/${INCUMBENT}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.roster).toEqual([]);
+  }, 300_000);
+
+  /*
+   * The roster is names and seats. It must not become a second, quieter way
+   * to read a rival's private numbers.
+   */
+  it("still gives nothing of a rival's position away", async () => {
+    const app = await getTestApp();
+    const { ventureId, rivalVentureId, seat } = await readyRoom(app, { withRival: true });
+
+    const res = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/companies/${rivalVentureId}`);
+    const body = JSON.stringify(res.body.roster);
+    for (const secret of ["cash", "debt", "creditLimit", "pipeline"]) {
+      expect(body, `a rival's ${secret} is not yours to read`).not.toMatch(new RegExp(secret, "i"));
+    }
+  }, 300_000);
+});
+
 describe("somebody with no seat at the table", () => {
   it("is told the same nothing by all three routes", async () => {
     /*
