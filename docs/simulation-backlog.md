@@ -738,6 +738,49 @@ many customers as it had people.
 `cheap` went from 0.2–0.4% of a market to 5–19%: the whole strategy was being
 starved by the same bug.
 
+### An optimiser, and the four objectives that were wrong
+
+`shared/simulation/optimiser.ts`. Every bot until now decided one seat at a
+time — `botDecision` is called once per role, with that role's levers and no
+idea what the other four are doing — so five seats spent against the same cash
+and none of them knew. This one solves the whole company at once: one budget,
+one objective, every lever competing for the same pound, allocated a slice at
+a time to whichever returns most at the margin. Because every lever in the
+engine saturates, that produces the ramp a good operator has, with brand,
+product and service rising together.
+
+Getting the objective right took four tries, and each failure says something
+about the game:
+
+| objective | what it did |
+|---|---|
+| money | raised price ~1.5× a year, compounding to **290×** over fourteen; served 174k where the ordinary bot served 1.4m; £1.9bn, brand 30, **quality 4** |
+| this year's forecast | spent **nothing** on product — and was right to, since `projected` leaves this year's shipping out because it lands next year — finishing on quality 5 |
+| next year's forecast | spent to exactly the solvency constraint, every year ending on nothing: **52% survival** |
+| + a year's reserve | survived more, ended poor: 62% survival, **10%** of seasons richer |
+| + money in the score | 62% / 62% |
+
+The first is the most useful finding on its own: an unconstrained optimiser
+**proves** this engine still rewards gouging, and it found it in one pass.
+Price is now anchored to the segment's own reference rather than to last
+year's price, which makes the compounding inexpressible.
+
+**It does not beat the hand-written `survivor` tier** (62%/62% against
+86%/86%). That is not a misnomer — it is a real constrained search and it is
+optimal for the objective it is given — but one year of lookahead is a greedy
+horizon in a game that compounds over fourteen. A sequence of locally best
+years is not the best sequence.
+
+The next step is a longer horizon or a value on the pipeline, and both cost:
+every candidate already runs a full year of the engine, about a hundred
+candidates per decision.
+
+What it is worth now is what a benchmark is worth. It is deterministic, it
+coordinates all five seats, and `test/unit/optimiser.test.ts` holds the
+properties that make it one — same plan twice, spends only what the company
+could raise, prices against the market, keeps a year of costs back, and puts
+money into the product that a one-year objective never would.
+
 ### A loyal segment is not loyal, it is sealed
 
 Found underneath the fix, and it is the next thing.
