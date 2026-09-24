@@ -765,15 +765,45 @@ The first is the most useful finding on its own: an unconstrained optimiser
 Price is now anchored to the segment's own reference rather than to last
 year's price, which makes the compounding inexpressible.
 
-**It does not beat the hand-written `survivor` tier** (62%/62% against
-86%/86%). That is not a misnomer — it is a real constrained search and it is
-optimal for the objective it is given — but one year of lookahead is a greedy
-horizon in a game that compounds over fourteen. A sequence of locally best
-years is not the best sequence.
+### Breadth was the real gap, and horizon was hiding inside it
 
-The next step is a longer horizon or a value on the pipeline, and both cost:
-every candidate already runs a full year of the engine, about a hundred
-candidates per decision.
+Measuring what each tier actually *files* was more useful than measuring what
+it achieves:
+
+```
+Levers the game offers:  72
+optimal   touches  9  (13%)   →  16  (22%) after this work
+survivor  touches 40  (56%)
+Neither ever touched:    31
+```
+
+The optimiser was out-searching the survivor on a narrow slice and losing on
+the whole game. Among the 31 neither had ever touched: **the entire finance
+seat** — borrow, repay, raise, dividends, factoring, refinancing, buyback,
+cost review — and **every expansion lever**. No bot in this codebase had ever
+opened a second region, in any season, so companies spent fourteen years
+selling into a tenth of a market. One of five seats was unexercised by any
+simulation, which means every balance number in this document was produced by
+tables that never borrowed a pound or entered a second market.
+
+It now borrows and expands. Expansion is the interesting one: it takes a
+majority of the five seats, so it is the one decision an optimiser can express
+and five independent per-role bots structurally *cannot*.
+
+**Breadth and horizon turned out to be the same problem.** Adding the levers
+was not enough — the optimiser still refused to expand, and it was right to.
+A region committed this year opens *next* year, so at the moment the next-year
+forecast is taken it is an entry cost and nothing else; a one-year objective
+prices it at exactly its cost. It only started expanding once the objective
+credited a region that is about to open, at what it will reach when it gets
+there. The levers it was missing were precisely the long-payback ones, and no
+amount of widening the search reaches them without widening the horizon too.
+
+**It still does not beat the survivor**: 62% survival against 86%. But when it
+survives it now builds the bigger company — £214m against £127m in project
+management software, on 826,000 customers. It has become a high-conviction
+player, which wins larger and fails more often. Closing that means finding
+what kills the other 38%, not searching harder.
 
 What it is worth now is what a benchmark is worth. It is deterministic, it
 coordinates all five seats, and `test/unit/optimiser.test.ts` holds the

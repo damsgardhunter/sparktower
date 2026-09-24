@@ -44,23 +44,26 @@
  *
  * ## Where it stands, honestly
  *
- * Over a full fourteen-year season it does **not** beat the hand-written
- * `survivor` tier: 62% survival and 62% of seasons ending richer, against
- * 86% and 86%. It is not a misnomer — it is a genuine constrained search over
- * the whole company, and it is optimal for the objective it is given — but
- * one year of lookahead is a greedy horizon in a game whose returns compound
- * over fourteen. It takes the best available year, repeatedly, and a sequence
- * of locally best years is not the best sequence.
+ * It decides 16 of the game's 72 levers, against the hand-written
+ * `survivor` tier's 40. That is the real gap and it was not the one I
+ * expected: the search is better and the *model* is smaller. It plays a
+ * business as six spending taps, a price, a plant, a headcount, a loan and a
+ * second market — which is more than any bot before it, and a long way from
+ * a company.
  *
- * The honest next step is a longer horizon, or a value on the pipeline that
- * prices what is still in flight. Both cost more: every candidate plan here
- * already runs a full year of the engine, and there are of the order of a
- * hundred candidates per decision.
+ * Over fourteen years it survives 62% of seasons against the survivor's 86%,
+ * and when it survives it builds a bigger business: £214m against £127m in
+ * project management software, on 826,000 customers. It has become a
+ * high-conviction player — it borrows, it opens regions, it commits — which
+ * wins larger and fails more often. That is a fair shape for an aggressive
+ * growth strategy and a bad shape for a benchmark, and closing it means
+ * finding what kills the other 38%.
  *
- * What it is good for now is what a benchmark is for. It is deterministic, it
- * coordinates all five seats against one budget, and it will say what the best
- * plan *it can see* is worth in any market — so when a change to the engine
- * moves that number, the change did something.
+ * What is still missing, in the order it matters: the rest of the finance
+ * seat (raising, dividends, factoring, refinancing), price tiers, segment
+ * targeting, hiring and training, research, deals, and niches. Several of
+ * those have the same problem expansion had — they pay over years, and a
+ * one-year lookahead prices them at their cost.
  *
  * ## Why it ramps rather than jumps
  *
@@ -83,6 +86,7 @@ import { resolveYear } from "./resolve";
 import { isUnlocked } from "./responsibilities";
 import { atScale } from "./market";
 import { EXECUTIVE } from "./decisions";
+import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
 
 /** One lever the optimiser can put money into, and where it lives. */
 interface SpendLever {
@@ -129,6 +133,19 @@ export const OPTIMISER_COMMITS = 0.55;
  */
 export const OPTIMISER_RESERVE_YEARS = 1;
 
+/** How much of the remaining credit line to try drawing on, as shares of it. */
+const BORROW_TRIES = [0.25, 0.5];
+
+/**
+ * The multiple a year of contribution is valued at.
+ *
+ * Five, which is roughly what the engine's own `valueOf` pays for a year of
+ * sales and about what a steady business changes hands for. It is the whole
+ * of the optimiser's patience: at one, nothing with a payback longer than a
+ * year is ever worth buying.
+ */
+export const VALUE_YEARS = 5;
+
 /**
  * How many slices the budget is handed out in. More is finer and slower, and
  * every slice costs a full run of the year across every lever — so ten is a
@@ -153,13 +170,32 @@ function headroom(company: Company): number {
 }
 
 /** The plan as a decision the engine will accept. */
+/** The two structural choices, kept together because they are decided together. */
+interface Shape {
+  /** A region to open, if the table is putting one up this year. */
+  region: string | null;
+  /** What to draw down to pay for the plan. */
+  borrow: number;
+}
+
 function draftOf(
   company: Company,
   spend: Record<string, number>,
   price: number,
   capacityTarget: number,
   headcount: number,
+  shape: Shape,
 ): TeamDecisions {
+  /*
+   * Opening a region takes a majority of the seats, and this is the one
+   * decision in the game that an optimiser can express and five independent
+   * seats structurally cannot: operations puts it up and the others vote. No
+   * bot had ever opened a region, in any season, which is why a company was
+   * confined for fourteen years to the one region it started in — a tenth of
+   * a market at best, and most of why market shares read as low single
+   * digits.
+   */
+  const vote = shape.region ? { expandVote: { [shape.region]: "yes" as const } } : {};
   return {
     companyId: company.id,
     cmo: {
@@ -168,6 +204,7 @@ function draftOf(
       performanceSpend: spend.performanceSpend ?? 0,
       celebritySpend: 0,
       targetCities: company.cities,
+      ...vote,
     },
     cto: {
       featureSpend: spend.featureSpend ?? 0,
@@ -179,17 +216,26 @@ function draftOf(
        * the forecast cannot see, so the optimiser would never choose it.
        */
       techDebtPaydown: Math.round((spend.featureSpend ?? 0) * 0.4),
+      ...vote,
     },
     coo: {
       capacityTarget,
       supportSpend: spend.supportSpend ?? 0,
       efficiencySpend: spend.efficiencySpend ?? 0,
       headcount,
+      ...(shape.region ? { expand: shape.region } : {}),
     },
-    cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
+    /*
+     * And it borrows to pay for growth, which no bot has ever done either.
+     * A business that will only spend what is already in the bank is not
+     * being careful, it is refusing to use half of what the finance seat is
+     * for — and the engine bounds the draw at what the bank would actually
+     * lend (see `drawdown`), so this cannot run away.
+     */
+    cfo: { borrow: Math.max(0, Math.round(shape.borrow)), repay: 0, cashBuffer: 0, ...vote },
     // Growth, and an answer ready for whatever went wrong: silence recovers
     // far less of what a shock costs, and the forecast cannot see that either.
-    ceo: { focus: "growth", shockAnswer: "statement" },
+    ceo: { focus: "growth", shockAnswer: "statement", ...vote },
   };
 }
 
@@ -246,16 +292,31 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   /** What this segment thinks the ordinary thing costs: the anchor for every price tried. */
   const reference = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0]?.referencePrice ?? company.price;
 
-  const measure = (trial: Record<string, number>, price: number): { score: number; serves: number; room: number } => {
+  const measure = (trial: Record<string, number>, price: number, shape: Shape): { score: number; serves: number; room: number } => {
     /*
      * Room is chased to this year's forecast rather than chosen
      * independently. What is built this year opens next, so this is the plant
      * the plan is asking for.
      */
-    const probe = forecastDemand({ world, companyId, year, economy, draft: draftOf(company, trial, price, company.capacity, headcount) });
+    const probe = forecastDemand({ world, companyId, year, economy, draft: draftOf(company, trial, price, company.capacity, headcount, shape) });
     if (!probe) return { score: -Infinity, serves: 0, room: company.capacity };
-    const room = Math.max(company.capacity, Math.round(probe.likely * 1.08));
-    const draft = draftOf(company, trial, price, room, headcount);
+    /*
+     * The plant is sized against the band, not the middle of it.
+     *
+     * This is where the forecast's uncertainty actually belongs. Room built
+     * for the likely case and paid for whether or not it fills is a bet on
+     * the mean; sizing nearer the low end costs a few turned-away customers
+     * in a good year and nothing in a bad one, which is the trade a real
+     * operation makes.
+     *
+     * Requiring the *spend* to be covered by the low case was tried instead
+     * and is far too strict — it forbids investing ahead of revenue at all,
+     * and the optimiser funded brand alone, £440,000 of a £4.4m budget,
+     * because every further slice failed the constraint. Solvency is guarded
+     * after the year is played, where it can be checked rather than guessed.
+     */
+    const room = Math.max(company.capacity, Math.round(probe.likely * 1.2));
+    const draft = draftOf(company, trial, price, room, headcount, shape);
 
     /*
      * Play the year, then ask what the company it has become could sell the
@@ -274,7 +335,18 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * has no year after to forecast, and one that ends it on nothing is one
      * bad year from the same thing.
      */
-    const reserve = fixedPerYear * OPTIMISER_RESERVE_YEARS * per;
+    /*
+     * The reserve scales with the plan, not just with the payroll.
+     *
+     * A flat year of running costs is the right buffer for a company
+     * spending nothing and far too small for one committing millions a year
+     * and servicing a loan — which is what this optimiser does once it is
+     * allowed to borrow. Half of what the plan itself commits, or a year of
+     * costs, whichever is larger: a company should be able to absorb a bad
+     * year without the bad year being the end of it.
+     */
+    const committed = Object.values(trial).reduce((sum, n) => sum + n, 0);
+    const reserve = Math.max(fixedPerYear * OPTIMISER_RESERVE_YEARS, committed * 0.5) * per;
     if (!me || me.bankruptSince || me.cash < reserve) return { score: -Infinity, serves: 0, room };
 
     const ahead = forecastDemand({ world: after, companyId, year: year + 1, economy });
@@ -295,56 +367,137 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * by charging more: the price is anchored to the market's own reference
      * (see `PRICE_TRIES`) and cannot run away.
      */
+    /*
+     * Valued as a business rather than as a year.
+     *
+     * A year of contribution was not enough to buy anything with a long
+     * payback, and the measurement was unambiguous: with the objective one
+     * year out, the optimiser never once opened a region or drew on its
+     * credit line in ten seasons. It was right not to — a region opens the
+     * *following* year and reaches only as far as the brand does when it
+     * gets there, so within one year of lookahead it is an entry cost and
+     * nothing else. The same argument sank borrowing, which is interest now
+     * against growth later.
+     *
+     * So the score is what the company is worth: the money in the bank plus
+     * the position it will hold, taken at a multiple. That is what a buyer
+     * would pay and it is the shortest way to make an optimiser value a
+     * pipeline, a plant and a second market without running five more years
+     * of the engine for every one of a hundred candidates.
+     */
     const margin = Math.max(0, price - me.unitCost);
-    return { score: me.cash + serves * margin * per, serves, room };
+    /*
+     * And a region that is about to open counts for something.
+     *
+     * This is the one thing the lookahead cannot see for itself. A region
+     * committed this year opens *next* year, so at the moment the forecast
+     * for next year is taken it is not in `cities` yet — the entry cost has
+     * been paid and none of the market has arrived. A horizon of one year
+     * therefore values expansion at exactly its cost and never buys it, which
+     * is why no bot in this codebase has ever opened a second region and why
+     * companies spend fourteen years confined to a tenth of a market.
+     *
+     * Credited at what it will be able to reach when it gets there — as far
+     * as the brand carries, which is the engine's own rule (`firstYearReach`)
+     * — rather than at the whole region, because the first year in a new
+     * place is mostly introductions.
+     */
+    const opening = me.expanding ? niche.cities.find((c) => c.id === me.expanding!.cityId) : undefined;
+    const here = company.cities.reduce((sum, id) => sum + (niche.cities.find((c) => c.id === id)?.weight ?? 0), 0);
+    const pending = opening && here > 0
+      ? (opening.weight / here) * firstYearReach(me.brand)
+      : 0;
+    const position = serves * margin * per * VALUE_YEARS;
+    return { score: me.cash + position * (1 + pending), serves, room };
   };
 
+  let shape: Shape = { region: null, borrow: 0 };
   let price = Math.max(1, company.price);
-  let best = measure(spend, price);
+  let best = measure(spend, price, shape);
 
-  // The plant and the price first, against the company as it stands.
-  for (const multiple of PRICE_TRIES) {
-    const tryPrice = Math.max(1, Math.round(reference * multiple));
-    const got = measure(spend, tryPrice);
-    if (got.score > best.score) { best = got; price = tryPrice; }
-  }
+  /** One pass of the budget, a slice at a time, for a given shape. */
+  const ascend = (from: Record<string, number>, startPrice: number, withShape: Shape) => {
+    const trialSpend = { ...from };
+    let trialPrice = startPrice;
+    let at = measure(trialSpend, trialPrice, withShape);
 
-  /*
-   * Then the budget, a slice at a time, to whichever lever returns most for
-   * it. Because every lever saturates, the answer is a plan that raises all
-   * of them together rather than one that empties the bank into marketing.
-   */
-  let committed = 0;
-  for (let i = 0; i < OPTIMISER_STEPS && committed + step <= affordable; i++) {
-    let bestField: string | null = null;
-    let bestScore = best.score;
-    let bestAt = best;
-    for (const lever of levers) {
-      const trial = { ...spend, [lever.field]: (spend[lever.field] ?? 0) + step };
-      const got = measure(trial, price);
-      if (got.score > bestScore) { bestScore = got.score; bestField = lever.field; bestAt = got; }
+    // The price first, against the company as it stands.
+    for (const multiple of PRICE_TRIES) {
+      const tryPrice = Math.max(1, Math.round(reference * multiple));
+      const got = measure(trialSpend, tryPrice, withShape);
+      if (got.score > at.score) { at = got; trialPrice = tryPrice; }
     }
-    if (!bestField) break; // Nothing left that pays for itself.
-    spend[bestField] = (spend[bestField] ?? 0) + step;
-    committed += step;
-    best = bestAt;
 
-    // Re-price every few slices: what the company is worth charging changes
-    // as the plan makes it better.
-    if (i % 4 === 3) {
-      for (const multiple of PRICE_TRIES) {
-        const tryPrice = Math.max(1, Math.round(reference * multiple));
-        const got = measure(spend, tryPrice);
-        if (got.score > best.score) { best = got; price = tryPrice; }
+    /*
+     * Then the budget, a slice at a time, to whichever lever returns most for
+     * it. Because every lever saturates, the answer is a plan that raises all
+     * of them together rather than one that empties the bank into marketing.
+     */
+    const room = affordable + Math.max(0, withShape.borrow);
+    let spent = 0;
+    for (let i = 0; i < OPTIMISER_STEPS && spent + step <= room; i++) {
+      let bestField: string | null = null;
+      let bestAt = at;
+      for (const lever of levers) {
+        const trial = { ...trialSpend, [lever.field]: (trialSpend[lever.field] ?? 0) + step };
+        const got = measure(trial, trialPrice, withShape);
+        if (got.score > bestAt.score) { bestField = lever.field; bestAt = got; }
+      }
+      if (!bestField) break; // Nothing left that pays for itself.
+      trialSpend[bestField] = (trialSpend[bestField] ?? 0) + step;
+      spent += step;
+      at = bestAt;
+
+      // Re-price every few slices: what the company is worth charging changes
+      // as the plan makes it better.
+      if (i % 4 === 3) {
+        for (const multiple of PRICE_TRIES) {
+          const tryPrice = Math.max(1, Math.round(reference * multiple));
+          const got = measure(trialSpend, tryPrice, withShape);
+          if (got.score > at.score) { at = got; trialPrice = tryPrice; }
+        }
       }
     }
+    return { spend: trialSpend, price: trialPrice, at };
+  };
+
+  let run = ascend(spend, price, shape);
+
+  /*
+   * Then the two structural choices, against the plan rather than in the
+   * abstract — a region is only worth opening if there is a business to open
+   * it with, and borrowing is only worth doing if there is something to spend
+   * it on.
+   *
+   * Tried after the ascent rather than inside it because each is a full pass
+   * of the budget, and the lookahead already runs a year of the engine for
+   * every candidate. Greedy, and affordable.
+   */
+  const announced = announcedRegion({ niche, seasonId: world.seasonId, year, open: company.cities });
+  if (announced && company.cash > announced.entryCost * EXPANSION_DISCOUNT * 1.5) {
+    const withRegion: Shape = { ...shape, region: announced.id };
+    const alternative = ascend(spend, run.price, withRegion);
+    if (alternative.at.score > run.at.score) { shape = withRegion; run = alternative; }
   }
+
+  for (const draw of BORROW_TRIES) {
+    const amount = Math.round(Math.max(0, (company.creditLimit ?? 0) - (company.debt ?? 0)) * draw);
+    if (amount <= 0) continue;
+    const withDebt: Shape = { ...shape, borrow: amount };
+    const alternative = ascend(run.spend, run.price, withDebt);
+    if (alternative.at.score > run.at.score) { shape = withDebt; run = alternative; }
+  }
+
+  const spendFinal = run.spend;
+  price = run.price;
+  best = run.at;
+  for (const key of Object.keys(spend)) spend[key] = spendFinal[key] ?? 0;
 
   const rounded: Record<string, number> = {};
   for (const [field, amount] of Object.entries(spend)) rounded[field] = Math.round(amount / 1000) * 1000;
 
   return {
-    decisions: draftOf(company, rounded, price, best.room, headcount),
+    decisions: draftOf(company, rounded, price, best.room, headcount, shape),
     score: best.score,
     serves: best.serves,
     spends: Object.values(rounded).reduce((sum, n) => sum + n, 0),

@@ -38,13 +38,41 @@ describe("the optimiser", () => {
     expect(JSON.stringify(a.decisions)).toBe(JSON.stringify(b.decisions));
   });
 
-  it("commits only what the company could actually lay hands on", () => {
+  it("commits only what the company could actually lay hands on, loan included", () => {
+    /*
+     * The bound is a share of cash and credit, *plus* whatever it decided to
+     * draw down — because borrowing to fund a plan is one of the things it
+     * is allowed to do, and the engine bounds the draw itself (`drawdown`).
+     */
     const world = worldFor();
     const me = world.companies.find((c) => c.id === "us")!;
     const couldRaise = Math.max(0, me.cash) + Math.max(0, (me.creditLimit ?? 0) - (me.debt ?? 0));
     const plan = planFor(world)!;
-    expect(plan.spends).toBeLessThanOrEqual(couldRaise * OPTIMISER_COMMITS + 1);
+    const drawn = plan.decisions.cfo?.borrow ?? 0;
+    expect(plan.spends).toBeLessThanOrEqual(couldRaise * OPTIMISER_COMMITS + drawn + 1);
   });
+
+  it("opens a second region, which no seat deciding on its own ever could", () => {
+    /*
+     * Expansion takes a majority of the five seats, so it is the one decision
+     * an optimiser can express and independent per-role bots structurally
+     * cannot. Before this, no bot in the codebase had ever opened one, and a
+     * company spent fourteen years selling into a tenth of its market.
+     *
+     * It also needs the objective to see a year further than the forecast
+     * does: a region committed now opens *next* year, so at the moment the
+     * next-year forecast is taken it is an entry cost and nothing else.
+     */
+    let world = worldFor("expand");
+    let opened = false;
+    for (let year = 1; year <= 5 && !opened; year++) {
+      const plan = optimise({ world, companyId: "us", year, economy: economyFor("expand", year, 1) });
+      if (!plan) break;
+      if (plan.decisions.coo?.expand) opened = true;
+      world = resolveYear({ ...world, year }, [plan.decisions as never]).world;
+    }
+    expect(opened).toBe(true);
+  }, 60_000);
 
   it("prices against the market, not against what it charged last year", () => {
     /*
