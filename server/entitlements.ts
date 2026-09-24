@@ -2,14 +2,14 @@ import type { Response } from "express";
 import { storage } from "./storage";
 import {
   getEntitlements, normalizeTier, MEMORY_MESSAGE_LIMIT, TASK_GEN_LIMIT,
-  OUTCOME_PRICE_CENTS, DAY_PASS_HOURS, TOP_UP_CENTS, topUpFor, formatMoney,
+  OUTCOME_PRICE_CENTS, ACTIONS_PER_PACK, TOP_UP_CENTS, topUpFor, formatMoney,
   PAY_ENDPOINTS, type PaymentRequiredBody, type Wallet,
   type BooleanFeature, type Entitlements, type TierId, type PricedOutcomeId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
-import { holdCredits, holdMoney, holdCovered } from "./credit-reservations";
-import { spend, walletOf, dayPassActive, hasBuildPass } from "./wallet";
+import { holdCredits, holdMoney, holdCovered, holdAction } from "./credit-reservations";
+import { spend, walletOf, dayPassActive, hasBuildPass, spendBoughtAction } from "./wallet";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -99,7 +99,7 @@ export function paymentRequired(opts: {
    * balance already covers was refused for a reason money won't fix, so there
    * is nothing to offer.
    */
-  const buyable = outcome === "dayPass" || outcome === "imagePass";
+  const buyable = outcome === "actionPack" || outcome === "imagePass";
   const remedy: PaymentRequiredBody["remedy"] =
     cents == null ? "none" : shortfall > 0 ? "top_up" : buyable ? "buy_pass" : "none";
   return {
@@ -206,30 +206,41 @@ export async function requireCredits(
     holdCredits(res, userId, 1);
     return ent;
   }
+  /*
+   * A pass somebody already bought, honoured to the hour it was sold for.
+   *
+   * Nothing sells one any more. Checked before the bought actions on purpose:
+   * while a pass is running it covers everything, so it would be daylight
+   * robbery to quietly spend a pack the same person had also paid for.
+   */
   if (await dayPassActive(userId)) {
-    /*
-     * Free under the pass. A hold worth nothing is left so that the route's
-     * own deductCredits settles against it rather than falling back to taking
-     * an action off the allowance — "unlimited for 24 hours" has to mean the
-     * allowance stops moving. The fair-use ceiling still applies through the
-     * AI burst limit above, which is what keeps "unlimited" honest.
-     */
     holdCovered(res, userId);
+    return ent;
+  }
+  /*
+   * And then the actions they bought, one at a time.
+   *
+   * Taken here rather than at settle-time so two requests arriving together
+   * cannot both spend the last one; `holdAction` is what hands it back if the
+   * work never happens.
+   */
+  if (await spendBoughtAction(userId)) {
+    holdAction(res, userId);
     return ent;
   }
 
   const wallet = await walletOf(userId);
-  const pass = OUTCOME_PRICE_CENTS.dayPass;
-  const affordable = wallet.balanceCents >= pass;
+  const pack = OUTCOME_PRICE_CENTS.actionPack;
+  const affordable = wallet.balanceCents >= pack;
   res.status(402).json(paymentRequired({
     message: affordable
       ? `You've used all ${wallet.allowanceLimit} free Nova actions this month. ` +
-        `A ${formatMoney(pass)} day pass gives you unlimited small actions for the next ${DAY_PASS_HOURS} hours, ` +
+        `${formatMoney(pack)} buys ${ACTIONS_PER_PACK} more — they don't expire — ` +
         `and you have ${wallet.balanceDisplay} on your account.`
       : `You've used all ${wallet.allowanceLimit} free Nova actions this month. ` +
-        `A ${formatMoney(pass)} day pass gives you unlimited small actions for the next ${DAY_PASS_HOURS} hours. ` +
+        `${formatMoney(pack)} buys ${ACTIONS_PER_PACK} more, whenever you want them. ` +
         `Your allowance resets at the start of next month — ${label} is free again then.`,
-    label, outcome: "dayPass", cents: pass, wallet,
+    label, outcome: "actionPack", cents: pack, wallet,
   }));
   return null;
 }

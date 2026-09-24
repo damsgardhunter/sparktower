@@ -47,7 +47,9 @@ function WalletSummary() {
       <p className="text-xs text-muted-foreground" data-testid="text-sidebar-allowance">
         {wallet.dayPassActive
           ? "Day pass on — small actions unlimited"
-          : `${wallet.allowanceRemaining} of ${wallet.allowanceLimit} free Nova actions left`}
+          : wallet.actionsBought > 0
+            ? `${wallet.allowanceRemaining} free + ${wallet.actionsBought} bought Nova actions left`
+            : `${wallet.allowanceRemaining} of ${wallet.allowanceLimit} free Nova actions left`}
       </p>
       <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-pricing">
         {wallet.balanceCents > 0 ? "Add to your balance" : `Top up from ${formatMoney(500)}`}

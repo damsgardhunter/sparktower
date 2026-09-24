@@ -111,7 +111,12 @@ function AllowanceLine({ wallet }: { wallet: Wallet }) {
   }
   return (
     <p className="text-sm text-muted-foreground">
-      {wallet.allowanceRemaining} of {wallet.allowanceLimit} free Nova actions left this month.
+      {wallet.allowanceRemaining} of {wallet.allowanceLimit} free Nova actions left this month
+      {/* The bought ones are said separately: they are a different promise —
+          the free ones come back next month and reset to 25, these stay until
+          they are used. Rolling them into one figure would make "25 left" mean
+          two different things on two different days. */}
+      {wallet.actionsBought > 0 && `, and ${wallet.actionsBought} you've bought`}.
     </p>
   );
 }
@@ -157,13 +162,13 @@ export function PaymentDialog() {
   });
 
   /*
-   * Buys whichever pass the refusal named. Two prices, two endpoints, one
-   * button — to the person it is the same press, and the 402 already said
-   * which one it is.
+   * Buys whatever the refusal named — a pack of Nova actions, or a day of
+   * images. Two prices, two endpoints, one button: to the person it is the
+   * same press, and the 402 already said which one it is.
    */
-  const dayPass = useMutation({
+  const buyMore = useMutation({
     mutationFn: async () => {
-      const endpoint = detail?.body.outcome === "imagePass" ? PAY_ENDPOINTS.imagePass : PAY_ENDPOINTS.dayPass;
+      const endpoint = detail?.body.outcome === "imagePass" ? PAY_ENDPOINTS.imagePass : PAY_ENDPOINTS.actionPack;
       return (await apiRequest("POST", endpoint)).json() as Promise<{ wallet: Wallet }>;
     },
     onSuccess: async () => {
@@ -178,7 +183,7 @@ export function PaymentDialog() {
       });
       close();
     },
-    onError: (e) => toast({ title: "Couldn't buy the day pass", description: errorText(e), variant: "destructive" }),
+    onError: (e) => toast({ title: "Couldn't add those", description: errorText(e), variant: "destructive" }),
   });
 
   const topUp = useMutation({
@@ -201,7 +206,7 @@ export function PaymentDialog() {
     return () => window.removeEventListener(TOPUP_RETURN_EVENT, on);
   }, []);
 
-  const busy = dayPass.isPending || topUp.isPending || replay.isPending;
+  const busy = buyMore.isPending || topUp.isPending || replay.isPending;
 
   if (returned) {
     /*
@@ -281,8 +286,20 @@ export function PaymentDialog() {
           <Button variant="ghost" onClick={close} disabled={busy} data-testid="button-payment-cancel">Not now</Button>
 
           {body.remedy === "buy_pass" && (
-            <Button onClick={() => dayPass.mutate()} disabled={busy} data-testid="button-buy-day-pass">
-              {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</> : `Get ${body.label.toLowerCase()} — ${body.price?.display ?? formatMoney(100)}`}
+            <Button onClick={() => buyMore.mutate()} disabled={busy} data-testid="button-buy-day-pass">
+              {/*
+                * The outcome's name, not the label.
+                *
+                * `label` is the thing that was refused — "Nova coaching", "a
+                * persona" — and putting it on the button made it read "Get
+                * nova coaching — $5" when what the five dollars actually buys
+                * is twenty-five Nova actions, of which coaching is one. The
+                * price comes off the 402 rather than a literal, because it has
+                * moved once already.
+                */}
+              {busy
+                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</>
+                : `Get ${(body.outcome ? OUTCOME_COPY[body.outcome].name : body.label).toLowerCase()} — ${body.price?.display ?? ""}`.trim()}
             </Button>
           )}
 

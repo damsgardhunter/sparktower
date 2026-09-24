@@ -428,6 +428,13 @@
       "when": 1790100221639,
       "tag": "0059_company_verification_and_prizes",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790214779371,
+      "tag": "0060_nova_action_packs",
+      "breakpoints": true
     }
   ]
 }

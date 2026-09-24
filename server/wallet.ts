@@ -28,21 +28,25 @@
  * cents` — so the database decides, once, and the loser is told no. A model
  * call that got through on a balance that wasn't there is money we never had.
  */
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import { db } from "./db";
 import { users, novaLedger, novaBuildPasses } from "@shared/schema";
 import {
-  DAY_PASS_HOURS, MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS,
+  ACTIONS_PER_PACK, MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS,
   formatMoney, type PricedOutcomeId,
   type Wallet,
 } from "@shared/plans";
 
 /** Everything a dialog needs to say where somebody stands, in one object. */
 
-export function walletFrom(row: { balanceCents: number; creditsUsed: number; dayPassUntil: Date | null; imagePassUntil?: Date | null }): Wallet {
+export function walletFrom(row: {
+  balanceCents: number; creditsUsed: number; dayPassUntil: Date | null;
+  imagePassUntil?: Date | null; novaActionsBought?: number;
+}): Wallet {
   const used = Math.max(0, row.creditsUsed ?? 0);
   const active = !!row.dayPassUntil && row.dayPassUntil.getTime() > Date.now();
   return {
+    actionsBought: Math.max(0, row.novaActionsBought ?? 0),
     balanceCents: row.balanceCents ?? 0,
     balanceDisplay: formatMoney(row.balanceCents ?? 0),
     allowanceUsed: used,
@@ -64,7 +68,7 @@ export async function walletOf(userId: string): Promise<Wallet> {
   await storage.resetCreditsIfNeeded(userId);
   const [row] = await db.select({
     balanceCents: users.balanceCents, creditsUsed: users.creditsUsed, dayPassUntil: users.dayPassUntil,
-    imagePassUntil: users.imagePassUntil,
+    imagePassUntil: users.imagePassUntil, novaActionsBought: users.novaActionsBought,
   }).from(users).where(eq(users.id, userId));
   if (!row) return walletFrom({ balanceCents: 0, creditsUsed: 0, dayPassUntil: null });
   return walletFrom(row);
@@ -179,23 +183,52 @@ export async function creditTopUp(
 }
 
 /**
- * Buys a day pass out of the balance and extends the window.
+ * Buys a pack of small Nova actions out of the balance.
  *
- * Extends rather than replaces: somebody who buys a second pass with four
- * hours left on the first has bought 24 more hours, not lost four. Returns
- * null when the balance couldn't cover it.
+ * They add up rather than replacing each other: somebody who buys a second
+ * pack with nine actions left on the first has thirty-four, not twenty-five.
+ * Returns null when the balance couldn't cover it.
+ *
+ * This replaced a day pass — a dollar for twenty-four hours of unlimited small
+ * actions. The trouble with renting a window is that what it really costs
+ * depends on how fast somebody types, and the thing being rented is a model
+ * call, which costs real money every time. A pack is the same promise as the
+ * balance itself: a fixed number of things for a fixed price, spent when you
+ * spend them, expiring never.
  */
-export async function buyDayPass(userId: string): Promise<{ until: Date; wallet: Wallet } | null> {
-  const cents = OUTCOME_PRICE_CENTS.dayPass;
-  const taken = await spend(userId, cents, { outcome: "dayPass", note: "Day pass — unlimited small Nova actions" });
+export async function buyActionPack(userId: string): Promise<{ actions: number; wallet: Wallet } | null> {
+  const cents = OUTCOME_PRICE_CENTS.actionPack;
+  const taken = await spend(userId, cents, {
+    outcome: "actionPack",
+    note: `${ACTIONS_PER_PACK} more small Nova actions`,
+  });
   if (!taken) return null;
-  const ms = DAY_PASS_HOURS * 60 * 60 * 1000;
   const [row] = await db.update(users)
-    .set({ dayPassUntil: sql`greatest(coalesce(${users.dayPassUntil}, now()), now()) + make_interval(hours => ${DAY_PASS_HOURS})` })
+    .set({ novaActionsBought: sql`${users.novaActionsBought} + ${ACTIONS_PER_PACK}` })
     .where(eq(users.id, userId))
-    .returning({ until: users.dayPassUntil });
-  const until = row?.until ?? new Date(Date.now() + ms);
-  return { until, wallet: await walletOf(userId) };
+    .returning({ actions: users.novaActionsBought });
+  return { actions: row?.actions ?? ACTIONS_PER_PACK, wallet: await walletOf(userId) };
+}
+
+/**
+ * Spends one bought action, if there is one. True when it took it.
+ *
+ * A conditional update rather than a read then a write, so two requests
+ * arriving together cannot both spend the last one.
+ */
+export async function spendBoughtAction(userId: string): Promise<boolean> {
+  const [row] = await db.update(users)
+    .set({ novaActionsBought: sql`${users.novaActionsBought} - 1` })
+    .where(and(eq(users.id, userId), gt(users.novaActionsBought, 0)))
+    .returning({ left: users.novaActionsBought });
+  return !!row;
+}
+
+/** Hands one back, for work that was reserved and never delivered. */
+export async function refundBoughtAction(userId: string): Promise<void> {
+  await db.update(users)
+    .set({ novaActionsBought: sql`${users.novaActionsBought} + 1` })
+    .where(eq(users.id, userId));
 }
 
 /** Whether "Nova builds the whole business" has been bought for this project. */

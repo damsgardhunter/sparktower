@@ -4,7 +4,7 @@
  * Generating on the path spends one small Nova action; running low shows in
  * what the client reads; running out refuses the generate — before any model
  * call — with everything a dialog needs to offer the way on; topping up and
- * buying the $1 day pass lets the same generate through; and the day pass is
+ * buying a pack of Nova actions lets the same generate through; and the pack is
  * unlimited for its window rather than a bigger bucket.
  *
  * What this file used to test was the other loop: run out of credits, upgrade
@@ -72,7 +72,7 @@ describe("running out of the month's free Nova", () => {
   let app: any;
   beforeEach(async () => { app = await getTestApp(); });
 
-  it("warns when low, refuses at zero with the day pass to offer, and the pass lets generating go on", async () => {
+  it("warns when low, refuses at zero with more actions to offer, and the pack lets generating go on", async () => {
     const me = await builder(app);
     const project = (await me.agent.post("/api/projects").send({ title: "Paying Path", description: "A project that runs out of free Nova actions on its path.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const tasks = (await me.agent.get(`/api/projects/${project.id}/kanban`)).body;
@@ -91,10 +91,10 @@ describe("running out of the month's free Nova", () => {
     const refused = await me.agent.post(`/api/projects/${project.id}/path/work`).send({ taskId: step.id });
     expect(refused.status).toBe(402);
     expect(refused.body).toMatchObject({
-      code: "payment_required", outcome: "dayPass",
-      price: { cents: OUTCOME_PRICE_CENTS.dayPass, display: "$1" },
+      code: "payment_required", outcome: "actionPack",
+      price: { cents: OUTCOME_PRICE_CENTS.actionPack, display: "$5" },
       remedy: "top_up",
-      endpoints: { dayPass: "/api/nova/day-pass", topUp: "/api/nova/top-up" },
+      endpoints: { actionPack: "/api/nova/day-pass", topUp: "/api/nova/top-up" },
     });
     const loops = await me.agent.post(`/api/projects/${project.id}/path/loops/write`).send({});
     expect(loops.body.code).toBe("payment_required");
@@ -104,14 +104,14 @@ describe("running out of the month's free Nova", () => {
     // Money on the account, and the pass is one tap rather than a redirect.
     await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, me.id));
     const nudged = await me.agent.post(`/api/projects/${project.id}/path/work`).send({ taskId: step.id });
-    expect(nudged.body.remedy, "with money there, the dialog offers the pass itself").toBe("buy_pass");
+    expect(nudged.body.remedy, "with money there, the dialog offers the actions itself").toBe("buy_pass");
 
-    const pass = await me.agent.post("/api/nova/day-pass").send({});
-    expect(pass.status, JSON.stringify(pass.body)).toBe(200);
-    expect(pass.body.wallet.balanceCents).toBe(500 - OUTCOME_PRICE_CENTS.dayPass);
+    const pack = await me.agent.post("/api/nova/day-pass").send({});
+    expect(pack.status, JSON.stringify(pack.body)).toBe(200);
+    expect(pack.body.wallet.balanceCents).toBe(500 - OUTCOME_PRICE_CENTS.actionPack);
 
-    // And generating goes on — unlimited for the window, not a bigger bucket:
-    // the month's allowance is still spent and stays spent.
+    // And generating goes on, out of the pack — the month's free allowance is
+    // still spent and stays spent, because the two are different promises.
     const again = await me.agent.post(`/api/projects/${project.id}/path/loops/write`).send({});
     expect(again.body.code).not.toBe("payment_required");
     expect((await rowOf(me.id)).u).toBe(MONTHLY_SMALL_ACTIONS);
@@ -124,7 +124,7 @@ describe("running out of the month's free Nova", () => {
     const wallet = (await me.agent.get("/api/nova/wallet")).body;
     expect(wallet.wallet).toMatchObject({ balanceCents: 0, allowanceRemaining: 0, dayPassActive: false });
     // The price list travels with it, so a dialog never hard-codes a price.
-    expect(wallet.prices.outcomes.find((o: any) => o.id === "dayPass")).toMatchObject({ cents: 100, display: "$1" });
+    expect(wallet.prices.outcomes.find((o: any) => o.id === "actionPack")).toMatchObject({ cents: 500, display: "$5" });
 
     const started = await me.agent.post("/api/nova/top-up").send({ amountCents: 500 });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
@@ -155,6 +155,7 @@ describe("running out of the month's free Nova", () => {
     // And the plan catalog has nothing to sell: every plan is free.
     const plans = (await request(app).get("/api/plans")).body;
     for (const p of plans.plans) expect(p.price).toBe(0);
-    expect(plans.pricing.outcomes.map((o: any) => o.id)).toContain("dayPass");
+    // What it sells instead of a plan: outcomes, and more Nova actions.
+    expect(plans.pricing.outcomes.map((o: any) => o.id)).toContain("actionPack");
   });
 });

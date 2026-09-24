@@ -195,7 +195,7 @@ describe("quoting the cost of an AI action", () => {
 describe("the price list", () => {
   it("prices exactly the outcomes the product owner named, in whole dollars", () => {
     expect(OUTCOME_PRICE_CENTS).toEqual({
-      dayPass: 100,
+      actionPack: 500,
       roadmap: 300,
       document: 300,
       codeAudit: 500,

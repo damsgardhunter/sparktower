@@ -90,11 +90,11 @@ import {
   FAIR_USE_NOTICE, FAIR_USE_MONTHLY_CAP, normalizeTier, roadmapRebuildCost,
   PRICE_LIST, PRICING_ROWS, PRICING_NOTICE, TOP_UP_CENTS, OUTCOME_PRICE_CENTS,
   CHARGEABLE, NO_CHARGE,
-  OUTCOME_COPY, formatMoney,
+  OUTCOME_COPY, formatMoney, ACTIONS_PER_PACK,
   type TierId,
   PAY_ENDPOINTS,
 } from "@shared/plans";
-import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
+import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
 import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
 import { requireImages, buyImagePass, imagePassActive } from "./images";
 
@@ -6925,21 +6925,29 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    * reason a balance exists rather than a redirect to Stripe every time
    * somebody runs out mid-sentence.
    */
-  app.post("/api/nova/day-pass", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+  /*
+   * More Nova actions, bought a pack at a time.
+   *
+   * This route was `/api/nova/day-pass` and sold twenty-four hours of
+   * unlimited small actions for a dollar. The path stays for a moment longer
+   * than the pass does — see PAY_ENDPOINTS — because a client already loaded
+   * in somebody's browser will keep posting to whatever it was built with.
+   */
+  app.post(PAY_ENDPOINTS.actionPack, isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      const bought = await buyDayPass(userId);
+      const bought = await buyActionPack(userId);
       if (!bought) {
         const wallet = await walletOf(userId);
         return res.status(402).json(paymentRequired({
-          message: `A day pass is ${formatMoney(OUTCOME_PRICE_CENTS.dayPass)} and your balance is ${wallet.balanceDisplay}. Add a few dollars and it's yours straight away.`,
-          label: OUTCOME_COPY.dayPass.name, outcome: "dayPass", cents: OUTCOME_PRICE_CENTS.dayPass, wallet,
+          message: `${ACTIONS_PER_PACK} more Nova actions is ${formatMoney(OUTCOME_PRICE_CENTS.actionPack)} and your balance is ${wallet.balanceDisplay}. Add a few dollars and they're yours straight away.`,
+          label: OUTCOME_COPY.actionPack.name, outcome: "actionPack", cents: OUTCOME_PRICE_CENTS.actionPack, wallet,
         }));
       }
-      res.json({ dayPassUntil: bought.until.toISOString(), wallet: bought.wallet });
+      res.json({ actionsBought: bought.actions, wallet: bought.wallet });
     } catch (error) {
-      console.error("Day pass error:", error);
-      res.status(500).json({ message: "Couldn't start your day pass." });
+      console.error("Action pack error:", error);
+      res.status(500).json({ message: "Couldn't add those Nova actions." });
     }
   });
 

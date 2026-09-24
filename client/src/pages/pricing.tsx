@@ -9,7 +9,7 @@ import { useWallet } from "@/components/payment-dialog";
 import { errorText } from "@/lib/api-error";
 import {
   PRICING_ROWS, PRICING_NOTICE, TOP_UP_CENTS, TOP_UP_DEFAULTS,
-  MONTHLY_SMALL_ACTIONS, DAY_PASS_HOURS, formatMoney,
+  MONTHLY_SMALL_ACTIONS, ACTIONS_PER_PACK, OUTCOME_PRICE_CENTS, formatMoney,
 } from "@shared/plans";
 import { cn } from "@/lib/utils";
 import { Check, Clock, Loader2, Wallet as WalletIcon } from "lucide-react";
@@ -146,7 +146,7 @@ export default function Pricing() {
         <p className="flex items-start gap-2">
           <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
           The {MONTHLY_SMALL_ACTIONS} free Nova actions reset at the start of every month. If you run out mid-flow,
-          a {formatMoney(100)} day pass covers them for {DAY_PASS_HOURS} hours — or you wait, and they come back.
+          {formatMoney(OUTCOME_PRICE_CENTS.actionPack)} buys {ACTIONS_PER_PACK} more — they never expire — or you wait, and the free ones come back.
         </p>
       </div>
     </div>

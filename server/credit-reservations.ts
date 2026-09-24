@@ -28,7 +28,13 @@ import { db } from "./db";
 import { users } from "@shared/schema";
 import type { PricedOutcomeId } from "@shared/plans";
 
-interface Hold { userId: string; amount: number; open: boolean }
+interface Hold {
+  userId: string;
+  amount: number;
+  open: boolean;
+  /** A bought Nova action rather than allowance credits — returned to the pack, not the month. */
+  action?: boolean;
+}
 
 const holds = new Map<string, Hold[]>();
 
@@ -51,10 +57,16 @@ async function release(hold: Hold): Promise<void> {
   hold.open = false;
   forget(hold);
   try {
-    await returnCredits(hold.userId, hold.amount);
+    if (hold.action) {
+      /* Bought and not delivered: it goes back on the pack it came off. */
+      const { refundBoughtAction } = await import("./wallet");
+      await refundBoughtAction(hold.userId);
+    } else {
+      await returnCredits(hold.userId, hold.amount);
+    }
   } catch (err) {
-    // Costs the person one action's credits; never worth failing their response over.
-    console.error(`[credits] couldn't return ${hold.amount} held credits to ${hold.userId}:`, err);
+    // Costs the person one action; never worth failing their response over.
+    console.error(`[credits] couldn't return a held action to ${hold.userId}:`, err);
   }
 }
 
@@ -195,8 +207,34 @@ export function holdMoney(
  * alternative was teaching thirty call sites when not to settle, which is the
  * kind of rule that holds until the thirty-first.
  */
-export function holdCovered(res: Response, userId: string, outcome: PricedOutcomeId = "dayPass"): void {
+export function holdCovered(res: Response, userId: string, outcome: PricedOutcomeId = "actionPack"): void {
   holdMoney(res, userId, 0, outcome, null);
+}
+
+/**
+ * Records one bought Nova action already taken for this response, and hands it
+ * back if the route never delivers.
+ *
+ * The same shape as `holdCredits` above and for the same reason — the action
+ * is spent before the work starts, so two requests arriving together cannot
+ * both spend the last one, and a failure has to return it. It settles through
+ * the money path, worth nothing, so the thirty call sites that call
+ * `deductCredits` at the end carry on working without knowing any of this.
+ */
+export function holdAction(res: Response, userId: string): void {
+  const hold: Hold = { userId, amount: 0, open: true, action: true };
+  const list = holds.get(userId) ?? [];
+  list.push(hold);
+  holds.set(userId, list);
+
+  const end = res.end;
+  (res as any).end = function (this: Response, ...args: any[]) {
+    (res as any).end = end;
+    if (!hold.open) return (end as any).apply(this, args);
+    void release(hold).finally(() => (end as any).apply(this, args));
+    return this;
+  };
+  res.once("close", () => { void release(hold); });
 }
 
 export function settleMoney(userId: string): boolean {

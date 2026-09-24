@@ -62,7 +62,7 @@ export const MONTHLY_SMALL_ACTIONS = 25;
 
 /** The outcomes that carry a price. Everything else Nova does is small, or free. */
 export type PricedOutcomeId =
-  | "dayPass"
+  | "actionPack"
   | "roadmap"
   | "document"
   | "codeAudit"
@@ -78,8 +78,11 @@ export type PricedOutcomeId =
  * What each outcome costs, in cents. Whole dollars on purpose: the point of
  * moving off credits is that a person can read the price without arithmetic.
  *
- *   dayPass    — unlimited small actions for DAY_PASS_HOURS. The thing you buy
- *                when the month's allowance runs out and you're mid-flow.
+ *   actionPack — ACTIONS_PER_PACK more small Nova actions. The thing you buy
+ *                when the month's free allowance runs out and you are mid-flow.
+ *                Spent one at a time and never expiring, which is the whole
+ *                difference from the day pass it replaced: that sold a window,
+ *                so what it really cost depended on how fast you could type.
  *   roadmap    — Nova builds the path and roadmap: phases, milestones, order.
  *   document   — the document builder, plan and fill, one price for the whole
  *                document however many blocks it turns out to have.
@@ -124,7 +127,7 @@ export type PricedOutcomeId =
  *                lot. A project that already ran it on credits keeps it.
  */
 export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
-  dayPass: 100,
+  actionPack: 500,
   roadmap: 300,
   document: 300,
   codeAudit: 500,
@@ -150,7 +153,22 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
 export const CHARGEABLE = 1;
 export const NO_CHARGE = 0;
 
-/** What a day pass buys, in hours. Bought at 11pm, still good at 10pm tomorrow. */
+/**
+ * How many small Nova actions one pack buys.
+ *
+ * The same number as the free monthly allowance, deliberately: "another
+ * twenty-five" is a thing somebody can hold in their head against the
+ * twenty-five they already get, and a pack that did not match it would make
+ * both numbers harder to remember.
+ */
+export const ACTIONS_PER_PACK = 25;
+
+/**
+ * What a day pass bought, in hours.
+ *
+ * Nothing sells one any more — see ACTIONS_PER_PACK — and this stays because
+ * passes already paid for are still honoured until they run out.
+ */
 export const DAY_PASS_HOURS = 24;
 
 /** The image pass runs the same day-shaped window as the ordinary one. */
@@ -208,7 +226,17 @@ export interface Wallet {
   allowanceUsed: number;
   allowanceLimit: number;
   allowanceRemaining: number;
-  /** When the current day pass runs out, or null. */
+  /**
+   * Small Nova actions bought and not yet spent, on top of the free monthly
+   * allowance above. They do not expire.
+   */
+  actionsBought: number;
+  /**
+   * When an old day pass runs out, or null.
+   *
+   * Nothing sells one any more — actions are bought in packs — and one already
+   * paid for is honoured to the hour it was sold for.
+   */
   dayPassUntil: string | null;
   dayPassActive: boolean;
   /** …and the image pass, which is a different five-dollar thing. */
@@ -248,12 +276,18 @@ export interface PaymentRequiredBody {
   remedy: "buy_pass" | "top_up" | "none";
   topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
   /** So the client never hard-codes a path that moves. */
-  endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
+  endpoints: { wallet: string; actionPack: string; topUp: string; build: string };
 }
 
 export const PAY_ENDPOINTS = {
   wallet: "/api/nova/wallet",
-  dayPass: "/api/nova/day-pass",
+  /*
+   * The path still says "day-pass" and what it sells is a pack of actions.
+   * Renaming it would 404 every client already loaded in a browser, and a
+   * person mid-flow being told the button does not exist is a worse thing than
+   * a stale word in a URL. The name goes when the old clients have.
+   */
+  actionPack: "/api/nova/day-pass",
   imagePass: "/api/nova/image-pass",
   topUp: "/api/nova/top-up",
   build: "/api/nova/build-my-business",
@@ -396,9 +430,9 @@ export function priceOf(action: NovaActionId): ActionPrice {
 
 /** What the pricing page and the top-up dialog list, in the order they read best. */
 export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string }> = {
-  dayPass: {
-    name: "Day pass",
-    blurb: "Unlimited small Nova actions for 24 hours. What you buy when the month's allowance runs out mid-flow.",
+  actionPack: {
+    name: "More Nova actions",
+    blurb: `${ACTIONS_PER_PACK} more small Nova actions, spent one at a time. What you buy when the month's free allowance has run out — they never expire, so nothing is wasted by buying them on a quiet week.`,
   },
   roadmap: {
     name: "Build my path and roadmap",
@@ -470,7 +504,7 @@ export interface PricingRow {
 export const PRICING_ROWS: PricingRow[] = [
   { label: "Everything you do yourself", price: "Free", detail: "Paths, boards, milestones, check-ins, publishing, the feed, teams, private projects, the public market, company accounts. Forever, for everyone." },
   { label: "Nova at your elbow", price: "Free", detail: `${MONTHLY_SMALL_ACTIONS} small Nova actions a month — chat, nudges, personas, progress summaries, tidying the board.` },
-  { label: OUTCOME_COPY.dayPass.name, price: formatMoney(OUTCOME_PRICE_CENTS.dayPass), detail: OUTCOME_COPY.dayPass.blurb },
+  { label: OUTCOME_COPY.actionPack.name, price: formatMoney(OUTCOME_PRICE_CENTS.actionPack), detail: OUTCOME_COPY.actionPack.blurb },
   { label: OUTCOME_COPY.roadmap.name, price: formatMoney(OUTCOME_PRICE_CENTS.roadmap), detail: OUTCOME_COPY.roadmap.blurb },
   { label: OUTCOME_COPY.document.name, price: formatMoney(OUTCOME_PRICE_CENTS.document), detail: OUTCOME_COPY.document.blurb },
   { label: OUTCOME_COPY.codeAudit.name, price: formatMoney(OUTCOME_PRICE_CENTS.codeAudit), detail: OUTCOME_COPY.codeAudit.blurb },
@@ -767,7 +801,7 @@ const FREE_PLAN: PlanPresentation = {
   highlights: [
     "Every feature, free forever",
     `${MONTHLY_SMALL_ACTIONS} small Nova actions a month`,
-    `${formatMoney(OUTCOME_PRICE_CENTS.dayPass)} day pass for unlimited small actions`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.actionPack)} for ${ACTIONS_PER_PACK} more, whenever you want them`,
     `${formatMoney(OUTCOME_PRICE_CENTS.roadmap)} — Nova builds your path and roadmap`,
     `${formatMoney(OUTCOME_PRICE_CENTS.document)} — Nova writes a document`,
     `${formatMoney(OUTCOME_PRICE_CENTS.codeAudit)} — Nova audits your codebase`,

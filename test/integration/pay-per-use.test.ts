@@ -73,7 +73,7 @@ const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { db } = await import("../../server/db");
 const { users, novaLedger, simSeasons } = await import("@shared/schema");
 const { eq } = await import("drizzle-orm");
-const { OUTCOME_PRICE_CENTS, MONTHLY_SMALL_ACTIONS } = await import("@shared/plans");
+const { OUTCOME_PRICE_CENTS, MONTHLY_SMALL_ACTIONS, ACTIONS_PER_PACK, PAY_ENDPOINTS } = await import("@shared/plans");
 const { verifyEmail } = await import("../helpers/verify-email");
 
 afterAll(async () => { await closeTestApp(); delete process.env.RATE_LIMIT_EXEMPT_EMAILS; });
@@ -128,7 +128,7 @@ const topUpEvent = (id: string, sessionId: string, userId: string, amountCents: 
 });
 
 describe("the month's free allowance", () => {
-  it("covers small Nova actions, then asks for a day pass — with everything a dialog needs to offer it", async () => {
+  it("covers small Nova actions, then offers more — with everything a dialog needs to ask for them", async () => {
     const app = await getTestApp();
     const b = await builder(app);
 
@@ -156,67 +156,130 @@ describe("the month's free allowance", () => {
     expect(refused.status).toBe(402);
     expect(refused.body).toMatchObject({
       code: "payment_required",
-      outcome: "dayPass",
-      price: { cents: OUTCOME_PRICE_CENTS.dayPass, display: "$1" },
+      outcome: "actionPack",
+      price: { cents: OUTCOME_PRICE_CENTS.actionPack, display: "$5" },
       remedy: "top_up",
     });
     // What it costs, what they have, and what to do about it — in one answer.
     expect(refused.body.wallet).toMatchObject({ allowanceRemaining: 0, balanceCents: 0 });
-    expect(refused.body.topUp).toMatchObject({ shortfallCents: OUTCOME_PRICE_CENTS.dayPass, suggestCents: 500 });
-    expect(refused.body.endpoints.dayPass).toBe("/api/nova/day-pass");
-    expect(refused.body.message).toMatch(/day pass/i);
+    expect(refused.body.topUp).toMatchObject({ shortfallCents: OUTCOME_PRICE_CENTS.actionPack, suggestCents: 500 });
+    expect(refused.body.endpoints.actionPack).toBe("/api/nova/day-pass");
+    expect(refused.body.message).toMatch(new RegExp(`${ACTIONS_PER_PACK} more`));
 
     // With money on the account it is one tap instead, and the dialog is told so.
     await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, b.userId));
     const affordable = await smallAction(b);
     expect(affordable.status).toBe(402);
-    // "buy_pass" covers both passes — the dollar one for small actions and the
-    // five-dollar one for images. `outcome` says which; to a person it is the
-    // same press, so it is one button.
+    /*
+     * "buy_pass" covers both of the things the balance can buy outright — a
+     * pack of Nova actions and a day of images. The name is older than the
+     * pack and is left alone deliberately: it is a string clients already
+     * branch on, and renaming it would break a page somebody has open.
+     * `outcome` says which; to a person it is the same press, so it is one
+     * button.
+     */
     expect(affordable.body.remedy).toBe("buy_pass");
-    expect(affordable.body.outcome).toBe("dayPass");
+    expect(affordable.body.outcome).toBe("actionPack");
     expect(affordable.body.topUp).toBe(null);
   });
 });
 
-describe("the day pass", () => {
-  it("costs a dollar, covers small actions for its window, and stops covering them after it", async () => {
+describe("buying more Nova actions", () => {
+  it("costs five dollars, adds twenty-five, and spends them one at a time", async () => {
     const app = await getTestApp();
     const b = await builder(app, { balanceCents: 500 });
     await db.update(users).set({ creditsUsed: MONTHLY_SMALL_ACTIONS, creditsResetAt: new Date() }).where(eq(users.id, b.userId));
 
-    const bought = await b.agent.post("/api/nova/day-pass").send({});
+    const bought = await b.agent.post(PAY_ENDPOINTS.actionPack).send({});
     expect(bought.status, JSON.stringify(bought.body)).toBe(200);
-    expect(bought.body.wallet).toMatchObject({ balanceCents: 500 - OUTCOME_PRICE_CENTS.dayPass, dayPassActive: true });
-    expect(new Date(bought.body.dayPassUntil).getTime()).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
+    expect(bought.body.wallet).toMatchObject({
+      balanceCents: 500 - OUTCOME_PRICE_CENTS.actionPack,
+      actionsBought: ACTIONS_PER_PACK,
+    });
 
-    // Covered, with the allowance already spent: the route reaches the model.
+    /*
+     * Covered, with the free allowance already spent: the route reaches the
+     * model, and one bought action is gone. Every one of these fails at the
+     * model, which is why the count is read from the row rather than inferred
+     * — a failed action is handed back, and that is its own test below.
+     */
     const covered = await smallAction(b);
     expect(covered.status, JSON.stringify(covered.body)).not.toBe(402);
-    expect(covered.status).toBeGreaterThanOrEqual(500);
-    // And the pass is free: the allowance didn't move, and neither did the balance.
-    expect(await balanceOf(b.userId)).toBe(500 - OUTCOME_PRICE_CENTS.dayPass);
+
+    // The free allowance did not move; a pack is what is paying now.
     expect((await wallet(b.agent)).allowanceUsed).toBe(MONTHLY_SMALL_ACTIONS);
-
-    // The window closes.
-    await db.update(users).set({ dayPassUntil: new Date(Date.now() - 1000) }).where(eq(users.id, b.userId));
-    const after = await smallAction(b);
-    expect(after.status).toBe(402);
-    expect(after.body.outcome).toBe("dayPass");
-
-    // Buying a second pass extends rather than replaces, and takes another dollar.
-    await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, b.userId));
-    const again = await b.agent.post("/api/nova/day-pass").send({});
-    expect(again.status).toBe(200);
-    expect(await balanceOf(b.userId)).toBe(500 - OUTCOME_PRICE_CENTS.dayPass);
+    expect(await balanceOf(b.userId)).toBe(500 - OUTCOME_PRICE_CENTS.actionPack);
   });
 
-  it("refuses the pass, with a top-up to offer, when there isn't a dollar there", async () => {
+  it("hands the action back when the work never happens", async () => {
+    /*
+     * The action is spent before the model is called, so that two requests
+     * arriving together cannot both spend the last one. Which means a failure
+     * has to return it, or every broken model call would quietly cost five
+     * dollars a pack.
+     */
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: 500 });
+    await db.update(users).set({ creditsUsed: MONTHLY_SMALL_ACTIONS, creditsResetAt: new Date() }).where(eq(users.id, b.userId));
+    await b.agent.post(PAY_ENDPOINTS.actionPack).send({});
+
+    const failed = await smallAction(b);
+    expect(failed.status).toBeGreaterThanOrEqual(500);
+    expect((await wallet(b.agent)).actionsBought, "a failed action is not a spent one").toBe(ACTIONS_PER_PACK);
+  });
+
+  it("runs out, and says what another pack costs", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: 500 });
+    await db.update(users).set({
+      creditsUsed: MONTHLY_SMALL_ACTIONS, creditsResetAt: new Date(), novaActionsBought: 0,
+    }).where(eq(users.id, b.userId));
+
+    const refused = await smallAction(b);
+    expect(refused.status).toBe(402);
+    expect(refused.body.outcome).toBe("actionPack");
+    expect(refused.body.remedy).toBe("buy_pass");
+    expect(refused.body.message).toMatch(new RegExp(`${ACTIONS_PER_PACK} more`));
+  });
+
+  it("stacks, rather than replacing what is left", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: 1_000 });
+    await b.agent.post(PAY_ENDPOINTS.actionPack).send({});
+    const second = await b.agent.post(PAY_ENDPOINTS.actionPack).send({});
+    expect(second.status).toBe(200);
+    expect(second.body.wallet.actionsBought).toBe(ACTIONS_PER_PACK * 2);
+    expect(await balanceOf(b.userId)).toBe(1_000 - OUTCOME_PRICE_CENTS.actionPack * 2);
+  });
+
+  it("honours a day pass somebody already paid for, and never sells another", async () => {
+    /*
+     * The day pass is gone from the price list and the column is not: somebody
+     * may have bought twenty-four hours an hour before this shipped, and
+     * taking that away would be theft. While one is running it covers
+     * everything, and the pack it sits beside is deliberately not touched.
+     */
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: 500 });
+    await db.update(users).set({
+      creditsUsed: MONTHLY_SMALL_ACTIONS, creditsResetAt: new Date(),
+      dayPassUntil: new Date(Date.now() + 60 * 60 * 1000), novaActionsBought: 3,
+    }).where(eq(users.id, b.userId));
+
+    const covered = await smallAction(b);
+    expect(covered.status).not.toBe(402);
+    expect((await wallet(b.agent)).actionsBought, "a pass covers it; the pack is left alone").toBe(3);
+
+    // And nothing on the price list sells one any more.
+    expect(Object.keys(OUTCOME_PRICE_CENTS)).not.toContain("dayPass");
+  });
+
+  it("refuses a pack, with a top-up to offer, when there isn't five dollars there", async () => {
     const app = await getTestApp();
     const b = await builder(app);
-    const res = await b.agent.post("/api/nova/day-pass").send({});
+    const res = await b.agent.post(PAY_ENDPOINTS.actionPack).send({});
     expect(res.status).toBe(402);
-    expect(res.body).toMatchObject({ code: "payment_required", outcome: "dayPass", remedy: "top_up" });
+    expect(res.body).toMatchObject({ code: "payment_required", outcome: "actionPack", remedy: "top_up" });
     expect(res.body.topUp.optionsCents).toContain(500);
   });
 });

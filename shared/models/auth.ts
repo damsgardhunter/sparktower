@@ -45,9 +45,21 @@ export const users = pgTable("users", {
    */
   balanceCents: integer("balance_cents").default(0).notNull(),
   /**
-   * While this is in the future, small Nova actions are free and don't touch
-   * the monthly allowance — a day pass, bought for a dollar. Null or past
-   * means the allowance is what's covering them.
+   * Small Nova actions bought and not yet spent.
+   *
+   * The thing somebody buys when the month's free allowance has run out. Not
+   * a subscription and not a rental: a pack of actions, spent one at a time,
+   * which do not expire — money put on an account here never does, and an
+   * action bought with it is the same promise.
+   */
+  novaActionsBought: integer("nova_actions_bought").default(0).notNull(),
+  /**
+   * The old day pass: while this is in the future, small actions were free and
+   * didn't touch the allowance.
+   *
+   * Nothing sells one any more — see `novaActionsBought` — and it is still
+   * read, and honoured, until the last one bought runs out. Dropping it on
+   * deploy would take a day from somebody who paid for it an hour earlier.
    */
   dayPassUntil: timestamp("day_pass_until"),
   /**
