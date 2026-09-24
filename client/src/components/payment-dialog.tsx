@@ -74,10 +74,27 @@ export function openPayment(detail: PaymentEventDetail) {
  * wallet, because getting that wrong is silent: every balance on screen simply
  * renders empty.
  */
+/**
+ * What is on the account, read fresh every time it is asked for.
+ *
+ * The app's default is `staleTime: Infinity` — right for almost everything
+ * here, and wrong for money. A balance cached for the life of a tab is a
+ * balance that is wrong the moment it changes anywhere else: in another tab,
+ * on a phone, from a top-up that completed while this page sat open. It showed
+ * up as a confirmation dialog telling somebody with a hundred dollars on their
+ * account that $14.99 was "more than your balance", because the number it was
+ * comparing against had been fetched before they added any.
+ *
+ * `refetchOnMount: "always"` as well as `staleTime: 0`, because the dialog
+ * mounts its copy of this the moment it opens, which is exactly the moment the
+ * figure has to be true.
+ */
 export function useWallet(enabled = true) {
   return useQuery({
     queryKey: [PAY_ENDPOINTS.wallet],
     enabled,
+    staleTime: 0,
+    refetchOnMount: "always",
     select: (d: { wallet: Wallet }) => d.wallet,
   });
 }
@@ -96,6 +113,11 @@ export function useBuildPasses() {
   return useQuery({
     queryKey: [PAY_ENDPOINTS.wallet],
     enabled: !!user,
+    /* Same reason as `useWallet`: what has been paid for decides whether a
+       dialog opens at all, and a stale answer either charges twice or offers
+       something already owned. */
+    staleTime: 0,
+    refetchOnMount: "always",
     select: (d: { buildPasses?: string[] }) => d.buildPasses ?? [],
   });
 }
