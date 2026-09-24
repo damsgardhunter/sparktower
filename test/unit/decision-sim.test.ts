@@ -227,9 +227,25 @@ describe("refusing nonsense", () => {
   });
 
   it("never runs a horizon it wasn't offered", () => {
-    expect(cleanMonths(12)).toBe(12);
-    expect(cleanMonths(7)).toBe(12);
-    expect(cleanMonths(600)).toBe(12);
+    /*
+     * The promise in the name is unchanged: whatever comes out is one of the
+     * horizons this can actually run. What changed is where an unoffered
+     * number lands. It used to fall back to the *default*, so 600 became 12 —
+     * not the longest horizon, the shortest ordinary one — and everything a
+     * plan did after its first year silently never happened. Eight plans that
+     * differed only in the month an owner quit her job came back byte for byte
+     * identical, because none of them ever reached the month she quit.
+     *
+     * It now snaps to the nearest offered horizon, preferring the longer on a
+     * tie, because being given less time than you asked for is the more
+     * misleading of the two errors: plans break at the end.
+     */
+    for (const m of [3, 6, 12, 24, 36]) expect(cleanMonths(m)).toBe(m);
+    expect(cleanMonths(7)).toBe(6);
+    expect(cleanMonths(600)).toBe(36);
+    expect(cleanMonths(18)).toBe(24);
+    // And nonsense still falls back to the default rather than guessing.
+    for (const junk of [0, -5, NaN, null, undefined, "soon"]) expect(cleanMonths(junk)).toBe(12);
   });
 
   it("refuses to project a company that has told it nothing", () => {

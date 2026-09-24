@@ -53,10 +53,23 @@ function askedShape(system: string): unknown | null {
   const lines = system.split("\n");
   const asked = lines.findIndex((l) => /respond only with|return only|valid json of exactly this shape/i.test(l));
   if (asked === -1) return null;
-  for (const line of lines.slice(asked)) {
-    const text = line.trim();
-    if (!text.startsWith("{") && !text.startsWith("[")) continue;
-    try { return JSON.parse(text); } catch { /* the next line, or none */ }
+
+  for (let i = asked; i < lines.length; i++) {
+    const start = lines[i].trim();
+    if (!start.startsWith("{") && !start.startsWith("[")) continue;
+    /*
+     * Shapes are usually one line and sometimes several — the ten-year
+     * valuation writes its five scores, its three numbers and its notes across
+     * three lines for readability, and a single-line reader found nothing,
+     * answered with a generic object, and left the route to report the model
+     * as unreadable. So: keep adding lines until it parses, and give up at the
+     * point a shape could not plausibly still be open.
+     */
+    let text = "";
+    for (let j = i; j < Math.min(lines.length, i + 40); j++) {
+      text += (j === i ? "" : "\n") + lines[j];
+      try { return JSON.parse(text); } catch { /* not closed yet */ }
+    }
   }
   return null;
 }
@@ -95,6 +108,55 @@ function fill(node: unknown, key = ""): unknown {
   return `${label}${STUB_SENTENCE}${described ? ` (asked for: ${described.slice(0, 120)})` : ""}`;
 }
 
+/**
+ * Shapes the prompt declares but does not describe.
+ *
+ * The rule above — answer in the shape the prompt asked for — needs the shape
+ * to carry its structure, and almost all of them do. The decision simulator's
+ * does not: it asks for `{"levers":[]}` and describes what a lever is in prose
+ * above, because the real model has read that prose. A stub filling `[]` with
+ * strings produces no usable lever, the route correctly answers "that isn't
+ * something the numbers can settle", and the entire decision simulator is
+ * unreachable on a stubbed server — the one part of the product whose output
+ * is arithmetic rather than prose, and so the one most worth driving without
+ * paying for a model.
+ *
+ * So: a small, named exception. Each entry says how to recognise the prompt
+ * and what minimum structure to put in. Kept deliberately short — if this
+ * grows past a handful, the prompts have a shape problem worth fixing at
+ * source rather than papering over here.
+ */
+const STRUCTURED: { when: RegExp; key: string; value: unknown }[] = [
+  {
+    /*
+     * A scored judgement — the marketing scheme's five dimensions, and
+     * anything else that asks for a `scores` object. Every number filled with
+     * zero (the honest default for "no model was called") put every scheme
+     * below the bar for testing, so the half of that feature which runs the
+     * scheme through the simulator could not be reached on a stubbed server at
+     * all. A mid-range score makes it drivable; the words beside it still say
+     * on every line that nothing was asked.
+     */
+    when: /score each dimension|"scores"/i,
+    key: "scores",
+    value: null,  // filled per-key below, from the shape's own dimensions
+  },
+  {
+    // shared/simulation/decision-sim.ts — LEVER_KINDS and the shape at leverPrompt.
+    when: /levers/i,
+    key: "levers",
+    value: [{
+      kind: "spend",
+      label: `${STUB_SENTENCE} A stand-in lever so the arithmetic has something to run on.`,
+      startMonth: 1,
+      monthly: 1000,
+      months: 6,
+      monthlyRevenueAtPeak: 2000,
+      rampMonths: 2,
+    }],
+  },
+];
+
 /** What the model would have said, had it been asked. */
 export function stubCompletion(system: string, user: string): string {
   const shape = askedShape(system);
@@ -102,5 +164,26 @@ export function stubCompletion(system: string, user: string): string {
     const subject = /MILESTONE:|STEP:|PROJECT STATE/.test(user) ? " for this step" : "";
     return `${STUB_SENTENCE} There is no real answer${subject} because AI_STUB is on.`;
   }
-  return JSON.stringify(fill(shape));
+  const filled = fill(shape) as Record<string, unknown>;
+  if (filled && typeof filled === "object" && !Array.isArray(filled)) {
+    for (const { when, key, value } of STRUCTURED) {
+      if (!(key in filled) || !when.test(system)) continue;
+      if (value === null) {
+        /*
+         * A shape that named its own members — keep them, and give each a
+         * middle number rather than the zero every numeric field gets.
+         */
+        const asked = (shape as any)[key];
+        if (asked && typeof asked === "object" && !Array.isArray(asked)) {
+          filled[key] = Object.fromEntries(Object.keys(asked).map((k) => [k, 60]));
+        }
+        continue;
+      }
+      // Only where the prompt asked for that key and left it empty to describe in prose.
+      if (Array.isArray((shape as any)[key]) && !(shape as any)[key].length) filled[key] = value;
+    }
+    // A "cannot do this" field must be empty, or the route reads the stub as a refusal.
+    for (const k of ["cannotSimulate"]) if (k in filled) filled[k] = "";
+  }
+  return JSON.stringify(filled);
 }

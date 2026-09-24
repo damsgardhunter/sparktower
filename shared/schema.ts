@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
+import { CURRENCY_CODES } from "./currency";
 
 // Re-exporting from auth models as requested
 export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
@@ -132,6 +133,14 @@ export const projects = pgTable("projects", {
    * and nonsense for shipping". Plain text with a backfill default of "other".
    */
   subcategory: text("subcategory").default("other").notNull(),
+  /**
+   * What this business counts its money in — see shared/currency.ts.
+   *
+   * Not what SparkTower charges in, which stays dollars because Stripe takes
+   * dollars. This is the owner's own money: what the shop turns over, what is
+   * in its bank, what the simulator answers in.
+   */
+  currency: text("currency").default("USD").notNull(),
   /**
    * The optional phase the project has chosen to be in (e.g. "branch-build",
    * the keep-building extension after week 2), or null on the main line.
@@ -1720,7 +1729,7 @@ export const novaLedger = pgTable("nova_ledger", {
  *
  * The purchase is a pass rather than a single long-running job: building out
  * every section of a path is dozens of model calls that a person watches
- * arrive over minutes, and charging each one against the $30 they already paid
+ * arrive over minutes, and charging each one against what they already paid
  * would mean threading a receipt through every route. Instead the pass sits
  * here, and any priced outcome on that project is covered by it — see
  * requireCredits in server/entitlements.ts, which looks for one before it
@@ -1740,7 +1749,7 @@ export const novaBuildPasses = pgTable("nova_build_passes", {
 }));
 
 /**
- * One run of "Nova builds the whole business" — the $30 outcome.
+ * One run of "Nova builds the whole business" — the priced outcome.
  *
  * Shaped like code_audit_runs, and for the same reason: the work happens
  * outside the request that started it, so the only way anybody can see it is
@@ -2476,6 +2485,14 @@ export const insertProjectBase = createInsertSchema(projects).omit({
     errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or run a company." }),
   }),
   subcategory: z.string({ required_error: "Pick what kind of project it is for that goal.", invalid_type_error: "Pick what kind of project it is for that goal." }).min(1, "Pick what kind of project it is for that goal."),
+  /*
+   * Optional, and validated against the list rather than trusted: it is a
+   * display currency, so an unknown code is a pound sign that never appears
+   * rather than an error worth stopping a project being created for.
+   */
+  currency: z.enum(CURRENCY_CODES, {
+    errorMap: () => ({ message: `Pick a currency: ${CURRENCY_CODES.join(", ")}.` }),
+  }).optional(),
 });
 
 export const insertProjectSchema = insertProjectBase.superRefine((v, ctx) => {
@@ -3952,6 +3969,58 @@ export const simulationScenarios = pgTable("simulation_scenarios", {
  * Kept per run: an owner who does this again in a year should be able to see
  * what changed.
  */
+/**
+ * A marketing scheme for a product that already exists, and what Nova made of it.
+ *
+ * The decision simulator answers "what if I spend £1,000 a month on marketing"
+ * with a curve, which is the right answer to that question and no answer at
+ * all to the one a marketer asks: is *this plan* any good? A budget is not a
+ * scheme. Who it is aimed at, where it runs, what it says, what it offers and
+ * how anybody would know it worked — that is the scheme, and it is the thing
+ * worth scoring before a pound is spent on it.
+ *
+ * Scored, then testable: a scheme Nova rates worth trying can be run through
+ * the simulator for a year as a spend lever, against the business's own
+ * numbers, so "we think this will work" becomes a curve somebody can argue
+ * with.
+ */
+export const marketingSchemes = pgTable("marketing_schemes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: "set null" }),
+  /** The plan, in the marketer's own words. */
+  scheme: text("scheme").notNull(),
+  /** What they intend to spend a month on it, and for how long. */
+  monthlyBudget: integer("monthly_budget").notNull(),
+  months: integer("months").notNull().default(12),
+  /** What they expect it to bring in a month once it is working. Their claim, not Nova's. */
+  expectedMonthlyReturn: integer("expected_monthly_return").notNull().default(0),
+  /*
+   * For a scheme selling something people keep paying for. With these, it is
+   * tested as a subscriber base that accumulates rather than as a campaign
+   * holding up a level of trade — the same plan modelled the wrong way is
+   * wrong by an order of magnitude. Stored in whole units of the project's
+   * currency; churn is per mille so it survives a column of integers.
+   */
+  pricePerMonth: integer("price_per_month").notNull().default(0),
+  /** Customers leaving each month, per thousand. 30 is 3%. */
+  churnPerMille: integer("churn_per_mille").notNull().default(0),
+  newCustomersAtFull: integer("new_customers_at_full").notNull().default(0),
+  marketSize: integer("market_size").notNull().default(0),
+  /** Nova's read: scores per dimension, what is strong, what is missing. */
+  evaluation: jsonb("evaluation").notNull(),
+  /** 0–100, computed from the scores rather than asked for. */
+  score: integer("score").notNull().default(0),
+  /** Whether it is worth putting through the simulator at all. */
+  worthTesting: boolean("worth_testing").notNull().default(false),
+  /** The last run of it through the decision engine, if it has been tested. */
+  test: jsonb("test"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("marketing_schemes_project_idx").on(t.projectId, t.createdAt),
+]);
+export type MarketingScheme = typeof marketingSchemes.$inferSelect;
+
 export const tenYearOutlooks = pgTable("ten_year_outlooks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),

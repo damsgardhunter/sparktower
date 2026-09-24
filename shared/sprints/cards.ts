@@ -225,7 +225,14 @@ export interface SpendOption {
   detail: string;
   /** What this buys, and what skipping it costs. */
   consequence: string;
-  group: "Hiring" | "Product" | "Getting customers" | "Keeping it standing";
+  /*
+   * The sprint deck's four are "Hiring", "Product", "Getting customers" and
+   * "Keeping it standing"; a deck written for a different kind of business
+   * names its own (see shared/simulation/operating-deck.ts). Every screen that
+   * shows these derives its groups from the deck it was handed, so the type is
+   * the loose one and the deck is the authority.
+   */
+  group: string;
   /** Sensible granularity for the slider, in dollars. */
   step: number;
   /** Below this it doesn't buy anything real — a quarter-hire is not a hire. */

@@ -6,6 +6,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { errorText } from "@/lib/api-error";
 import {
   formatMoney, priceOf, OUTCOME_COPY, PAY_ENDPOINTS,
@@ -78,6 +79,24 @@ export function useWallet(enabled = true) {
     queryKey: [PAY_ENDPOINTS.wallet],
     enabled,
     select: (d: { wallet: Wallet }) => d.wallet,
+  });
+}
+
+/**
+ * The projects whose priced outcomes are already paid for.
+ *
+ * Read from the same endpoint as the balance, so asking costs no extra call.
+ * Fetched ahead of any dialog rather than alongside one, because the answer
+ * decides whether a dialog opens at all — but only once somebody is signed in.
+ * Without that guard it fired on the signup page and on every logged-out
+ * route, where the wallet endpoint quite correctly answers 401.
+ */
+export function useBuildPasses() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: [PAY_ENDPOINTS.wallet],
+    enabled: !!user,
+    select: (d: { buildPasses?: string[] }) => d.buildPasses ?? [],
   });
 }
 
@@ -303,22 +322,36 @@ export function PaymentDialog() {
  */
 interface PurchaseRequest { price: ActionPrice; title: string; detail?: string; resolve: (ok: boolean) => void }
 
-const PurchaseConfirmContext = createContext<((action: NovaActionId, opts?: { title?: string; detail?: string }) => Promise<boolean>) | null>(null);
+const PurchaseConfirmContext = createContext<((action: NovaActionId, opts?: { title?: string; detail?: string; projectId?: string | null }) => Promise<boolean>) | null>(null);
 
 export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<PurchaseRequest | null>(null);
   const { data: wallet } = useWallet(!!pending);
+  const { data: buildPasses } = useBuildPasses();
 
   const confirmPurchase = useCallback(
-    (action: NovaActionId, opts?: { title?: string; detail?: string }) => {
+    (action: NovaActionId, opts?: { title?: string; detail?: string; projectId?: string | null }) => {
       const price = priceOf(action);
       // Free and allowance-covered work goes straight through, unasked.
       if (price.cents == null) return Promise.resolve(true);
+      /*
+       * So does anything on a project that bought the whole-business build.
+       *
+       * The server has always treated the build pass as covering every priced
+       * outcome on that project (server/entitlements.ts) and takes nothing.
+       * This dialog did not know, so it quoted a price and a new balance for
+       * work already owned — "Price $6, Balance $20 → $14" — and then charged
+       * nothing. A confirmation that asks for money it will not take is worse
+       * than no confirmation: it is either declined, costing somebody a
+       * feature they paid for, or accepted, leaving them wrong about what
+       * they have spent.
+       */
+      if (opts?.projectId && buildPasses?.includes(opts.projectId)) return Promise.resolve(true);
       return new Promise<boolean>((resolve) => {
         setPending({ price, title: opts?.title ?? OUTCOME_COPY[price.kind as PricedOutcomeId].name, detail: opts?.detail, resolve });
       });
     },
-    [],
+    [buildPasses],
   );
 
   const settle = (ok: boolean) => { pending?.resolve(ok); setPending(null); };

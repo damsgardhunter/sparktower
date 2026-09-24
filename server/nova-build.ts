@@ -1,5 +1,5 @@
 /**
- * Nova building the whole business — the work behind the $30.
+ * Nova building the whole business — the work behind the priced outcome.
  *
  * Read shared/nova-build.ts first: it says which steps Nova closes and which
  * it deliberately leaves open, and that decision is the reason this file

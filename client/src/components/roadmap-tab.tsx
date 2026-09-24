@@ -139,7 +139,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
   const generateMutation = useMutation({
     mutationFn: async () => {
       // Priced: asked before it spends, never after. See payment-dialog.
-      if (!(await confirmPurchase("roadmapGeneration"))) return null;
+      if (!(await confirmPurchase("roadmapGeneration", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/generate`, {
         goal, startingPoint: startingPoint || undefined, targetDate: targetDate || undefined, depth,
       });
@@ -201,7 +201,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
        * the rebuild and people stop rebuilding; charge for the nudge and they
        * stop touching the plan at all.
        */
-      if (!(await confirmPurchase("roadmapRebuild"))) return null;
+      if (!(await confirmPurchase("roadmapRebuild", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/rebuild`, {
         whatChanged: whatChanged || undefined,
         newGoal: newGoal || undefined,

@@ -199,7 +199,7 @@ describe("the price list", () => {
       roadmap: 300,
       document: 300,
       codeAudit: 500,
-      business: 3000,
+      business: 1499,
       seasonSeat: 300,
       // "What would it take?", priced with the roadmap and the document
       // because it is the same kind of thing: one commissioned piece of work
@@ -210,30 +210,40 @@ describe("the price list", () => {
       // second scenario is where the learning is, and charging for it would be
       // charging somebody to compare.
       simulations: 300,
-      // Posting a company challenge, at $4.99 — deliberately not a whole
-      // dollar. It is a deterrent rather than revenue: the note in
-      // shared/plans.ts says why, and the prize it holds is separate money
-      // that never belongs to us.
+      // Writing a marketing scheme for a product that already exists and
+      // having Nova score it. The dearest of the small commissions because it
+      // is the only one that reads a plan and argues with it on the owner's
+      // own figures. One price for the project, like the simulator: a second
+      // scheme is where the comparison is.
+      // Posting a company challenge, at $4.99. Deliberately not a whole dollar
+      // and deliberately not revenue — the note in shared/plans.ts says why:
+      // it is priced to make posting a challenge a decision rather than a
+      // reflex, on a surface where a careless one costs whoever enters it a
+      // fortnight.
       challenge: 499,
+      marketing: 600,
       // A day of pictures. Its own price rather than a small action, because
       // an image is the most expensive thing here per press.
       imagePass: 500,
     });
     /*
-     * Whole dollars, on purpose — with one exception, on purpose.
+     * Whole dollars, on purpose — with two exceptions, on purpose.
      *
      * The point of leaving credits behind was that nobody should have to
      * convert a number into money in their head, and $3 does that better than
-     * $2.99. `challenge` earns the exception because it is not revenue: it is
-     * a deterrent, set at the price that makes posting one a decision. Named
-     * rather than loosened to "anything goes", so the next price added has to
-     * argue for itself the way this one did.
+     * $2.99. Two prices earn the exception and both argue for it where they
+     * are set: `business` because it is the only one big enough for the
+     * threshold to be the thing somebody actually decides on, and `challenge`
+     * because it is a deterrent rather than revenue. Everything else stays
+     * whole. Pinned as a named set rather than loosened to "anything goes",
+     * so the next price added has to argue for itself the way these two did.
      */
-    const NOT_WHOLE_DOLLARS = new Set(["challenge"]);
+    const NOT_WHOLE = new Set<PricedOutcomeId>(["business", "challenge"]);
     for (const [id, cents] of Object.entries(OUTCOME_PRICE_CENTS)) {
-      if (NOT_WHOLE_DOLLARS.has(id)) continue;
-      expect(cents % 100, `${id} should be whole dollars`).toBe(0);
+      if (NOT_WHOLE.has(id as PricedOutcomeId)) continue;
+      expect(cents % 100, `${id} should be a whole number of dollars`).toBe(0);
     }
+    expect(OUTCOME_PRICE_CENTS.business).toBe(1499);
     expect(MONTHLY_SMALL_ACTIONS).toBe(25);
   });
 

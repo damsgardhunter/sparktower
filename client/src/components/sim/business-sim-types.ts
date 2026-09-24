@@ -1,3 +1,4 @@
+import { businessMoney } from "@shared/currency";
 /**
  * What `/api/projects/:id/decision-sim` sends, in one place.
  *
@@ -8,6 +9,8 @@
  * share one cache entry rather than fetching it twice.
  */
 import type { Answer, Baseline, Lever } from "@shared/simulation/decision-sim";
+import type { Hindsight } from "@shared/simulation/hindsight";
+import type { Sensitivity } from "@shared/simulation/what-matters";
 import type { BaselineField } from "@shared/simulation/company-baseline";
 import type { Allocation } from "@shared/sprints/budget";
 import type { SpendOption } from "@shared/sprints/cards";
@@ -31,6 +34,10 @@ export interface Scenario {
   narrative: Narrative;
   rerunOf: string | null;
   createdAt: string;
+  /** How this projection has held up against the check-ins filed since. Null while it is too new. */
+  hindsight: Hindsight | null;
+  /** Which of this plan's numbers actually decide it, ranked by how much they move the answer. */
+  matters: { headline: string | null; rows: Sensitivity[] } | null;
 }
 
 export interface Outlook {
@@ -53,6 +60,10 @@ export interface FieldDef {
 export interface SimPayload {
   today: string;
   aiAvailable: boolean;
+  /** The business's own money (shared/currency.ts). The price below is dollars. */
+  currency: string;
+  /** Whether this is a software business, which decides which worked examples it is offered. */
+  software: boolean;
   price: { cents: number; display: string; unlocked: boolean };
   baseline: Baseline;
   overridden: BaselineField[];
@@ -73,11 +84,16 @@ export interface SimPayload {
 
 export const simKey = (projectId: string) => ["/api/projects", projectId, "decision-sim"];
 
-/** "$14k", "−$2,300". The screen is full of money and none of it needs cents. */
-export function money(n: number): string {
-  const a = Math.abs(Math.round(n));
-  const body = a >= 1_000_000 ? `${(a / 1_000_000).toFixed(2)}m` : a >= 10_000 ? `${Math.round(a / 1000)}k` : a.toLocaleString("en-GB");
-  return `${n < 0 ? "−" : ""}$${body}`;
+/**
+ * "£14k", "−$2,300". The screen is full of money and none of it needs cents.
+ *
+ * Takes the business's own currency, which the status route sends: these are
+ * the owner's figures, not this product's prices. Defaults to dollars so a
+ * caller that hasn't got the currency yet renders something rather than
+ * nothing — see shared/currency.ts.
+ */
+export function money(n: number, currency?: unknown): string {
+  return businessMoney(n, currency);
 }
 
 /** "22 Sep 2026, 14:03" — two scenarios run the same afternoon need the hour. */

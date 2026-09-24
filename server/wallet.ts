@@ -206,6 +206,24 @@ export async function hasBuildPass(userId: string, projectId: string | null | un
   return !!row;
 }
 
+/**
+ * Every project this account has bought the whole-business build for.
+ *
+ * The client needs this, not just the server. `requireCredits` has always
+ * treated a build pass as covering every priced outcome on that project — the
+ * route that sells it says "from here on every priced outcome on it is already
+ * paid for" — but the confirmation dialog knew only an action's list price and
+ * the balance, so on a project that had already paid for the build it still opened with
+ * "Price $6 / Balance $20 → $14" and a Pay button. Pressing it took nothing,
+ * which is right and is not what the buyer was told; declining it meant not
+ * using something they already owned.
+ */
+export async function buildPassProjects(userId: string): Promise<string[]> {
+  const rows = await db.select({ projectId: novaBuildPasses.projectId })
+    .from(novaBuildPasses).where(eq(novaBuildPasses.userId, userId));
+  return rows.map((r) => r.projectId);
+}
+
 /** The last movements on an account, newest first — a statement somebody can read. */
 export async function recentLedger(userId: string, limit = 25) {
   return db.select({

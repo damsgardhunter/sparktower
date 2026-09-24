@@ -21,9 +21,21 @@ const WIDTH = 640;
 const HEIGHT = 180;
 const PAD = { left: 8, right: 8, top: 12, bottom: 18 };
 
-export function CashCurve({ likely, cautious, without }: { likely: Run; cautious: Run; without: Run }) {
+export function CashCurve({ likely, cautious, bold, without, currency }: {
+  likely: Run; cautious: Run; bold?: Run; without: Run; currency?: string;
+}) {
+  /*
+   * The good case was computed and never drawn.
+   *
+   * `answer()` has always run three confidences and the chart showed two of
+   * them, so the one line an owner most wants to see — what it looks like if
+   * this goes well — existed in the payload and nowhere on screen. Drawn
+   * faintly, because it is the least likely of the three and a chart that
+   * gives it equal weight is a chart that sells.
+   */
   const series = [
     { key: "without", run: without, stroke: "currentColor", className: "text-muted-foreground/40", width: 1.5, dash: "4 3" },
+    ...(bold ? [{ key: "bold", run: bold, stroke: "currentColor", className: "text-emerald-500/35", width: 1.5, dash: "5 3" }] : []),
     { key: "cautious", run: cautious, stroke: "currentColor", className: "text-amber-500", width: 2, dash: undefined },
     { key: "likely", run: likely, stroke: "currentColor", className: "text-emerald-500", width: 2.5, dash: undefined },
   ];
@@ -49,7 +61,7 @@ export function CashCurve({ likely, cautious, without }: { likely: Run; cautious
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         className="w-full h-[180px]"
         role="img"
-        aria-label={`Bank balance over ${months} months: ${money(likely.endCash)} if it goes as expected, ${money(cautious.endCash)} if it goes slowly, ${money(without.endCash)} if you do nothing.`}
+        aria-label={`Bank balance over ${months} months: ${money(likely.endCash, currency)} if it goes as expected, ${money(cautious.endCash, currency)} if it goes slowly, ${money(without.endCash, currency)} if you do nothing.`}
       >
         {/* The line the whole decision is measured against: an empty bank. */}
         <line
@@ -71,9 +83,10 @@ export function CashCurve({ likely, cautious, without }: { likely: Run; cautious
         ))}
       </svg>
       <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground">
-        <Key className="text-emerald-500" label={`As expected — ${money(likely.endCash)}`} />
-        <Key className="text-amber-500" label={`If it goes slowly — ${money(cautious.endCash)}`} />
-        <Key className="text-muted-foreground/50" label={`Doing nothing — ${money(without.endCash)}`} dashed />
+        <Key className="text-emerald-500" label={`As expected — ${money(likely.endCash, currency)}`} />
+        <Key className="text-amber-500" label={`If it goes slowly — ${money(cautious.endCash, currency)}`} />
+        {bold && <Key className="text-emerald-500/40" label={`If it goes well — ${money(bold.endCash, currency)}`} dashed />}
+        <Key className="text-muted-foreground/50" label={`Doing nothing — ${money(without.endCash, currency)}`} dashed />
         <span className="ml-auto tabular-nums">month 1 → {months}</span>
       </div>
     </div>

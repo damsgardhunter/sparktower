@@ -58,6 +58,23 @@ describe("the AI stub", () => {
     expect(parsed.runGroups[0].where).toBe("terminal");
   });
 
+  it("reads a shape written across several lines", () => {
+    // The ten-year valuation writes its shape over three lines; a single-line
+    // reader found nothing and the route reported the model as unreadable.
+    const shape = `{"scores":{"growth":0,"risk":0},
+ "tenYear":0,"peak":0,"peakYear":1,
+ "summary":"three or four sentences","advice":["the one change","a second"]}`;
+    const parsed = parseModelJson(stubCompletion(promptFor(shape), "A company that exists"));
+    // Scored shapes get a middle number rather than zero, or every scored
+    // feature reads as a total failure on a stubbed server and the half of it
+    // behind a pass mark can't be reached at all.
+    expect(Object.keys(parsed.scores), "the nested object kept its own dimensions").toEqual(["growth", "risk"]);
+    expect(parsed.scores.growth).toBeGreaterThan(0);
+    expect(parsed.peakYear).toEqual(expect.any(Number));
+    expect(parsed.advice).toHaveLength(3);
+    expect(parsed.summary).toContain("AI_STUB");
+  });
+
   it("says something readable when the prompt wanted prose rather than JSON", () => {
     const text = stubCompletion("You are Nova. Reply to the builder in two sentences.", "How is my project going?");
     expect(() => parseModelJson(text)).toThrow();

@@ -31,6 +31,7 @@
 import { metricFor, type CheckinLike } from "../company-rhythm";
 import { readMargin, readWeeklyRevenue } from "../what-would-it-take";
 import { cleanBaseline, emptyBaseline, type Baseline } from "./decision-sim";
+import { symbolOf } from "../currency";
 
 /** Weeks to a month, for turning a weekly check-in into a monthly figure. */
 export const WEEKS_PER_MONTH = 52 / 12;
@@ -61,14 +62,43 @@ export const FIELD_COPY: Record<BaselineField, { label: string; hint: string }> 
   interestRate: { label: "Interest on it", hint: "What that borrowing costs a year, as a percentage." },
   debtRepayment: { label: "Repaid a month", hint: "What comes off the balance each month, on top of the interest." },
   growth: { label: "Growing by, a month", hint: "How much revenue moves on its own each month without any new decision. Most businesses are near zero, and a minus is allowed." },
-  grossMargin: { label: "Kept per extra dollar", hint: "Of every extra dollar of revenue, what is left once the cost of delivering it is paid. A restaurant is around 25–30%; software is 80%+." },
+  // Names a currency, so it is the one label `fieldCopyIn` has to rewrite.
+  // The default is the default currency's; nothing should render this copy
+  // directly on a project that has said what it counts in.
+  grossMargin: { label: "Kept per extra $1", hint: "Of every extra unit of revenue, what is left once the cost of delivering it is paid. A restaurant is around 25–30%; software is 80%+." },
   staff: { label: "People on the payroll", hint: "Including you, if the business pays you." },
+  ownerHours: { label: "Hours a week you can give it", hint: "What you can honestly put in, after the day job and everything else. Leave it at 0 and the plan is never held back by your time — which is rarely true and is how a plan built on your evenings reads as working." },
+  daysToGetPaid: { label: "Days before you're paid", hint: "0 if the money arrives when the work does. 30 or 60 if you invoice. The commonest way a profitable business runs out of cash." },
+  taxRate: { label: "Tax on profit", hint: "Roughly what goes to the taxman out of the profit. Leave it at 0 only if you genuinely pay none." },
+  seasonalSwing: { label: "How far the quiet months fall", hint: "0 for a business that is the same all year. 30% means your worst month is about a third down and your best about a third up." },
+  bestMonth: { label: "Your best month", hint: "Which month of the year is the busiest. Only matters if the quiet months fall at all." },
 };
+
+/**
+ * The same copy, in the money this business actually counts in.
+ *
+ * One label names a currency, and it used to name two at once — "Kept per
+ * extra £1/$1" — which was an honest hedge back when a project could not say
+ * what it counted in. It can (migration 0056), and the hedge had become the
+ * only wrong number on a screen whose summary line above it already read
+ * "€0 in, €0 out, €0 in the bank". A business counting in euros, Canadian or
+ * Australian dollars was offered a pound and a US dollar and neither was its.
+ */
+export function fieldCopyIn(currency: unknown): Record<BaselineField, { label: string; hint: string }> {
+  return {
+    ...FIELD_COPY,
+    grossMargin: { ...FIELD_COPY.grossMargin, label: `Kept per extra ${symbolOf(currency)}1` },
+  };
+}
 
 /** The order the fields read best in, which is not the order they are declared in. */
 export const FIELD_ORDER: BaselineField[] = [
   "monthlyRevenue", "monthlyCosts", "grossMargin", "cash",
   "debt", "interestRate", "debtRepayment", "staff", "growth",
+  // The facts of a real business that the arithmetic used to assume away:
+  // that the owner's week is finite, that money arrives later than the work,
+  // that the taxman takes a share, and that most trades have a bad January.
+  "ownerHours", "daysToGetPaid", "taxRate", "seasonalSwing", "bestMonth",
 ];
 
 /** How a field is typed and shown: money, a percentage, or a count. */
@@ -76,6 +106,8 @@ export const FIELD_UNIT: Record<BaselineField, "money" | "percent" | "count"> = 
   monthlyRevenue: "money", monthlyCosts: "money", cash: "money", debt: "money",
   interestRate: "percent", debtRepayment: "money", growth: "percent",
   grossMargin: "percent", staff: "count",
+  ownerHours: "count", daysToGetPaid: "count", taxRate: "percent",
+  seasonalSwing: "percent", bestMonth: "count",
 };
 
 /**

@@ -120,6 +120,44 @@ async function goalFor(projectId: string, opts: { backboneId?: string | null; go
 }
 
 /**
+ * Whether a milestone is finished, read off the board's rows.
+ *
+ * The one rule, in one place, because it was written twice and the two copies
+ * disagreed. `pathStatus` has always counted a milestone done when its own row
+ * is done *or* when every child under it is; `listTracks` looked only at the
+ * milestone's own row. So a milestone finished by its children — a core-loop
+ * milestone whose five loops are all written — counted on the page and not on
+ * the section button above it, and the two numbers sat on screen together:
+ * "Ship 23/24" in the tab, "24/24 milestones" in the bar directly beneath. A
+ * founder who had finished the whole path was told by the nav that they had
+ * not, and no amount of further work would ever close it.
+ *
+ * Pass every row on the section, children included — a caller that filters to
+ * rows carrying a `backbone:` tag throws away exactly the evidence this needs.
+ */
+export function milestoneDoneReader(
+  rows: { status: string; tags: string[] | null }[],
+  loopSources: Set<string>,
+): (id: string) => boolean {
+  const own = new Map<string, string>();
+  const children = new Map<string, typeof rows>();
+  for (const t of rows) {
+    const b = backboneIdOf(t.tags); if (b) own.set(b, t.status);
+    const p = parentOf(t.tags); if (p) children.set(p, [...(children.get(p) ?? []), t]);
+  }
+  return (id: string) => {
+    const kids = children.get(id);
+    // Loops and steps: a source milestone is done when all five kinds of loop
+    // are there and every loop is written.
+    if (loopSources.has(id) && kids?.some((k) => isLoop(k.tags))) {
+      return kids.every((k) => k.status === "done")
+        && loopCoverage(kids.filter((k) => isLoop(k.tags)).map((k) => ({ type: loopTypeOf(k.tags), written: true }))).complete;
+    }
+    return own.get(id) === "done" || (!!kids?.length && kids.every((k) => k.status === "done"));
+  };
+}
+
+/**
  * Every section, started or not: for the manager's three section buttons.
  * Progress is read without syncing anything, so it's cheap to poll.
  */
@@ -132,14 +170,24 @@ export async function listTracks(projectId: string) {
   for (const g of PROJECT_GOALS) {
     const state = await trackState(projectId, g.id);
     if (!state) { out.push({ goal: g.id, label: g.label, short: g.short, started: false as const, primary: false }); continue; }
-    const main = mainLineMilestones(resolveTree(g.id, state.subcategory, state.capitalRoute));
-    const live = rows.filter((r) => !isArchivedPath(r.tags) && backboneIdOf(r.tags) && trackOfTask(r.tags, primaryGoal) === g.id);
-    const done = new Set(live.filter((r) => r.status === "done").map((r) => backboneIdOf(r.tags)));
-    const present = new Set(live.map((r) => backboneIdOf(r.tags)));
+    const phases = resolveTree(g.id, state.subcategory, state.capitalRoute);
+    const main = mainLineMilestones(phases);
+    /*
+     * Children are kept, not filtered out: `milestoneDoneReader` needs them to
+     * see a milestone its loops or steps finished. Only rows belonging to some
+     * milestone of this section are relevant, which is either a `backbone:`
+     * tag or a `parent:` one.
+     */
+    const live = rows.filter((r) =>
+      !isArchivedPath(r.tags)
+      && (backboneIdOf(r.tags) || parentOf(r.tags))
+      && trackOfTask(r.tags, primaryGoal) === g.id);
+    const isDone = milestoneDoneReader(live, new Set(loopSourcesOf(phases)));
+    const present = new Set(live.map((r) => backboneIdOf(r.tags)).filter(Boolean));
     out.push({
       goal: g.id, label: g.label, short: g.short, started: true as const, primary: state.primary, subcategory: state.subcategory,
-      done: main.filter((m) => done.has(m.id)).length, total: main.length,
-      next: main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null,
+      done: main.filter((m) => isDone(m.id)).length, total: main.length,
+      next: main.find((m) => present.has(m.id) && !isDone(m.id))?.title ?? null,
     });
   }
   return { primary: primaryGoal, tracks: out };
@@ -1360,17 +1408,9 @@ export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null
   // Rows come back in whatever order the table holds them; loops and steps read in the order they were placed.
   for (const kids of children.values()) kids.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const loopSources = new Set(loopSourcesOf(phases));
-  const isDone = (id: string) => {
-    const own = taskByBackbone.get(id)?.status === "done";
-    const kids = children.get(id);
-    // Loops and steps: a source milestone is done when all five kinds of loop
-    // are there and every loop is written; a fan-out milestone when every step
-    // of every loop is done.
-    if (loopSources.has(id) && kids?.some((k) => isLoop(k.tags))) {
-      return kids.every((k) => k.status === "done") && loopCoverage(kids.filter((k) => isLoop(k.tags)).map((k) => ({ type: loopTypeOf(k.tags), written: true }))).complete;
-    }
-    return own || (!!kids?.length && kids.every((k) => k.status === "done"));
-  };
+  // The same rule the section buttons read, so the tab and the bar beneath it
+  // can never again show two different numbers for one path.
+  const isDone = milestoneDoneReader(tasks, loopSources);
   const loopsOf = (id: string) => (children.get(id) ?? []).filter((k) => isLoop(k.tags)).map((k) => ({
     taskId: k.id, title: k.title, description: k.description ?? "", status: k.status, type: loopTypeOf(k.tags),
   })).sort(byLoopOrder);

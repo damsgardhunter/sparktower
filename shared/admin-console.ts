@@ -1,3 +1,4 @@
+import { formatMoney, OUTCOME_PRICE_CENTS } from "./plans";
 /**
  * The customer console: what an operator may do to somebody else's account,
  * written down in one place.
@@ -87,7 +88,8 @@ export const CONSOLE_ACTION_DEFS: Record<ConsoleAction, ConsoleActionDef> = {
   },
   build_pass: {
     id: "build_pass", label: "Grant the whole-business build", role: "owner", reversible: true, subject: "project",
-    blurb: "Marks one project as having bought the $30 build, so every priced outcome on it is already paid for.",
+    /* The price is read rather than written: it has changed once already. */
+    blurb: `Marks one project as having bought the whole-business build (${formatMoney(OUTCOME_PRICE_CENTS.business)}), so every priced outcome on it is already paid for.`,
   },
   project_privacy: {
     id: "project_privacy", label: "Change who can see the project", role: "admin", reversible: true, subject: "project",
@@ -108,8 +110,8 @@ export const isConsoleAction = (v: unknown): v is ConsoleAction =>
  * Not because an operator is expected to be careless — because a console with
  * no ceiling is one where a slipped decimal point, or a stolen session that
  * got past a second factor, is unbounded. $200 covers every real support case
- * on this price list (the dearest single thing is a $30 build) and nothing
- * larger happens by accident.
+ * on this price list — comfortably more than the dearest single thing on it,
+ * whatever that is this month — and nothing larger happens by accident.
  */
 export const MAX_GRANT_CENTS = 20_000;
 export const MAX_GRANT_CENTS_PER_DAY = 50_000;

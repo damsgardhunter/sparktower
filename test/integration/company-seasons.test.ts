@@ -12,6 +12,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { makeVerifiedCompany } from "../helpers/company";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { companyAuditLog, simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
@@ -37,7 +38,7 @@ async function player(app: any, firstName = `S${n + 1}`) {
 /** A company, its owner, and `staff` more people who joined through the team link. */
 async function companyWithStaff(app: any, staff: number) {
   const owner = await player(app, "Owner");
-  const made = await owner.agent.post("/api/companies").send({ name: "Northwind Trading" });
+  const made = await makeVerifiedCompany(owner.agent, "Northwind Trading");
   expect(made.status, JSON.stringify(made.body)).toBe(201);
   const companyId = made.body.company.id as string;
   const people = [owner];

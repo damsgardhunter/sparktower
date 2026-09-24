@@ -3,16 +3,20 @@
  *
  * The game of the same name gives two strangers half an hour to invent a
  * startup over five rounds — the idea, the customer, the money, the product,
- * and where the first million goes — and then values what they made up.
+ * and where a year's money goes — and then values what they made up.
  *
  * Four of those five rounds are already answered for a real project. The idea,
  * the customer, the model and the product are the business, and its weekly
  * numbers say more about them than any round of a game could. So this asks the
  * one round that is left, and it is the one that carries the most information
- * anyway: **you have a million dollars and a year. Where does it go?**
+ * anyway: **you have a year's money and a year. Where does it go?** The sum
+ * is the business's own — see `budgetFor` in shared/simulation/operating-deck.ts
+ * — because a café turning over £430,000 learns nothing from spending an
+ * imaginary million, and the deck is the one written for businesses that exist
+ * rather than the sprint game's engineers and designers.
  *
  * That question is not decoration. It is the only thing on this screen the
- * owner has just decided, and a million dollars spent on seven things badly is
+ * owner has just decided, and a year's money spent on seven things badly is
  * the most common way a good business stops being one — which is why a line
  * funded below what it costs is shown as buying nothing rather than quietly
  * counted.
@@ -35,12 +39,14 @@ import { Loader2, Sparkles, Hourglass, AlertTriangle } from "lucide-react";
 import { money, simKey, stamp, type Outlook, type SimPayload } from "./business-sim-types";
 import type { Allocation } from "@shared/sprints/budget";
 import type { SpendOption } from "@shared/sprints/cards";
+import { symbolOf } from "@shared/currency";
 
 /** A valuation is a big number and always reads better rounded to its own scale. */
-function valuation(n: number): string {
-  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(n >= 10_000_000_000 ? 0 : 1)}bn`;
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}m`;
-  return money(n);
+function valuation(n: number, currency?: string): string {
+  const symbol = symbolOf(currency);
+  if (n >= 1_000_000_000) return `${symbol}${(n / 1_000_000_000).toFixed(n >= 10_000_000_000 ? 0 : 1)}bn`;
+  if (n >= 1_000_000) return `${symbol}${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}m`;
+  return money(n, currency);
 }
 
 export function TenYearsFromNow({ projectId }: { projectId: string }) {
@@ -59,6 +65,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
       if (!data!.price.unlocked && !(await confirmPurchase("tenYearOutlook", {
         title: "Ten years from now",
         detail: "Bought once for this project. Running it again — and every decision you simulate — is free from then on.",
+        projectId,
       }))) return null;
       return apiRequest("POST", `/api/projects/${projectId}/decision-sim/ten-years`, { allocation })
         .then((r) => r.json());
@@ -76,6 +83,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
   }
 
   const { budget, options, outlooks } = data.tenYears;
+  const currency = data.currency;
   const left = budget - spent;
   const groups = [...new Set(options.map((o) => o.group))];
 
@@ -89,13 +97,13 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
           </div>
           <p className="text-sm text-muted-foreground">
             Everything Nova needs about your business is already here — what it sells, who to, what it takes and what it
-            keeps. So there is only one question: <span className="text-foreground font-medium">you have been lent a
-            million dollars and a year. Where does it go?</span> Then it says where that puts you in ten years.
+            keeps. So there is only one question: <span className="text-foreground font-medium">you have been lent{" "}
+            {money(budget, currency)} and a year. Where does it go?</span> Then it says where that puts you in ten years.
           </p>
 
           <div className="flex items-center gap-3 flex-wrap rounded-lg border border-border px-3 py-2">
-            <span className="text-sm font-semibold tabular-nums" data-testid="ty-left">{money(left)}</span>
-            <span className="text-xs text-muted-foreground">left of {money(budget)}</span>
+            <span className="text-sm font-semibold tabular-nums" data-testid="ty-left">{money(left, currency)}</span>
+            <span className="text-xs text-muted-foreground">left of {money(budget, currency)}</span>
             <div className="ml-auto h-1.5 w-32 rounded-full bg-muted overflow-hidden" aria-hidden>
               <div
                 className="h-full bg-primary transition-[width]"
@@ -106,7 +114,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
           {left < 0 && (
             <p className="text-sm rounded-md border border-amber-500/40 bg-amber-500/5 p-3 flex gap-2">
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-              <span>That's {money(-left)} more than you have. Anything over the million is taken off the biggest lines before it is valued.</span>
+              <span>That's {money(-left, currency)} more than you have. Anything over {money(budget, currency)} is taken off the biggest lines before it is valued.</span>
             </p>
           )}
 
@@ -120,6 +128,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
                     option={option}
                     amount={allocation[option.id] ?? 0}
                     onChange={(n) => setAllocation((a) => ({ ...a, [option.id]: n }))}
+                    currency={currency}
                   />
                 ))}
               </div>
@@ -137,7 +146,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
               Where does this put us in ten years?
               {!data.price.unlocked && <span className="ml-1.5 text-xs opacity-80">{data.price.display}</span>}
             </Button>
-            {spent <= 0 && <span className="text-xs text-muted-foreground">Put the million somewhere first.</span>}
+            {spent <= 0 && <span className="text-xs text-muted-foreground">Put it somewhere first.</span>}
             {!data.aiAvailable && <span className="text-xs text-muted-foreground">Nova isn't available right now.</span>}
           </div>
         </CardContent>
@@ -156,7 +165,7 @@ export function TenYearsFromNow({ projectId }: { projectId: string }) {
  * underfunding appears the moment it applies rather than at the end, since by
  * the end the money is gone.
  */
-function SpendRow({ option, amount, onChange }: { option: SpendOption; amount: number; onChange: (n: number) => void }) {
+function SpendRow({ option, amount, onChange, currency }: { option: SpendOption; amount: number; onChange: (n: number) => void; currency?: string }) {
   const underfunded = amount > 0 && amount < option.minimumUseful;
   return (
     <div className={`rounded-lg border p-3 space-y-2 ${amount > 0 ? "border-primary/40 bg-primary/5" : "border-border"}`}>
@@ -181,7 +190,7 @@ function SpendRow({ option, amount, onChange }: { option: SpendOption; amount: n
       <p className="text-[11px] text-muted-foreground leading-snug">{option.consequence}</p>
       {underfunded && (
         <p className="text-[11px] text-amber-600" data-testid={`ty-underfunded-${option.id}`}>
-          Below {money(option.minimumUseful)} this buys nothing real — and it will be valued that way.
+          Below {money(option.minimumUseful, currency)} this buys nothing real — and it will be valued that way.
         </p>
       )}
     </div>
@@ -201,11 +210,11 @@ function OutlookCard({ outlook, data }: { outlook: Outlook; data: SimPayload }) 
       <CardContent className="p-5 space-y-4">
         <div className="flex items-end gap-3 flex-wrap">
           <div>
-            <p className="text-3xl font-semibold tabular-nums" data-testid="ty-value">{valuation(verdict.tenYear)}</p>
+            <p className="text-3xl font-semibold tabular-nums" data-testid="ty-value">{valuation(verdict.tenYear, data.currency)}</p>
             <p className="text-xs text-muted-foreground">what it's worth in ten years</p>
           </div>
           <div className="pb-1">
-            <p className="text-sm tabular-nums">{valuation(verdict.peak)} <span className="text-muted-foreground">at its peak, in year {verdict.peakYear}</span></p>
+            <p className="text-sm tabular-nums">{valuation(verdict.peak, data.currency)} <span className="text-muted-foreground">at its peak, in year {verdict.peakYear}</span></p>
           </div>
           <Badge variant="secondary" className="ml-auto" data-testid="ty-band">{outlook.band} · {outlook.overall}/1000</Badge>
         </div>
@@ -240,9 +249,9 @@ function OutlookCard({ outlook, data }: { outlook: Outlook; data: SimPayload }) 
 
         {/* The budget it was an answer to. Never a verdict without its question. */}
         <div className="text-xs text-muted-foreground space-y-1">
-          <p>The million went:</p>
+          <p>It went:</p>
           <p>
-            {funded.map(([id, n]) => `${money(n ?? 0)} on ${options.find((o) => o.id === id)?.label ?? id}`).join(" · ") || "nowhere"}
+            {funded.map(([id, n]) => `${money(n ?? 0, data.currency)} on ${options.find((o) => o.id === id)?.label ?? id}`).join(" · ") || "nowhere"}
           </p>
           <p>Valued {stamp(outlook.createdAt)}.</p>
         </div>

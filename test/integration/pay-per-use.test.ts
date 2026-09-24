@@ -19,6 +19,7 @@ import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
 import Stripe from "stripe";
 import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
+import { makeVerifiedCompany, proveDomain, freshDomain } from "../helpers/company";
 
 const WEBHOOK_SECRET = fakeWebhookSecret("pay-per-use");
 const signer = new Stripe(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
@@ -394,7 +395,7 @@ describe("the developer's way to have money", () => {
 describe("a company's private training season", () => {
   async function company(app: any, balanceCents = 0) {
     const owner = await builder(app, { balanceCents });
-    const made = await owner.agent.post("/api/companies").send({ name: `Northwind ${n}` });
+    const made = await makeVerifiedCompany(owner.agent, `Northwind ${n}`);
     expect(made.status, JSON.stringify(made.body)).toBe(201);
     return { owner, companyId: made.body.company.id as string };
   }
@@ -459,11 +460,18 @@ describe("what stays free forever", () => {
     // Allowance spent and no balance: if any of these were gated, it would show.
     await db.update(users).set({ creditsUsed: MONTHLY_SMALL_ACTIONS, creditsResetAt: new Date() }).where(eq(users.id, b.userId));
 
+    /*
+     * Proving a domain is itself free, and a company cannot be made without
+     * one — so the proof is done here and spent below. The claim this test
+     * makes is about money, not about what a company has to demonstrate.
+     */
+    const verificationId = await proveDomain(b.agent, freshDomain("free-forever"));
+
     const calls: [string, string, Record<string, unknown>][] = [
       // A private project — the gate that used to sell the Starter plan.
       ["post", "/api/projects", { title: "Kept Quiet", description: "A private project, which used to need a paid plan and now does not.", category: "saas", goal: "ship_mvp", subcategory: "saas", isPrivate: true }],
       // A company account, a team, a post on the feed, a milestone on the board.
-      ["post", "/api/companies", { name: `Free Forever ${n}` }],
+      ["post", "/api/companies", { name: `Free Forever ${n}`, verificationId }],
       ["post", "/api/feed", { content: "Shipped the first version of the thing today.", postType: "milestone" }],
       ["post", `/api/projects/${b.projectId}/milestones`, { title: "First release", description: "The first thing anybody outside can use." }],
       ["post", `/api/projects/${b.projectId}/kanban`, { title: "Write the landing page", status: "todo" }],

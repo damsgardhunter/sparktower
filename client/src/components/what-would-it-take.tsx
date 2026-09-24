@@ -211,6 +211,7 @@ function TargetPanel({ projectId, data, target, slot, onCompare, canCompare, com
       if (!data.price.unlocked && !(await confirmPurchase("whatWouldItTake", {
         title: `What would it take to reach ${target.label}?`,
         detail: "Built once for this project. Re-running it — for this size or any of the other three — is free from then on.",
+        projectId,
       }))) return null;
       return apiRequest("POST", `/api/projects/${projectId}/what-would-it-take/${target.id}`, {}).then((r) => r.json());
     },

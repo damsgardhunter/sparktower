@@ -92,7 +92,7 @@ export function DocumentStartDialog({
        * document afterwards are free — one price for the whole document
        * however long it turns out to be (CHARGE_FOR, shared/plans.ts).
        */
-      if (!(await confirmPurchase("documentPlan"))) return null;
+      if (!(await confirmPurchase("documentPlan", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/documents/plan`, {
         title, description,
         sourceTaskId,

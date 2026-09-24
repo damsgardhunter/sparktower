@@ -61,10 +61,15 @@ import {
   missingFrom, type Answer, type Baseline, type Lever,
 } from "@shared/simulation/decision-sim";
 import {
-  FIELD_COPY, FIELD_ORDER, FIELD_UNIT, readBaseline, type BaselineField,
+  fieldCopyIn, FIELD_ORDER, FIELD_UNIT, readBaseline, type BaselineField,
 } from "@shared/simulation/company-baseline";
-import { BUDGET_TOTAL, cleanAllocation, summariseBudget, type Allocation } from "@shared/sprints/budget";
-import { SPEND_OPTIONS } from "@shared/sprints/cards";
+import { cleanAllocation, summariseBudget, type Allocation } from "@shared/sprints/budget";
+import { operatingDeck } from "@shared/simulation/operating-deck";
+import { valueTenYears } from "@shared/simulation/ten-year";
+import { markProjection, type Hindsight } from "@shared/simulation/hindsight";
+import { whatMatters, explainWhatMatters, headlineWhatMatters, type Sensitivity } from "@shared/simulation/what-matters";
+import { businessMoney, businessMoneyExact, currencyOf } from "@shared/currency";
+import { isSoftwareCategory } from "@shared/categories";
 import { cleanVerdict, overallScore, scoreBand, DIMENSIONS, type Verdict } from "@shared/sprints/scoring";
 
 type Project = typeof projects.$inferSelect;
@@ -122,6 +127,8 @@ interface Ground {
   checkins: CheckinLike[];
   read: ReturnType<typeof readBaseline>;
   saved: typeof simulationBaselines.$inferSelect | null;
+  /** The fields the owner typed themselves — so a deliberate zero reads as an answer. */
+  answered: string[];
   metrics: { id: string; label: string; unit: string; latest: number | null }[];
   latestWeek: string | null;
   goals: string[];
@@ -145,6 +152,8 @@ async function groundOf(project: Project): Promise<Ground> {
   return {
     checkins,
     saved: row,
+    /** The fields the owner typed, so an explicit zero counts as an answer. */
+    answered: Array.isArray(row?.overridden) ? (row!.overridden as string[]) : [],
     read: readBaseline({
       subcategory: project.subcategory,
       checkins,
@@ -184,7 +193,7 @@ function describe(project: Project, ground: Ground, baseline: Baseline): string 
 - Money out: ${dollars(baseline.monthlyCosts)} a month
 - In the bank: ${dollars(baseline.cash)}
 - Owed: ${dollars(baseline.debt)} at ${Math.round(baseline.interestRate * 100)}% a year, repaying ${dollars(baseline.debtRepayment)} a month
-- Kept out of every extra dollar of revenue: ${Math.round(baseline.grossMargin * 100)}c
+- Kept out of every extra unit of revenue: ${Math.round(baseline.grossMargin * 100)}%
 - People on the payroll: ${baseline.staff}
 - Growing on its own by ${(baseline.growth * 100).toFixed(1)}% a month`,
     units ? `WHAT IT SELLS\n${units.how}` : null,
@@ -199,12 +208,19 @@ function describe(project: Project, ground: Ground, baseline: Baseline): string 
 // ─── Turning a sentence into levers ──────────────────────────────────────────
 
 const LEVER_SHAPES = `Each lever is one of these, and nothing else:
-{"kind":"hire","label":"...","startMonth":1,"people":12,"monthlyCostEach":4000,"monthlyRevenueEach":0,"rampMonths":3}
+("subscription" is for anything customers pay for again and again — a monthly fee, a retainer, a standing order. Use it instead of "spend" whenever customers STAY, because they stack up: each month's marketing wins more, some leave, and the rest keep paying. "spend" models trade that falls back when you stop advertising, which is right for a café and wrong for a subscription. "marketSize" is how many customers exist at all — put the real number in; a projection that sells to more customers than exist discredits everything beside it.)
+("drawings" is money the OWNER takes out of the business — wages to themselves, a dividend, "when can I start paying myself". Cash out, never a cost.)
+("job" is money from outside the business — a wage, a second job, a partner's income — and "intoBusiness" is the share of it that reaches the business. Use it whenever the plan starts with earning the money rather than having it: "I'll work another year and save", "I'll keep my job until it pays for itself". It is cash in, never revenue.)
+(On a hire, "ownerHoursFreedEach" is hours a week it takes off the OWNER once that person is up to speed — a manager, an ops hire, a bookkeeper. Zero unless the question is plainly about the owner doing less: "so I can stop doing the rotas", "to get me out of the kitchen". Guess conservatively and say what you assumed.)
+{"kind":"hire","label":"...","startMonth":1,"people":12,"monthlyCostEach":4000,"monthlyRevenueEach":0,"rampMonths":3,"ownerHoursFreedEach":0}
 {"kind":"spend","label":"...","startMonth":1,"monthlyAmount":1000,"months":0,"monthlyReturnAtFull":6000,"halfSpend":1500,"lagMonths":1}
 {"kind":"price","label":"...","startMonth":1,"changePct":10,"demandChangePct":-6,"lagMonths":1}
 {"kind":"loan","label":"...","startMonth":1,"amount":100000,"apr":0.11,"termMonths":60}
 {"kind":"oneOff","label":"...","startMonth":1,"amount":25000}
 {"kind":"saving","label":"...","startMonth":1,"monthlyAmount":800}
+{"kind":"job","label":"...","startMonth":1,"monthlyTakeHome":2200,"months":12,"intoBusiness":0.25}
+{"kind":"drawings","label":"...","startMonth":13,"monthlyAmount":1500,"months":0}
+{"kind":"subscription","label":"...","startMonth":1,"monthlyAmount":400,"months":0,"newCustomersAtFull":12,"halfSpend":400,"pricePerMonth":39,"monthlyChurn":0.03,"lagMonths":1,"marketSize":20000}
 {"kind":"other","label":"...","startMonth":1,"monthlyRevenueDelta":3000,"monthlyCostDelta":1200,"rampMonths":2}`;
 
 /**
@@ -290,9 +306,41 @@ Respond ONLY with valid JSON of exactly this shape, no markdown fences:
   return { system, user };
 }
 
+/**
+ * Revenue actually filed, month by month, since a projection was made.
+ *
+ * Each check-in is read on its own through the same recipe the baseline uses,
+ * then the weeks are bucketed by calendar month and summed. A month with no
+ * check-in comes back null rather than zero — see `markProjection` for why
+ * that distinction matters more than it looks.
+ */
+function actualMonthsSince(project: Project, checkins: CheckinLike[], from: Date, months: number): (number | null)[] {
+  const byMonth = new Map<string, number>();
+  for (const c of checkins) {
+    const one = readWeeklyRevenue(project.subcategory, [c], 1);
+    if (!one) continue;
+    const key = String(c.weekOf).slice(0, 7); // YYYY-MM
+    byMonth.set(key, (byMonth.get(key) ?? 0) + one.weekly);
+  }
+  const out: (number | null)[] = [];
+  const cursor = new Date(from);
+  for (let i = 0; i < months; i += 1) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    /* Only months already behind us can be marked. */
+    const past = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1) <= new Date();
+    out.push(past ? byMonth.get(key) ?? null : null);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return out;
+}
+
 // ─── What the client reads ───────────────────────────────────────────────────
 
-const scenarioForClient = (row: typeof simulationScenarios.$inferSelect) => ({
+const scenarioForClient = (
+  row: typeof simulationScenarios.$inferSelect,
+  hindsight: Hindsight | null = null,
+  matters: { headline: string | null; rows: Sensitivity[] } | null = null,
+) => ({
   id: row.id,
   question: row.question,
   months: row.months,
@@ -303,6 +351,10 @@ const scenarioForClient = (row: typeof simulationScenarios.$inferSelect) => ({
   narrative: row.narrative as Narrative,
   rerunOf: row.rerunOf,
   createdAt: row.createdAt,
+  /** How it has held up against the check-ins since. Null while it is too new to mark. */
+  hindsight,
+  /** Which of this plan's numbers actually decide it. See shared/simulation/what-matters.ts. */
+  matters,
 });
 
 const outlookForClient = (row: typeof tenYearOutlooks.$inferSelect) => {
@@ -361,6 +413,10 @@ export function registerDecisionSimRoutes(app: Express): void {
     res.json({
       today: todayYmd(),
       aiAvailable: openAiConfigured(),
+      /** The business's own money. The price beside it is dollars, because that is what Stripe takes. */
+      currency: currencyOf(project.currency),
+      /** Which worked examples to offer: a web app has no van and no Mondays. */
+      software: isSoftwareCategory(project.category),
       price: { cents: priceCents, display: formatMoney(priceCents), unlocked: priceCents === 0 },
       baseline: ground.read.baseline,
       /** Which fields the owner typed, so the form can show the rest as read from the check-ins. */
@@ -368,14 +424,42 @@ export function registerDecisionSimRoutes(app: Express): void {
       sources: ground.read.sources,
       missing: ground.read.missing,
       /** What every field is called and means, so the two clients cannot disagree about it. */
-      fields: FIELD_ORDER.map((f) => ({ field: f, unit: FIELD_UNIT[f], ...FIELD_COPY[f] })),
-      notReady: missingFrom(ground.read.baseline),
+      fields: (() => {
+        // In this project's own money: the margin label names a currency.
+        const copy = fieldCopyIn(project.currency);
+        return FIELD_ORDER.map((f) => ({ field: f, unit: FIELD_UNIT[f], ...copy[f] }));
+      })(),
+      notReady: missingFrom(ground.read.baseline, ground.answered),
       horizons: HORIZONS,
       confidences: CONFIDENCE_COPY,
-      scenarios: scenarios.map(scenarioForClient),
+      scenarios: scenarios.map((row) => {
+        /*
+         * Marked against what was actually filed. The one thing this tool is
+         * uniquely able to teach — how good this owner's own forecasting is —
+         * and it was throwing the evidence away every week.
+         */
+        const result = row.result as Answer;
+        const actual = actualMonthsSince(project, ground.checkins, row.createdAt, row.months);
+        /*
+         * Which numbers decide this plan, worked out here rather than stored:
+         * it is a couple of dozen runs of pure arithmetic, and computing it on
+         * read means an old scenario gets the ranking too, and gets it against
+         * whatever the engine does today rather than what it did in March.
+         */
+        const money = (n: number) => businessMoney(n, project.currency);
+        const ranked = explainWhatMatters(
+          whatMatters({ baseline: row.baseline as Baseline, levers: row.levers as Lever[], months: row.months }),
+          money,
+        );
+        return scenarioForClient(
+          row,
+          result?.with?.likely ? markProjection(result.with.likely, actual) : null,
+          ranked.length ? { headline: headlineWhatMatters(ranked, money), rows: ranked } : null,
+        );
+      }),
       tenYears: {
-        budget: BUDGET_TOTAL,
-        options: SPEND_OPTIONS,
+        budget: operatingDeck(ground.read.baseline.monthlyRevenue, isSoftwareCategory(project.category)).total,
+        options: operatingDeck(ground.read.baseline.monthlyRevenue, isSoftwareCategory(project.category)).options,
         dimensions: DIMENSIONS,
         outlooks: outlooks.map(outlookForClient),
       },
@@ -407,7 +491,7 @@ export function registerDecisionSimRoutes(app: Express): void {
       overridden,
       sources: ground.read.sources,
       missing: ground.read.missing,
-      notReady: missingFrom(ground.read.baseline),
+      notReady: missingFrom(ground.read.baseline, ground.answered),
     });
   });
 
@@ -437,7 +521,7 @@ export function registerDecisionSimRoutes(app: Express): void {
      * flat line at nothing, and somebody who paid for that would be entitled
      * to be annoyed about it.
      */
-    const notReady = missingFrom(baseline);
+    const notReady = missingFrom(baseline, ground.answered);
     if (notReady) return res.status(409).json({ message: notReady, code: "no_numbers_yet" });
     if (!openAiConfigured()) {
       return res.status(503).json({ message: "Nova isn't available right now, so this can't be read. Nothing was charged." });
@@ -485,7 +569,7 @@ export function registerDecisionSimRoutes(app: Express): void {
         });
       }
 
-      const result = answer({ baseline, levers, months });
+      const result = answer({ baseline, levers, months, currency: currencyOf(project.currency) });
 
       /*
        * The words, written to the computed verdict. A failure here is not
@@ -563,10 +647,10 @@ export function registerDecisionSimRoutes(app: Express): void {
      */
     const ground = await groundOf(project);
     const baseline = ground.read.baseline;
-    const notReady = missingFrom(baseline);
+    const notReady = missingFrom(baseline, ground.answered);
     if (notReady) return res.status(409).json({ message: notReady, code: "no_numbers_yet" });
 
-    const result = answer({ baseline, levers, months });
+    const result = answer({ baseline, levers, months, currency: currencyOf(project.currency) });
     const assumptions = (original.assumptions as string[]) ?? [];
 
     // metering: free by design — this project already bought the simulator, and a
@@ -619,8 +703,10 @@ export function registerDecisionSimRoutes(app: Express): void {
    * The game asks two strangers to invent a startup over five rounds and then
    * values what they made up. Four of those rounds are already answered here —
    * the idea, the customer, the model and the product are the project — so the
-   * only round left is the one nobody can read off a check-in: given a million
-   * dollars and a year, where does it go? That is the question, and the
+   * only round left is the one nobody can read off a check-in: given a year's
+   * spending and a year, where does it go? (A sum scaled to this business by
+   * `budgetFor`, not the game's imaginary million — see
+   * shared/simulation/operating-deck.ts.) That is the question, and the
    * valuation is of this business rather than an imaginary one.
    *
    * The verdict is the game's shape, cleaned through the game's own wall
@@ -631,16 +717,23 @@ export function registerDecisionSimRoutes(app: Express): void {
     const project = await projectFor(res, req.params.id, userId);
     if (!project) return;
 
-    const allocation = cleanAllocation(req.body?.allocation);
-    const budget = summariseBudget(allocation);
+    /*
+     * Read against the deck this business is actually offered — the operating
+     * one, and its own budget. Cleaning a café's allocation against the sprint
+     * game's deck would drop every line it had, because none of the ids match.
+     */
+    const preRead = await groundOf(project);
+    const deck = operatingDeck(preRead.read.baseline.monthlyRevenue, isSoftwareCategory(project.category));
+    const allocation = cleanAllocation(req.body?.allocation, deck);
+    const budget = summariseBudget(allocation, deck);
     if (budget.total <= 0) {
-      return res.status(400).json({ message: "Put the million somewhere first — even leaving it in the bank is an answer." });
+      return res.status(400).json({ message: "Put it somewhere first — even leaving it in the bank is an answer." });
     }
     if (!openAiConfigured()) {
       return res.status(503).json({ message: "Nova isn't available right now, so this can't be valued. Nothing was charged." });
     }
 
-    const ground = await groundOf(project);
+    const ground = preRead;
     const baseline = ground.read.baseline;
     // The same purchase as the scenarios: one price for the project, then both.
     const bought = await alreadyBought(project.id);
@@ -649,28 +742,36 @@ export function registerDecisionSimRoutes(app: Express): void {
       : await requireCredits(res, userId, CHARGEABLE, "valuing this business ten years out", { outcome: "simulations", projectId: project.id });
     if (!ent) return;
 
-    const money = (n: number) => `$${Math.round(n).toLocaleString("en-GB")}`;
+    const money = (n: number) => businessMoneyExact(n, project.currency);
+    /*
+     * Computed here, not asked of the model. See shared/simulation/ten-year.ts
+     * for why: everything else on this page is arithmetic the owner can check,
+     * and three invented figures sitting beside it were borrowing its
+     * credibility.
+     */
+    const valued = valueTenYears(baseline, budget, { recurring: isSoftwareCategory(project.category) });
     const system = `You are a blunt, experienced analyst valuing a real business ten years out.
 
-This is not a startup somebody invented in half an hour — it is a company that exists, with the figures below, and the owner has said where they would put a million dollars over the next year. Judge what is actually in front of you. Most small businesses are worth a few hundred thousand dollars in ten years' time, and some are worth nothing because the owner is the business and the owner will be ten years older. Be willing to say a number is small.
+This is not a startup somebody invented in half an hour — it is a company that exists, with the figures below, and the owner has said where they would put ${money(deck.total)} over the next year — a sum scaled to this business, not a round number from a game. Judge what is actually in front of you. Most small businesses are worth a few hundred thousand dollars in ten years' time, and some are worth nothing because the owner is the business and the owner will be ten years older. Be willing to say a number is small.
 
 Score five dimensions from 0 to 1000. USE THE FULL RANGE. A competent, unremarkable business is around 500; 800+ should be rare.
 ${DIMENSIONS.map((d) => `- ${d.id}: ${d.blurb}${d.betterIs === "lower" ? " (HIGHER NUMBER = MORE RISK)" : ""}`).join("\n")}
 
-Then value it: what it is worth in ten years, the peak it reaches, and which year that peak falls in (1-10). The peak can never be lower than the ten-year figure.
+THE VALUATION IS ALREADY WORKED OUT. Do not produce one. It is computed from the owner's own figures — ${money(valued.low)} to ${money(valued.high)}, with ${money(valued.mid)} the middle, peaking in year ${valued.peakYear} — and these are the workings:
+${valued.workings.map((w) => `- ${w}`).join("\n")}
+Your job is to say what that means and what decides which end of the range it lands at. Never contradict the figure; if you think it is wrong, say which of the workings above is the one to argue with.
 
-Weigh the million heavily. It is the only thing here the owner has just decided, and a million dollars spent on the wrong things is how a good business stops being one. Lines funded below what they cost bought nothing — say so.
+Weigh that year's spending heavily. It is the only thing here the owner has just decided, and ${money(deck.total)} spent on the wrong things is how a good business stops being one. Lines funded below what they cost bought nothing — say so.
 
 Respond ONLY with valid JSON of exactly this shape, no markdown fences:
 {"scores":{"growth":0,"capital":0,"product":0,"acquisition":0,"risk":0},
- "tenYear":0,"peak":0,"peakYear":1,
- "summary":"three or four sentences on what this business becomes and what decides it",
+ "summary":"three or four sentences on what this business becomes and what decides which end of the computed range it lands at",
  "notes":{"growth":"one line","capital":"one line","product":"one line","acquisition":"one line","risk":"one line"},
  "advice":["the single change that would most raise this number","a second one"]}`;
 
     const user = [
       describe(project, ground, baseline),
-      `WHERE THE FIRST MILLION GOES (the owner's answer, for the coming year)\n${budget.funded.map((l) => `- ${money(l.amount)} — ${l.option.label}: ${l.option.detail}${l.underfunded ? "  [funded below what it costs; likely bought nothing]" : ""}`).join("\n") || "- nothing at all"}${budget.unallocated > 0 ? `\n- ${money(budget.unallocated)} left unallocated.` : ""}\nDeployed: ${money(budget.deployed)} of ${money(BUDGET_TOTAL)}.`,
+      `WHERE THE ${money(deck.total).toUpperCase()} GOES (the owner's answer, for the coming year)\n${budget.funded.map((l) => `- ${money(l.amount)} — ${l.option.label}: ${l.option.detail}${l.underfunded ? "  [funded below what it costs; likely bought nothing]" : ""}`).join("\n") || "- nothing at all"}${budget.unallocated > 0 ? `\n- ${money(budget.unallocated)} left unallocated.` : ""}\nDeployed: ${money(budget.deployed)} of ${money(deck.total)}.`,
       ground.jobs ? `HOW IT IS RUN\n${ground.jobs} recurring jobs on the board, ${ground.checkins.length} weekly check-ins filed.` : null,
     ].filter(Boolean).join("\n\n");
 
@@ -679,7 +780,31 @@ Respond ONLY with valid JSON of exactly this shape, no markdown fences:
         model: modelFor(ent),
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
       });
-      const verdict = cleanVerdict(parseModelJson<any>(completion.choices[0]?.message?.content, "valuation"));
+      /*
+       * The model's prose, the computed money.
+       *
+       * `cleanVerdict` is shared with the sprint game, where the model really
+       * does produce the valuation — that is a game about a company invented
+       * in an afternoon, and there is nothing else to work from. Here there
+       * is, so whatever the model returned for the three money fields is
+       * replaced by the arithmetic before anything is stored. Feeding them
+       * through `cleanVerdict` first keeps one place responsible for the
+       * shape; overriding after keeps one place responsible for the number.
+       */
+      const spoken = cleanVerdict(parseModelJson<any>(completion.choices[0]?.message?.content, "valuation"));
+      const verdict = {
+        ...spoken,
+        tenYear: Math.round(valued.mid),
+        peak: Math.round(Math.max(valued.peak, valued.mid)),
+        peakYear: valued.peakYear,
+        /** The range and the workings, so the screen can show its own reasoning. */
+        valuation: {
+          low: Math.round(valued.low), mid: Math.round(valued.mid), high: Math.round(valued.high),
+          multipleLow: valued.multipleLow, multipleHigh: valued.multipleHigh,
+          revenueThen: Math.round(valued.revenueThen), profitThen: Math.round(valued.profitThen),
+          workings: valued.workings,
+        },
+      };
 
       const [row] = await db.insert(tenYearOutlooks).values({
         projectId: project.id,
@@ -692,6 +817,7 @@ Respond ONLY with valid JSON of exactly this shape, no markdown fences:
           goals: ground.goals,
         } as any,
         verdict: verdict as any,
+        /* The words are the model's; the money is not. */
         fromModel: true,
         createdBy: userId,
         createdAt: new Date(),

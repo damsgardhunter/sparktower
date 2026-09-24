@@ -135,8 +135,8 @@ export function paymentRequired(opts: {
  *     offering the $1 pass, which the client buys in one tap and retries.
  *   - an outcome → a **price in dollars**, taken from the balance before the
  *     model runs, and given straight back if the route never delivers
- *     (holdMoney, server/credit-reservations.ts). A project covered by the $30
- *     whole-business pass is free here, which is what that $30 bought.
+ *     (holdMoney, server/credit-reservations.ts). A project covered by the
+ *     whole-business pass is free here, which is what that purchase bought.
  *
  * Returns the entitlements when the work may proceed, or null after writing
  * the response — callers `return` immediately on null, as they always have.
@@ -166,7 +166,7 @@ export async function requireCredits(
 
   // --- A priced outcome: dollars. ---
   if (outcome) {
-    // Covered by the $30 build, and marked so the route's settle takes nothing.
+    // Covered by the whole-business build, and marked so the route's settle takes nothing.
     if (await hasBuildPass(userId, projectId)) { holdCovered(res, userId, outcome); return ent; }
     const cents = OUTCOME_PRICE_CENTS[outcome];
     const taken = await spend(userId, cents, { outcome, note: label, projectId });
@@ -187,7 +187,7 @@ export async function requireCredits(
   /*
    * --- A small action: the build pass on this project, the allowance, the pass. ---
    *
-   * The $30 build comes first, and used to not be consulted here at all.
+   * The whole-business build comes first, and used to not be consulted here at all.
    * That purchase buys a project outright — the route that sells it says so:
    * "from here on every priced outcome on it is already paid for". But it was
    * only ever checked for *priced* outcomes, and the step work is a small

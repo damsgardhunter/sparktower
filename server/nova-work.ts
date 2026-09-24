@@ -6,7 +6,7 @@
  * does the same thing forty times without anybody watching. They had two
  * copies, and the copies had drifted: the route passed Nova the project's
  * loops and the ones its owner had already rejected, and the build passed
- * neither — so the thing somebody paid $30 for was reasoning about their
+ * neither — so the thing somebody paid for was reasoning about their
  * business without knowing what its core loops were, while the free button
  * next to it knew. That is the failure this module exists to prevent, and the
  * reason the context is assembled here rather than at either call site.

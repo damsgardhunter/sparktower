@@ -39,17 +39,28 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2, Sparkles, AlertTriangle, SlidersHorizontal, RefreshCw, ChevronDown, ChevronRight,
   TrendingUp, Wallet, CircleHelp,
+  Scale,
 } from "lucide-react";
 import { CashCurve } from "./cash-curve";
 import { money, simKey, stamp, type Scenario, type SimPayload } from "./business-sim-types";
 import type { Baseline, Lever, Verdict } from "@shared/simulation/decision-sim";
 import type { BaselineField } from "@shared/simulation/company-baseline";
 
-/** The four computed verdicts, and how loudly each is shown. */
+/** The computed verdicts, and how loudly each is shown. */
 const VERDICT_TONE: Record<Verdict, "secondary" | "outline" | "destructive"> = {
   "it pays for itself": "secondary",
   "it works, but it is tight": "outline",
   "it costs more than it brings back": "destructive",
+  // A loss in cash bought on purpose, which is not the same warning.
+  "it costs money and buys back your time": "outline",
+  /*
+   * Ahead on the central case and fragile underneath it. Red rather than
+   * amber: a plan that falls over one time in four is nearer to the plan that
+   * runs you out of money than to the one that is merely tight, and the point
+   * of the badge is that nobody has to read down to the eighth bullet to find
+   * that out.
+   */
+  "it works only if little goes wrong": "destructive",
   "it runs you out of money": "destructive",
 };
 
@@ -63,10 +74,55 @@ const VERDICT_TONE: Record<Verdict, "secondary" | "outline" | "destructive"> = {
  */
 const EXAMPLES = [
   "What happens if I hire 12 people right now?",
-  "If I spend $1,000 a month on marketing, what's the projected outcome?",
+  "If I spend 1,000 a month on marketing, what's the projected outcome?",
   "What if I put my prices up 10%?",
-  "Can I afford a $60,000 van on finance this year?",
+  "Can I afford a 60,000 van on finance this year?",
   "What if I took on two more staff and stopped opening on Mondays?",
+];
+
+/**
+ * The same, for a business with no van and no Mondays.
+ *
+ * Every example above has premises or a vehicle — a van on finance, two more
+ * staff, not opening on Mondays — which is the right list for most of the
+ * businesses here and a strange one for a web app sold to the whole world.
+ * The decisions a software business actually weighs are the ones the engine
+ * grew a subscription lever for: what to charge, how many leave, whether the
+ * spend that brings people in pays for itself.
+ */
+const EXAMPLES_SOFTWARE = [
+  "If I spend 1,000 a month getting customers on and they keep paying, where am I in two years?",
+  "What if I put my prices up 10% and one in twenty customers leaves?",
+  "What happens if 3 in 100 customers leave every month instead of 2?",
+  "Can I afford to pay a second developer out of this?",
+  "How much would I have to charge for this to pay me a wage?",
+];
+
+/**
+ * The same, for somebody who hasn't started.
+ *
+ * The list above is written for a business with money moving through it, and
+ * offered to a founder with nothing it is a list of decisions they cannot
+ * make: hire twelve people, spend a thousand a month, buy a sixty-thousand
+ * van. The questions that matter when you have nothing are about getting the
+ * first money at all — a wage put aside, a few hundred spent, a small thing
+ * bought on finance — and the engine can answer every one of them.
+ */
+const EXAMPLES_FROM_NOTHING = [
+  "If I keep my job for a year and put 400 a month into it, what can I start with?",
+  "What happens if I spend 200 on flyers and it brings in 600 a month by month three?",
+  "Can I afford a 1,500 trailer on finance with nothing in the bank?",
+  "What if I work part time for six months while it gets going?",
+  "How long before this pays me more than my job does?",
+];
+
+/** Starting from nothing, with no flyers to print and no trailer to buy. */
+const EXAMPLES_SOFTWARE_FROM_NOTHING = [
+  "If I keep my job for a year and put 400 a month into it, what can I start with?",
+  "What happens if I spend 200 a month on ads and 15 people a month sign up by month three?",
+  "What if I charged 9 a month instead of 19 and twice as many signed up?",
+  "What if I work part time for six months while it gets going?",
+  "How long before this pays me more than my job does?",
 ];
 
 /** What each of a lever's numbers is called, in the owner's words. */
@@ -88,6 +144,35 @@ const LEVER_FIELD_COPY: Record<string, { label: string; unit: "money" | "percent
   monthlyRevenueDelta: { label: "Extra revenue, a month", unit: "money" },
   monthlyCostDelta: { label: "Extra cost, a month", unit: "money" },
   startMonth: { label: "Starts in month", unit: "count" },
+
+  /*
+   * The two newest kinds of lever, whose numbers had no copy at all.
+   *
+   * This map is an allowlist — the editor renders a lever's numeric fields
+   * only if they are named here — so the job and subscription levers arrived
+   * with every one of their figures invisible. A scenario would hold
+   * `monthlyTakeHome 2000, pricePerMonth 49, monthlyChurn 0.03,
+   * marketSize 200000` and offer the owner two boxes: how many months, and
+   * which month it starts. The line above the editor says "every one of these
+   * is a guess — change any of them and run it again", under an answer whose
+   * whole shape came from a price and a churn rate they could not reach.
+   */
+  monthlyTakeHome: { label: "Take-home a month", unit: "money" },
+  intoBusiness: { label: "How much of it goes in", unit: "percent" },
+  pricePerMonth: { label: "Each pays, a month", unit: "money" },
+  monthlyChurn: { label: "Leaving a month", unit: "percent" },
+  // Deliberately not "at this budget": on the lever this is the ceiling the
+  // saturating curve approaches, and the spend above decides how near it gets.
+  // The marketing form asks the friendlier question and converts.
+  newCustomersAtFull: { label: "Most new a month, at any spend", unit: "count" },
+  newCustomersFromHours: { label: "New a month from your own hours", unit: "count" },
+  wordOfMouth: { label: "Each customer brings in, a month", unit: "percent" },
+  reinvestShare: { label: "Share of its revenue put back in", unit: "percent" },
+  ownerHoursAMonth: { label: "Hours a month it takes you", unit: "count" },
+  marketSize: { label: "Customers that exist at all", unit: "count" },
+  rivalShare: { label: "Share of them already taken", unit: "percent" },
+  priceErosion: { label: "Price falls a year", unit: "percent" },
+  ownerHoursFreedEach: { label: "Hours a week each frees up", unit: "count" },
 };
 
 /** Percentages are stored as fractions and typed as whole numbers. One conversion, here. */
@@ -96,8 +181,14 @@ const toInput = (value: number, unit: "money" | "percent" | "count", asFraction:
 const fromInput = (value: number, unit: "money" | "percent" | "count", asFraction: boolean) =>
   unit === "percent" && asFraction ? value / 100 : value;
 
-/** The lever fields that hold a fraction rather than a percentage figure. */
-const FRACTION_FIELDS = new Set(["apr"]);
+/**
+ * The lever fields that hold a fraction rather than a percentage figure.
+ *
+ * `monthlyChurn` and `intoBusiness` are both stored 0–1, so without them here
+ * a 3% churn would render as "0.03" in a box labelled "(%)" and anyone
+ * correcting it to 3 would have set churn to 300%.
+ */
+const FRACTION_FIELDS = new Set(["apr", "monthlyChurn", "intoBusiness", "wordOfMouth", "reinvestShare", "rivalShare", "priceErosion"]);
 
 export function DecisionLab({ projectId }: { projectId: string }) {
   const { toast } = useToast();
@@ -119,6 +210,7 @@ export function DecisionLab({ projectId }: { projectId: string }) {
       if (!data!.price.unlocked && !(await confirmPurchase("decisionSimulation", {
         title: "Simulate this decision",
         detail: "Bought once for this project. Every question after this one — and the ten-year outlook — is free from then on.",
+        projectId,
       }))) return null;
       return apiRequest("POST", `/api/projects/${projectId}/decision-sim/scenarios`, { question, months })
         .then((r) => r.json());
@@ -138,6 +230,15 @@ export function DecisionLab({ projectId }: { projectId: string }) {
 
   /* One question per row, newest first, and a re-run sits with the question it came from. */
   const scenarios = data.scenarios;
+  /*
+   * Nothing coming in and nothing in the bank: the questions worth offering
+   * are a different set. See EXAMPLES_FROM_NOTHING.
+   */
+  const fromNothing = data.baseline.monthlyRevenue <= 0 && data.baseline.cash <= 0;
+  /* A web app is offered software decisions; everything else keeps the van. */
+  const examples = data.software
+    ? (fromNothing ? EXAMPLES_SOFTWARE_FROM_NOTHING : EXAMPLES_SOFTWARE)
+    : (fromNothing ? EXAMPLES_FROM_NOTHING : EXAMPLES);
 
   return (
     <div className="space-y-4" data-testid="decision-lab">
@@ -207,7 +308,7 @@ export function DecisionLab({ projectId }: { projectId: string }) {
             <div className="space-y-1.5" data-testid="sim-examples">
               <p className="text-xs text-muted-foreground">Things people ask:</p>
               <div className="flex flex-wrap gap-1.5">
-                {EXAMPLES.map((e) => (
+                {examples.map((e) => (
                   <button
                     key={e}
                     type="button"
@@ -224,7 +325,7 @@ export function DecisionLab({ projectId }: { projectId: string }) {
       </Card>
 
       {scenarios.map((s, i) => (
-        <ScenarioCard key={s.id} projectId={projectId} scenario={s} startOpen={i === 0} onAsk={setQuestion} />
+        <ScenarioCard key={s.id} projectId={projectId} scenario={s} startOpen={i === 0} onAsk={setQuestion} currency={data.currency} />
       ))}
     </div>
   );
@@ -248,9 +349,24 @@ function StartingPosition({ projectId, data, open, onToggle }: {
   const sourceOf = (f: BaselineField) => data.sources.find((s) => s.field === f)?.from ?? null;
 
   const save = useMutation({
+    /*
+     * Saving records every number on screen, not only the ones retyped.
+     *
+     * `overridden` used to be the fields this session touched, which made the
+     * displayed zeros unanswerable. The panel says, in as many words, "zero is
+     * a real answer — fill one in", and a founder with nothing in the bank and
+     * nothing coming in was looking at two fields already reading 0: there was
+     * nothing to type. Typing 0 over a 0 fires no change, so the button below
+     * stayed disabled and the simulator stayed blocked. The only way through
+     * was to type 1 and then 0 — a wrong number, corrected, to say "none".
+     *
+     * `data.missing` is exactly the set with no source and no answer, so
+     * pressing a button labelled "Save these" now means what it says: these
+     * are the figures, including the zeros.
+     */
     mutationFn: () => apiRequest("PUT", `/api/projects/${projectId}/decision-sim/baseline`, {
       numbers: values,
-      overridden: [...new Set([...data.overridden, ...touched])],
+      overridden: [...new Set([...data.overridden, ...touched, ...data.missing])],
     }).then((r) => r.json()),
     onSuccess: () => {
       setDraft(null);
@@ -278,7 +394,7 @@ function StartingPosition({ projectId, data, open, onToggle }: {
         <Wallet className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-sm font-medium">Where you're starting from</span>
         <span className="text-xs text-muted-foreground truncate">
-          {money(data.baseline.monthlyRevenue)} in, {money(data.baseline.monthlyCosts)} out, {money(data.baseline.cash)} in the bank
+          {money(data.baseline.monthlyRevenue, data.currency)} in, {money(data.baseline.monthlyCosts, data.currency)} out, {money(data.baseline.cash, data.currency)} in the bank
         </span>
         {data.missing.length > 0 && (
           <Badge variant="outline" className="ml-auto text-[10px] shrink-0" data-testid="sim-baseline-missing">
@@ -322,7 +438,9 @@ function StartingPosition({ projectId, data, open, onToggle }: {
             })}
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || !draft} data-testid="button-sim-save-baseline">
+            {/* Never disabled for want of an edit: confirming what is already
+                shown is the whole point when the true answer is a zero. */}
+            <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending} data-testid="button-sim-save-baseline">
               {save.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
               Save these
             </Button>
@@ -339,8 +457,10 @@ function StartingPosition({ projectId, data, open, onToggle }: {
 }
 
 /** One question and what the arithmetic said about it. */
-function ScenarioCard({ projectId, scenario, startOpen, onAsk }: {
+function ScenarioCard({ projectId, scenario, startOpen, onAsk, currency }: {
   projectId: string; scenario: Scenario; startOpen: boolean; onAsk: (q: string) => void;
+  /** The business's own money, so the curve and its key read in it. */
+  currency?: string;
 }) {
   const { toast } = useToast();
   const [open, setOpen] = useState(startOpen);
@@ -387,7 +507,91 @@ function ScenarioCard({ projectId, scenario, startOpen, onAsk }: {
               <p className="text-sm font-medium leading-relaxed" data-testid="sim-headline">{scenario.narrative.headline}</p>
             )}
 
-            <CashCurve likely={result.with.likely} cautious={result.with.cautious} without={result.without} />
+            {/*
+              * How this one turned out, before anything it predicted is read.
+              *
+              * Put above the chart deliberately: a projection that has already
+              * been shown to run 40% high should be read as a projection that
+              * runs 40% high, not discovered to have been one after the
+              * pleasant curve has done its work.
+              */}
+            {scenario.hindsight && (
+              <p
+                className={`text-sm rounded-md border px-3 py-2 ${
+                  scenario.hindsight.lean === "over"
+                    ? "border-amber-500/40 bg-amber-500/5"
+                    : scenario.hindsight.lean === "under"
+                      ? "border-emerald-500/40 bg-emerald-500/5"
+                      : "border-border bg-muted/40"
+                }`}
+                data-testid="sim-hindsight"
+              >
+                {scenario.hindsight.line}
+              </p>
+            )}
+
+            <CashCurve likely={result.with.likely} cautious={result.with.cautious} bold={result.with.bold} without={result.without} currency={currency} />
+
+            {/*
+              * What actually decides this plan.
+              *
+              * Placed between the chart and the findings on purpose: the chart
+              * says what happens, the findings say why, and this says which of
+              * the nine numbers underneath it is worth arguing about. Without
+              * it a plan is nine things to worry about equally, when in
+              * practice one or two carry the whole answer.
+              */}
+            {scenario.matters && scenario.matters.rows.length > 0 && (
+              <div className="rounded-lg border border-border p-3 space-y-2" data-testid="sim-what-matters">
+                <div className="flex items-center gap-2">
+                  <Scale className="h-3.5 w-3.5 text-muted-foreground" />
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">What decides this</p>
+                </div>
+                {scenario.matters.headline && (
+                  <p className="text-sm leading-relaxed">{scenario.matters.headline}</p>
+                )}
+                {/*
+                  * Two groups, never one list. The business's own figures are
+                  * usually the biggest movers on the page — a fifth of a large
+                  * cost base beats any single decision — so ranking them
+                  * together answers "should I do this?" with "your rent is
+                  * large". True, and not the question.
+                  */}
+                {(["decision", "business"] as const).map((scope) => {
+                  const group = scenario.matters!.rows.filter((r) => r.scope === scope);
+                  if (!group.length) return null;
+                  const widest = Math.max(...group.map((r) => r.swing)) || 1;
+                  return (
+                    <div key={scope} className="space-y-1.5">
+                      {scope === "business" && (
+                        <p className="text-[11px] font-medium text-muted-foreground pt-1">
+                          And underneath it, about the business rather than this decision:
+                        </p>
+                      )}
+                      <ul className="space-y-1.5">
+                        {group.map((r) => (
+                          <li key={`${r.leverIndex}-${r.field}`} className="space-y-0.5" data-testid={`matters-${r.field}`}>
+                            <div className="flex items-baseline gap-2 text-sm">
+                              <span className="flex-1">{r.line}</span>
+                            </div>
+                            {/* The bar is the comparison; the sentence is the detail. */}
+                            <div className="h-1 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${scope === "decision" ? "bg-primary/60" : "bg-muted-foreground/40"}`}
+                                style={{ width: `${Math.max(3, (r.swing / widest) * 100)}%` }}
+                              />
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+                <p className="text-[11px] text-muted-foreground">
+                  Each one nudged a fifth either way on its own, everything else held still. Change the ones that matter in the boxes below and run it again — it costs nothing.
+                </p>
+              </div>
+            )}
 
             {/* The computed findings. These are not Nova's, and they are not negotiable. */}
             <ul className="space-y-1 text-sm" data-testid="sim-facts">

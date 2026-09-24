@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { TrainingTab } from "@/components/company/training-tab";
 import { DecisionLab } from "@/components/sim/decision-lab";
+import { MarketingSchemes } from "@/components/sim/marketing-schemes";
 import { TenYearsFromNow } from "@/components/sim/ten-years-from-now";
 
 interface ProjectCompany {
@@ -60,6 +61,7 @@ export function SimulationsPanel({ projectId }: { projectId: string }) {
   const business = (
     <div className="space-y-4">
       <DecisionLab projectId={projectId} />
+      <MarketingSchemes projectId={projectId} />
       <TenYearsFromNow projectId={projectId} />
     </div>
   );

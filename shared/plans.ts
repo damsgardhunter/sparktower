@@ -25,6 +25,19 @@
  * "this is a bigger job" hints), but nothing in the server prices anything
  * from it any more — server/entitlements.ts prices from CHARGE_FOR below.
  *
+ * ## Whole dollars, with one deliberate exception
+ *
+ * Every price here is a whole number of dollars, because the point of leaving
+ * credits behind was that nobody should have to convert a number into money in
+ * their head, and $3 does that better than $2.99 does.
+ *
+ * `business` is the exception, at $14.99. It is the only price on this list
+ * big enough for the threshold to matter — the difference between "about
+ * fifteen dollars" and "about thirty" is the decision somebody actually makes,
+ * and at that size the convention of the shelf beats the tidiness of the
+ * table. Every other price stays whole, and a new one should be whole unless
+ * there is the same argument for it.
+ *
  * Everything money-related reads from here: the wallet (server/wallet.ts), the
  * charge itself (server/entitlements.ts), top-up checkout and the webhook, the
  * /api/plans response, and the pricing page. Change a number here and it
@@ -58,6 +71,7 @@ export type PricedOutcomeId =
   | "wwit"
   | "simulations"
   | "challenge"
+  | "marketing"
   | "imagePass";
 
 /**
@@ -93,6 +107,15 @@ export type PricedOutcomeId =
  *                the roadmap: a price per run is a price on checking, and
  *                checking is the behaviour worth encouraging. Included in
  *                `business`.
+ *   marketing  — a marketing scheme for a product that already exists: the
+ *                owner or their marketer writes the plan — who it is aimed at,
+ *                where it runs, what it offers, what it costs and how it is
+ *                measured — Nova reads it against the business's own figures
+ *                and scores it, and a scheme good enough to be worth testing
+ *                can then be run through the simulator for a year. Priced per
+ *                project like the simulations it feeds, and higher than them
+ *                because it is the one thing here a person can hand to a
+ *                client. Included in `business`.
  *   wwit       — "What would it take?": the route from where a company is to a
  *                size it picks, built from its own check-in numbers. Priced
  *                with the roadmap and the document because it is the same kind
@@ -105,11 +128,12 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   roadmap: 300,
   document: 300,
   codeAudit: 500,
-  business: 3000,
+  business: 1499,
   seasonSeat: 300,
   wwit: 300,
   simulations: 300,
   challenge: 499,
+  marketing: 600,
   imagePass: 500,
 };
 
@@ -155,7 +179,7 @@ export const FREE_IMAGE_RUNS = 1;
 /**
  * Top-up amounts offered in Stripe Checkout.
  *
- * Round numbers, and enough of them that the $30 whole-business build and a
+ * Round numbers, and enough of them that the whole-business build and a
  * twenty-seat season are each one trip through Checkout rather than four. The
  * server refuses any amount not in this list, so the client can't name its own
  * price. A balance never expires — it is the person's money.
@@ -263,6 +287,7 @@ export type NovaActionId =
   | "healthFix" | "strategyRecommendation" | "videoGeneration" | "profileVisuals"
   | "postImage" | "resumeEvaluation" | "matchExplanation" | "reputationEvaluation"
   | "pricingAnalysis" | "whatWouldItTake" | "decisionSimulation" | "tenYearOutlook"
+  | "marketingScheme"
   | "pitchDeckOutline"
   | "investorReadinessScore" | "mockInterviewQuestion" | "mockInterviewGrading"
   | "pitchCritique" | "sprintIdeaSuggestion" | "practiceSprint" | "novaPartnerReply"
@@ -347,6 +372,8 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
    * learns anything from one projection.
    */
   decisionSimulation: "simulations",
+  // Read a marketing scheme: bought once for the project, like the simulations it feeds.
+  marketingScheme: "marketing",
   tenYearOutlook: "simulations",
 };
 
@@ -400,6 +427,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
   simulations: {
     name: "Simulate a decision",
     blurb: "Ask what happens if you hire, borrow, put prices up or spend on marketing, and see it month by month against your own numbers — three ways it could go, and against doing nothing. Bought once for a project; every question after that is free.",
+  },
+  marketing: {
+    name: "Test a marketing scheme",
+    blurb: "Write the plan for a product that already exists — who it is for, where it runs, what it offers, what it costs, how you will know it worked — and Nova scores it against your own figures. A scheme worth testing can then be run for a year in the simulator. Bought once for a project.",
   },
   imagePass: {
     name: "A day of images",

@@ -14,6 +14,7 @@ import { registerChallengeRoutes } from "./challenge-routes";
 import { registerCompanyRhythmRoutes } from "./company-rhythm-routes";
 import { registerWhatWouldItTakeRoutes } from "./what-would-it-take";
 import { registerDecisionSimRoutes } from "./decision-sim-routes";
+import { registerMarketingRoutes } from "./marketing-routes";
 
 export function registerCompanyFeatures(app: Express): void {
   /* Before the company routes: a company cannot be created without one. */
@@ -26,4 +27,5 @@ export function registerCompanyFeatures(app: Express): void {
   registerCompanyRhythmRoutes(app);
   registerWhatWouldItTakeRoutes(app);
   registerDecisionSimRoutes(app);
+  registerMarketingRoutes(app);
 }

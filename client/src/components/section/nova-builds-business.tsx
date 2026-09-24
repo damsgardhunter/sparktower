@@ -31,7 +31,7 @@ import { AlertTriangle, Check, Loader2, Sparkles, UserRound } from "lucide-react
  *
  * It reads a server-side run rather than holding a spinner, so the wait
  * survives a refresh, a second tab and the phone — which matters most here,
- * because somebody who has just spent $30 will absolutely reload the page.
+ * because somebody who has just bought the build will absolutely reload the page.
  */
 export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
   const { toast } = useToast();
@@ -54,6 +54,7 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
       if (!paid && !(await confirmPurchase("buildMyBusiness", {
         title: OUTCOME_COPY.business.name,
         detail: `${OUTCOME_COPY.business.blurb} Nova writes every step that is its to write, and leaves the decisions that are yours with the options already researched.`,
+        projectId,
       }))) return null;
       // This screen reports its own failure, so the shared watcher doesn't toast it too.
       quietBuildErrors(projectId, 60_000);

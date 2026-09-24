@@ -17,7 +17,8 @@ import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companies, companyMembers, companyChallenges, challengeEntries, notifications, projects } from "@shared/schema";
+import { companies, companyMembers, companyChallenges, challengeEntries, notifications, projects, users } from "@shared/schema";
+import { CHALLENGE_FEE_CENTS, MIN_PRIZE_CENTS } from "@shared/challenges-money";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -39,6 +40,14 @@ async function company(ownerId: string, others: { userId: string; role: "admin" 
   const suffix = Math.random().toString(36).slice(2, 8);
   const [c] = await db.insert(companies).values({
     name: `Acme ${suffix}`, slug: `acme-${suffix}`, industry: "E-Commerce", createdBy: ownerId, createdAt: new Date(),
+    /*
+     * Proved, because a company that has not proved a domain cannot put a
+     * challenge in front of strangers — that is the whole point of the check
+     * and it is tested where it belongs, in company-verification.test.ts. The
+     * rows are written straight in here rather than through the route, so the
+     * proof has to be written in too.
+     */
+    verifiedDomain: `acme-${suffix}.test`, verifiedAt: new Date(), verifiedMethod: "file",
   }).returning();
   await db.insert(companyMembers).values([
     { companyId: c.id, userId: ownerId, role: "owner", joinedAt: new Date() },
@@ -52,7 +61,16 @@ const brief = {
   title: "Cut our returns rate",
   brief: "We ship furniture and a fifth of it comes back. Show us a way to cut that without cutting sales.",
   criteria: "Evidence it works on real customers.",
+  /* The words, for anything the money cannot say. */
   prize: "$5,000 and a paid pilot",
+  /*
+   * And the money itself, which is now held by SparkTower until a winner is
+   * picked. In the shared brief rather than passed at each call site so that
+   * every test expecting a 400 still gets it for the reason it names — a
+   * missing prize would refuse them all first and quietly stop them testing
+   * the title, the deadline and the industry at all.
+   */
+  prizeCents: MIN_PRIZE_CENTS,
   terms: "Winners are paid within 30 days of the announcement. Entrants keep their own IP unless a pilot is agreed.",
   industry: "E-Commerce",
 };
@@ -83,6 +101,13 @@ beforeEach(async () => {
 });
 
 async function newChallenge(extra: Record<string, unknown> = {}) {
+  /*
+   * The fee and the prize leave the balance together, so whoever posts has to
+   * have the money. Topped up here rather than in every caller: what this file
+   * is about is who may post and what they may write, not the escrow, which
+   * company-verification.test.ts covers.
+   */
+  await db.update(users).set({ balanceCents: CHALLENGE_FEE_CENTS + MIN_PRIZE_CENTS * 4 }).where(eq(users.id, owner.id));
   const res = await owner.agent.post(`/api/companies/${acme.id}/challenges`).send({ ...brief, deadline: inAMonth(), ...extra });
   expect(res.status, res.text).toBe(201);
   return res.body as { id: string };
@@ -91,6 +116,8 @@ async function newChallenge(extra: Record<string, unknown> = {}) {
 describe("posting a challenge", () => {
   it("checks what the company writes", async () => {
     const base = `/api/companies/${acme.id}/challenges`;
+    // Enough for the one that is meant to succeed at the end of this.
+    await db.update(users).set({ balanceCents: CHALLENGE_FEE_CENTS + MIN_PRIZE_CENTS * 4 }).where(eq(users.id, owner.id));
     expect((await owner.agent.post(base).send({ ...brief, deadline: inAMonth(), title: "x" })).status).toBe(400);
     expect((await owner.agent.post(base).send({ ...brief, deadline: inAMonth(), brief: "too short" })).status).toBe(400);
     expect((await owner.agent.post(base).send({ ...brief, deadline: inAMonth(), terms: "" })).status).toBe(400);

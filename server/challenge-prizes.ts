@@ -27,7 +27,7 @@
  * entrant wins it. Keeping both numbers on the row means a refund can never
  * accidentally hand back the fee, and a receipt can say what happened to each.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { challengePrizes, novaLedger, users } from "@shared/schema";
 import { CHALLENGE_FEE_CENTS, formatPrize } from "@shared/challenges-money";
@@ -225,7 +225,16 @@ export async function prizeFor(challengeId: string) {
 /** The prizes for a list of challenges, in one query, for a list screen. */
 export async function prizesFor(challengeIds: string[]) {
   if (!challengeIds.length) return new Map<string, typeof challengePrizes.$inferSelect>();
+  /*
+   * `inArray`, not a hand-written `= any(...)`.
+   *
+   * A JS array interpolated into a template goes to Postgres as one bound
+   * parameter, so `any($1)` was handed a bare uuid where it wanted an array
+   * literal and threw "malformed array literal" — a 500 on GET /api/challenges,
+   * which is the public list. It only showed up with challenges on the page;
+   * an empty board returns early on the line above and looked perfectly fine.
+   */
   const rows = await db.select().from(challengePrizes)
-    .where(sql`${challengePrizes.challengeId} = any(${challengeIds})`);
+    .where(inArray(challengePrizes.challengeId, challengeIds));
   return new Map(rows.map((r) => [r.challengeId, r]));
 }

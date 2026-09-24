@@ -129,6 +129,16 @@ export const MINE: Owned[] = [
    */
   { table: "user_blocks", column: "blocker_id" },
   { table: "user_blocks", column: "blocked_id" },
+  /*
+   * A domain somebody proved they own.
+   *
+   * Theirs, not the company's: the verification is keyed to the person who did
+   * it and is `on delete cascade`, so it goes when they do — the company keeps
+   * its own `verified_domain` and carries on. Listed here rather than left
+   * implicit so it is in the export too: "I proved I own this domain on this
+   * date" is a thing somebody leaving is entitled to a copy of.
+   */
+  { table: "company_verifications", column: "user_id" },
 ];
 
 export const CHOICE: Owned[] = [
@@ -192,6 +202,27 @@ export const KEPT: Owned[] = [
   { table: "project_documents", column: "created_by_id" },
   { table: "project_files", column: "uploader_id" },
   { table: "code_audit_runs", column: "started_by_id" },
+  /*
+   * The decision simulator's rows: a project's baseline numbers, the scenarios
+   * run against them and the ten-year outlooks. Each is keyed to the project
+   * and cascades with it; the user column only records who pressed the button,
+   * and is already `on delete set null`. Team work, like the audit above.
+   */
+  { table: "simulation_baselines", column: "updated_by" },
+  { table: "simulation_scenarios", column: "created_by" },
+  { table: "ten_year_outlooks", column: "created_by" },
+  // A marketing scheme is the same shape as the three above: written against
+  // one project, cascading with it, and `author_id` only says who typed it.
+  { table: "marketing_schemes", column: "author_id" },
+  /*
+   * The money behind a challenge, which is held for somebody else until a
+   * winner is picked. `funded_by` and `awarded_to` are `on delete set null`
+   * precisely so the record outlives the account that paid or won, pointing at
+   * a tombstone — money is kept for the same reason every other payment record
+   * here is.
+   */
+  { table: "challenge_prizes", column: "funded_by" },
+  { table: "challenge_prizes", column: "awarded_to" },
   { table: "project_code_audits", column: "created_by_id" },
   { table: "cofounder_sprints", column: "user1_id" },
   { table: "cofounder_sprints", column: "user2_id" },

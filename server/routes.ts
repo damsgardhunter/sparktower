@@ -94,7 +94,7 @@ import {
   type TierId,
   PAY_ENDPOINTS,
 } from "@shared/plans";
-import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass } from "./wallet";
+import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
 import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
 import { requireImages, buyImagePass, imagePassActive } from "./images";
 
@@ -3235,7 +3235,7 @@ RULES:
       }
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone", { projectId });
       if (!ent) return;
-      // Assembled in server/nova-work.ts, which the $30 build uses too — the
+      // Assembled in server/nova-work.ts, which the whole-business build uses too — the
       // two had drifted, and the paid one was the one missing the loops.
       const payload = await produceWorkForTask(ent, ctx, await readSurroundings(projectId));
       const row = await saveWork(projectId, ctx.task.id, payload);
@@ -6911,6 +6911,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         prices: PRICE_LIST,
         notice: PRICING_NOTICE,
         recent: await recentLedger(userId, 20),
+        /** Projects whose priced outcomes are already paid for. See server/wallet.ts. */
+        buildPasses: await buildPassProjects(userId),
       });
     } catch (error) {
       console.error("Wallet read error:", error);
@@ -7021,7 +7023,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   /**
-   * "Nova builds the whole business" — $30, once, for one project.
+   * "Nova builds the whole business" — bought once, for one project.
    *
    * What the money buys is a pass on that project (nova_build_passes): from
    * here on every priced outcome on it — the roadmap, the documents, the audit
@@ -7045,7 +7047,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
          * Already paid for. Not an error to be shown as one: a build that was
          * interrupted — a restart, a step that threw — has to be startable
          * again, and the pass is the receipt that makes the second run free.
-         * Refusing outright would leave someone who paid $30 with a half-built
+         * Refusing outright would leave someone who paid for the build with a half-built
          * path and no button.
          */
         if (await buildInFlight(projectId)) {
@@ -7269,7 +7271,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    *
    * Everything priced in this product is bought out of the balance, and the
    * only way to fill it is a Stripe Checkout session. That makes the paid
-   * paths — the $30 build above, the day pass, the documents — untestable
+   * paths — the whole-business build above, the day pass, the documents — untestable
    * locally without either real Stripe credentials or somebody writing
    * `balance_cents` by hand in psql, which skips the ledger and leaves the two
    * disagreeing. This credits it the way the webhook does, ledger row and all,

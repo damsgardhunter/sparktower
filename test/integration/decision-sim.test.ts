@@ -304,15 +304,23 @@ describe("re-running with the owner's own numbers", () => {
 });
 
 describe("ten years from now", () => {
-  it("values the business on where the million goes, through the game's own cleaning", async () => {
+  it("values the business on where a year's money goes, through the budget's own cleaning", async () => {
     mode = "decision";
     const app = await getTestApp();
     const owner = await person(app);
     const id = await runProject(owner);
     await withNumbers(owner, id);
 
+    // $20,000 a month, so the question is about $240,000 — a year of this
+    // business's revenue — rather than the sprint game's imaginary million.
+    const offered = (await owner.agent.get(`/api/projects/${id}/decision-sim`)).body.tenYears;
+    expect(offered.budget, "the sum is the business's own").toBe(240_000);
+    expect(offered.options.map((o: any) => o.id), "and the deck is one a real business can buy from")
+      .toContain("manager");
+    expect(offered.options.map((o: any) => o.id)).not.toContain("first-engineer");
+
     const res = await owner.agent.post(`/api/projects/${id}/decision-sim/ten-years`)
-      .send({ allocation: { marketing: 300_000, "ops-hire": 200_000, runway: 500_000 } });
+      .send({ allocation: { "local-marketing": 60_000, manager: 60_000, runway: 120_000 } });
     expect(res.status, res.text).toBe(200);
 
     const { outlook } = res.body;
@@ -322,10 +330,27 @@ describe("ten years from now", () => {
     expect(outlook.verdict.peakYear).toBeLessThanOrEqual(10);
     expect(outlook.overall).toBeGreaterThan(0);
     expect(outlook.band).toBeTruthy();
-    expect(outlook.allocation.runway).toBe(500_000);
+    expect(outlook.allocation.runway).toBe(120_000);
   });
 
-  it("will not value a million that has not been put anywhere", async () => {
+  it("trims an allocation to this business's budget, not to a million", async () => {
+    mode = "decision";
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner);
+    await withNumbers(owner, id);
+
+    // Half a million into a business whose year is $240,000: the overspend
+    // comes off the biggest line, and nothing is valued that wasn't affordable.
+    const res = await owner.agent.post(`/api/projects/${id}/decision-sim/ten-years`)
+      .send({ allocation: { manager: 500_000, systems: 20_000 } });
+    expect(res.status, res.text).toBe(200);
+    const total = Object.values(res.body.outlook.allocation as Record<string, number>).reduce((a, b) => a + b, 0);
+    expect(total).toBeLessThanOrEqual(240_000);
+    expect(res.body.outlook.allocation.systems, "the small line survives the trim").toBe(20_000);
+  });
+
+  it("will not value money that has not been put anywhere", async () => {
     const app = await getTestApp();
     const owner = await person(app);
     const id = await runProject(owner);
@@ -347,7 +372,7 @@ describe("ten years from now", () => {
 
     const start = await balanceOf(owner.id);
     const valued = await owner.agent.post(`/api/projects/${id}/decision-sim/ten-years`)
-      .send({ allocation: { marketing: 1_000_000 } });
+      .send({ allocation: { "local-marketing": 240_000 } });
     expect(valued.status).toBe(200);
     expect(start - (await balanceOf(owner.id))).toBe(OUTCOME_PRICE_CENTS.simulations);
 

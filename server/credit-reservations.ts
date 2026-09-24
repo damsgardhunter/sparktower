@@ -183,7 +183,7 @@ export function holdMoney(
  * Marks this response as already paid for.
  *
  * Some actions are free at the point of use and still run the same code:
- * an outcome on a project the $30 whole-business build covers, a small action
+ * an outcome on a project the whole-business build covers, a small action
  * under a day pass. Those return from requireCredits without taking anything —
  * and the route then settles the way every route settles, by calling
  * storage.deductCredits once the answer is in hand. With no hold to find, that

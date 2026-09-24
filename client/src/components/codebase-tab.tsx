@@ -248,7 +248,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const auditMutation = useMutation({
     mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
       // Priced: asked before it spends, never after. See payment-dialog.
-      if (!(await confirmPurchase("codeAudit"))) return null;
+      if (!(await confirmPurchase("codeAudit", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
       return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
     },
