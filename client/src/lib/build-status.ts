@@ -41,7 +41,56 @@ export const buildStageLabel = (stage: string | null | undefined) =>
     : "Working through your path";
 
 /** What each project's build last looked like, so a finish is acted on once however many copies are mounted. */
-const seen = new Map<string, { runningId: string | null; lastId: string | null; finishedAt: string | null }>();
+export interface BuildMark {
+  runningId: string | null;
+  lastId: string | null;
+  finishedAt: string | null;
+  /** Everything the build has got through, however each one ended. */
+  through: number;
+}
+
+/** Where a status reading stands against the one before it. */
+export interface BuildChange {
+  /** The run is no longer running. */
+  stopped: boolean;
+  /** A run finished — a different run, or the same one gaining an end. */
+  finished: boolean;
+  /** Still running, and another step went by since the last look. */
+  advanced: boolean;
+}
+
+export const markOf = (data: BuildRunStatus): BuildMark => ({
+  runningId: data.running?.id ?? null,
+  lastId: data.last?.id ?? null,
+  finishedAt: data.last?.finishedAt ?? null,
+  through: data.running ? data.running.stepsDone + data.running.stepsForYou + data.running.stepsFailed : 0,
+});
+
+/**
+ * What changed between two readings, and so what has to be re-read.
+ *
+ * Its own function because the answer decides whether a fourteen-minute build
+ * looks like it is working: `advanced` is the one that was missing, and
+ * nothing about a React effect makes that rule easier to check.
+ */
+export function buildChange(prev: BuildMark, next: BuildMark): BuildChange {
+  const stopped = !!prev.runningId && !next.runningId;
+  const finished = next.finishedAt !== prev.finishedAt || next.lastId !== prev.lastId;
+  return { stopped, finished, advanced: !stopped && !finished && !!next.runningId && next.through > prev.through };
+}
+
+const seen = new Map<string, BuildMark>();
+
+/*
+ * What the path screen reads, re-read each time the build gets through
+ * another step.
+ *
+ * Shorter than the list used when a run ends, on purpose: this fires once per
+ * step for the length of the build, and the documents and the activity log are
+ * neither on the screen somebody is watching nor cheap to fetch. They are
+ * caught by the full sweep at the finish.
+ */
+const LIVE_KEYS = ["path", "tracks", "milestones", "kanban"];
 /** Until when a build's outcome is left to the screen that started it. */
 const quietUntil = new Map<string, number>();
 
@@ -67,13 +116,31 @@ export function useBuildStatus(projectId: string | undefined, opts: { expectRunn
   const data = query.data;
   useEffect(() => {
     if (!projectId || !data) return;
-    const next = { runningId: data.running?.id ?? null, lastId: data.last?.id ?? null, finishedAt: data.last?.finishedAt ?? null };
+    const next = markOf(data);
     const prev = seen.get(projectId);
     seen.set(projectId, next);
     if (!prev) return;  // first look: nothing has changed yet
-    const stopped = !!prev.runningId && !next.runningId;
-    const finished = next.finishedAt !== prev.finishedAt || next.lastId !== prev.lastId;
-    if (!stopped && !finished) return;
+    const { stopped, finished, advanced } = buildChange(prev, next);
+
+    /*
+     * A step went by while the build is still going: re-read the path.
+     *
+     * Everything here used to wait for the run to stop, so for the fourteen
+     * minutes of a twenty-seven step build the screen showed the path exactly
+     * as it was when the button was pressed — Nova answering and closing a
+     * step every forty-five seconds, and the card above the progress bar
+     * sitting on the same step throughout. It didn't look like it was working,
+     * it looked broken.
+     *
+     * Keyed on the count rather than the poll, so this is about one re-read
+     * per step and not one every three seconds.
+     */
+    if (!stopped && !finished) {
+      if (advanced) {
+        for (const key of LIVE_KEYS) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
+      }
+      return;
+    }
 
     /*
      * A build rewrites the path, the board and the milestones — nineteen steps

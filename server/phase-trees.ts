@@ -34,6 +34,7 @@ import {
 import { MONEY_POSITION_MILESTONE } from "@shared/phase-trees/systemize";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
+import { tidyProse } from "./prose-style";
 
 /** Tags let the actor and tier ride on the existing task row. */
 export const tagsFor = (m: ResolvedMilestone) => [
@@ -1040,11 +1041,57 @@ export async function pathTaskContext(projectId: string, taskId: string) {
   return { task, project, milestone, actor, tier };
 }
 
+/**
+ * Markdown decoration off a stored packet, on the way out.
+ *
+ * Packets written from now on are tidied before they are saved
+ * (server/prose-style.ts), but a path built before that is full of "## " and
+ * "**Evidence:**", and those are the packets somebody is reading today. This
+ * is derived on read like the run groups above it — the row is never
+ * rewritten, so nothing is lost if the rule changes.
+ *
+ * Code is not prose: a build's files and its run commands are passed straight
+ * through, and `tidyProse` masks backtick spans in what is left.
+ */
+function tidyWorkProse(payload: WorkPayload): WorkPayload {
+  const p = (v: unknown) => tidyProse(v);
+  switch (payload.kind) {
+    case "options":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        intro: p(payload.intro),
+        options: payload.options.map((o) => ({ ...o, title: p(o.title), body: p(o.body), why: o.why ? p(o.why) : o.why })),
+      };
+    case "build":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        summary: p(payload.summary),
+        verify: p(payload.verify),
+        assumptions: payload.assumptions.map(p),
+      };
+    case "template":
+      return { ...payload, intro: p(payload.intro), template: p(payload.template), whatNovaDid: p(payload.whatNovaDid), whatIsLeft: p(payload.whatIsLeft) };
+    case "plan":
+      return {
+        ...payload,
+        summary: p(payload.summary),
+        sections: payload.sections.map((x) => ({ heading: p(x.heading), body: p(x.body) })),
+        assumptions: payload.assumptions.map(p),
+        gaps: payload.gaps.map(p),
+        actions: payload.actions.map((a) => ({ ...a, title: p(a.title), detail: p(a.detail) })),
+      };
+    default:
+      return payload;
+  }
+}
+
 export async function latestWork(taskId: string) {
   const [row] = await db.select().from(pathWork).where(and(eq(pathWork.taskId, taskId), ne(pathWork.kind, "loop-audit"))).orderBy(desc(pathWork.createdAt)).limit(1);
   // Every screen reads packets through here or saveWork, so this is where an
   // older packet gets its run steps as blocks — derived on read, never rewritten.
-  return row ? { ...row, payload: withRunGroups(row.payload as WorkPayload) } : null;
+  return row ? { ...row, payload: tidyWorkProse(withRunGroups(row.payload as WorkPayload)) } : null;
 }
 
 /** Nova's latest competitive read of the loops, kept on the core-loop task. */
