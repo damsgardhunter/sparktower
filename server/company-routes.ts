@@ -159,6 +159,13 @@ function readCompanyInput(raw: any, partial: boolean):
 const publicCompany = (c: typeof companies.$inferSelect) => ({
   id: c.id, name: c.name, slug: c.slug, website: c.website, industry: c.industry,
   size: c.size, description: c.description, projectId: c.projectId,
+  /*
+   * The proof, on every view of a company. Without it on the wire no screen
+   * can say what is missing, and a leader whose company cannot post challenges
+   * has no way to find out why — which is the state every company that
+   * predates verification is in.
+   */
+  verifiedDomain: c.verifiedDomain, verifiedAt: c.verifiedAt, verifiedMethod: c.verifiedMethod,
 });
 
 /** Everyone who acts for the company, owners first, then by when they joined. */
@@ -335,6 +342,68 @@ export function registerCompanyRoutes(app: Express): void {
     } catch (error) {
       console.error("Company update error:", error);
       res.status(500).json({ message: "Couldn't save those changes." });
+    }
+  });
+
+  /**
+   * Claim a proven domain for a company that already exists.
+   *
+   * Every company created before verification has `verified_domain` null, and
+   * a leader whose company cannot post a challenge needs a way out of that
+   * which is not "delete it and start again". So the same proof, spent on a
+   * company instead of on a creation.
+   *
+   * "manage", not "delete": an admin runs the company day to day and this is
+   * part of running it. What it is not is a thing a member can do — the
+   * verified domain is the company's identity in front of strangers.
+   *
+   * Once, and never changed. A company that has proved a domain and wants a
+   * different one is either a rename or somebody taking it over, and neither
+   * should happen through a form with no record of it.
+   */
+  app.post("/api/companies/:id/verify", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyFor(res, String(req.params.id), req.user.id, "manage");
+      if (!found) return;
+      if (found.company.verifiedDomain) {
+        return res.status(409).json({
+          code: "already_verified",
+          message: `This company is already verified as ${found.company.verifiedDomain}. Get in touch if that needs to change.`,
+        });
+      }
+
+      const outcome = await db.transaction(async (tx) => {
+        const claim = await spendableVerification(tx, req.user.id, req.body?.verificationId);
+        if (!claim.ok) return claim;
+
+        const now = new Date();
+        const [row] = await tx.update(companies).set({
+          verifiedDomain: claim.verification.domain,
+          verifiedAt: now,
+          verifiedMethod: claim.verification.method,
+          /* The website becomes the domain that was proved, as it does at creation. */
+          website: `https://${claim.verification.domain}`,
+        }).where(eq(companies.id, found.company.id)).returning();
+        await tx.update(companyVerifications).set({ companyId: found.company.id })
+          .where(eq(companyVerifications.id, claim.verification.id));
+        return { ok: true as const, company: row };
+      });
+
+      if (!outcome.ok) return res.status(outcome.status).json({ code: outcome.code, message: outcome.message });
+      await logCompany(found.company.id, req.user.id, "company_verified", null, {
+        domain: outcome.company.verifiedDomain, method: outcome.company.verifiedMethod,
+      });
+      res.json({ company: publicCompany(outcome.company) });
+    } catch (error: any) {
+      /*
+       * The unique index is the real rule, and it can still fire here: the
+       * domain could have been claimed between the check and this write.
+       */
+      if (String(error?.code) === "23505") {
+        return res.status(409).json({ code: "domain_taken", message: "That domain was claimed by another company just now." });
+      }
+      console.error("Company verify error:", error);
+      res.status(500).json({ message: "Couldn't verify that just now." });
     }
   });
 

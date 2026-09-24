@@ -13,7 +13,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ChevronDown, ChevronUp, ExternalLink, Loader2, Plus, Trophy } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, Plus, ShieldAlert, Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,21 +42,51 @@ interface ReviewEntry {
 const NO_INDUSTRY = "none";
 const listKey = (companyId: string) => [`/api/companies/${companyId}/challenges`];
 
-export function ChallengesTab({ companyId, canManage }: { companyId: string; canManage: boolean }) {
+export function ChallengesTab({ companyId, canManage, verifiedDomain }: {
+  companyId: string; canManage: boolean;
+  /** Null until somebody proves the website. An unverified company cannot post. */
+  verifiedDomain?: string | null;
+}) {
   const [creating, setCreating] = useState(false);
   const { data, isLoading, isError } = useQuery<CompanyChallenge[]>({ queryKey: listKey(companyId) });
+  const verified = !!verifiedDomain;
 
   return (
     <div className="space-y-4 pt-2">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-semibold">Challenges</h2>
-          <p className="text-sm text-muted-foreground max-w-2xl">Put a real problem in front of founders, with a prize you state and pay yourselves.</p>
+          <p className="text-sm text-muted-foreground max-w-2xl">
+            Put a real problem in front of founders. The prize is money, paid in when you post and held by SparkTower until you pick a winner.
+          </p>
         </div>
         {canManage && !creating && (
-          <Button size="sm" onClick={() => setCreating(true)} data-testid="button-new-challenge"><Plus className="h-4 w-4 mr-1" />New challenge</Button>
+          /*
+            * Disabled rather than hidden when the company is unverified: a
+            * button that vanishes leaves somebody looking for it, and the
+            * banner above the tabs is where the way out is.
+            */
+          <Button
+            size="sm" disabled={!verified} onClick={() => setCreating(true)}
+            title={verified ? undefined : "Prove the company's website first"}
+            data-testid="button-new-challenge"
+          >
+            <Plus className="h-4 w-4 mr-1" />New challenge
+          </Button>
         )}
       </div>
+
+      {canManage && !verified && (
+        <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm" data-testid="challenges-need-verification">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <span>
+            <span className="font-medium">Prove the company's website to post challenges.</span>{" "}
+            <span className="text-muted-foreground">
+              It is what tells an entrant the company is real before they spend a fortnight on one. The banner at the top of this page starts it.
+            </span>
+          </span>
+        </p>
+      )}
 
       {creating && <CreateChallenge companyId={companyId} onDone={() => setCreating(false)} />}
 

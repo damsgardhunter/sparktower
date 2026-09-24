@@ -20,12 +20,15 @@ import { ScoutingTab } from "@/components/company/scouting-tab";
 import { ChallengesTab } from "@/components/company/challenges-tab";
 import { RunTab } from "@/components/company/run-tab";
 import { AdminTab } from "@/components/company/admin-tab";
+import { CompanyVerificationBanner, CompanyVerifiedMark } from "@/components/company/company-verification";
 import { PostsTab } from "@/components/company/posts-tab";
 
 export interface CompanyView {
   company: {
     id: string; name: string; slug: string; website: string | null; industry: string | null;
     size: string | null; description: string | null; projectId: string | null;
+    /** The domain somebody proved they control. Null for every company created before verification existed. */
+    verifiedDomain: string | null; verifiedAt: string | null; verifiedMethod: string | null;
   };
   role: CompanyRole;
   members: { userId: string; name: string; role: CompanyRole; avatarUrl: string | null; permissions: CompanyPermission[] }[];
@@ -73,6 +76,8 @@ export default function CompanyPage() {
   // "Is a leader": what most tabs read. The Run tab is given its own power instead, since a member can be trusted with it alone.
   const canManage = canCompany(data.role, "manage");
   const props = { companyId: data.company.id, canManage };
+  /* Only the challenges tab needs it, and only to say why its button is off. */
+  const verifiedDomain = data.company.verifiedDomain;
   const powers = data.me?.powers ?? [];
 
   return (
@@ -86,9 +91,22 @@ export default function CompanyPage() {
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-company-name">{data.company.name}</h1>
           <Badge variant="secondary" className="capitalize">{data.role}</Badge>
           {data.company.industry && <Badge variant="outline">{data.company.industry}</Badge>}
+          {/* Who this is, next to the name — the same mark strangers see on a challenge. */}
+          <CompanyVerifiedMark domain={data.company.verifiedDomain} />
         </div>
         {data.company.description && <p className="text-sm text-muted-foreground mt-1.5 max-w-2xl">{data.company.description}</p>}
       </div>
+
+      {/*
+        * Above the tabs, because it is about the whole company rather than any
+        * one of them — and because the tab it blocks (challenges) is not the
+        * one somebody lands on.
+        */}
+      <CompanyVerificationBanner
+        companyId={data.company.id}
+        canManage={canManage}
+        verifiedDomain={data.company.verifiedDomain}
+      />
 
       <Tabs value={tab} onValueChange={(t) => navigate(`/companies/${id}?tab=${t}`, { replace: true })}>
         <TabsList className="flex-wrap h-auto">
@@ -96,7 +114,7 @@ export default function CompanyPage() {
         </TabsList>
         <TabsContent value="training"><TrainingTab {...props} /></TabsContent>
         <TabsContent value="talent"><TalentTab {...props} /></TabsContent>
-        <TabsContent value="challenges"><ChallengesTab {...props} /></TabsContent>
+        <TabsContent value="challenges"><ChallengesTab {...props} verifiedDomain={verifiedDomain} /></TabsContent>
         <TabsContent value="scouting"><ScoutingTab {...props} /></TabsContent>
         <TabsContent value="run"><RunTab companyId={data.company.id} canManage={powers.includes("run_business")} /></TabsContent>
         <TabsContent value="posts"><PostsTab {...props} /></TabsContent>

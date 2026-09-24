@@ -165,6 +165,85 @@ describe("impersonation", () => {
   });
 });
 
+describe("verifying a company that already exists", () => {
+  /** Every company created before verification is in this state. */
+  async function unverifiedCompany(app: any) {
+    const me = await person(app);
+    const vid = await prove(me, `seed-${n}-${Date.now()}.test`);
+    const made = await makeCompany(me, `Older Co ${n}`, vid);
+    expect(made.status, made.text).toBe(201);
+    const companyId = made.body.company.id as string;
+    await db.update(companies).set({ verifiedDomain: null, verifiedAt: null, verifiedMethod: null })
+      .where(eq(companies.id, companyId));
+    return { me, companyId };
+  }
+
+  it("takes a fresh proof and can post challenges afterwards", async () => {
+    const app = await getTestApp();
+    const { me, companyId } = await unverifiedCompany(app);
+
+    // Before: the company exists and cannot post.
+    const blocked = await me.agent.post(`/api/companies/${companyId}/challenges`).send({
+      title: "Too soon", brief: "A challenge posted by a company that has not proved its website yet, which must fail.",
+      terms: "Entries stay yours and we claim no rights over them. We may offer to hire you if you win.",
+      deadline: new Date(Date.now() + 14 * 86_400_000).toISOString(), prizeCents: 50_000,
+    });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.code).toBe("company_not_verified");
+
+    const domain = `later-${Date.now()}.test`;
+    const vid = await prove(me, domain);
+    const res = await me.agent.post(`/api/companies/${companyId}/verify`).send({ verificationId: vid });
+    expect(res.status, res.text).toBe(200);
+    expect(res.body.company.verifiedDomain).toBe(domain);
+
+    const [row] = await db.select().from(companies).where(eq(companies.id, companyId));
+    expect(row.verifiedMethod).toBe("file");
+    // The website follows the proof, rather than staying whatever was typed.
+    expect(row.website).toBe(`https://${domain}`);
+  });
+
+  it("refuses a second domain once one is proved", async () => {
+    const app = await getTestApp();
+    const { me, companyId } = await unverifiedCompany(app);
+
+    const first = await prove(me, `first-${Date.now()}.test`);
+    expect((await me.agent.post(`/api/companies/${companyId}/verify`).send({ verificationId: first })).status).toBe(200);
+
+    const second = await prove(me, `second-${Date.now()}.test`);
+    const res = await me.agent.post(`/api/companies/${companyId}/verify`).send({ verificationId: second });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("already_verified");
+  });
+
+  it("is not something a stranger or a plain member can do", async () => {
+    const app = await getTestApp();
+    const { companyId } = await unverifiedCompany(app);
+    const stranger = await person(app);
+    const vid = await prove(stranger, `stranger-${Date.now()}.test`);
+
+    // A stranger is told the company does not exist, as everywhere else here.
+    const res = await stranger.agent.post(`/api/companies/${companyId}/verify`).send({ verificationId: vid });
+    expect([403, 404]).toContain(res.status);
+    const [row] = await db.select().from(companies).where(eq(companies.id, companyId));
+    expect(row.verifiedDomain).toBeNull();
+  });
+
+  it("cannot take a domain another company already proved", async () => {
+    const app = await getTestApp();
+    const real = await person(app);
+    const domain = `contested-${Date.now()}.test`;
+    const realVid = await prove(real, domain);
+    expect((await makeCompany(real, "The Real One", realVid)).status).toBe(201);
+
+    // Somebody else cannot even start a verification for it, which is the guard.
+    const { me } = await unverifiedCompany(app);
+    const started = await me.agent.post("/api/company-verifications").send({ website: domain });
+    expect(started.status).toBe(409);
+    expect(started.body.code).toBe("domain_taken");
+  });
+});
+
 describe("posting a challenge", () => {
   const brief = "Build us something that reads a spreadsheet and tells us what is wrong with it.";
   const challenge = (prizeCents: number) => ({
