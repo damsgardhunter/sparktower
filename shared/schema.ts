@@ -661,6 +661,13 @@ export const projectApplications = pgTable("project_applications", {
   resumeUrl: text("resume_url"),
   answers: jsonb("answers").default([]),
   message: text("message"),
+  /*
+   * The open role this application is for, as it was listed on the project.
+   * Null for a general application — a project with no roles listed still
+   * takes one, and every application made before the public page listed roles
+   * individually predates the question being asked.
+   */
+  role: text("role"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

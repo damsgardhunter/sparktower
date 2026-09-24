@@ -2835,7 +2835,15 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
                   <div key={app.id} className="flex items-center gap-3 p-2 rounded-md bg-muted/30" data-testid={`application-${app.id}`}>
                     <UserAvatar src={app.profile?.avatarUrl ?? null} name={name} className="h-8 w-8" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{name}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-medium">
+                        <span className="truncate">{name}</span>
+                        {/* Which role they pressed. Older applications have none. */}
+                        {app.role && (
+                          <Badge variant="secondary" className="shrink-0 text-[10px] font-normal" data-testid={`application-role-${app.id}`}>
+                            {app.role}
+                          </Badge>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground truncate">{app.message || "No message"}</p>
                       <p className="text-xs text-tertiary">{new Date(app.createdAt).toLocaleDateString()}</p>
                     </div>

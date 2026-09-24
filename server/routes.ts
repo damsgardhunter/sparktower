@@ -895,7 +895,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
-      const { resumeUrl, answers, message } = req.body;
+      const { resumeUrl, answers, message, role } = req.body;
       const project = await storage.getProject(projectId);
       // A private project isn't there to anyone off its team — the same 404 as one that doesn't exist.
       if (!project || project.isPrivate) return res.status(404).json({ message: "Project not found" });
@@ -904,7 +904,19 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
       const existing = await storage.getUserApplications(userId);
       if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
-      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      /*
+       * The role is checked against what the project actually lists rather
+       * than stored as sent. It arrives from a click on a role card, but it
+       * is still a string in a request body, and "which role did they apply
+       * for" is read back to the owner as fact — an unchecked one would let
+       * anybody write their own job title into someone else's inbox. Anything
+       * that doesn't match a listed role is dropped, leaving a general
+       * application, which is what a project with no roles listed gets anyway.
+       */
+      const listedRole = typeof role === "string"
+        ? (project.rolesNeeded || []).find((r) => r.toLowerCase() === role.trim().toLowerCase()) ?? null
+        : null;
+      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message, role: listedRole });
       /*
        * The owner hears about it. An application used to land in a table that
        * only the manage page's Team tab read, and nothing pointed there — so
