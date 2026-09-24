@@ -21,7 +21,7 @@ Secrets" or "restore from the Replit snapshot" is out of date.
 | Region | Oregon |
 | Branch | `main`, auto-deploy on |
 | Build | `npm ci && npm run build` |
-| Pre-deploy | `npm run db:migrate` — migrations land before the new version takes traffic |
+| Pre-deploy | `npm run db:migrate && npm run db:verify` — migrations land, and are checked to have landed, before the new version takes traffic |
 | Start | `npm run start` (the script sets `NODE_ENV=production` itself) |
 | Health check path | `/_health` |
 | Database | Render Postgres, same region, wired by `fromDatabase` in the blueprint |
@@ -134,10 +134,11 @@ changes on the day DNS moves, not a constant of the repository.
 2. **Manually:** Render dashboard → the service → **Manual Deploy** → *Deploy
    latest commit*, or *Clear build cache & deploy* when a build fails in a way
    that smells like stale `node_modules`.
-3. The pre-deploy command runs `npm run db:migrate` **before** the new version
-   takes traffic. A failed migration fails the deploy and the old version keeps
-   serving. That is the whole reason it is a pre-deploy command and not a step
-   in the start script.
+3. The pre-deploy command runs `npm run db:migrate && npm run db:verify`
+   **before** the new version takes traffic. A failed migration fails the
+   deploy and the old version keeps serving. That is the whole reason it is a
+   pre-deploy command and not a step in the start script. The verify is there
+   because the migrate alone could not fail — see below.
 4. Render builds, boots the new instance, waits for `/_health`, then shifts
    traffic.
 
@@ -184,6 +185,55 @@ query fails with `ECONNREFUSED`. This is not hypothetical — it is what the fir
 deploy of this service did, and it is why `/_ready` exists.
 
 Backups and restores: [backups.md](backups.md).
+
+## When `db:migrate` says success and does nothing
+
+`drizzle-kit migrate` does not track which migrations ran. It reads the newest
+`created_at` in `drizzle.__drizzle_migrations` and applies every journal entry
+stamped later than that — one comparison, one high-water mark. Anything at or
+below it is assumed done, and either way the command prints *migrations applied
+successfully!* and exits 0.
+
+So a single row stamped later than the newest migration hides all of them. That
+is what happened here: eighteen rows in the dev database matched no migration
+file — left by files edited or deleted after they ran — and one of them was
+stamped past the end of the journal. Ten migrations were skipped on every
+deploy, silently, for days.
+
+Two things came out of it:
+
+- **`npm run db:verify`** runs straight after the migrate in pre-deploy and
+  asks whether every journal entry is recorded as applied, matching by content
+  hash. If one isn't, the deploy goes red instead of quiet.
+- **`npm run db:reconcile`** is the repair. It reports by default and changes
+  nothing until `-- --apply`. It moves rows whose hash matches a migration onto
+  that migration's journal timestamp, and copies rows matching no file into
+  `drizzle.__drizzle_migrations_orphaned` before removing them — a row saying a
+  migration once ran is the only record that it did.
+
+```bash
+DATABASE_URL=<external url> npm run db:reconcile            # read what it intends to do
+DATABASE_URL=<external url> npm run db:reconcile -- --apply
+DATABASE_URL=<external url> npm run db:migrate
+DATABASE_URL=<external url> npm run db:verify
+```
+
+Every migration from `0051` on is written to be safe to run twice — `IF NOT
+EXISTS`, or an `ALTER TABLE` inside a `DO $$ … EXCEPTION WHEN duplicate_object`
+block — so re-applying one against a database that already has it is a no-op
+rather than a failed deploy. Keep it that way when adding migrations; the
+guard test in `test/unit/migration-journal.test.ts` covers the journal, not the
+SQL.
+
+**The root cause, so it isn't repeated:** the journal's `when` values were
+edited by hand after those migrations had already run, which is what put the
+databases and the file out of step. Don't renumber or restamp an entry that has
+shipped. Add a new one.
+
+One wart left alone on purpose: two files are numbered `0056`, from the same
+hand-editing. `drizzle-kit` numbers the next migration from the last entry's
+`idx`, so it has already absorbed the duplicate and nothing collides. Renaming
+a migration that has run everywhere would be churn for no behavioural gain.
 
 ## The health endpoints, and which one a monitor should watch
 
