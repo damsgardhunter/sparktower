@@ -45,7 +45,7 @@ export function ProfileHeader({
   onEditAvatar?: () => void;
 }) {
   const name = nameOf(profile, user);
-  const cover = assetUri(profile?.coverUrl);
+  const cover = assetUri(profile?.coverUrl, 640);
 
   return (
     <View style={{ marginHorizontal: GUTTER, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>

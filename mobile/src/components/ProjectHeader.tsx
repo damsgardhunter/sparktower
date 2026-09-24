@@ -28,7 +28,7 @@ export function ProjectHeader({
   /** Jumps to "Back this project" when the project runs a campaign. */
   onBack?: () => void;
 }) {
-  const cover = assetUri(project.coverUrl);
+  const cover = assetUri(project.coverUrl, 640);
 
   const share = () => {
     const url = `${API_URL}/projects/${project.id}`;

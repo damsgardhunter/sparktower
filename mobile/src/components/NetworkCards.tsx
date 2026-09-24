@@ -87,7 +87,7 @@ export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, rea
   onDismiss?: () => void;
   action: ReactNode;
 }) {
-  const cover = assetUri(coverUrl);
+  const cover = assetUri(coverUrl, 640);
   return (
     <View style={[n.gridCard, { width }]}>
       <Pressable onPress={onOpen} style={({ pressed }) => [{ alignItems: "center" }, pressed && { opacity: 0.8 }]} accessibilityRole="button" accessibilityLabel={`Open ${name}'s profile`}>

@@ -75,7 +75,7 @@ export function AppHeader() {
    * rather than an absolute URL, and a bare path renders as nothing at all on a
    * phone — no broken-image icon, no console, just a blank where the photo was.
    */
-  const coverUrl = assetUri(profile?.coverUrl);
+  const coverUrl = assetUri(profile?.coverUrl, 640);
   const avatarUrl = assetUri(profile?.avatarUrl ?? me?.user?.profileImageUrl) ?? undefined;
 
   const hidden = visibility?.hidden;
