@@ -63,10 +63,19 @@ describe("making and reading a company", () => {
     const one = await owner.agent.get(`/api/companies/${companyId}`);
     expect(one.status).toBe(200);
     expect(Object.keys(one.body).sort()).toEqual(["company", "me", "members", "role"]);
-    expect(Object.keys(one.body.company).sort()).toEqual(["description", "id", "industry", "name", "projectId", "size", "slug", "website"]);
+    /*
+     * The proof travels with the company now, because the page draws a badge
+     * from it — a builder deciding whether to spend a fortnight on somebody's
+     * challenge is entitled to see which domain they proved and when.
+     */
+    expect(Object.keys(one.body.company).sort()).toEqual([
+      "description", "id", "industry", "name", "projectId", "size", "slug",
+      "verifiedAt", "verifiedDomain", "verifiedMethod", "website",
+    ]);
     expect(one.body.company).toMatchObject({
       id: companyId, name: "Acme Widgets", industry: "Fintech", size: "11-50",
       website: `https://${domain}`, description: "We make widgets.", projectId: null,
+      verifiedDomain: domain,
     });
     expect(one.body.company.slug).toMatch(/^acme-widgets-[a-z0-9]{6}$/);
     expect(one.body.role).toBe("owner");
