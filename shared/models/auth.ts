@@ -90,6 +90,24 @@ export const users = pgTable("users", {
   subscriptionRefundedAt: timestamp("subscription_refunded_at"),
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
   /**
+   * Where money this person earns here should land.
+   *
+   * "balance" puts it on their SparkTower balance, spendable on Nova straight
+   * away and needing no bank, no onboarding and no identity check. "bank"
+   * sends it out to their connected Stripe account.
+   *
+   * Null means they have not said, which is deliberately not the same as
+   * wanting their balance. An absent choice resolves to the bank when there is
+   * a connected account to pay and the balance when there isn't — so
+   * connecting an account still means what it always meant, and the dead end
+   * it replaced (releasing refused outright without one) is gone.
+   *
+   * Defaulting this to "balance" instead would have silently redirected every
+   * creator who had already connected a bank, because nothing flips a default.
+   * The backing payout tests caught exactly that.
+   */
+  payoutTarget: varchar("payout_target", { enum: ["balance", "bank"] }),
+  /**
    * Platform-side authority, distinct from a user's role on any one project.
    *
    * Only "reviewer" and above may approve a backing payout, so this is the

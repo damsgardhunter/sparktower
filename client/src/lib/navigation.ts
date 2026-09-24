@@ -9,7 +9,7 @@
 export interface NavItem {
   title: string;
   url: string;
-  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "Gamepad2" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard";
+  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "Gamepad2" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard" | "Banknote";
   /** The surface whose flag hides this item. None for pages that aren't feature areas. */
   surface?: string;
 }
@@ -58,5 +58,11 @@ export const SECONDARY_NAV: NavItem[] = [
   { title: "Companies", url: "/companies", icon: "Users", surface: "companies" },
   // Real problems companies put up, for founders to answer.
   { title: "Challenges", url: "/challenges", icon: "Trophy", surface: "companies" },
+  /*
+   * Ungated, and deliberately not hidden behind owning a project. The only way
+   * to reach payout setup used to be a campaign's backing tab, so somebody who
+   * had won a challenge prize had nowhere to add a bank account at all.
+   */
+  { title: "Earnings", url: "/earnings", icon: "Banknote" },
   { title: "Pricing", url: "/pricing", icon: "CreditCard" },
 ];

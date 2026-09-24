@@ -1726,7 +1726,13 @@ export const novaLedger = pgTable("nova_ledger", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   /** "topup" | "spend" | "refund" | "grant" — grant is support putting money on an account by hand. */
-  kind: text("kind", { enum: ["topup", "spend", "refund", "grant"] }).notNull(),
+  /**
+   * "topup" | "spend" | "refund" | "grant" | "earnings" — grant is support
+   * putting money on an account by hand; earnings is money the person made
+   * here (a backed project, a challenge prize) landing in their balance
+   * rather than going out to a bank.
+   */
+  kind: text("kind", { enum: ["topup", "spend", "refund", "grant", "earnings"] }).notNull(),
   /** Which priced outcome, for a spend or its refund. Null on a top-up. */
   outcome: text("outcome"),
   /** Signed: positive in, negative out. */
@@ -1735,6 +1741,12 @@ export const novaLedger = pgTable("nova_ledger", {
   balanceAfter: integer("balance_after").notNull(),
   /** Unique: the Checkout session that paid for a top-up. This is what makes a replayed webhook harmless. */
   stripeSessionId: varchar("stripe_session_id"),
+  /**
+   * Unique: what this line was for, when it came from somewhere other than
+   * Stripe — "backing:<id>", "prize:<challengeId>". The same guarantee as
+   * stripeSessionId and the reason a retried release credits somebody once.
+   */
+  sourceKey: varchar("source_key"),
   /** What it was for, in the person's own terms ("Audit my codebase"). */
   note: text("note"),
   /** The project a purchase was for, when it was for one. */
@@ -1743,6 +1755,7 @@ export const novaLedger = pgTable("nova_ledger", {
 }, (table) => ({
   byUser: index("nova_ledger_user_idx").on(table.userId, table.createdAt),
   bySession: unique("nova_ledger_stripe_session").on(table.stripeSessionId),
+  bySource: unique("nova_ledger_source_key").on(table.sourceKey),
 }));
 
 /**

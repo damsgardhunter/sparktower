@@ -32,6 +32,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
 import { getUncachableStripeClient } from "./stripeClient";
+import { creditEarningsIn } from "./wallet";
 import { runRefundSweep } from "./backing-jobs";
 import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
@@ -1024,24 +1025,44 @@ export function registerBackingRoutes(app: Express) {
       const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
       if (!project) return res.status(404).json({ message: "Project not found" });
       const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
-      if (!owner?.stripeConnectAccountId) {
-        return res.status(422).json({ message: "The creator has no connected Stripe account." });
-      }
+      if (!owner) return res.status(404).json({ message: "Project owner not found" });
+      /*
+       * Where this creator's money is going.
+       *
+       * It used to be Stripe or nothing: no connected account meant a 422 and
+       * pledges that sat in escrow indefinitely, because Stripe's identity
+       * checks are a wall some creators never get over — and the backers'
+       * money stayed stuck behind it. Paying into the SparkTower balance needs
+       * no bank and no onboarding, so the dead end is now a choice.
+       *
+       * A connected account still means what it always meant. `payoutTarget`
+       * is an override rather than a setting with a default: null is "hasn't
+       * said", and only an explicit "balance" diverts money away from an
+       * account somebody went through Stripe's identity checks to open.
+       * Reading an absent choice as "balance" would have redirected every
+       * existing creator's payouts in silence.
+       */
+      const toBank = !!owner.stripeConnectAccountId && owner.payoutTarget !== "balance";
 
       // A pledge under a chargeback isn't the platform's to pay out until the dispute is won.
       const pending = await db.select().from(projectBackings)
         .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)));
       if (pending.length === 0) return res.json({ released: 0, totalCents: 0 });
 
-      const stripe = await getUncachableStripeClient();
+      const stripe = toBank ? await getUncachableStripeClient() : null;
       const released: string[] = [];
       /** Who to tell, once the money is actually gone. */
       const releasedBackers: { backerId: string; amountCents: number }[] = [];
       const failed: { id: string; error: string }[] = [];
       let totalCents = 0;
 
-      // What has already gone out for this project, by pledge — asked once, up front.
-      const paidOut = await transfersByBacking(stripe, projectId);
+      /*
+       * What has already gone out for this project, by pledge — asked once, up
+       * front. Only Stripe needs asking: a balance settlement is made
+       * exact-once by the ledger's unique source key instead, so there is
+       * nothing to reconcile and no reason to reach for Stripe at all.
+       */
+      const paidOut = stripe ? await transfersByBacking(stripe, projectId) : new Map<string, string>();
 
       // One transfer per backing rather than one lump sum: a single failure
       // then costs one pledge instead of the whole batch, and each transfer
@@ -1069,6 +1090,23 @@ export function registerBackingRoutes(app: Express) {
               .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)))
               .for("update");
             if (!row) return "gone" as const;
+
+            /*
+             * Settled into the balance, the pledge carries no transfer id,
+             * because there is no transfer. The ledger line keyed
+             * "backing:<id>" is the record, and its unique index is what makes
+             * a retried release credit the creator once rather than twice.
+             */
+            if (!stripe) {
+              await creditEarningsIn(tx, project.ownerId, amount, `backing:${backing.id}`,
+                `Backing on ${project.title}`);
+              await tx.update(projectBackings).set({
+                status: "released",
+                releasedAt: new Date(),
+                resolvedAt: new Date(),
+              }).where(eq(projectBackings.id, backing.id));
+              return "released" as const;
+            }
 
             const transferId = paidOut.get(backing.id) ?? (await stripe.transfers.create({
               amount,

@@ -198,6 +198,71 @@ export async function creditTopUp(
 }
 
 /**
+ * Money the person earned here, landing in their balance.
+ *
+ * The same shape as `creditTopUp` and for the same reason: the write that
+ * claims the source key and the write that moves the balance are one
+ * transaction, so a release retried after a timeout credits somebody once.
+ * `sourceKey` is what makes that true — "backing:<id>", "prize:<challengeId>" —
+ * and the unique index on it is the actual guarantee. The return says whether
+ * this call was the one that moved the money, so a caller settling a batch can
+ * tell "paid" from "already paid" rather than counting it twice.
+ *
+ * Deliberately not `creditTopUp` with a different note: a top-up is money the
+ * person put in and a statement that blurs the two cannot answer "what did I
+ * make here?", which is the question the earnings page exists to answer.
+ */
+export async function creditEarnings(
+  userId: string,
+  cents: number,
+  sourceKey: string,
+  note: string,
+): Promise<{ credited: boolean; balanceCents: number }> {
+  if (cents <= 0) return { credited: false, balanceCents: (await walletOf(userId)).balanceCents };
+  return db.transaction((tx) => creditEarningsIn(tx, userId, cents, sourceKey, note));
+}
+
+/**
+ * The same, inside a transaction the caller already holds.
+ *
+ * Releasing backed funds takes a row lock on the pledge before it moves any
+ * money, and that lock is what stops the release and the refund sweep from
+ * both acting on one pledge. Opening a second transaction to credit the
+ * balance would take a second connection, which cannot see that lock and can
+ * sit behind it — so the credit joins the caller's transaction instead, and
+ * the pledge flipping to "released" and the money arriving are one write or
+ * neither.
+ */
+export async function creditEarningsIn(
+  tx: any,
+  userId: string,
+  cents: number,
+  sourceKey: string,
+  note: string,
+): Promise<{ credited: boolean; balanceCents: number }> {
+  if (cents <= 0) {
+    const [u] = await tx.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, userId));
+    return { credited: false, balanceCents: u?.balanceCents ?? 0 };
+  }
+  {
+    const claimed = await tx.insert(novaLedger).values({
+      userId, kind: "earnings", outcome: null, amountCents: cents,
+      balanceAfter: 0, sourceKey, note,
+    }).onConflictDoNothing({ target: novaLedger.sourceKey }).returning({ id: novaLedger.id });
+    if (!claimed.length) {
+      const [u] = await tx.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, userId));
+      return { credited: false, balanceCents: u?.balanceCents ?? 0 };
+    }
+    const [row] = await tx.update(users)
+      .set({ balanceCents: sql`${users.balanceCents} + ${cents}` })
+      .where(eq(users.id, userId))
+      .returning({ balanceAfter: users.balanceCents });
+    await tx.update(novaLedger).set({ balanceAfter: row?.balanceAfter ?? cents }).where(eq(novaLedger.id, claimed[0].id));
+    return { credited: true, balanceCents: row?.balanceAfter ?? cents };
+  }
+}
+
+/**
  * Buys a pack of small Nova actions out of the balance.
  *
  * They add up rather than replacing each other: somebody who buys a second

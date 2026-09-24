@@ -83,6 +83,8 @@ import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { earningsFor, setPayoutTarget } from "./earnings";
+import { platformRevenue } from "./platform-revenue";
 import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
 import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
 import {
@@ -111,7 +113,7 @@ import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
 import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
-import { isOwner as isPlatformOwner } from "./platform-roles";
+import { isOwner as isPlatformOwner, requireOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, unmarkMilestones, PATH_MARK_LIMIT, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
@@ -6742,8 +6744,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const stripe = await getUncachableStripeClient();
       const link = await stripe.accountLinks.create({
         account: user.stripeConnectAccountId,
-        refresh_url: `${req.protocol}://${req.get("host")}/profile`,
-        return_url: `${req.protocol}://${req.get("host")}/profile?connect=success`,
+        /*
+         * Back to the earnings page, which is where they were and where the
+         * answer is. It used to return to /profile, from the days when the
+         * only way in was a project's backing setup — leaving somebody who
+         * had just finished Stripe's form on a page that said nothing about
+         * whether it had worked.
+         */
+        refresh_url: `${req.protocol}://${req.get("host")}/earnings`,
+        return_url: `${req.protocol}://${req.get("host")}/earnings?connected=1`,
         type: "account_onboarding",
       });
 
@@ -6784,6 +6793,56 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Payouts error:", error);
       res.status(500).json({ message: "Failed to get payout info" });
+    }
+  });
+
+  /**
+   * What a person has earned, and whether it can reach them.
+   *
+   * `/api/payouts` above answers only for donations, and nothing in the client
+   * ever called it. This answers across every way money is owed here — backings
+   * held or released on their projects, challenge prizes they have won — and
+   * says which of it is actually theirs to spend.
+   */
+  app.get("/api/earnings", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Earnings error:", error);
+      res.status(500).json({ message: "Failed to read earnings" });
+    }
+  });
+
+  /**
+   * Where this person's future earnings should land: their balance here, or
+   * their bank. Refused for "bank" without an account Stripe will actually
+   * pay — see setPayoutTarget, which says why.
+   */
+  app.patch("/api/earnings/target", isAuthenticated, async (req: any, res) => {
+    try {
+      const target = req.body?.target;
+      if (target !== "balance" && target !== "bank") {
+        return res.status(400).json({ message: "Pick either your balance or your bank." });
+      }
+      const done = await setPayoutTarget((req.user as any).id, target);
+      if (!done.ok) return res.status(422).json({ message: done.reason });
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Payout target error:", error);
+      res.status(500).json({ message: "Failed to change where your earnings go" });
+    }
+  });
+
+  /**
+   * SparkTower's own cash position. Owner only, and 404 to everybody else —
+   * the same gate the analytics console uses, for the same reason.
+   */
+  app.get("/api/admin/revenue", isAuthenticated, requireOwner, async (_req, res) => {
+    try {
+      res.json(await platformRevenue());
+    } catch (error) {
+      console.error("Platform revenue error:", error);
+      res.status(500).json({ message: "Failed to read revenue" });
     }
   });
 
