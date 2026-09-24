@@ -335,6 +335,115 @@ the doors, not after.
 
 ---
 
+# Hardware: what it buys, and what it cannot
+
+Written for the case of arriving at ~1,000 concurrent inside the first month
+off paid advertising.
+
+## The one that surprises people: a bigger web box does almost nothing
+
+`startCommand` is `node dist/index.cjs` — **one process, one thread, one core**
+([package.json](../../package.json)). Moving the web service from a 1-CPU plan
+to a 4-CPU plan leaves three cores idle. Web capacity comes from *processes*,
+not from the size of the machine they sit on:
+
+- **More instances.** Set `numInstances` in [render.yaml](../../render.yaml) —
+  there is none today, so it runs exactly one.
+- **Or cluster inside the instance**, forking one worker per core.
+
+Both are the same thing to this codebase: more than one process. Which means
+both need the same prerequisites as Stage 3 — in-memory credit holds, the
+unguarded jobs, the in-process builds. **Clustering is not a way around that
+work.** A second core and a second machine break identical things.
+
+Extra RAM on the web service is worth a little (bigger builds, more in-flight
+requests) but it is not the constraint. Extra CPU is worth nothing until there
+is a process to use it.
+
+## Where a bigger box *does* buy capacity: Postgres
+
+Postgres uses a backend process per connection and will genuinely use every
+core you give it. This is where the money goes.
+
+- **RAM** so the working set is cached. `basic-256mb` caches essentially
+  nothing; every query that should be a memory hit goes to disk. This is the
+  single largest win available to you right now.
+- **CPU** for concurrent queries.
+- **Connection limit** high enough for your instance count — or a pooler, which
+  is cheaper than the tier that would offer the connections directly.
+
+## 1,000 clicks is not 1,000 dashboards
+
+This changes the sizing more than any tier choice, so work it out before you
+buy anything.
+
+| Visitor | Requests/minute | Cacheable? |
+|---|---|---|
+| Anonymous, on the landing page | ~3 (`/api/projects` every 20 s) | **Yes — identical for everyone** |
+| Signed in, any page | 9 | Partly (counts are per user) |
+| Signed in, on a project dashboard | 22 | No (per project) |
+| In a live simulation | 40+ | No |
+
+An ad click is the first row. 1,000 anonymous visitors is ~50 req/s of a query
+whose answer is *the same for all of them*
+([live-projects.tsx](../../client/src/components/live-projects.tsx)). Put a
+20-second cache in front of `/api/projects` — edge or in-process — and 50 req/s
+becomes roughly nothing.
+
+So the real question is not "can I serve 1,000 clicks" but "how many of them
+sign in, open a project, and leave the tab open". Provision for *that* number.
+Assume it is lower than you hope, and make the anonymous path free.
+
+## A starting configuration for ~1,000 concurrent signed-in users
+
+Provision this, then measure — the numbers below are a starting point derived
+from the measured per-user request rates, not a guarantee.
+
+| Piece | Start at | Why |
+|---|---|---|
+| Web instances | **4–8** at 1–2 CPU | 1,000 × 22 req/min ≈ 366 req/s; budget 50–100 req/s per process and keep headroom |
+| Web autoscaling | min 3, max 10 | Ad traffic is spiky; a cold start under a spike is the worst time to find out |
+| Postgres | **4+ vCPU, 16 GB+** | Must hold the working set; 366 req/s of small queries is CPU-bound on a small tier |
+| PgBouncer | transaction mode | 8 instances × 22 connections = 176; see the caveats in [Launching above 200](#launching-above-200) |
+| Redis | small | Counts cache, and move sessions off Postgres |
+| CDN | in front of everything | Static bundle, public objects, and the cacheable anonymous API |
+| Worker service | 1 instance | Jobs and long-running builds, off the web path |
+
+If polling is cut (SSE for the three count endpoints), the web tier halves.
+That is the cheapest capacity in this table by a wide margin.
+
+## What each purchase is wasted without
+
+Buy in this order, because each of these is money spent on nothing until the
+line above it is true.
+
+| Purchase | Wasted unless |
+|---|---|
+| More web instances | credit holds are in Postgres and jobs have moved to a worker |
+| A bigger Postgres tier | nothing — buy this first, it always helps |
+| PgBouncer | the session pool is shared and the session-level `SET`s have moved |
+| Read replicas | `/path` no longer writes on read |
+| A counts cache | nothing — it always helps |
+| A CDN | nothing — it always helps |
+
+Three of those are unconditional: **Postgres tier, CDN, counts cache.** Start
+there today; none of them need a code change first.
+
+## How to size it properly rather than by this table
+
+1. Fix `/path` and share the session pool — otherwise you measure the
+   bottleneck rather than the app.
+2. Deploy one instance on the tier you intend to use.
+3. Drive it with the load harness until p95 crosses your limit. That gives
+   **requests per second per instance**, measured, on real hardware.
+4. Divide your expected peak by it, add 50% headroom, set `numInstances`.
+5. Re-measure after every change that alters the per-user request rate.
+
+Step 3 is the only number in this document that will be true for your
+deployment, because it will have been measured on it.
+
+---
+
 ## Cloud storage
 
 You are already on Google Cloud Storage — [objectStorage.ts](../../server/replit_integrations/object_storage/objectStorage.ts)
