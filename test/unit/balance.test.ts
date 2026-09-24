@@ -232,10 +232,15 @@ describe("can you win, and can you lose", () => {
     }
   });
 
-  it("leaves a team that never turns up still standing", () => {
-    // The floor, checked in every market rather than only the first one.
+  it("winds up a team that never turns up, in every market", () => {
+    /*
+     * The floor used to be that an idle team survived everywhere. Measured,
+     * that meant doing nothing was a viable way to finish a season — more
+     * than half of them alive, some of them richer than they started. A game
+     * about running a company cannot make running it optional.
+     */
     for (const niche of NICHES) {
-      expect(season(niche, idle).bankrupt, `${niche.id} kills an idle team`).toBe(false);
+      expect(season(niche, idle).bankrupt, `${niche.id} lets an idle team trade on`).toBe(true);
     }
   });
 });

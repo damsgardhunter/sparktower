@@ -856,15 +856,61 @@ enough to coast on for eight years.** Until that is false, the bot that does
 least will stay close to the bot that does best, and every instrument that
 makes coasting expensive makes playing expensive too.
 
+### Doing nothing is no longer a way to finish a season
+
+A table that never files anything used to end more than half of seasons alive
+and sometimes richer than it started, coasting on an opening position nobody
+had earned. It is wound up now, in every market, every time.
+
+The mechanism is deliberately keyed on **nobody filing**, not on spending
+little — which is the distinction every cost lever failed to make. A plant
+overhead cannot tell a team that played badly from one that never turned up,
+because both hold a plant. `decisionsForYear` already knows who was absent, so
+it marks the year `steered: false` when every seat is empty, and the engine
+winds the company down from the second silent year: the plant goes, the
+customers follow, and after six it is wound up altogether.
+
+Trimming customers alone did nothing at all, which is worth recording — a
+company at these sizes is capacity-bound with demand to spare, so the market
+simply refilled it every year. Taking the room away is what does it.
+
+**This replaces a deliberate guarantee** that a company nobody filed for was
+still standing after fourteen years, whose rationale was that the player who
+wanders back on day twelve is the one worth having. The two rules cannot both
+hold: a company nobody runs for ten years cannot be both closed and
+recoverable. What is kept is the half that survives the arithmetic — the
+counter resets the moment anybody files, so a table that goes quiet for a
+year or two and comes back finds a company that lost ground rather than one
+that ended, and `season.test.ts` holds that.
+
+### And the bots stopped changing their minds every year
+
+Every choice in the game — positioning, pace, sourcing, how a feature is
+built — was re-rolled from scratch annually, because the seed carries the
+year. A bot that picks a different market position every twelve months is not
+playing badly, it is not playing at all, and no lever that rewards
+consistency could ever pay for it. Last year's answer stands now unless a
+one-in-five roll says otherwise.
+
 ### Closing the gap: it is the best table in the codebase now
 
-Over 70 seasons a side:
+Scored on all four of the things a season is made of, 42 seasons a side:
 
 ```
-optimal    survived 84%   ended richer 81%
-survivor   survived 80%   ended richer 76%
-filler     survived 83%   ended richer 69%
+mode        value     cash   customers   survived
+idle        £0.0m    £3.4m          11         0%
+filler      £9.9m   £10.6m     167,242        83%
+survivor   £10.6m   £18.3m     198,313        86%
+optimal    £15.1m   £31.1m     247,943        86%
 ```
+
+Ahead on value, cash and customers; level on survival. Getting there needed
+three years of rollout with a continuation that *grows* rather than a frozen
+plan, a plant allowed to double rather than grow by half, cash weighted at
+eight hundredths of a pound of company (at zero it spends to the last pound
+for any gain at all; at a half it hoards and the business collapses to 29,000
+customers), and two years of running costs held back rather than one or
+three.
 
 The route there, each step measured:
 

@@ -327,6 +327,14 @@ export interface Company {
    * `marketScale`.
    */
   scale?: number;
+  /**
+   * How many periods in a row nobody has filed anything for this company.
+   *
+   * A business nobody runs does not sit still, it winds down: the people
+   * leave, the room goes, and the customers find somebody who answers. See
+   * `windDown` in `resolve.ts`.
+   */
+  unsteered?: number;
   debt: number;
   /** What the bank will lend, given reputation and what the company owns. */
   creditLimit: number;

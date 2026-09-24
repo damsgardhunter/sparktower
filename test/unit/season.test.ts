@@ -336,19 +336,30 @@ describe("the chair nobody sat in", () => {
 });
 
 describe("a whole season", () => {
-  it("leaves a team that never opened the app with a company still standing", () => {
+  it("winds up a company nobody ever opened the app for", () => {
     /*
-     * The floor. Five people join, argue about seats, and never come back.
-     * Fourteen days later there must still be something there — because the
-     * one who does wander back on day twelve is the player worth having, and a
-     * smoking crater is where that stops.
+     * This used to be the opposite rule: five people join, never come back,
+     * and a fortnight later there is still something standing, because the
+     * one who wanders back on day twelve is the player worth having.
+     *
+     * It could not survive the measurement. Idle tables were finishing more
+     * than half of all seasons alive and occasionally richer than they
+     * started, coasting on an opening position nobody had earned while the
+     * business rotted underneath — which makes the one thing the game is
+     * about, running a company, optional.
+     *
+     * The two rules cannot both hold: a company nobody runs for ten years
+     * cannot be both closed and recoverable. What is kept is the part that
+     * still makes sense, and the next test holds it — a table that misses a
+     * year and comes back finds a company that lost ground, not one that
+     * ended.
      */
     const { world, history } = playSeason(() => null);
     const team = world.companies.find((c) => c.id === "team")!;
 
     expect(history).toHaveLength(SEASON_YEARS);
-    expect(team.bankruptSince, "an untouched team should not be bankrupt").toBeUndefined();
-    expect(team.cash).toBeGreaterThan(0);
+    expect(team.bankruptSince, "a company nobody ran should not still be trading").toBeDefined();
+    expect(Object.values(team.customers).reduce((a, b) => a + b, 0)).toBe(0);
   });
 
   it("rewards the team that actually played", () => {
@@ -393,8 +404,13 @@ describe("a whole season", () => {
      * possible — not guaranteed, but possible — or the message to a returning
      * player is "you already lost" and they leave again.
      */
-    const { history } = playSeason((year, company) => (year >= 11 ? playedYear(company) : null));
-    const atReturn = history[9];
+    /*
+     * Returning after two quiet years, not ten. A company left alone for a
+     * decade is wound up now (see above), and the guarantee worth keeping is
+     * the one about a table that goes quiet for a while and comes back.
+     */
+    const { history } = playSeason((year, company) => (year >= 4 ? playedYear(company) : null));
+    const atReturn = history[2];
     const atEnd = history[history.length - 1];
 
     expect(atEnd.marketShare).toBeGreaterThan(atReturn.marketShare);

@@ -56,6 +56,39 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export const CARETAKER_RATE = 0.6;
 
+/**
+ * How many years of nobody filing before a company starts winding down, and
+ * how fast it goes once it does.
+ *
+ * The first silent year is free — a table on a train, a week nobody could
+ * make. From the second the plant winds down by a third a year and rising,
+ * and after six the business is wound up altogether.
+ *
+ * This replaces an older guarantee that a company nobody ever filed for was
+ * still standing after fourteen years. It could not survive contact with the
+ * measurement: idle tables were finishing more than half of seasons alive,
+ * coasting on an opening position they had not earned. The two rules cannot
+ * both hold — a company nobody runs for ten years cannot be both closed and
+ * recoverable — and of the two, a business that closes when nobody runs it is
+ * the one a game about running a business should have.
+ *
+ * What is kept is the part that still makes sense: the counter resets the
+ * moment anybody files, so a table that misses a year and comes back finds a
+ * company that lost ground rather than one that ended.
+ */
+export const WIND_DOWN_FROM = 2;
+export const WIND_DOWN_RATE = 0.35;
+
+/**
+ * And how many silent years before it is wound up altogether.
+ *
+ * Six. By then the plant has gone, the customers have gone, and what is left
+ * is a bank balance with no business attached — which the engine will happily
+ * carry to the end of a season, solvent and empty, if nobody says otherwise.
+ * A company is not a bank balance.
+ */
+export const WIND_UP_AFTER = 6;
+
 /** Small deterministic hash, so a season's weather is fixed the moment it is created. */
 function seedOf(text: string): number {
   let hash = 2166136261;
@@ -517,6 +550,19 @@ export interface YearDecisions {
  * missing — it is one. A team whose CFO is away should keep the marketing its
  * CMO chose an hour ago, and lose only the finance decisions nobody made.
  */
+/**
+ * Whether anybody actually steered this company this year.
+ *
+ * `decisionsForYear` always produces a decision object — that is the point of
+ * the caretaker — so the engine cannot tell "five people filed nothing" from
+ * "five people filed a thin year" by looking at what it is handed. It has to
+ * be told, and this is where it is known.
+ */
+function markSteering(decisions: TeamDecisions, absent: Role[], company: Company): TeamDecisions {
+  const seats = company.seats?.length ?? 5;
+  return absent.length >= Math.max(1, seats) ? { ...decisions, steered: false } : decisions;
+}
+
 export function decisionsForYear(input: {
   company: Company;
   niche: Niche;
@@ -566,12 +612,12 @@ export function decisionsForYear(input: {
   if (target && target !== "ceo" && company.seats.includes(target) && submitted[target] && previous?.[LEVER_OF[target]]) {
     const filed = (decisions as any)[LEVER_OF[target]];
     (decisions as any)[LEVER_OF[target]] = defaultDraft(target, company, (previous as any)[LEVER_OF[target]]);
-    return { decisions, absent, overruled: { role: target, filed } };
+    return { decisions: markSteering(decisions, absent, company), absent, overruled: { role: target, filed } };
   }
   // An overrule that could not happen is not recorded as one.
   if (target && decisions.ceo) (decisions.ceo as any) = { ...decisions.ceo, overrule: "" };
 
-  return { decisions, absent };
+  return { decisions: markSteering(decisions, absent, company), absent };
 }
 
 /**

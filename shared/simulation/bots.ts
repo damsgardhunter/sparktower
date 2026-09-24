@@ -64,6 +64,16 @@ export const botsForVenture = (ventureId: string, count: number, poolSize = BOT_
 export const BOT_JITTER = 0.12;
 
 /**
+ * How often a bot reconsiders a choice it has already made.
+ *
+ * One year in five. Below that a company never adapts; above it, it has no
+ * identity from one year to the next — which is what every bot did before
+ * this, because the seed carries the year and so every choice was a fresh
+ * coin toss.
+ */
+export const RETHINK_ODDS = 0.2;
+
+/**
  * One numeric lever, nudged.
  *
  * Seeded on the venture, year, role and field together, so the same company in
@@ -674,7 +684,24 @@ export function botDecision(input: {
     }
 
     if (field.kind === "choice" && field.options?.length) {
-      draft[field.id] = jitterChoice(seed, field.options.map((o) => o.value), value);
+      /*
+       * A company keeps doing what it was doing, mostly.
+       *
+       * Every choice in the game was re-rolled from scratch every year —
+       * positioning, pace, sourcing, how a feature is built — because the
+       * seed carries the year. A bot that picks a different market position
+       * every twelve months is not playing badly, it is not playing at all,
+       * and none of the levers that reward consistency could ever pay for it.
+       *
+       * So last year's answer stands unless the roll says otherwise. A weak
+       * table is one that changes its mind too rarely and too late, not one
+       * that changes it annually at random.
+       */
+      const options = field.options.map((o) => o.value);
+      const settled = value !== undefined && value !== null && options.includes(value as never);
+      draft[field.id] = settled && between(`${seed}:rethink`, 0, 1) > RETHINK_ODDS
+        ? value
+        : jitterChoice(seed, options, value);
       continue;
     }
 

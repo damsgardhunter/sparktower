@@ -16,6 +16,7 @@
  *   5. Reputation moves, last, because it is a consequence rather than a lever.
  */
 import type { Company, Economy, Niche, World } from "./types";
+import { WIND_DOWN_FROM, WIND_DOWN_RATE, WIND_UP_AFTER } from "./season";
 import { inPeriodWords } from "./cadence";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
@@ -451,6 +452,47 @@ export function resolveYear(
    */
   const byCompany = new Map(decisions.map((d) => [d.companyId, sanitiseDecisions(d)]));
   /*
+   * Who actually filed. Taken from what was handed in, before the board and
+   * the caretaker fill the gaps, because "nobody steered this company" is a
+   * different fact from "this company's plan was thin".
+   */
+  const steered = new Set(decisions.filter((d) => d.steered !== false).map((d) => d.companyId));
+
+  /**
+   * A business nobody runs closes.
+   *
+   * The caretaker keeps a company going on last year's plan at sixty per
+   * cent, which is right for a table that missed a day and wrong for one that
+   * never arrived: measured over fourteen years of filing nothing at all, a
+   * company still finished standing in more than half of markets, coasting on
+   * an opening position it had not earned and banking the profit while the
+   * business rotted underneath it.
+   *
+   * Nothing steers it, so it winds down. The first missed year costs nothing
+   * — people are on trains — and from the second the people leave, the room
+   * goes back and the customers find somebody who answers the phone, faster
+   * every year. A table that comes back on day twelve still has something to
+   * come back to; one that never comes back does not.
+   */
+  const windDown = (company: Company, years: number): Company => {
+    if (years < WIND_DOWN_FROM) return company;
+    const gone = Math.min(0.9, (years - WIND_DOWN_FROM + 1) * WIND_DOWN_RATE);
+    const keep = 1 - gone;
+    /*
+     * The room goes, and that is what does it. Taking the customers alone
+     * changed nothing at all — a company at the size these start at is
+     * capacity-bound with demand to spare, so the market simply refilled it
+     * every year, and fourteen years of being ignored still ended in profit.
+     * A plant nobody is paying for is a plant that is not there, and a
+     * company cannot serve customers it has no room for.
+     */
+    return {
+      ...company,
+      capacity: Math.max(0, Math.round(company.capacity * keep)),
+      customers: Object.fromEntries(Object.entries(company.customers).map(([id, n]) => [id, Math.max(0, Math.round(n * keep))])),
+    };
+  };
+  /*
    * Where the investors have removed the chief executive, the board's
    * decisions stand in that chair — replacing whatever was filed, before
    * anything reads it, so the focus a removed chief executive filed cannot
@@ -461,6 +503,25 @@ export function resolveYear(
     const filed = byCompany.get(company.id) ?? { companyId: company.id };
     byCompany.set(company.id, { ...filed, ceo: boardChiefExecutive(company) as any });
   }
+  /*
+   * The wind-down happens before the year is read, not after it.
+   *
+   * Applied at settlement it did the opposite of its job: the company earned
+   * a full year on the customers it was about to lose, reported the smaller
+   * number, and finished fourteen years of being ignored with £20.9m in the
+   * bank. Customers a company no longer has cannot pay it.
+   */
+  const unsteeredNow = new Map<string, number>();
+  world = {
+    ...world,
+    companies: world.companies.map((company) => {
+      if (company.kind !== "player") return company;
+      const years = steered.has(company.id) ? 0 : (company.unsteered ?? 0) + 1;
+      unsteeredNow.set(company.id, years);
+      return windDown(company, years);
+    }),
+  };
+
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
   const notesFor: Record<string, string[]> = {};
@@ -1129,6 +1190,11 @@ export function resolveYear(
      * to tell somebody they have 14,353.5 customers. Rounded once, at the
      * point they become the company's, so every screen downstream is safe.
      */
+    /*
+     * How long this company has gone without anybody filing for it. Reset the
+     * moment somebody does, so one missed year is a missed year.
+     */
+    const unsteeredFor = unsteeredNow.get(company.id) ?? 0;
     const customers = Object.fromEntries(
       Object.entries(allocation.held[company.id] ?? {}).map(([id, n]) => [id, Math.max(0, Math.round(n))]),
     );
@@ -1435,6 +1501,23 @@ export function resolveYear(
      * the recovery moves rather than closing the game.
      */
     let bankruptSince = company.bankruptSince;
+    /*
+     * A company with no room, no customers and nobody filing for it has
+     * not failed in the usual way — it has simply stopped being a company.
+     * Winding the plant down alone left it dormant and solvent, sitting on
+     * the last of its opening money in year fourteen with nothing to spend
+     * it on, which is not a season anybody played and not a result anybody
+     * should be able to finish with.
+     */
+    const nothingLeft = company.kind === "player" && unsteeredFor >= WIND_UP_AFTER;
+    if (nothingLeft) {
+    bankruptSince ??= world.year;
+    notesFor[company.id] = [
+      ...(notesFor[company.id] ?? []),
+      "Nobody has filed anything for this company in years. The room is gone, the customers are gone, and it has been wound up.",
+    ];
+    }
+
     let emergencyDrawn = 0;
     // Repayment clears the expensive money first.
     let emergencyDebt = company.kind === "player" ? applyRepayment(company.emergencyDebt ?? 0, repaid) : 0;
@@ -1779,6 +1862,7 @@ export function resolveYear(
       // Automation ordered this year runs from now, like the room built this year.
       ...(company.kind === "player" ? { automation: (base as Company & { automationNext?: number }).automationNext ?? base.automation } : {}),
       unitCost: base.unitCost,
+      unsteered: unsteeredFor,
       customers,
       cash,
       debt,

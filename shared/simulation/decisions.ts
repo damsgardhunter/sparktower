@@ -236,6 +236,14 @@ export interface ExecutiveDecision {
 
 /** One year, from all five seats. A missing seat is a real state, not an error. */
 export interface TeamDecisions {
+  /**
+   * False when every seat was empty: nobody filed anything at all.
+   *
+   * Set by `decisionsForYear`, read by `resolveYear` to know the difference
+   * between a company running on a caretaker's plan and one nobody is running
+   * — which is the difference between a bad season and a closed business.
+   */
+  steered?: boolean;
   companyId: string;
   cmo?: MarketingDecision;
   cfo?: FinanceDecision;
