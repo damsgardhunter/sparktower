@@ -11,14 +11,13 @@ import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Building2, Loader2, Plus, Users } from "lucide-react";
 import { VerifyDomain } from "@/components/company/verify-domain";
+import { Field, NovaInput, NovaTextarea, NOVA_FIELD_CLASS } from "@/components/nova";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { COMPANY_SIZES, INDUSTRIES, type CompanyRole } from "@shared/companies";
@@ -63,9 +62,11 @@ export default function CompaniesPage() {
         <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
       ) : !data?.companies.length ? (
         !showForm && (
-          <Card>
+          <Card className="nova-ring-soft">
             <CardContent className="py-10 text-center space-y-3">
-              <Building2 className="h-8 w-8 mx-auto text-muted-foreground" />
+              <span className="nova-chip mx-auto flex h-11 w-11 items-center justify-center rounded-xl">
+                <Building2 className="h-5 w-5" />
+              </span>
               <p className="text-sm text-muted-foreground">You're not part of any company yet. Create one, or ask a colleague for their team's invite link.</p>
               <Button variant="outline" onClick={() => setShowForm(true)}>Create a company</Button>
             </CardContent>
@@ -77,7 +78,13 @@ export default function CompaniesPage() {
             <button
               key={c.id}
               onClick={() => navigate(`/companies/${c.id}`)}
-              className="text-left rounded-xl border bg-card p-4 hover:border-primary/50 transition-colors"
+              /*
+                * The soft ring rather than the full one: these are a grid of
+                * equals, and the loud gradient is for the one thing on a
+                * screen that should draw the eye. The glow on hover is what
+                * says it is a door.
+                */
+              className="nova-ring-soft nova-hover-glow rounded-xl p-4 text-left"
               data-testid={`company-${c.id}`}
             >
               <div className="flex items-center gap-2 flex-wrap">
@@ -181,7 +188,8 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
   const fieldError = (f: string) => error?.field === f ? <p className="text-xs text-destructive mt-1">{error.message}</p> : null;
 
   return (
-    <Card>
+    /* While it is open this is the only thing on the screen to do, so it takes the full ring. */
+    <Card className="nova-ring nova-glow">
       <CardHeader><CardTitle className="text-lg">New company</CardTitle></CardHeader>
       <CardContent>
         <form
@@ -190,16 +198,24 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
         >
           <VerifyDomain onVerified={setProved} />
 
-          <div className={proved ? undefined : "pointer-events-none opacity-40"} aria-hidden={!proved}>
-            <Label htmlFor="company-name">Name</Label>
-            <Input id="company-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Acme Ltd" data-testid="input-company-name" />
-            {fieldError("name")}
-          </div>
+          <div className={proved ? "space-y-4" : "pointer-events-none space-y-4 opacity-40"} aria-hidden={!proved}>
+            <Field
+              label="Name"
+              hint="How it appears to everyone: on your challenges, and to anybody you recruit."
+              error={error?.field === "name" ? error.message : undefined}
+            >
+              {(f) => (
+                <NovaInput
+                  {...f} value={name} onChange={(e) => setName(e.target.value)}
+                  maxLength={80} placeholder="Acme Ltd" data-testid="input-company-name"
+                />
+              )}
+            </Field>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <Label>Industry</Label>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Industry</Label>
               <Select value={industry} onValueChange={setIndustry}>
-                <SelectTrigger data-testid="select-industry"><SelectValue placeholder="Choose one" /></SelectTrigger>
+                <SelectTrigger className={NOVA_FIELD_CLASS} data-testid="select-industry"><SelectValue placeholder="Choose one" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NONE}>Not set</SelectItem>
                   {INDUSTRIES.map((i) => <SelectItem key={i} value={i}>{i}</SelectItem>)}
@@ -207,10 +223,10 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
               </Select>
               {fieldError("industry")}
             </div>
-            <div>
-              <Label>Size</Label>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Size</Label>
               <Select value={size} onValueChange={setSize}>
-                <SelectTrigger data-testid="select-size"><SelectValue placeholder="How many people" /></SelectTrigger>
+                <SelectTrigger className={NOVA_FIELD_CLASS} data-testid="select-size"><SelectValue placeholder="How many people" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NONE}>Not set</SelectItem>
                   {COMPANY_SIZES.map((s) => <SelectItem key={s} value={s}>{s} people</SelectItem>)}
@@ -220,11 +236,21 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
             </div>
           </div>
           {fieldError("website")}
-          <div>
-            <Label htmlFor="company-description">What the company does</Label>
-            <Textarea id="company-description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={600} rows={3} data-testid="input-company-description" />
-            <p className="text-xs text-muted-foreground mt-1">{description.length}/600</p>
-            {fieldError("description")}
+          <Field
+            label="What the company does"
+            optional
+            hint={error?.field === "description" ? undefined : `A line or two. ${600 - description.length} characters left.`}
+            error={error?.field === "description" ? error.message : undefined}
+          >
+            {(f) => (
+              <NovaTextarea
+                {...f} value={description} onChange={(e) => setDescription(e.target.value)}
+                maxLength={600} rows={3}
+                placeholder="Commercial cleaning for offices across the north west."
+                data-testid="input-company-description"
+              />
+            )}
+          </Field>
           </div>
           {error && !["name", "industry", "size", "website", "description"].includes(error.field ?? "") && (
             <p className="text-sm text-destructive">{error.message}</p>

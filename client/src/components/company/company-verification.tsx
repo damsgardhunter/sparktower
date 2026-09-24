@@ -65,7 +65,7 @@ export function CompanyVerificationBanner({ companyId, canManage, verifiedDomain
 
   if (!open) {
     return (
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3" data-testid="company-unverified">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3.5" data-testid="company-unverified">
         <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
         <p className="min-w-0 flex-1 text-sm">
           <span className="font-medium">This company can't post challenges yet.</span>{" "}
@@ -81,7 +81,7 @@ export function CompanyVerificationBanner({ companyId, canManage, verifiedDomain
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-border p-4" data-testid="company-verify-panel">
+    <div className="nova-ring space-y-3 rounded-xl p-4" data-testid="company-verify-panel">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">Prove this company's website</p>

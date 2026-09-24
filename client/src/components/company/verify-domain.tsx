@@ -27,9 +27,7 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Pill } from "@/components/nova";
+import { Field, NovaInput, Pill } from "@/components/nova";
 import {
   AlertTriangle, Check, Copy, Globe, Loader2, RefreshCw, ShieldCheck,
 } from "lucide-react";
@@ -52,7 +50,7 @@ function Copyable({ value, label }: { value: string; label: string }) {
   return (
     <div className="space-y-1">
       <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
-      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5">
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2">
         <code className="min-w-0 flex-1 truncate font-mono text-xs">{value}</code>
         <Button
           type="button" size="sm" variant="ghost" className="h-7 shrink-0 px-2"
@@ -123,14 +121,14 @@ export function VerifyDomain({ onVerified }: {
 
   return (
     <div className="space-y-3" data-testid="verify-domain">
-      <div>
-        <Label htmlFor="verify-website">Your company's website</Label>
-        <p className="mb-1.5 text-xs text-muted-foreground">
-          You'll prove you control it. It's what stops anybody posting challenges in your company's name.
-        </p>
+      <Field
+        label="Your company's website"
+        hint="You'll prove you control it. It's what stops anybody posting challenges in your company's name."
+      >
+        {(f) => (
         <div className="flex gap-2">
-          <Input
-            id="verify-website"
+          <NovaInput
+            {...f}
             value={verification?.domain ?? website}
             onChange={(e) => setWebsite(e.target.value)}
             disabled={!!verification}
@@ -153,7 +151,8 @@ export function VerifyDomain({ onVerified }: {
             </Button>
           )}
         </div>
-      </div>
+        )}
+      </Field>
 
       {deadEnd && (
         <p className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm" data-testid="verify-dead-end">
@@ -164,7 +163,7 @@ export function VerifyDomain({ onVerified }: {
       {problem && !verification && <p className="text-sm text-destructive">{problem}</p>}
 
       {verification && (
-        <div className="space-y-3 rounded-lg border border-border p-3">
+        <div className="nova-ring-soft space-y-3 rounded-xl p-3">
           {/* Two ways, because organisations are shaped differently: one can deploy, one can only ask IT for a DNS record. */}
           <div className="flex gap-1.5" role="tablist">
             {(["file", "dns"] as VerificationMethod[]).map((m) => (
