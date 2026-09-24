@@ -124,10 +124,12 @@ function MarketSeason({ projectId }: { projectId: string }) {
 
   if (!company) {
     return (
-      <Card data-testid="simulations-no-company">
+      <Card className="nova-ring" data-testid="simulations-no-company">
         <CardContent className="p-6 space-y-3">
           <div className="flex items-center gap-2">
-            <Gamepad2 className="h-5 w-5 text-primary" />
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip">
+              <Gamepad2 className="h-4 w-4" />
+            </span>
             <p className="text-lg font-semibold">Run a market against other people</p>
           </div>
           <p className="text-sm text-muted-foreground max-w-2xl">
@@ -140,7 +142,9 @@ function MarketSeason({ projectId }: { projectId: string }) {
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             <Link href="/simulation">
-              <Button size="sm" data-testid="button-public-market">Pick a market <ArrowRight className="h-4 w-4 ml-1" /></Button>
+              <Button size="sm" className="nova-hover-glow" data-testid="button-public-market">
+                Pick a market <ArrowRight className="h-4 w-4 ml-1" />
+              </Button>
             </Link>
             <Link href="/companies">
               <Button size="sm" variant="outline" data-testid="button-company-account">Set up a company account</Button>
@@ -153,7 +157,7 @@ function MarketSeason({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4" data-testid="simulations-panel">
-      <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-xl nova-ring px-3 py-2 text-sm text-muted-foreground">
         <Users className="h-4 w-4 text-primary shrink-0" />
         <span className="flex-1">
           {canRun

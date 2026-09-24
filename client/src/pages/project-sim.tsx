@@ -70,6 +70,21 @@ export default function ProjectSimPage() {
    */
   const { data: project } = useQuery<{ title?: string }>({ queryKey: [`/api/projects/${projectId}`] });
 
+  /*
+   * Back means back, not "the project page".
+   *
+   * This navigated to the Simulations tab whatever route you arrived by, so
+   * somebody who came from their desk, a link or another simulation was sent
+   * somewhere they had never been and lost the place they had. History knows
+   * where they came from; the tab is only right when there is no history to
+   * go back to — a fresh tab, a pasted link — and then it is the best guess
+   * there is.
+   */
+  const goBack = () => {
+    if (window.history.length > 1) window.history.back();
+    else navigate(`/projects/${projectId}?tab=simulations`);
+  };
+
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4 p-4 sm:p-6" data-testid={`project-sim-${game}`}>
       <SimHeader
@@ -77,8 +92,8 @@ export default function ProjectSimPage() {
         title={meta.title}
         titleTestId={`sim-title-${game}`}
         subtitle={project?.title ? `${meta.lead} · ${project.title}` : meta.lead}
-        onBack={() => navigate(`/projects/${projectId}?tab=simulations`)}
-        backLabel="Back to simulations"
+        onBack={goBack}
+        backLabel="Back"
         backTestId="button-back-simulations"
       />
       <p className="px-1 text-sm text-muted-foreground">{meta.blurb}</p>
