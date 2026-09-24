@@ -17,6 +17,7 @@ const platform = () => (globalThis as any).__rnPlatform;
 
 beforeEach(() => {
   (globalThis as any).__picker = { permission: { granted: true, canAskAgain: true }, result: { canceled: true }, launched: [] };
+  (globalThis as any).__documentPicker = { result: { canceled: true }, asked: [] };
   platform().OS = "ios";
 });
 
@@ -98,3 +99,39 @@ describe("pickPhoto", () => {
     });
   });
 });
+
+/**
+ * A build made before the photo library existed.
+ *
+ * The picker is a native module: install the package and a phone running
+ * yesterday's binary still has the JavaScript half and not the native one, so
+ * the first call throws. Only a rebuild fixes that, and somebody on the older
+ * build should not lose the ability to add a picture in the meantime.
+ */
+describe("when the build has no photo library in it", () => {
+  const withoutNative = async (run: () => Promise<any>) => {
+    (globalThis as any).__picker.native = false;
+    try { return await run(); } finally { (globalThis as any).__picker.native = true; }
+  };
+
+  it("falls back to Files rather than throwing", async () => {
+    (globalThis as any).__documentPicker.result = {
+      canceled: false,
+      assets: [{ uri: "file:///tmp/from-files.png", name: "from-files.png", mimeType: "image/png", size: 4242 }],
+    };
+    const file = await withoutNative(() => pickPhoto());
+    expect(file).toEqual({ uri: "file:///tmp/from-files.png", name: "from-files.png", mimeType: "image/png", size: 4242 });
+    expect(picker().launched, "the native picker was never asked").toHaveLength(0);
+    expect((globalThis as any).__documentPicker.asked[0].type).toEqual(["image/*"]);
+  });
+
+  it("asks for videos too where the surface takes them", async () => {
+    await withoutNative(() => pickPhoto({ videos: true }));
+    expect((globalThis as any).__documentPicker.asked[0].type).toContain("video/mp4");
+  });
+
+  it("still returns nothing when they back out", async () => {
+    await expect(withoutNative(() => pickPhoto())).resolves.toBeNull();
+  });
+});
+
