@@ -44,33 +44,24 @@
  *
  * ## Where it stands
  *
- * Over 70 seasons a side it survives 84% and ends richer than it started in
- * 81%, against the hand-written `survivor` tier's 80% and 76% and the weak
- * `filler` tier's 83% and 69%. It is finally the best table in the codebase,
- * and the road there is worth more than the number:
+ * It survives more seasons than any other tier (91% against 86%) and builds
+ * the least valuable company (£10.4m against the survivor's £17.1m, on
+ * 176,000 customers against 419,000). It is cautious, not optimal, and the
+ * honest reading is that the search is sound and the objective still is not
+ * quite the game.
  *
- * ```
- *                                                 survives   richer
- * one year ahead, valued on cash                     62%       57%
- *   + net off the debt it borrowed                   62%       62%
- *   + believe the engine over the forecast           62%       62%
- *   + a plant that grows at a plant's speed          71%       71%
- *   + value the position over the years left         76%       76%
- *   + roll two years forward, not one                81%       81%
- *   + a finer search (16 slices, not 10)             84%       81%
- * ```
+ * It did score on cash plus a multiple of the position, which made it worse
+ * than that: it banked £30.3m against the ordinary bot's £18.8m on half the
+ * customers and came last of four tiers on the measure the season actually
+ * ranks founders by. A pound not spent scored a pound; a pound spent had to
+ * earn its way back. Scoring `valueOf` — a year of what the customers pay,
+ * plus what is owned, less what is owed, with cash deliberately not in it —
+ * moved it from £9.6m to £12.5m on the same seeds.
  *
- * Four of those seven are corrections to *how a business is modelled* rather
- * than to the search, and the two biggest — the second year of rollout and
- * the longer horizon — are both the same lesson. This game compounds. Brand
- * bought now pays by making next year's brand cheaper, and an objective that
- * looks one year out prices it at nothing.
- *
- * What is still missing: most of the finance seat, price tiers, segment
- * targeting, hiring and training, research, deals and niches. It decides 16
- * of the game's 72 levers against the survivor's 40, and now beats it
- * anyway — which says the remaining 56 are worth less than knowing what a
- * year is worth.
+ * What is missing is patience of a kind a two-year rollout still cannot buy.
+ * The survivor tier builds 419,000 customers by holding a course for
+ * fourteen years; this optimiser re-decides from scratch every year and each
+ * decision is locally right.
  *
  * ## Why it ramps rather than jumps
  *
@@ -364,8 +355,10 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * and a plan should not look better because a die fell well for it.
      */
     let after;
+    let valued = 0;
     try {
-      after = resolveYear({ ...world, year }, [draft], economy, { withoutEvent: true }).world;
+      const first = resolveYear({ ...world, year }, [draft], economy, { withoutEvent: true });
+      after = first.world;
       /*
        * And then a second year, holding the same plan.
        *
@@ -384,7 +377,11 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
       const held = after.companies.find((c) => c.id === companyId);
       if (held && !held.bankruptSince) {
         const second = draftOf(held, trial, price, Math.max(held.capacity, room), headcount, { region: null, borrow: 0 });
-        after = resolveYear({ ...after, year: year + 1 }, [second], economy, { withoutEvent: true }).world;
+        const next = resolveYear({ ...after, year: year + 1 }, [second], economy, { withoutEvent: true });
+        after = next.world;
+        valued = next.reports.find((r) => r.companyId === companyId)?.value ?? 0;
+      } else {
+        valued = first.reports.find((r) => r.companyId === companyId)?.value ?? 0;
       }
     } catch {
       return { score: -Infinity, serves: 0, room };
@@ -503,8 +500,24 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * less every year it goes on existing, and spending to get above that
      * line beats holding on to the money.
      */
+    /*
+     * Scored the way the game scores it.
+     *
+     * The objective was the money in the bank plus a multiple of the
+     * position, and it produced a company that banked the money: £30.3m of
+     * cash against the ordinary bot's £18.8m, on 172,000 customers against
+     * 371,000 — and on the engine's own measure of what a company is worth it
+     * came *last* of the four tiers, behind the bot that plays badly. It was
+     * liquidating: every pound not spent scored a pound, and a pound spent
+     * had to earn its way back.
+     *
+     * `valueOf` in `resolve.ts` is what the season actually ranks founders on
+     * — a year of what the customers pay, plus what the company owns, less
+     * what it owes — and cash is deliberately not in it. Optimising anything
+     * else optimises the wrong game.
+     */
     const position = (serves * margin * per - fixedPerYear * per) * life;
-    return { score: me.cash - me.debt + position * (1 + pending), serves, room };
+    return { score: valued + position * pending, serves, room };
   };
 
   let shape: Shape = { region: null, borrow: 0 };

@@ -799,6 +799,63 @@ credited a region that is about to open, at what it will reach when it gets
 there. The levers it was missing were precisely the long-payback ones, and no
 amount of widening the search reaches them without widening the horizon too.
 
+### Cash is not the score, and measuring it that way hid two things
+
+A weak bot appearing to end "richer" than it started, as often as a good one,
+turned out to be half a measurement problem and half a real one.
+
+**The measurement.** "Ended richer" was cash above the opening £6m, and cash is
+deliberately *not* what a season ranks founders on. `valueOf` in `resolve.ts`
+is: a year of what the customers pay, plus what the company owns, less what it
+owes. Scored that way, over 56 seasons a side:
+
+```
+mode        median value   median cash   customers   survived
+idle               £0.0m        £2.5m       1,682        55%
+filler            £15.2m       £12.8m     308,232        86%
+survivor          £17.1m       £21.4m     419,505        86%
+optimal           £10.4m        £7.8m     176,099        91%
+```
+
+A table that never files anything ends **worthless** and dies in 45% of
+seasons. The model does punish doing nothing; measuring it in cash did not
+show that, because a company can bank its opening endowment while its business
+rots — profitable for eight years on a position it never earned.
+
+**And the real one.** Filler at £15.2m against survivor's £17.1m is a 12% gap
+for the difference between playing badly and playing well. That is too close,
+and it is the same finding as ever: this engine rewards spending weakly, so
+the bot that spends least is never far behind.
+
+**The optimiser was optimising the wrong thing.** It banked the most cash of
+any tier (£30.3m at one point, against the ordinary bot's £18.8m) on half the
+customers, and came *last* on the measure the game actually uses. It was
+liquidating: a pound not spent scored a pound, and a pound spent had to earn
+its way back. It now scores on the engine's own `value`, which moved it from
+£9.6m to £12.5m on the same seeds — and it is still behind both bots on value
+while surviving more than either. Cautious, not optimal.
+
+### Three instruments tried against "doing nothing is too safe"
+
+- **A plant overhead** cannot tell "played badly" from "never turned up",
+  because both hold a plant. At 0.20 it bankrupted an idle team by year five,
+  which breaks a deliberate product guarantee — *"five people join, argue
+  about seats, and never come back; fourteen days later there must still be
+  something there, because the one who wanders back on day twelve is the
+  player worth having"*. At 0.12 the guarantee holds and the skill gradient
+  inverts instead, because a cost rise always hits the spender hardest.
+- **Opening the sealed segments** (the tolerance recalibration) does not touch
+  it: the passive company is capacity-bound, not churn-bound. It holds exactly
+  its starting plant because even a terrible company can fill it. And it still
+  breaks the same three guards.
+- **Scoring on value rather than cash** is the one that landed, and it fixed
+  the optimiser rather than the balance.
+
+The unresolved shape of it: **a company's opening position is profitable
+enough to coast on for eight years.** Until that is false, the bot that does
+least will stay close to the bot that does best, and every instrument that
+makes coasting expensive makes playing expensive too.
+
 ### Closing the gap: it is the best table in the codebase now
 
 Over 70 seasons a side:
