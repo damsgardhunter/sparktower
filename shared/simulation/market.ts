@@ -91,12 +91,16 @@ export function headStartAgainst(segment: Segment, company: Company, year?: numb
 /**
  * The most a company can charge over what the segment expects, having earned it.
  *
- * Eighteen per cent, at the very top of every axis the segment cares about.
- * Not more: at twenty-five the premium play won every one of the seven
- * markets and `balance.test.ts` said so, which is the guard working. Enough
- * to make being good worth paying for; not enough to make it the only way.
+ * Twelve per cent, at the very top of every axis the segment cares about.
+ *
+ * It was eighteen, set while the market could hold half again as many
+ * customers as it had people. Once that was fixed the market became finite
+ * and margin started mattering more than volume on its own, which tipped the
+ * premium play into winning all seven markets. Twelve puts the restaurant
+ * chain back in the hands of the regional play and leaves every strategy a
+ * market of its own — which is what `balance.test.ts` is there to hold.
  */
-export const PRICE_LICENCE_MAX = 0.18;
+export const PRICE_LICENCE_MAX = 0.12;
 
 /**
  * What this company has earned the right to charge.
@@ -216,6 +220,20 @@ export interface AllocationResult {
   flows: Record<string, Record<string, Record<string, number>>>;
   /** New demand each company won in each segment, before capacity. */
   fresh: Record<string, Record<string, number>>;
+  /**
+   * Customers a shrinking segment took away, by segment and company.
+   *
+   * A segment is a number of people, and that number moves — the economy
+   * turns, the growth rates differ. When it falls below what the companies in
+   * it are holding, somebody has to lose customers, and before this nobody
+   * did: holdings only ever grew, so by year twelve of a fourteen-year season
+   * the companies in dating apps held 9.3 million customers in a market of
+   * 6.0 million people.
+   *
+   * Taken proportionally, because a market getting smaller is not a rival
+   * winning and should not read as one.
+   */
+  shrank: Record<string, Record<string, number>>;
   /** segment → company → customers it won and could not serve. */
   turnedAway: Record<string, Record<string, number>>;
   /**
@@ -390,6 +408,7 @@ export function allocate(
   const switched: Record<string, number> = {};
   const flows: AllocationResult["flows"] = {};
   const fresh: AllocationResult["fresh"] = {};
+  const shrank: AllocationResult["shrank"] = {};
   const turnedAway: AllocationResult["turnedAway"] = {};
   const spill: AllocationResult["spill"] = {};
   for (const c of companies) { held[c.id] = {}; unserved[c.id] = 0; }
@@ -415,11 +434,23 @@ export function allocate(
      * change supplier slowly, and a simulation where they don't is a
      * simulation where brands are worthless.
      */
+    /*
+     * First, the segment itself. If there are fewer people in it than the
+     * companies between them are holding, the difference goes — taken from
+     * everybody in proportion, because a market getting smaller is not a
+     * rival winning.
+     */
+    shrank[segment.id] = {};
+    const heldAtStart = companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
+    const shrinkRatio = heldAtStart > demand && heldAtStart > 0 ? demand / heldAtStart : 1;
+
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
     for (const c of companies) {
-      const current = c.customers[segment.id] ?? 0;
-      if (current <= 0) continue;
+      const started = c.customers[segment.id] ?? 0;
+      if (started <= 0) continue;
+      const current = shrinkRatio < 1 ? Math.floor(started * shrinkRatio) : started;
+      if (current < started) shrank[segment.id][c.id] = started - current;
 
       const mine = appeal[c.id];
       const gap = Math.max(0, bestAppeal - mine);
@@ -434,6 +465,25 @@ export function allocate(
        * describes as a wall feel like a formality. A third is still fast — it
        * is the outer limit of what a genuinely better product achieves against
        * an inattentive rival — and it makes the years in between matter.
+       */
+      /*
+       * Scaled to the gaps that are actually reachable.
+       *
+       * This was `0.06 + loyalty * 0.34`, a span of 0.06 to 0.40 — against
+       * appeal gaps that top out near 0.19, because appeal is a weighted
+       * geometric mean of scores that cannot exceed one. A segment at loyalty
+       * 0.86 therefore had a tolerance of 0.352 against a best-possible gap
+       * of 0.192: not loyal, impermeable. Nothing any company could ever do
+       * would move one of its customers.
+       *
+       * It went unnoticed because the open pool counted every leaver twice
+       * and left a tenth of each segment unclaimed, so a challenger took
+       * those instead and it looked like the door was open. With the
+       * arithmetic fixed the wall was the only thing left.
+       *
+       * At 0.02 to 0.15 a company that is genuinely far better takes about
+       * six per cent a year from the most devoted segment in the game and
+       * fourteen from the most flighty, which is a door in both.
        */
       const tolerance = 0.06 + segment.loyalty * 0.34;
       const excess = Math.max(0, gap - tolerance);
@@ -481,6 +531,19 @@ export function allocate(
      * **flow**, and it has already been scaled — `leaveRate` is an annual
      * rate divided by `per` above.
      *
+     * Each leaver is counted **once**. They used to be counted twice — once
+     * because `alreadyHeld` is measured after they go, and once as
+     * `poolForNewcomers` — so `alreadyHeld + upForGrabs` exceeded the
+     * segment's population by the churn, every period, for ever. Holdings
+     * only grew: by year twelve of a fourteen-year season the companies in
+     * dating apps held 9.3 million customers in a market of 6.0 million
+     * people, and every number downstream of that — revenue, cash, the value
+     * a season is ranked on — was inflated by half.
+     *
+     * Counted once, the arithmetic closes exactly: `alreadyHeld` is what
+     * stayed, `open` is what nobody supplies, `poolForNewcomers` is what just
+     * came loose, and the three of them are the segment.
+     *
      * The old line measured the open pool *after* churn, which quietly folded
      * the leavers into it and then scaled the sum. At a quarterly cadence
      * incumbents shed a quarter as many customers, so the pool shrank on its
@@ -489,7 +552,7 @@ export function allocate(
      * its first year. Separating them makes a period's opportunity a quarter
      * of a year's, which is the whole of what it should be.
      */
-    const heldBefore = companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
+    const heldBefore = Math.min(heldAtStart, demand);
     const alreadyHeld = companies.reduce((sum, c) => sum + (held[c.id][segment.id] ?? 0), 0);
     const open = Math.max(0, demand - heldBefore);
     /*
@@ -508,7 +571,7 @@ export function allocate(
      * serve, `open` is empty and stays empty. What refills the market period
      * after period is churn, and churn *is* scaled.
      */
-    const newDemand = open + poolForNewcomers;
+    const newDemand = open;
     /*
      * And it cannot offer more seats than the segment has people.
      *
@@ -649,7 +712,7 @@ export function allocate(
     }
   }
 
-  return { held, unserved, switched, flows, fresh, turnedAway, spill };
+  return { held, unserved, switched, flows, fresh, shrank, turnedAway, spill };
 }
 
 /** Everyone's share of the whole niche, 0–1, for the table everyone reads first. */

@@ -60,14 +60,47 @@ function playSeason(decide: (year: number, company: any, world: World) => TeamDe
  * then claims playing is worse than not playing.
  */
 function playedYear(company: { cash: number; capacity: number; price: number }, world?: World): TeamDecisions {
-  const spend = Math.round(Math.max(250_000, company.cash * 0.08));
+  /*
+   * A steady hand, and steady has to mean affordable.
+   *
+   * This was eight per cent of the bank on each of six levers — some forty
+   * per cent of the company's cash every year, for fourteen years. It stood
+   * up while a market could hold half again as many customers as it had
+   * people, because the growth that bought paid for it. Against a market that
+   * is now finite it is not a plan, it is a burn: the "played" team reached
+   * the last year insolvent at minus £3.9m, and lost a comparison against
+   * doing nothing that it should win easily.
+   *
+   * Three per cent a lever is a company investing seriously and still able to
+   * pay for it, and the floor has to be small enough that a company having a
+   * thin year cuts its cloth instead of spending itself into the ground — a
+   * £120,000 floor across six levers was £720,000 a year against a million of
+   * revenue, and the engine simply refused most of it: "there was only 0 to
+   * spend, cash and credit together". A team that cannot pay for its plan is
+   * not playing well, it is playing badly, and this test is about the former.
+   */
+  const spend = Math.round(Math.max(40_000, company.cash * 0.03));
   const d: TeamDecisions = {
     companyId: "team",
     cmo: { price: company.price, brandSpend: spend, performanceSpend: spend, celebritySpend: 0, targetCities: [] },
-    cto: { featureSpend: spend, reliabilitySpend: spend, techDebtPaydown: 0 },
+    /*
+     * And it pays down what the shipping borrows. Features accrue technical
+     * debt, debt buys outages and breaches, and those cost reputation — so a
+     * fixture that shipped hard for fourteen years and never paid any of it
+     * back finished with a worse name than a company that did nothing at all,
+     * which says more about the plan than about playing.
+     */
+    cto: { featureSpend: spend, reliabilitySpend: spend, techDebtPaydown: Math.round(spend * 0.5) },
     coo: { capacityTarget: Math.round(company.capacity * 1.15), supportSpend: spend, efficiencySpend: Math.round(spend * 0.4), headcount: 5 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
-    ceo: { focus: "growth" },
+    /*
+     * And it answers when something goes wrong. A shock met with silence
+     * recovers far less of the reputation it cost, and a bigger company draws
+     * more shocks — so a fixture that never filed a `shockAnswer` in fourteen
+     * years was being punished for growing, and finished with a worse name
+     * than a company that did nothing.
+     */
+    ceo: { focus: "growth", shockAnswer: "statement" },
   };
   /*
    * A steady hand builds to the forecast. Growing capacity a fixed fifteen per

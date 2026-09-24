@@ -699,41 +699,82 @@ management and MMOs never fail once in twenty**. That is a market-content
 question — the opening region, the incumbents' strength, the segment mix — and
 it is the one remaining thing standing between this and a balanced set.
 
-### A market can hold more customers than it has people
+### A market can hold more customers than it has people — fixed
 
-Found while checking why a winning company's market share read as 4%. It is
-real, it is old, and it is not a cadence bug:
+Two things were wrong and both are now right.
+
+**Every leaver was counted twice.** `alreadyHeld` is measured after churn, so
+the people who just left were in the open pool once as "not held any more" and
+again as `poolForNewcomers`. `alreadyHeld + upForGrabs` therefore exceeded the
+segment's population by the churn, every period, for ever.
+
+**And a shrinking segment took nobody with it.** Holdings only grew: when the
+number of people in a segment fell — the economy turns, the growth rates
+differ — nothing gave.
 
 ```
-year   market demand   customers held   ratio
-   3      6,883,269        7,154,827    1.04
-   6      6,552,711        7,586,738    1.16
-   9      6,246,515        8,267,893    1.32
-  12      5,963,009        9,277,942    1.56
+            before            after
+year  demand      held    ratio   held    ratio
+   3  6,883,269  7,154,827  1.04   6,883,261  1.00
+   6  6,552,711  7,586,738  1.16   6,552,701  1.00
+  12  5,963,009  9,277,942  1.56   5,962,995  1.00
 ```
 
-By year twelve the companies in dating apps between them hold 9.3 million
-customers in a market of 6.0 million people. Everything downstream of that is
-inflated by half: revenue, cash, and the value a season is ranked on.
+A segment now adds up to the people in it, to within rounding, in every year
+of every market. Revenue, cash and the value a season is ranked on were all
+inflated by up to half and are not any more.
 
-The cause is that the open pool counts every leaver **twice** — once because
-`alreadyHeld` is measured after they go, and once as `poolForNewcomers` — so
-`alreadyHeld + upForGrabs` exceeds `demand` by the churn, every period,
-forever. Holdings only ever grow, and when a segment shrinks nothing gives.
+A shrinking market is a real movement, so it gets its own line in the year-end
+report — `leftMarket`, beside `lostTo` and `turnedAway`. "We lost four
+thousand people and nobody took them" is a different sentence from losing them
+to a rival, and a team that reads the second when the first is true goes and
+fixes a price that was never the problem.
 
-**It is not fixed**, deliberately. Both obvious fixes were tried and reverted:
+**It cured MMOs.** The market that could not be played — best strategy 5.20%
+revenue share against a 5% floor, held up by one strategy — reaches 10.8%
+once the arithmetic closes. It was choked by a market holding half again as
+many customers as it had people.
 
-- Trimming holdings to `demand` after allocation stops the capacity pass ever
-  turning anybody away, and breaks the year-end customer bridge.
-- Capping the pool at the seats actually available reconciles the totals but
-  removes the mobility the double-count was providing: a competent team's
-  share in MMOs fell from 5.1% to 4.6%, below what `balance.test.ts` asserts.
+`cheap` went from 0.2–0.4% of a market to 5–19%: the whole strategy was being
+starved by the same bug.
 
-Counting each leaver once is the correct model and makes the arithmetic exact.
-It also makes the market roughly a third less liquid, so it needs the churn
-rate raised to compensate and a full balance pass across all seven markets —
-which is a piece of work in its own right, not a line change. The three tests
-that fail under the naive fix are the right guards and should stay.
+### A loyal segment is not loyal, it is sealed
+
+Found underneath the fix, and it is the next thing.
+
+Appeal is a weighted geometric mean of scores that cannot exceed one, so the
+gap between a near-perfect company and an ordinary one tops out around **0.19**.
+The tolerance a rival has to beat before anybody even considers moving is
+`0.06 + loyalty * 0.34` — a span of 0.06 to **0.40**.
+
+```
+segment              loyalty  tolerance   best gap   churn
+Swipers                 0.15      0.111      0.125    2.4%
+The recently single     0.22      0.135      0.155    3.2%
+The long-haulers        0.86      0.352      0.192    0.0%
+```
+
+A segment at loyalty 0.86 is not hard to take. It is impossible: no company
+that could exist can produce a gap that clears its tolerance. And even the
+flightiest segment in the game only ever leaks 2.4% a year.
+
+It went unseen because the double-count left a tenth of every segment
+unclaimed, so a challenger took those instead and the door looked open. The
+test that guards this — "a moat that never leaks is a wall, and a wall makes
+the game unwinnable" — was passing for the wrong reason, and now measures the
+mechanism it names against an appeal gap big enough to show it.
+
+**Recalibrating the tolerance to the reachable range was tried and is not in.**
+At `0.02 + loyalty * 0.13` a great company takes about 6% a year from the most
+devoted segment and 14% from the most flighty, which is the door the comment
+asks for. It also hands every one of the seven markets to the premium play,
+because once customers can actually move, the best offer wins and being
+excellent is underpriced. Four separate levers were tried against that — the
+price licence, the headroom on gains above the midpoint, the tolerance itself
+and the appeal exponent — and premium swept all seven at every setting.
+
+So the order is: **make excellence cost what it is worth, then open the door.**
+Not the other way round, which is what was attempted here.
 
 ### What is not done
 

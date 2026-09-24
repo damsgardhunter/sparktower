@@ -225,6 +225,8 @@ export interface SegmentBridge {
   sentTo: Flow[];
   /** Turned away by a rival who was full, and taken in by you. */
   pickedUp: number;
+  /** The segment shrank and took these with it. Nobody won them. */
+  leftMarket: number;
   /** Rounding across a market of millions; shown only when it is not trivial. */
   other: number;
   end: number;
@@ -341,7 +343,15 @@ function segmentBridges(input: {
      * out by forty on a screen people will check with a calculator is a bridge
      * nobody trusts afterwards.
      */
-    const other = end - (start - lost + won + freshWon - turnedAway + pickedUp);
+    /*
+     * The segment itself got smaller, and took a share of everybody's
+     * customers with it. Its own line, because "we lost four thousand people
+     * and nobody took them" is a different sentence from losing them to a
+     * rival, and a team that reads the second when the first is true will go
+     * and fix a price that was never the problem.
+     */
+    const leftMarket = allocation.shrank[sid]?.[company.id] ?? 0;
+    const other = end - (start - lost - leftMarket + won + freshWon - turnedAway + pickedUp);
 
     const biggest = lostTo[0];
     const rival = biggest ? effective.get(biggest.id) : undefined;
@@ -360,7 +370,7 @@ function segmentBridges(input: {
 
     return {
       segmentId: sid, name: segment.name, start, lostTo, wonFrom, fresh: freshWon,
-      turnedAway, sentTo, pickedUp, other, end, why, shortOf,
+      turnedAway, sentTo, pickedUp, leftMarket, other, end, why, shortOf,
     };
   });
 }
