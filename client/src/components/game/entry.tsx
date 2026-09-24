@@ -110,48 +110,59 @@ export function GameEntry() {
   const locked = !inProgress && daily ? !daily.canStart : false;
 
   return (
-    <Card className="overflow-hidden border-primary/25 bg-gradient-to-br from-primary/5 to-transparent">
+    /*
+      * The soft ring rather than the full one: this and the market card are a
+      * pair of equals, and the loud gradient is for the one thing on a screen
+      * that should draw the eye.
+      */
+    <Card className="nova-ring-soft overflow-hidden">
       <CardContent className="space-y-4 p-4 sm:p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold">Ten Years From Now</h3>
-              <Badge variant="secondary">~{minutes} min</Badge>
-              {/* Stated before it bites, not as an error afterwards. */}
-              <Badge variant="outline" className="gap-1 font-normal" data-testid="badge-once-a-day">
-                <CalendarCheck className="h-3 w-3" /> One a day
-              </Badge>
-            </div>
-            <p className="mt-1.5 max-w-xl text-sm text-muted-foreground">
-              Invent a startup with someone in five rounds — the idea, the customer, the money, the
-              product, and how you spend your first million. Then find out what an AI thinks it's
-              worth in a decade.
-            </p>
+        {/*
+          * The copy gets the whole width and the buttons go underneath.
+          *
+          * They used to sit in the same row, `shrink-0`, so on a two-column
+          * grid they claimed most of the card and left the paragraph a
+          * hundred-pixel gutter running twelve lines down beside an empty
+          * half. Nothing about the sentence fixed that; the row did.
+          */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="nova-chip flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+              <Play className="h-4 w-4" />
+            </span>
+            <h3 className="text-lg font-semibold">Ten Years From Now</h3>
+            <Badge variant="secondary">~{minutes} min</Badge>
+            {/* Stated before it bites, not as an error afterwards. */}
+            <Badge variant="outline" className="gap-1 font-normal" data-testid="badge-once-a-day">
+              <CalendarCheck className="h-3 w-3" /> One a day
+            </Badge>
           </div>
+          <p className="text-sm text-muted-foreground">
+            Five rounds with a stranger to invent a startup. An AI says what it's worth in ten years.
+          </p>
+        </div>
 
-          {/* Full-width buttons on a phone, side by side from `sm` up. */}
-          <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-            {inProgress ? (
-              <Button className="w-full sm:w-auto" onClick={() => navigate(`/sprints/game/${inProgress.id}`)} data-testid="button-resume-game">
-                Back to your game
-              </Button>
-            ) : (
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => start.mutate()}
-                disabled={start.isPending || locked}
-                data-testid="button-start-game"
-              >
-                {start.isPending
-                  ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                  : locked ? <Clock className="mr-1.5 h-4 w-4" /> : <Play className="mr-1.5 h-4 w-4" />}
-                {locked ? "Played today" : "Play now"}
-              </Button>
-            )}
-            <Button variant="outline" className="w-full sm:w-auto" onClick={() => navigate("/sprints/boards")} data-testid="button-game-boards">
-              <Trophy className="mr-1.5 h-4 w-4" /> Leaderboards
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {inProgress ? (
+            <Button className="w-full sm:w-auto" onClick={() => navigate(`/sprints/game/${inProgress.id}`)} data-testid="button-resume-game">
+              Back to your game
             </Button>
-          </div>
+          ) : (
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => start.mutate()}
+              disabled={start.isPending || locked}
+              data-testid="button-start-game"
+            >
+              {start.isPending
+                ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                : locked ? <Clock className="mr-1.5 h-4 w-4" /> : <Play className="mr-1.5 h-4 w-4" />}
+              {locked ? "Played today" : "Play now"}
+            </Button>
+          )}
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => navigate("/sprints/boards")} data-testid="button-game-boards">
+            <Trophy className="mr-1.5 h-4 w-4" /> Leaderboards
+          </Button>
         </div>
 
         {/*
@@ -162,11 +173,9 @@ export function GameEntry() {
           <p className="flex items-start gap-2 rounded-lg border border-border bg-background/60 p-3 text-sm" data-testid="text-play-again">
             <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
             <span>
-              You've had today's game. The next one opens{" "}
+              Today's game is played. The next opens{" "}
               <span className="font-medium">{daily?.opensIn ?? "shortly"}</span>.{" "}
-              <span className="text-muted-foreground">
-                One a day, so the number at the end is worth something — and so is your place on the boards.
-              </span>
+              <span className="text-muted-foreground">One a day keeps the boards worth topping.</span>
             </span>
           </p>
         )}

@@ -61,32 +61,28 @@ function SimulationEntry() {
   const running = data?.ventures?.filter((v) => v.phase !== "retired") ?? [];
 
   return (
-    <Card className="overflow-hidden border-primary/25 bg-gradient-to-br from-primary/5 to-transparent" data-testid="card-simulation-entry">
+    <Card className="nova-ring-soft overflow-hidden" data-testid="card-simulation-entry">
       <CardContent className="space-y-4 p-4 sm:p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="flex items-center gap-2 text-lg font-semibold">
-                <Building2 className="h-5 w-5 text-primary" /> Market simulation
-              </h3>
-              <Badge variant="secondary">a fortnight</Badge>
-              <Badge variant="outline" className="gap-1 font-normal">
-                <Users className="h-3 w-3" /> five people
-              </Badge>
-            </div>
-            <p className="mt-1.5 max-w-xl text-sm text-muted-foreground">
-              Five of you run one company between you — marketing, finance, product, operations and the chief
-              executive's chair. One real day is one year of trading, against four companies that already hold ninety
-              per cent of the market.
-            </p>
+        {/* Same shape as the game card: copy across the full width, button under it. */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="nova-chip flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+              <Building2 className="h-4 w-4" />
+            </span>
+            <h3 className="text-lg font-semibold">Market simulation</h3>
+            <Badge variant="secondary">a fortnight</Badge>
+            <Badge variant="outline" className="gap-1 font-normal">
+              <Users className="h-3 w-3" /> five people
+            </Badge>
           </div>
-
-          <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-            <Button className="w-full sm:w-auto" onClick={() => navigate("/simulation")} data-testid="button-open-simulation">
-              {running.length ? "Join another market" : "Join a market"}
-            </Button>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Five of you run one company. A day is a year, against incumbents holding nine tenths of the market.
+          </p>
         </div>
+
+        <Button className="w-full sm:w-auto" onClick={() => navigate("/simulation")} data-testid="button-open-simulation">
+          {running.length ? "Join another market" : "Join a market"}
+        </Button>
 
         {running.length > 0 && (
           <div className="border-t border-border/60 pt-3">
@@ -153,7 +149,7 @@ export default function Sprints() {
             Simulations
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Invent a company in half an hour, or run one for a fortnight. Both are free.
+            Invent a company in half an hour, or run one for a fortnight. Both free.
           </p>
         </header>
 
