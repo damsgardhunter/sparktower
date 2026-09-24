@@ -30,7 +30,7 @@
  * other is a plan whose owner should know which way round that is.
  */
 import {
-  answer, type Answer, type Baseline, type Lever, type SubscriptionLever,
+  answer, runMonths, type Answer, type Baseline, type Lever, type SubscriptionLever,
 } from "./decision-sim";
 
 /** How hard to push each number. A fifth is big enough to move the answer and small enough to still be the same plan. */
@@ -116,8 +116,19 @@ export function whatMatters(input: {
   /** How many to return. The tail is noise by construction. */
   top?: number;
 }): Sensitivity[] {
+  /*
+   * `runMonths`, not `answer`.
+   *
+   * `answer` does three confidence runs, a do-nothing run, the verdict, the
+   * facts — and, since it learned to, `ruinRisk`, which is two hundred and
+   * forty more projections. This function calls it twice per field, so a plan
+   * with thirteen nudgeable numbers was asking for something like six thousand
+   * full thirty-six-month simulations to draw one small panel, and the
+   * simulations page timed out on any project with a couple of scenarios on
+   * it. What a nudge needs is one number off one run, which is what this is.
+   */
   const at = (baseline: Baseline, levers: Lever[]): number =>
-    answer({ baseline, levers, months: input.months }).with.likely.endCash;
+    runMonths({ baseline, levers, months: input.months, confidence: "likely" }).endCash;
 
   const found: Sensitivity[] = [];
 
