@@ -86,7 +86,7 @@ export default function Sprints() {
           <PageIntro
             icon="planet"
             title="Ten Years From Now"
-            body="Invent a startup with someone in five rounds — the idea, the customer, the money, the product, and how you spend your first million. Then find out what an AI thinks it's worth in a decade."
+            body="Five rounds with a stranger to invent a startup. An AI says what it's worth in ten years."
           />
 
           {/*
