@@ -856,6 +856,76 @@ enough to coast on for eight years.** Until that is false, the bot that does
 least will stay close to the bot that does best, and every instrument that
 makes coasting expensive makes playing expensive too.
 
+### Does it look like a business? `npm run sim:realism`
+
+A season can balance perfectly and still describe something nobody would
+recognise. `scripts/realism-report.mjs` puts what a season produces next to
+what real firms report:
+
+```
+market             gross%  op%  salary%   rev/head   growth  leader   HHI
+Dating apps           92%   27%      9%      £744k      15%     36%  0.29
+Drone delivery        72%  -18%     17%      £403k      20%     39%  0.30
+Podcasts              90%   20%     15%      £497k      22%     36%  0.27
+Restaurant chain      74%   31%      6%    £1,296k      26%     43%  0.28
+Construction          76%  -58%     44%      £155k      17%     35%  0.28
+Project management    87%   38%      8%    £1,140k      35%     35%  0.29
+MMOs                  94%   26%     16%      £451k      22%     42%  0.30
+
+anchors            20-80%  5-25%  15-40%  £80-400k   5-40%  15-40%  0.1-0.25
+```
+
+**Nobody works at these companies.** Headcount ends at exactly five in every
+market, in every season — the five people in the chairs, and not one person
+hired in fourteen years:
+
+```
+market              year 14 revenue   headcount   customers per head
+Restaurant chain             £50.7m           5              563,038
+MMOs                         £34.6m           5              113,531
+Dating apps                  £22.9m           5               84,929
+Construction                  £6.4m           5                1,045
+```
+
+A restaurant chain turning over £50.7m and serving 2.8 million people with
+five staff is not a business, and it is the root of several things this
+document has been circling for a long time. Labour is the largest cost in
+almost every real company and here it is 6–16% of revenue; that is why the
+cost base is light enough to coast on, why break-even sits at a sixth of the
+plant, and why every attempt to make standing still expensive had to reach
+for an artificial overhead instead.
+
+The reason nobody hires is that hiring is priced as a pure cost: `fixedCosts`
+charges the salary and the only thing a head buys back is service, through
+`staffing`'s `supportEquivalent`. Capacity is a free-standing number with no
+people attached, so a bot that hires is simply a bot that spends more. **The
+fix is to make capacity need people** — a plant can only serve what its staff
+can serve. That would put labour where it belongs, make the operations seat's
+hiring lever matter, and make coasting cost what coasting costs.
+
+It is also a serious rebalance, and the history in this document is that every
+cost increase lands hardest on whoever is spending. It wants its own pass,
+with the bots taught to hire before the constraint arrives — note that the
+optimiser already sizes headcount against capacity, so it is the one table
+that would not be blindsided.
+
+**Also worth knowing:**
+
+- **Every market has software margins.** Construction runs a 76% gross margin
+  and a restaurant chain 74%. Real construction is 10–20% and restaurants are
+  labour-heavy. The markets differ in their customers and not in their
+  economics.
+- **Operating margins run hot where the game is winnable** (27–38% against a
+  5–25% anchor) and deeply negative where it is not (−18%, −58%). There is
+  very little middle.
+- **Markets are more concentrated than typical** — HHI 0.27–0.30 against
+  0.1–0.25, leaders on 35–43%.
+- **Construction's profit swings by 44% of revenue year to year**, which is
+  three times the anchor. It is the market that has been hardest all along.
+- The price-spread column reads 37x in podcasts and that one is a **false
+  positive**: the market spans £14 to £380 by design, so a premium entrant
+  beside a mass-market incumbent is the market working, not a fault.
+
 ### Doing nothing is no longer a way to finish a season
 
 A table that never files anything used to end more than half of seasons alive
