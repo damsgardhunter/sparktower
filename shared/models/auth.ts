@@ -45,6 +45,15 @@ export const users = pgTable("users", {
    */
   balanceCents: integer("balance_cents").default(0).notNull(),
   /**
+   * A developer's account: never charged, allowance never moves.
+   *
+   * The one switch that replaced a dropdown of four identical free tiers. It
+   * is honoured only when NODE_ENV is not production *and* the route that sets
+   * it is reachable, which it is not in production — two gates, because a
+   * column that turns billing off deserves them.
+   */
+  devUnlimited: boolean("dev_unlimited").default(false).notNull(),
+  /**
    * Small Nova actions bought and not yet spent.
    *
    * The thing somebody buys when the month's free allowance has run out. Not

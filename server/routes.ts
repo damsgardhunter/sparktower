@@ -100,7 +100,7 @@ import { requireImages, buyImagePass, imagePassActive } from "./images";
 
 /** How many scenes a storyboard has, and therefore how many pictures it draws. */
 const STORYBOARD_SCENES = 5;
-import { novaBuildPasses } from "@shared/schema";
+import { novaBuildPasses, novaBuildRuns, simulationScenarios, tenYearOutlooks, marketingSchemes } from "@shared/schema";
 import {
   getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired,
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
@@ -7326,6 +7326,79 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Dev reset-credits error:", error);
       res.status(500).json({ message: "Failed to reset credits" });
+    }
+  });
+
+  /**
+   * The one switch: never charged, allowance never moves.
+   *
+   * What the tier dropdown could not do. Every tier is free since the product
+   * stopped selling subscriptions, so switching between four of them changed
+   * nothing a developer cared about — the month's twenty-five small actions
+   * still ran out halfway through testing a flow, and the whole-business card
+   * could only be bought once per project.
+   *
+   * See the note in server/entitlements.ts for why this is honoured only
+   * outside production as well as only settable outside it.
+   */
+  app.post("/api/dev/unlimited", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const on = req.body?.on !== false;
+      await db.update(users).set({ devUnlimited: on }).where(eq(users.id, userId));
+      res.json({ devUnlimited: on, wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Dev unlimited error:", error);
+      res.status(500).json({ message: "Couldn't change that" });
+    }
+  });
+
+  /**
+   * Forget what this project has paid for, so the paywalls come back.
+   *
+   * Every priced surface decides it has been bought by looking for a row: the
+   * whole-business card by a build pass, the simulator by any scenario or
+   * outlook, the marketing reader by any scheme. Testing the *purchase* —
+   * which is the part with the money in it and the part most worth
+   * exercising — was therefore a one-shot per project, and the way to do it
+   * twice was to make another project.
+   *
+   * Deletes the rows rather than flipping a flag, because the flag is the rows.
+   * Destructive on purpose and dev-only: it throws away simulations and
+   * schemes that took model calls to produce.
+   */
+  app.post("/api/dev/forget-purchases", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const projectId = String(req.body?.projectId ?? "");
+      const project = projectId ? await storage.getProject(projectId) : null;
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Not your project" });
+
+      const forgotten = {
+        buildPasses: (await db.delete(novaBuildPasses)
+          .where(and(eq(novaBuildPasses.userId, userId), eq(novaBuildPasses.projectId, projectId)))
+          .returning({ id: novaBuildPasses.id })).length,
+        scenarios: (await db.delete(simulationScenarios)
+          .where(eq(simulationScenarios.projectId, projectId)).returning({ id: simulationScenarios.id })).length,
+        outlooks: (await db.delete(tenYearOutlooks)
+          .where(eq(tenYearOutlooks.projectId, projectId)).returning({ id: tenYearOutlooks.id })).length,
+        schemes: (await db.delete(marketingSchemes)
+          .where(eq(marketingSchemes.projectId, projectId)).returning({ id: marketingSchemes.id })).length,
+        /* The build runs too, or the card reports the last one instead of offering. */
+        builds: (await db.delete(novaBuildRuns)
+          .where(eq(novaBuildRuns.projectId, projectId)).returning({ id: novaBuildRuns.id })).length,
+      };
+      res.json({ forgotten });
+    } catch (error) {
+      console.error("Dev forget-purchases error:", error);
+      res.status(500).json({ message: "Couldn't forget those" });
     }
   });
 

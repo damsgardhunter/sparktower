@@ -231,6 +231,8 @@ export interface Wallet {
    * allowance above. They do not expire.
    */
   actionsBought: number;
+  /** A developer's account: nothing is charged. Always false in production. */
+  devUnlimited: boolean;
   /**
    * When an old day pass runs out, or null.
    *

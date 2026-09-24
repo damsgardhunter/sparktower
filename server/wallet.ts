@@ -41,12 +41,14 @@ import {
 
 export function walletFrom(row: {
   balanceCents: number; creditsUsed: number; dayPassUntil: Date | null;
-  imagePassUntil?: Date | null; novaActionsBought?: number;
+  imagePassUntil?: Date | null; novaActionsBought?: number; devUnlimited?: boolean;
 }): Wallet {
   const used = Math.max(0, row.creditsUsed ?? 0);
   const active = !!row.dayPassUntil && row.dayPassUntil.getTime() > Date.now();
   return {
     actionsBought: Math.max(0, row.novaActionsBought ?? 0),
+    /* Never true in a production build: see requireCredits. */
+    devUnlimited: process.env.NODE_ENV !== "production" && !!row.devUnlimited,
     balanceCents: row.balanceCents ?? 0,
     balanceDisplay: formatMoney(row.balanceCents ?? 0),
     allowanceUsed: used,
@@ -69,9 +71,22 @@ export async function walletOf(userId: string): Promise<Wallet> {
   const [row] = await db.select({
     balanceCents: users.balanceCents, creditsUsed: users.creditsUsed, dayPassUntil: users.dayPassUntil,
     imagePassUntil: users.imagePassUntil, novaActionsBought: users.novaActionsBought,
+    devUnlimited: users.devUnlimited,
   }).from(users).where(eq(users.id, userId));
   if (!row) return walletFrom({ balanceCents: 0, creditsUsed: 0, dayPassUntil: null });
   return walletFrom(row);
+}
+
+/**
+ * Whether this account is a developer's, and so never charged.
+ *
+ * Read rather than cached: a developer flips it mid-session and expects the
+ * next click to behave differently. Callers must also check that this is not
+ * production — see the note in requireCredits.
+ */
+export async function devUnlimited(userId: string): Promise<boolean> {
+  const [row] = await db.select({ on: users.devUnlimited }).from(users).where(eq(users.id, userId));
+  return !!row?.on;
 }
 
 /** True while a day pass is running. */

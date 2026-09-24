@@ -9,7 +9,7 @@ import {
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
 import { holdCredits, holdMoney, holdCovered, holdAction } from "./credit-reservations";
-import { spend, walletOf, dayPassActive, hasBuildPass, spendBoughtAction } from "./wallet";
+import { spend, walletOf, dayPassActive, hasBuildPass, spendBoughtAction, devUnlimited } from "./wallet";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -160,6 +160,30 @@ export async function requireCredits(
 
   const ent = await getUserEntitlements(userId);
   if (amount <= 0) return ent;
+
+  /*
+   * A developer's account, outside production: nothing is ever charged.
+   *
+   * This replaced a dropdown offering four tiers that were all free, which
+   * could not do the one thing it was there for — running the same small
+   * action forty times in a row, or opening the whole-business card again
+   * after buying it once. Both of those now just work.
+   *
+   * Two gates, deliberately. The column is only settable through a route that
+   * 404s in production, and it is only *honoured* outside production, so a row
+   * that somehow arrived in a production database with the flag set still pays
+   * like everybody else. A switch that turns off billing is worth being
+   * paranoid about, and the cost of the second check is one boolean.
+   *
+   * `holdCovered` rather than an early `return ent`: the route at the other
+   * end still calls deductCredits when it finishes, and without a hold to
+   * settle against it would fall through and take an action off the month's
+   * allowance — which is the one thing this is supposed to stop.
+   */
+  if (process.env.NODE_ENV !== "production" && await devUnlimited(userId)) {
+    holdCovered(res, userId, opts?.outcome);
+    return ent;
+  }
 
   const outcome = opts?.outcome;
   const projectId = opts?.projectId ?? null;
