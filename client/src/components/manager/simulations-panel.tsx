@@ -34,13 +34,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Gamepad2, ArrowRight, Users } from "lucide-react";
+import { Loader2, Gamepad2, ArrowRight, Users, ChevronRight } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { TrainingTab } from "@/components/company/training-tab";
-import { DecisionLab } from "@/components/sim/decision-lab";
-import { MarketingSchemes } from "@/components/sim/marketing-schemes";
-import { TenYearsFromNow } from "@/components/sim/ten-years-from-now";
+import { SIM_GAMES } from "@/pages/project-sim";
 
 interface ProjectCompany {
   company: { id: string; name: string } | null;
@@ -58,13 +56,7 @@ export function SimulationsPanel({ projectId }: { projectId: string }) {
    */
   const seasons = surfaceOn("sprints");
 
-  const business = (
-    <div className="space-y-4">
-      <DecisionLab projectId={projectId} />
-      <MarketingSchemes projectId={projectId} />
-      <TenYearsFromNow projectId={projectId} />
-    </div>
-  );
+  const business = <BusinessSims projectId={projectId} />;
   if (!seasons) return business;
 
   return (
@@ -78,6 +70,44 @@ export function SimulationsPanel({ projectId }: { projectId: string }) {
         <MarketSeason projectId={projectId} />
       </TabsContent>
     </Tabs>
+  );
+}
+
+/**
+ * The three business simulations, as somewhere to choose from.
+ *
+ * They used to be stacked here, one under the other, each with its own inputs
+ * and its own long form — so opening this tab meant meeting all three at once
+ * and scrolling past two to reach the one you came for. Now each is a page,
+ * and this is the door to it.
+ *
+ * The cards carry the Nova ring, which is what this product uses for the
+ * things Nova itself does. Lit on hover rather than always, because three
+ * glowing cards is not emphasis, it is wallpaper.
+ */
+function BusinessSims({ projectId }: { projectId: string }) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-3" data-testid="business-sims">
+      {Object.values(SIM_GAMES).map((game) => (
+        <Link key={game.slug} href={`/projects/${projectId}/simulate/${game.slug}`}>
+          <Card
+            className="nova-ring nova-hover-glow h-full cursor-pointer"
+            data-testid={`card-sim-${game.slug}`}
+          >
+            <CardContent className="flex h-full flex-col gap-2 p-5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip">
+                <game.icon className="h-4 w-4" />
+              </span>
+              <p className="font-semibold leading-tight">{game.title}</p>
+              <p className="flex-1 text-sm text-muted-foreground">{game.blurb}</p>
+              <span className="flex items-center gap-1 text-sm font-medium text-primary">
+                Open <ChevronRight className="h-4 w-4" />
+              </span>
+            </CardContent>
+          </Card>
+        </Link>
+      ))}
+    </div>
   );
 }
 

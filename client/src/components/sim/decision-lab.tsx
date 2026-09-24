@@ -26,6 +26,7 @@
  * conversation.
  */
 import { useState } from "react";
+import { businessMoney } from "@shared/currency";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
@@ -324,6 +325,8 @@ export function DecisionLab({ projectId }: { projectId: string }) {
         </CardContent>
       </Card>
 
+      <CompareAttempts scenarios={scenarios} currency={data.currency} />
+
       {scenarios.map((s, i) => (
         <ScenarioCard key={s.id} projectId={projectId} scenario={s} startOpen={i === 0} onAsk={setQuestion} currency={data.currency} />
       ))}
@@ -457,6 +460,91 @@ function StartingPosition({ projectId, data, open, onToggle }: {
 }
 
 /** One question and what the arithmetic said about it. */
+/**
+ * Two past attempts, side by side.
+ *
+ * Every answer here is already measured against doing nothing — that is what
+ * `cashDifference` and `paybackMonth` are — so the one thing the page could
+ * not do was measure two *decisions* against each other. An owner who has
+ * asked about hiring and about spending the same money on ads has the two
+ * answers and no way to put them next to each other, which is the question
+ * they were actually asking.
+ *
+ * Only the numbers that decide it. The narrative is on the cards below and
+ * repeating it here would make this a third place to read the same paragraph.
+ */
+function CompareAttempts({ scenarios, currency }: { scenarios: Scenario[]; currency: string }) {
+  const [left, setLeft] = useState(0);
+  const [right, setRight] = useState(1);
+  if (scenarios.length < 2) return null;
+
+  const money = (n: number) => businessMoney(n, currency);
+  const a = scenarios[Math.min(left, scenarios.length - 1)];
+  const b = scenarios[Math.min(right, scenarios.length - 1)];
+  const label = (s: Scenario) => s.question.length > 60 ? `${s.question.slice(0, 60)}…` : s.question;
+
+  /*
+   * `rank` is what makes one column the better one, and it is only set where
+   * bigger is plainly better. Payback deliberately has none: a decision that
+   * pays back in month two and stops is not beating one that pays back in
+   * month nine and compounds, and colouring it would say it was.
+   */
+  const rows: { what: string; of: (s: Scenario) => string; rank?: (s: Scenario) => number }[] = [
+    { what: "Over", of: (s) => `${s.months} months` },
+    { what: "The call", of: (s) => s.result?.verdict ?? "—" },
+    { what: "Cash, against doing nothing", of: (s) => money(s.result?.cashDifference ?? 0), rank: (s) => s.result?.cashDifference ?? 0 },
+    { what: "Revenue a month, at the end", of: (s) => money(s.result?.revenueDifference ?? 0), rank: (s) => s.result?.revenueDifference ?? 0 },
+    { what: "Pays for itself", of: (s) => s.result?.paybackMonth ? `month ${s.result.paybackMonth}` : "not inside the horizon" },
+    { what: "Worst month, if it goes badly", of: (s) => money(s.result?.worstCase?.cash ?? 0), rank: (s) => s.result?.worstCase?.cash ?? 0 },
+  ];
+
+  const picker = (value: number, set: (n: number) => void, testid: string) => (
+    <select
+      className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+      value={value}
+      onChange={(e) => set(Number(e.target.value))}
+      data-testid={testid}
+    >
+      {scenarios.map((s, i) => <option key={s.id} value={i}>{label(s)}</option>)}
+    </select>
+  );
+
+  return (
+    <Card className="nova-ring-soft" data-testid="compare-attempts">
+      <CardContent className="space-y-3 p-5">
+        <div>
+          <p className="font-semibold">Put two of them side by side</p>
+          <p className="text-sm text-muted-foreground">
+            Each answer is already measured against doing nothing. This is the one that measures them against each other.
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {picker(left, setLeft, "select-compare-left")}
+          {picker(right, setRight, "select-compare-right")}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <tbody>
+              {rows.map((row) => {
+                const av = row.of(a);
+                const bv = row.of(b);
+                const lead = row.rank && a !== b ? row.rank(a) - row.rank(b) : 0;
+                return (
+                  <tr key={row.what} className="border-b last:border-0">
+                    <td className="py-1.5 pr-3 text-muted-foreground">{row.what}</td>
+                    <td className={`py-1.5 pr-3 font-medium ${lead > 0 ? "text-primary" : ""}`}>{av}</td>
+                    <td className={`py-1.5 font-medium ${lead < 0 ? "text-primary" : ""}`}>{bv}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ScenarioCard({ projectId, scenario, startOpen, onAsk, currency }: {
   projectId: string; scenario: Scenario; startOpen: boolean; onAsk: (q: string) => void;
   /** The business's own money, so the curve and its key read in it. */

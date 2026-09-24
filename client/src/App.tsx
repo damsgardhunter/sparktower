@@ -33,6 +33,7 @@ import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
+import ProjectSimPage from "@/pages/project-sim";
 import SimulationPage from "@/pages/simulation";
 import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
@@ -312,6 +313,8 @@ function Router() {
             <Route path="/contests/:slug" component={ContestDetail} />
             <Route path="/sprints" component={Sprints} />
             {/* The market simulation lives under /sprints, the page now called "Simulations". */}
+            {/* A project's own simulations, one to a page. See `project-sim.tsx`. */}
+            <Route path="/projects/:id/simulate/:game" component={ProjectSimPage} />
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />
