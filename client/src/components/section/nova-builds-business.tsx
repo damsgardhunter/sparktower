@@ -209,6 +209,22 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
     );
   }
 
+  /*
+   * Nothing left for Nova to write, so nothing to sell.
+   *
+   * The paid card has always counted `novaCanWrite` and said "three steps on
+   * your path are still Nova's to write". The offer never looked at it, so a
+   * builder who had worked through all twenty-four of their own milestones was
+   * still shown "Have Nova build it" at full price, for a path with nothing on
+   * it left to build — the one person on the product who should not be offered
+   * this, offered it every time they opened the dashboard.
+   *
+   * `undefined` is "not read yet" and must not hide the offer, or the card
+   * would blink out on every load before the first poll comes back. Only a
+   * real zero stands it down.
+   */
+  if (waiting && waiting.novaCanWrite === 0) return null;
+
   return (
     <div className="rounded-lg border border-primary/30 p-4 space-y-3" data-testid="nova-build-offer">
       <div className="space-y-1">
@@ -219,6 +235,21 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
           Nova works down your whole path and writes every step that's its to write — the research, the drafts, the documents.
           The decisions that are yours stay yours, with three real options waiting on each.
         </p>
+        {/*
+          * What it would actually write, on this path, today.
+          *
+          * It falls as the builder gets on with it, and that is the point: at
+          * four steps left this is a bad buy and the number says so before the
+          * price does. A figure that shrinks is worth more than a promise that
+          * doesn't, and somebody who reads it and decides against is somebody
+          * who was never going to be happy having paid.
+          */}
+        {waiting && waiting.novaCanWrite > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="text-build-offer-scope">
+            {plural(waiting.novaCanWrite, "step")} on your path {waiting.novaCanWrite === 1 ? "is" : "are"} Nova's to write right now.
+            {waiting.yoursAlone > 0 && ` ${plural(waiting.yoursAlone, "step")} would stay yours.`}
+          </p>
+        )}
       </div>
       <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending} data-testid="button-build-my-business">
         {start.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}

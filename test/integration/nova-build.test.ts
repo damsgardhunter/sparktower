@@ -279,7 +279,7 @@ describe("Nova builds the whole business", () => {
     expect((await stranger.agent.get(`/api/projects/${b.projectId}/nova-build`)).status).toBe(403);
   }, 300_000);
 
-  it("finishes a stopped build for nothing, because the $30 was for the outcome", async () => {
+  it("finishes a stopped build for nothing, because the price was for the outcome", async () => {
     const app = await getTestApp();
     const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
 
@@ -345,7 +345,7 @@ describe("Nova builds the whole business", () => {
     expect(treesIn(await tasksOf(b.projectId)), "the build laid out a path nobody started").toEqual(new Set(["SHIP"]));
   }, 120_000);
 
-  it("covers the steps it hands back, because the $30 bought the project and not part of it", async () => {
+  it("covers the steps it hands back, because the price bought the project and not part of it", async () => {
     const app = await getTestApp();
     const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
 
@@ -418,5 +418,34 @@ describe("Nova builds the whole business", () => {
         expect(after.body.waiting.optionsReady, "answering a decision takes it off the count").toBeLessThan(before);
       }
     }
+  }, 180_000);
+
+  it("has nothing left to write once every step is closed, so nothing is left to sell", async () => {
+    /*
+     * The offer card reads this number and stands down at zero.
+     *
+     * It did not, for a long time: the paid card counted `novaCanWrite` and
+     * said "three steps are still Nova's to write", and the *offer* never
+     * looked at it — so somebody who had worked through their whole path by
+     * hand was still shown "Have Nova build it" at full price, for a path with
+     * nothing on it left to build. Whatever else changes about that card, this
+     * count has to go to zero when there is genuinely nothing, or the one
+     * person who should never see the offer sees it every day.
+     */
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
+    expect(bought.status, JSON.stringify(bought.body)).toBe(201);
+    await settled(b);
+
+    /* Close everything the build handed back, the way a builder working through would. */
+    await db.update(projectKanbanTasks).set({ status: "done" })
+      .where(eq(projectKanbanTasks.projectId, b.projectId));
+
+    const status = await b.agent.get(`/api/projects/${b.projectId}/nova-build`);
+    expect(status.status).toBe(200);
+    expect(status.body.waiting, "a project still says what is waiting").toBeTruthy();
+    expect(status.body.waiting.novaCanWrite, "nothing left for Nova to write").toBe(0);
   }, 180_000);
 });
