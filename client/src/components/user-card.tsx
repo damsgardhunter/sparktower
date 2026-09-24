@@ -45,7 +45,14 @@ export function UserCard({ profile, userName, matchScore, matchReasons, explore,
   return (
     <Card
       ref={impressionRef}
-      className="hover-elevate cursor-pointer overflow-visible"
+      /*
+       * The same gradient edge as a project or a company card. All three are
+       * the same kind of object to somebody browsing — a named thing that
+       * opens when you press it — and a builder sitting in a plain bordered
+       * box next to two gradient-edged ones read as the lesser result.
+       * `border-0` because the ring draws its own and Card brings one.
+       */
+      className="nova-ring-soft nova-hover-glow border-0 cursor-pointer overflow-visible"
       onClick={() => {
         if (target) trackExplore(EXPLORE_EVENTS.openProfile, target);
         setLocation(`/profile/${profile.userId}`);

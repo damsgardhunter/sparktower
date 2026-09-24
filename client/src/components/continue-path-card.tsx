@@ -505,7 +505,7 @@ export function ContinuePathCard({ lead = false }: { lead?: boolean }) {
      */
     if (!lead || isLoading) return null;
     return (
-      <Card className="rounded-lg border-primary/30 bg-background dark:bg-card" data-testid="continue-path-empty">
+      <Card className="rounded-lg nova-ring-soft border-0" data-testid="continue-path-empty">
         <CardContent className="p-5 text-center space-y-2">
           <p className="font-medium">{NEXT_STEP_COPY.nothingWaiting}</p>
           <p className="text-sm text-muted-foreground">{NEXT_STEP_COPY.startBody}</p>
@@ -542,7 +542,18 @@ export function ContinuePathCard({ lead = false }: { lead?: boolean }) {
       </Button>
       )}
       {open && (
-      <Card id="continue-path-list" className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
+      /*
+       * The loud ring when the path is what the page is for, the soft one when
+       * it is a panel among others. Same rule the rest of the app follows: the
+       * full gradient belongs to the one thing on a screen that should draw
+       * the eye, and on the home screen that is this — the product's own loop,
+       * come back and take the next step.
+       */
+      <Card
+        id="continue-path-list"
+        className={`rounded-lg border-0 shadow-none ${lead ? "nova-ring nova-glow" : "nova-ring-soft"}`}
+        data-testid="continue-path-card"
+      >
         <CardContent className="p-0 text-[13px]">
           <ul className="divide-y divide-border/60">
             {items.map((item) => (

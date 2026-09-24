@@ -40,7 +40,7 @@ export default function PathHome() {
          * Nothing waiting means one of two things — no project yet, or every
          * path finished — and both are answered the same way: start one.
          */
-        <Card data-testid="path-home-empty">
+        <Card className="nova-ring-soft border-0" data-testid="path-home-empty">
           <CardContent className="p-6 text-center space-y-3">
             <p className="font-medium">Nothing waiting on a path right now.</p>
             <p className="text-sm text-muted-foreground">
@@ -52,7 +52,13 @@ export default function PathHome() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="rounded-lg border-primary/30">
+        /*
+         * The full gradient, not the soft one: this page is the path and
+         * nothing else, so the list is the thing on the screen that should
+         * draw the eye — the same call "Continue your path" makes when it
+         * leads the home screen.
+         */
+        <Card className="rounded-lg nova-ring nova-glow border-0">
           <CardContent className="p-0 text-[13px]">
             <ul className="divide-y divide-border/60">
               {items.map((item) => (
