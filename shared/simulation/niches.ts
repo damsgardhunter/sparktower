@@ -50,7 +50,7 @@ export const NICHES: Niche[] = [
         workforce: [
       { id: "moderators", name: "moderators", one: "a moderator", does: "service", pay: 0.75, share: 0.4 },
       { id: "engineers", name: "engineers", one: "an engineer", does: "product", pay: 1.6, share: 0.4 },
-      { id: "community", name: "community managers", one: "a community manager", does: "room", pay: 0.9, share: 0.2 },
+      { id: "community", name: "community managers", one: "a community manager", does: "room", pay: 0.9, share: 0.2 , serves: 35000},
     ],
     voice: {
       customer: "subscriber",
@@ -152,7 +152,7 @@ export const NICHES: Niche[] = [
     baseUnitCost: 10,
     innovationPace: 0.9,
         workforce: [
-      { id: "pilots", name: "pilots", one: "a pilot", does: "room", pay: 1.0, share: 0.5 },
+      { id: "pilots", name: "pilots", one: "a pilot", does: "room", pay: 1.0, share: 0.5 , serves: 20000},
       { id: "mechanics", name: "mechanics", one: "a mechanic", does: "product", pay: 1.1, share: 0.25 },
       { id: "dispatch", name: "dispatchers", one: "a dispatcher", does: "service", pay: 0.8, share: 0.25 },
     ],
@@ -256,7 +256,7 @@ export const NICHES: Niche[] = [
     innovationPace: 1.35,
         workforce: [
       { id: "producers", name: "producers", one: "a producer", does: "product", pay: 1.1, share: 0.4 },
-      { id: "editors", name: "editors", one: "an editor", does: "room", pay: 0.85, share: 0.4 },
+      { id: "editors", name: "editors", one: "an editor", does: "room", pay: 0.85, share: 0.4 , serves: 45000},
       { id: "ad_ops", name: "ad sales", one: "an ad seller", does: "service", pay: 0.95, share: 0.2 },
     ],
     voice: {
@@ -359,7 +359,7 @@ export const NICHES: Niche[] = [
     baseUnitCost: 6,
     innovationPace: 0.5,
         workforce: [
-      { id: "kitchen", name: "chefs and kitchen staff", one: "a chef", does: "room", pay: 0.7, share: 0.5 },
+      { id: "kitchen", name: "chefs and kitchen staff", one: "a chef", does: "room", pay: 0.7, share: 0.5 , serves: 30000},
       { id: "front", name: "front of house", one: "a server", does: "service", pay: 0.6, share: 0.35 },
       { id: "managers", name: "area managers", one: "an area manager", does: "product", pay: 1.4, share: 0.15 },
     ],
@@ -463,7 +463,7 @@ export const NICHES: Niche[] = [
     baseUnitCost: 340,
     innovationPace: 0.45,
         workforce: [
-      { id: "site", name: "site crews", one: "a site worker", does: "room", pay: 0.95, share: 0.55 },
+      { id: "site", name: "site crews", one: "a site worker", does: "room", pay: 0.95, share: 0.55 , serves: 620},
       { id: "engineers", name: "structural engineers", one: "an engineer", does: "product", pay: 1.7, share: 0.25 },
       { id: "qs", name: "quantity surveyors", one: "a surveyor", does: "service", pay: 1.3, share: 0.2 },
     ],
@@ -567,7 +567,7 @@ export const NICHES: Niche[] = [
         workforce: [
       { id: "engineers", name: "engineers", one: "an engineer", does: "product", pay: 1.8, share: 0.45 },
       { id: "success", name: "customer success", one: "a success manager", does: "service", pay: 1.0, share: 0.3 },
-      { id: "infra", name: "infrastructure", one: "an infrastructure engineer", does: "room", pay: 1.6, share: 0.25 },
+      { id: "infra", name: "infrastructure", one: "an infrastructure engineer", does: "room", pay: 1.6, share: 0.25 , serves: 28000},
     ],
     voice: {
       customer: "seat",
@@ -670,7 +670,7 @@ export const NICHES: Niche[] = [
         workforce: [
       { id: "devs", name: "game developers", one: "a developer", does: "product", pay: 1.7, share: 0.45 },
       { id: "gm", name: "game masters", one: "a game master", does: "service", pay: 0.8, share: 0.3 },
-      { id: "ops", name: "server operations", one: "an operations engineer", does: "room", pay: 1.5, share: 0.25 },
+      { id: "ops", name: "server operations", one: "an operations engineer", does: "room", pay: 1.5, share: 0.25 , serves: 32000},
     ],
     voice: {
       customer: "player",

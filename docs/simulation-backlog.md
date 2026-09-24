@@ -913,14 +913,69 @@ The price licence came down from 12% to 9% on the back of this: a kitchen's
 people cost two thirds of a studio's, and moving that moved which strategy
 wins where.
 
-**What it does not do yet.** The realism numbers below barely moved, because
-wages only matter once somebody hires and hiring is still priced as a pure
-cost. Capacity remains a free-standing number with no people attached, so a
-bot that hires is a bot that spends more. Making a plant only able to serve
-what its staff can serve is the next piece — the model is now in place for
-it, the markets already differ in how many people a customer takes, and the
-optimiser already sizes headcount against capacity so it is the one table
-that would not be blindsided.
+### Making a plant need people: built, measured, not wired in
+
+Each kind of person now says how many customers one of them looks after in a
+year, and the numbers are derived rather than guessed — set so that revenue
+per head lands at about three times the market's own wage, which puts the
+salary share where real companies report it:
+
+```
+market              serves/head   opening £   rev/head   salary share
+Restaurant chain         15,000         £13      £195k            34%
+Podcasts                 18,000         £14      £252k            33%
+Drone delivery           10,000         £25      £250k            33%
+Dating apps               7,000         £40      £280k            34%
+Construction                341        £900      £307k            33%
+MMOs                      8,000         £45      £360k            33%
+Project management        7,000         £55      £385k            33%
+```
+
+`canServe` and `staffFor` in `workforce.ts` are the two functions that turn
+that into a constraint, and wiring them into `resolveYear` does exactly what
+it should. Measured across all seven markets over fourteen years:
+
+```
+                     before        after
+headcount                 5       16–122
+revenue per head   £1.3m–£10.1m   £217k–£414k
+salaries               6–16%        20–24%
+profit swing          12–44%         8–16%
+```
+
+Four of the seven realism columns move from outside the real-world band to
+inside it. A restaurant chain goes from £50.7m of turnover with five people
+to £29m with a hundred and twenty-two.
+
+**It is not wired in, because it breaks six balance guards.** Every strategy
+fixture in the suite was written when room and people were unrelated — they
+build nine hundred thousand of plant and hire twenty — so with the constraint
+live they own empty buildings. Staffing the fixtures fixes four of the six and
+leaves the two that matter most: no strategy wins every market, and every
+strategy is viable somewhere. Competing on price is hit hardest, which is
+*correct* — a low-price high-volume business is labour-intensive — and is
+exactly why it needs a balance pass rather than a constant.
+
+Three things were learned on the way and are worth not rediscovering:
+
+- **Capping the forecast by headcount deadlocks the sizing loop.** A team
+  staffs the plant it builds and builds the plant the forecast asks for, so a
+  forecast that already knows the headcount can only ever say "stay the size
+  you are". What understaffing costs belongs *beside* the forecast, the way
+  `capacityRisk` sits beside it, not inside it.
+- **A second shift is people, by definition**, and leased room comes with
+  somebody in it — which is most of why leasing costs forty per cent more
+  than building. The cap belongs on the plant a company built and has to
+  staff itself.
+- **A hard cap is too blunt.** It takes a plant to nothing the moment the
+  payroll dips, which no real operation does. Understaffing should run the
+  doors badly, not shut them: `UNMANNED_FLOOR` is the softer form and it
+  passes two more guards than the cliff does.
+
+The order for the pass that lands it: teach the strategy fixtures to staff
+what they build, then retune for the fact that volume plays now carry a
+payroll, then wire the constraint. The optimiser already sizes headcount
+against capacity and is the one table that would not be blindsided.
 
 **Nobody works at these companies.** Headcount ends at exactly five in every
 market, in every season — the five people in the chairs, and not one person

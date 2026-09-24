@@ -809,6 +809,27 @@ export function resolveYear(
     if (leased > 0) {
       notesFor[company.id].push(`Leased room for ${leased.toLocaleString()} more ${niche.voice.capacityShort} this year. It costs 40% more than building it, and it goes back at the end of the year.`);
     }
+    /*
+     * And what the people can actually look after.
+     *
+     * Room is a building; serving customers is a job somebody does. A plant
+     * with nobody in it serves nobody, and until this the two were unrelated
+     * — a restaurant chain turned over £50.7m and served 2.8 million covers
+     * with five founders and no staff, because `headcount` was a cost that
+     * bought back only service and so no table ever touched it.
+     *
+     * The founders count. Five people who own the place do the work
+     * themselves in the first year, which is what makes a company of five
+     * viable before it has the revenue to hire anybody. See `workforce.ts`.
+     */
+    /*
+     * The staffing constraint is written and measured and not wired in here.
+     * See `workforce.ts`: a plant can only serve what its people can serve,
+     * and turning that on transforms the realism figures — salaries go from
+     * 6–16% of revenue to 20–24%, revenue per head from £1.3m to £250k — and
+     * breaks six balance guards, because every strategy fixture in the suite
+     * was written when room and people were unrelated. It wants its own pass.
+     */
     const capacity = build.now + leased + shift.units + stockHeld;
     const price = Math.max(1, d.cmo?.price ?? company.price);
 

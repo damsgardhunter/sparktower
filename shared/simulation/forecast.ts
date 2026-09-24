@@ -153,6 +153,15 @@ export function forecastDemand(input: {
   const funded = draft && company.kind === "player" ? sanitiseAndFund(company, draft, world.niche, economy) : draft;
   const me = projected(company, funded, world.niche.innovationPace, 1 / Math.max(1, Math.round(world.periodsPerYear ?? 1)));
   const at = demandAt(world, me, year, economy);
+  /*
+   * And capped by the people the draft is willing to employ.
+   *
+   * A forecast is what a company could sell; it is not what it could serve
+   * with nobody behind the counter. Since a plant now only serves what its
+   * staff can serve, a forecast that ignored headcount promised customers
+   * the year could never deliver — and the teams that size their plant to
+   * the forecast built for a number that was never available.
+   */
 
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
   /*
@@ -169,6 +178,15 @@ export function forecastDemand(input: {
     return { price, likely: m === 1 ? at.total : demandAt(world, { ...me, price }, year, economy).total };
   });
 
+  /*
+   * Deliberately *not* capped by the staff the draft employs, though it was
+   * tried. A forecast is what the market would buy; capping it turns the
+   * sizing loop into a deadlock, because a team staffs the plant it builds
+   * and builds the plant the forecast asks for — so a forecast that already
+   * knew the headcount could only ever tell a team to stay exactly the size
+   * it is. What understaffing costs belongs beside the number, like
+   * `capacityRisk`, not inside it.
+   */
   return {
     likely: at.total,
     low: Math.round(at.total * (1 - band)),
