@@ -80,6 +80,20 @@ export function notificationText(n: NotificationShape): string {
      * underneath it rather than crammed in.
      */
     case "nova_build_done": return n.projectTitle ? `Nova finished building ${n.projectTitle}` : "Nova finished building your path";
+    /*
+     * The headline says a projection can now be checked; the excerpt carries
+     * what it found — "ran about 38% high across 3 months". Deliberately not
+     * "come back and see": the sentence has to be worth the tap on its own,
+     * because a bell that cries wolf is a bell people turn off.
+     */
+    case "projection_marked":
+      return n.projectTitle
+        ? `Your ${n.projectTitle} projection can be checked against what happened`
+        : "One of your projections can be checked against what happened";
+    case "scheme_untested":
+      return n.projectTitle
+        ? `Your marketing scheme for ${n.projectTitle} is worth testing — and testing it is free`
+        : "Your marketing scheme is worth testing, and testing it is free";
     case "feedback_used": return n.projectTitle ? `${who} used your feedback in an update on ${n.projectTitle}` : `${who} used your feedback in an update`;
     // Not "cancelled": one person left, and the other is being told, not blamed.
     case "sprint_left": return `${who} left your sprint`;
@@ -129,6 +143,10 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // Onto the path it just built, at the next step — which after a build is the
   // first decision it left for them.
   if (n.kind === "nova_build_done" && n.projectId) return pathHref(n.projectId, { section: n.section });
+  /* Both land on the simulations panel, which is where the answer is. */
+  if ((n.kind === "projection_marked" || n.kind === "scheme_untested") && n.projectId) {
+    return `/projects/${n.projectId}/manage?tab=simulations`;
+  }
   if (n.kind === "artifact_signup" && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
   if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;

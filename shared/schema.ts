@@ -1469,6 +1469,20 @@ export const NOTIFICATION_KINDS = [
   // Nova finished building out a path you paid for. It takes minutes and
   // outlives the page, so the bell is how somebody who walked away finds out.
   "nova_build_done",
+  /*
+   * The simulator, checking its own homework.
+   *
+   * A projection is worth coming back for exactly once: when enough weeks have
+   * been filed that it can be marked against what actually happened. Nothing
+   * else here can tell somebody how good their own forecasting is, and it is
+   * the one thing they cannot work out for themselves.
+   */
+  "projection_marked",
+  /*
+   * A marketing scheme scored well enough to be worth a year in the simulator
+   * and has never been run. The scoring was paid for; the run is free.
+   */
+  "scheme_untested",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
