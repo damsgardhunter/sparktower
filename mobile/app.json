@@ -106,6 +106,15 @@
       ],
       "expo-web-browser",
       "expo-document-picker",
+      [
+        "expo-image-picker",
+        {
+          "//": "The sentence iOS shows in the permission dialog. It has to say what the app does with the photos, not that it would like some: a vague one is a refusal and, at review, a rejection.",
+          "photosPermission": "SparkTower uses your photos so you can add them to posts, updates and your profile.",
+          "//2": "The camera is not asked for: nothing in the app takes a picture, and an unused permission string is a question at review with no good answer.",
+          "cameraPermission": false
+        }
+      ],
       "expo-font",
       [
         "expo-splash-screen",

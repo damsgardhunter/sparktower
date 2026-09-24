@@ -65,7 +65,7 @@ export function PromotionCard({ promotion, slot, onHide }: {
       <View style={s.head}>
         <Pressable onPress={visit} accessibilityRole="link" accessibilityLabel={`${promotion.name} website`}>
           {tile
-            ? <Image source={{ uri: logo }} style={s.logo} resizeMode="contain" onError={() => setLogoBroken(true)} />
+            ? <Image source={{ uri: assetUri(logo)! }} style={s.logo} resizeMode="contain" onError={() => setLogoBroken(true)} />
             : (
               <LinearGradient colors={banner(promotion.category)} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[s.logo, s.logoFallback]}>
                 <Text style={s.logoText}>{initials(promotion.name)}</Text>
@@ -132,7 +132,7 @@ function PromoMedia({ promotion, poster, onPlay, onVisit }: {
   if (poster && !posterBroken && onPlay) {
     return (
       <Pressable onPress={onPlay} accessibilityRole="button" accessibilityLabel={`Play the ${promotion.name} video`} testID={`promo-play-${promotion.id}`}>
-        <Image source={{ uri: poster }} style={s.poster} resizeMode="cover" onError={() => setPosterBroken(true)} />
+        <Image source={{ uri: assetUri(poster)! }} style={s.poster} resizeMode="cover" onError={() => setPosterBroken(true)} />
         <View style={s.playOverlay} pointerEvents="none">
           <View style={s.playBadge}><Ionicons name="play" size={22} color="#000000" style={{ marginLeft: 2 }} /></View>
         </View>

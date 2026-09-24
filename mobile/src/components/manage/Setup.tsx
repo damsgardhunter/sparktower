@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { Image, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import * as DocumentPicker from "expo-document-picker";
+import { pickPhoto } from "../../photos";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
@@ -35,10 +35,8 @@ const BRIEF_FIELDS = [
 ] as const;
 
 async function pickImage(): Promise<string | null> {
-  const picked = await DocumentPicker.getDocumentAsync({ type: ["image/png", "image/jpeg", "image/webp"], copyToCacheDirectory: true });
-  if (picked.canceled || !picked.assets?.[0]) return null;
-  const f = picked.assets[0];
-  return uploadFile({ uri: f.uri, name: f.name, mimeType: f.mimeType || "image/png", size: f.size });
+  const file = await pickPhoto();
+  return file ? uploadFile(file) : null;
 }
 
 export function Setup({ projectId, project, isOwner }: { projectId: string; project: any; isOwner: boolean }) {

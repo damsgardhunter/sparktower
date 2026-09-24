@@ -105,7 +105,7 @@ export function GlossyButton({ label, icon, onPress, testID }: { label: string; 
 export function ProjectTile({ title, uri, size = 32 }: { title: string; uri?: string | null; size?: number }) {
   const src = assetUri(uri);
   if (src) {
-    return <Image source={{ uri: src }} style={[s.logo, { width: size, height: size }]} resizeMode="contain" />;
+    return <Image source={{ uri: assetUri(src)! }} style={[s.logo, { width: size, height: size }]} resizeMode="contain" />;
   }
   return (
     <View style={[s.tile, { width: size, height: size }]}>

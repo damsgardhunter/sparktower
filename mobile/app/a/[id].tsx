@@ -116,7 +116,7 @@ export default function PublicArtifactPage() {
         <View style={card} testID="artifact-project">
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
             {logo
-              ? <Image source={{ uri: logo }} style={{ width: 44, height: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border }} />
+              ? <Image source={{ uri: assetUri(logo)! }} style={{ width: 44, height: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border }} />
               : <View style={{ width: 44, height: 44, borderRadius: radius.sm, backgroundColor: colors.primarySoft }} />}
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: font.base, fontFamily: fontFamily.bold, color: colors.text }} numberOfLines={1}>{data.project.title}</Text>

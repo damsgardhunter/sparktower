@@ -228,7 +228,7 @@ export function PostCard({
                 style={media.length === 1 ? s.mediaOne : s.mediaTile}
                 accessibilityLabel="Open image"
               >
-                <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                <Image source={{ uri: assetUri(uri)! }} style={StyleSheet.absoluteFill} resizeMode="cover" />
               </Pressable>
             ))}
           </View>

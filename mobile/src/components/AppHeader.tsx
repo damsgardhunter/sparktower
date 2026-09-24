@@ -239,7 +239,21 @@ function Stat({ label, value }: { label: string; value?: number | null }) {
  * quarter of that screen was spent doing it. The profile is still one tap
  * away, from the header on every other tab and from the bar.
  */
-export function PlainHeader({ title }: { title: string }) {
+/**
+ * A header about the page you are on.
+ *
+ * Not every screen is about you. The cover-and-avatar header answers "how is
+ * my thing going", which is the right question on the feed and a strange one
+ * on a menu, in a conversation list or at a simulation table — your face and
+ * your three numbers over a screen that has nothing to do with them, taking a
+ * quarter of it. Worse, it made the top of the app change shape as you moved
+ * around: it slides away on scroll, so arriving on one of those screens showed
+ * it or didn't depending on what you had been reading a moment earlier.
+ *
+ * So those screens say what they are instead, with a line underneath for what
+ * you can do there when that isn't obvious from the title alone.
+ */
+export function PlainHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   const insets = useSafeAreaInsets();
   return (
     <View style={{
@@ -248,8 +262,11 @@ export function PlainHeader({ title }: { title: string }) {
       borderBottomWidth: 1,
       borderBottomColor: colors.borderSubtle,
     }}>
-      <View style={{ height: PLAIN_H, justifyContent: "center", paddingHorizontal: spacing.lg }}>
+      <View style={{ height: subtitle ? PLAIN_TALL_H : PLAIN_H, justifyContent: "center", paddingHorizontal: spacing.lg, gap: 1 }}>
         <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>{title}</Text>
+        {subtitle ? (
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs }} numberOfLines={1}>{subtitle}</Text>
+        ) : null}
       </View>
     </View>
   );
@@ -257,18 +274,21 @@ export function PlainHeader({ title }: { title: string }) {
 
 /**
  * What a screen under a PlainHeader must leave clear, since it floats like the
- * other one.
+ * other one. `subtitle` has to be told, not guessed: the hook is called by the
+ * screen and the header is rendered by the navigator, and they never meet.
  *
- * `useHeaderSpace` now works this out for itself from the route, so a screen
- * should call that and stop caring which header it has. Kept because the
- * screens that predate the change call it directly and are correct either way.
+ * `useHeaderSpace` works this out for itself from the route, so a new screen
+ * should call that and stop caring which header it has. This stays for the
+ * screens that ask directly, and because a screen with a subtitle is the one
+ * case the route cannot tell you about.
  */
-export function usePlainHeaderSpace(): number {
+export function usePlainHeaderSpace(opts: { subtitle?: boolean } = {}): number {
   const insets = useSafeAreaInsets();
-  return insets.top + PLAIN_H;
+  return insets.top + (opts.subtitle ? PLAIN_TALL_H : PLAIN_H);
 }
 
 const PLAIN_H = 48;
+const PLAIN_TALL_H = 64;
 
 /**
  * How much room a scrolling screen must leave at the top of its content.

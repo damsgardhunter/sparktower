@@ -407,6 +407,19 @@ export const yearClosing = (season: { nextTickAt: Date | null }, now = new Date(
  * Keyed with a prefix of its own so it never collides with the join paths'
  * `season:<id>` transaction lock, which guards something else entirely.
  */
+/**
+ * `onlyYear`: resolve that year or nothing.
+ *
+ * Without it, a caller that waited on the lock resolves whatever year it finds
+ * when it gets in — which is how a double-click on "resolve this year now"
+ * moved a room two years. Both requests passed the route's guard (it tested a
+ * column the update didn't change), the first resolved year 2 and set the
+ * clock, the second took the lock, found the season due and on year 3, and
+ * resolved that one too. The second year was resolved by somebody who was
+ * asking about the first.
+ *
+ * The periodic pass leaves it unset on purpose: its job is "whatever is due".
+ */
 export async function tickSeason(
   seasonId: string,
   now = new Date(),

@@ -6,7 +6,7 @@
  * take back a mistake. This reads both sides and fails when they disagree.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { MODERATION_REASON_CODES, UNDO_REASON_CODES, UNDOABLE_ACTIONS } from "@shared/moderation";
 
@@ -42,3 +42,91 @@ describe("what the mobile review screen restates", () => {
     expect(missing, "actions the history would print as a raw identifier").toEqual([]);
   });
 });
+
+/**
+ * Photos come from the phone's photos.
+ *
+ * Every image upload in the app used the document picker filtered to image
+ * types, on the belief that iOS would offer Photos behind it. It offers Files:
+ * iCloud Drive, and a Recents list of PDFs. Somebody adding a picture to a
+ * post was being asked to export it first, and the picture they had just taken
+ * was not there at all.
+ *
+ * This reads the app's source rather than trusting that, because the mistake
+ * is one line in a new file and nothing else would notice: a document picker
+ * asking for image types is a photo picker that opens the wrong app.
+ */
+describe("where the app gets a picture from", () => {
+  const root = join(__dirname, "..", "..");
+  const mobileSrc = join(root, "mobile", "src");
+  const sources = (dir: string): { path: string; text: string }[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return sources(p);
+      return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [{ path: p, text: readFileSync(p, "utf8") }] : [];
+    });
+
+  it("never asks the document picker for an image", () => {
+    const offenders = sources(mobileSrc)
+      .filter((f) => /getDocumentAsync\([^)]*image\//s.test(f.text))
+      .map((f) => f.path.slice(join(__dirname, "..", "..").length + 1));
+    expect(offenders, "these ask Files for a photo; mobile/src/photos.ts is what opens Photos").toEqual([]);
+  });
+
+  it("keeps the document picker for the things that really are files", () => {
+    // The guard above must not be satisfied by deleting the document picker:
+    // a CV, a project's documents and a zipped codebase all belong in Files.
+    const withDocs = sources(mobileSrc).filter((f) => f.text.includes("getDocumentAsync"));
+    expect(withDocs.length, "documents still come from Files").toBeGreaterThan(0);
+  });
+
+  it("asks for photo access with a sentence that says what for", () => {
+    const app = JSON.parse(readFileSync(join(root, "mobile", "app.json"), "utf8"));
+    const plugin = app.expo.plugins.find((p: unknown) => Array.isArray(p) && p[0] === "expo-image-picker");
+    expect(plugin, "the plugin carries the permission string into the build").toBeTruthy();
+    /*
+     * Not a decoration: iOS shows this exact sentence in the dialog, and a
+     * vague one gets refused by people and rejected at review.
+     */
+    expect(plugin[1].photosPermission).toMatch(/photos/i);
+    expect(plugin[1].photosPermission.length).toBeGreaterThan(40);
+  });
+});
+
+/**
+ * A picture on the phone has to be an absolute address.
+ *
+ * The server returns `/objects/uploads/<id>` for every image it stores. The
+ * web resolves that against the page; React Native resolves it against
+ * nothing and draws blank space, with no error and no broken-image icon —
+ * which is exactly what the app did, everywhere, for as long as nobody
+ * happened to compare it against the website. `assetUri` is the one thing
+ * that makes those paths fetchable, so an `<Image>` that skips it is a
+ * picture that will not appear.
+ */
+describe("pictures on the phone", () => {
+  const appRoot = join(__dirname, "..", "..", "mobile");
+  const files = (dir: string): { path: string; text: string }[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return e.name === "node_modules" ? [] : files(p);
+      return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [{ path: p, text: readFileSync(p, "utf8") }] : [];
+    });
+
+  it("every Image is given an absolute address", () => {
+    const offenders: string[] = [];
+    for (const f of [...files(join(appRoot, "src")), ...files(join(appRoot, "app"))]) {
+      // Comments come out first: a comment showing the wrong way (assetUri.ts
+      // explains the bug it exists for) is not the wrong way being done.
+      const code = f.text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/[^\n]*/g, "$1");
+      for (const m of code.matchAll(/source=\{\{\s*uri:?([^}]*)\}\}/g)) {
+        const expr = m[1];
+        // Already absolute (built from API_URL or a literal http) or passed through assetUri.
+        if (/assetUri|API_URL|https?:\/\//.test(expr)) continue;
+        offenders.push(`${f.path.slice(appRoot.length + 1)}: ${m[0].slice(0, 60)}`);
+      }
+    }
+    expect(offenders, "these render nothing on a phone — wrap the value in assetUri()").toEqual([]);
+  });
+});
+

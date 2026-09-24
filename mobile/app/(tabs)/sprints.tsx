@@ -65,7 +65,7 @@ export default function Sprints() {
   if (isLoading) return <Loading />;
   if (error && isSwitchedOff(error)) {
     return (
-      <Screen canvas>
+      <Screen canvas plainHeader={{ subtitle: true }}>
         <Empty
           icon="pause-circle-outline"
           title="Paused"
@@ -81,7 +81,7 @@ export default function Sprints() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
+      <Screen canvas plainHeader={{ subtitle: true }} onRefresh={refetch} refreshing={isRefetching}>
         <Card>
           <PageIntro
             icon="planet"

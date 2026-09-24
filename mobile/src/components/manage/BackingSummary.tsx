@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Image, Switch, Text, View } from "react-native";
-import * as DocumentPicker from "expo-document-picker";
+import { pickPhoto } from "../../photos";
 import * as WebBrowser from "expo-web-browser";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_URL, api, uploadFile } from "../../api/client";
@@ -329,11 +329,10 @@ function ImageField({ label, value, hint, onChange }: { label: string; value: st
   const [busy, setBusy] = useState(false);
   const pick = async () => {
     try {
-      const r = await DocumentPicker.getDocumentAsync({ type: ["image/png", "image/jpeg", "image/webp"], copyToCacheDirectory: true });
-      if (r.canceled || !r.assets?.[0]) return;
-      const f = r.assets[0];
+      const f = await pickPhoto();
+      if (!f) return;
       setBusy(true);
-      onChange(await uploadFile({ uri: f.uri, name: f.name, mimeType: f.mimeType || "image/png", size: f.size }));
+      onChange(await uploadFile(f));
     } catch (e) { fail(e, "Upload failed"); } finally { setBusy(false); }
   };
   return (
@@ -369,7 +368,7 @@ function MerchPreview({ projectId, config }: { projectId: string; config: MerchC
   const garment = (face: string, label: string, size?: number) => (
     <View style={{ flex: size ? undefined : 1, width: size, gap: 4 }}>
       <View style={{ aspectRatio: 200 / 224, borderRadius: radius.md, backgroundColor: GARMENT[config.colorway], borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", padding: "18%" }}>
-        <Image source={{ uri: src(face) }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+        <Image source={{ uri: assetUri(src(face))! }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
       </View>
       {!!label && <Text style={{ fontSize: 10, color: colors.textTertiary, textAlign: "center", fontFamily: fontFamily.medium, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</Text>}
     </View>

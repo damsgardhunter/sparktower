@@ -51,15 +51,48 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="feed" options={{ title: "Home" }} />
       <Tabs.Screen name="discover" options={{ title: "Discover" }} />
-      <Tabs.Screen name="messages" options={{ title: "Messages" }} />
+      {/*
+        * Messages and Sprints say what they are, like More does.
+        *
+        * The cover header is about you — your photograph, your face, your
+        * three numbers — which is the right thing above your feed and an odd
+        * thing above a list of conversations or a simulation table: a quarter
+        * of the screen given to something the page isn't about. It also slides
+        * away on scroll, and the scroll state is shared, so arriving here
+        * showed it or didn't depending on what you were reading a moment ago.
+        * That was the "sometimes there, sometimes not".
+        */}
+      <Tabs.Screen
+        name="messages"
+        options={{
+          title: "Messages",
+          header: () => <PlainHeader title="Messages" subtitle="Your conversations, newest first" />,
+        }}
+      />
       {/* Sprints has the bar slot Notifications had: notifications are reached
           from the bell in the header, which is where the unread count lives. */}
-      <Tabs.Screen name="sprints" options={{ title: "Simulations" }} />
+      <Tabs.Screen
+        name="sprints"
+        options={{
+          title: "Sprints & simulations",
+          header: () => <PlainHeader title="Sprints & simulations" subtitle="Run a company against other founders" />,
+        }}
+      />
       {/* More lives in this group so its URL stays `/more` — a group's name is
           not part of the path, so every existing link to /more lands on the tab
           rather than a pushed screen. It has no button of its own: the dome in
           the middle of the bar is how you get here. */}
-      <Tabs.Screen name="more" options={{ title: "More", href: null }} />
+      <Tabs.Screen
+        name="more"
+        options={{
+          title: "More",
+          href: null,
+          /* Not the profile header: a menu is for getting somewhere else, and
+             this one was showing you yourself and offering a tap to see more
+             of it. */
+          header: () => <PlainHeader title="Menu" subtitle="Everything that isn't on the bar" />,
+        }}
+      />
       {/* Off the bar, still tabs: your profile from the header, the rest from More.
           Projects joins them — off the bar, but the screen stays so its deep links still land. */}
       <Tabs.Screen name="projects" options={{ title: "Projects", href: null }} />

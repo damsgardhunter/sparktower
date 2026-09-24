@@ -240,13 +240,57 @@ export interface LoopClosureRead {
  * says why. Loops the model skipped come back as unreported-open, never
  * silently closed.
  */
+/** `/api/users/:id/follow` and `/api/users/:userId/follow` are the same endpoint. */
+const routeShape = (path: string) => path.replace(/:[\w-]+/g, ":p").replace(/\/+$/, "").toLowerCase();
+
+/**
+ * A citation that names an endpoint rather than a file, resolved to the file
+ * that registers it.
+ *
+ * The read is asked for paths and sometimes answers with the route, which is
+ * the more natural way to say where a stage lives — "POST /api/admin/safety/review"
+ * rather than "server/safety-routes.ts". Treating that as a file that isn't
+ * there produced the worst sentence this whole module can produce: the admin
+ * loop reported open because "none of the files it cited are in the
+ * repository (e.g. /api/admin/safety/review)", about a route registered at
+ * server/safety-routes.ts:300 and covered by tests. A builder reading that is
+ * being sent to rebuild something they already have.
+ *
+ * So a cited route that the repository registers becomes the file it is
+ * registered in. A cited route that nothing registers stays unreal, which is
+ * a true and useful thing to say.
+ */
+function fileForRoute(cited: string, routes: Map<string, string>): string | null {
+  const text = cited.trim();
+  const m = text.match(/^(?:(GET|POST|PUT|PATCH|DELETE)\s+)?(\/[\w:./{}*-]+)$/i);
+  if (!m) return null;
+  const shape = routeShape(m[2]);
+  return routes.get(`${(m[1] ?? "").toLowerCase()} ${shape}`) ?? routes.get(shape) ?? null;
+}
+
 export function sanitizeLoopClosures(
   raw: unknown,
   loops: { key: string; taskId: string; title: string; type: LoopType }[],
   files: Set<string>,
+  /** Every route the repository registers, so a citation that names one is not mistaken for a missing file. */
+  registered: { label: string; file: string }[] = [],
 ): LoopClosureRead[] {
   const items = Array.isArray(raw) ? raw : [];
-  const onlyReal = (v: unknown) => (Array.isArray(v) ? v : []).map((f) => s(typeof f === "string" ? f : (f as any)?.file, 200)).filter((f) => files.has(f)).slice(0, 6);
+  const routes = new Map<string, string>();
+  for (const r of registered) {
+    const m = String(r.label ?? "").trim().match(/^(?:(GET|POST|PUT|PATCH|DELETE)\s+)?(\S+)$/i);
+    if (!m || !r.file) continue;
+    const shape = routeShape(m[2]);
+    if (m[1]) routes.set(`${m[1].toLowerCase()} ${shape}`, r.file);
+    if (!routes.has(shape)) routes.set(shape, r.file);
+  }
+  /** What a citation is worth: the file itself, or the file behind the route it names. */
+  const resolve = (cited: string) => (files.has(cited) ? cited : fileForRoute(cited, routes));
+  const onlyReal = (v: unknown) => (Array.isArray(v) ? v : [])
+    .map((f) => resolve(s(typeof f === "string" ? f : (f as any)?.file, 200)))
+    .filter((f): f is string => !!f && files.has(f))
+    .filter((f, i, all) => all.indexOf(f) === i)
+    .slice(0, 6);
   return loops.map((loop) => {
     const item: any = items.find((i: any) => s(i?.key, 8) === loop.key);
     if (!item) {
@@ -270,7 +314,8 @@ export function sanitizeLoopClosures(
       const offered = (Array.isArray(raw) ? raw : []).map((f) => s(typeof f === "string" ? f : (f as any)?.file, 200)).filter(Boolean);
       cited += offered.length;
       const real = onlyReal(raw);
-      unreal = [...unreal, ...offered.filter((f) => !files.has(f))];
+      // Unreal means unreal: not a file, and not a route this repository registers.
+      unreal = [...unreal, ...offered.filter((f) => { const r = resolve(f); return !r || !files.has(r); })];
       return real;
     };
 
