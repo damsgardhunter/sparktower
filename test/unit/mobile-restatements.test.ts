@@ -130,3 +130,22 @@ describe("pictures on the phone", () => {
   });
 });
 
+describe("the sizes a picture is asked for", () => {
+  it("is the same list on the phone, in the web's shared module, and on the server", async () => {
+    /*
+     * Three copies by necessity — Metro can't resolve @shared, and the server
+     * builds what the clients ask for. A width nobody builds is not an error
+     * anywhere: the server quietly serves the original, so the only sign is
+     * the bill and a slow phone.
+     */
+    const { IMAGE_WIDTHS } = await import("@shared/image-size");
+    const { ALLOWED_WIDTHS } = await import("../../server/image-derivatives");
+    expect([...ALLOWED_WIDTHS]).toEqual([...IMAGE_WIDTHS]);
+
+    const phone = readFileSync(join(__dirname, "..", "..", "mobile", "src", "assetUri.ts"), "utf8");
+    const restated = /export const IMAGE_WIDTHS = \[([^\]]*)\]/.exec(phone);
+    expect(restated, "the phone should restate the widths").toBeTruthy();
+    expect(restated![1].match(/\d+/g)!.map(Number)).toEqual([...IMAGE_WIDTHS]);
+  });
+});
+

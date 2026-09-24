@@ -6,6 +6,7 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
+import { buildDerivative, derivativePathFor, wantedWidth } from "../../image-derivatives";
 
 /**
  * Register object storage routes for file uploads.
@@ -23,6 +24,63 @@ import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
 let warnedNoBucket = false;
 /** Said once, like the bucket warning: one line per deploy, not one per image. */
 let warnedNoCredentials = false;
+
+/**
+ * Streams the resized copy, making it first if this is the first time anybody
+ * asked for that size.
+ *
+ * Returns false when there is nothing to serve — not an image, already small
+ * enough, an upload path this doesn't recognise, or anything at all going
+ * wrong. The caller then serves the original, which is what happened before
+ * any of this existed.
+ */
+async function serveDerivative(
+  objects: ObjectStorageService,
+  objectPath: string,
+  width: number,
+  res: any,
+): Promise<boolean> {
+  const derivedPath = derivativePathFor(objectPath, width);
+  if (!derivedPath) return false;
+
+  try {
+    // Already made: the common case once a page has been looked at once.
+    const existing = await objects.getObjectEntityFile(derivedPath).catch(() => null);
+    if (existing) {
+      const [meta] = await existing.getMetadata();
+      const storedType = meta?.metadata?.contentType ?? meta?.contentType;
+      await objects.downloadObject(existing, res, DERIVATIVE_TTL, typeof storedType === "string" ? storedType : undefined);
+      return true;
+    }
+
+    const original = await objects.readObjectBuffer(objectPath, 25 * 1024 * 1024);
+    const made = await buildDerivative(original.buffer, original.contentType, width);
+    if (!made) return false;
+
+    /*
+     * Written before it is served, and the write is allowed to fail. Storing
+     * it is what makes the next request cheap; not storing it only means
+     * doing this work again, which is not a reason to fail the request in
+     * front of somebody.
+     */
+    await objects.writeObjectAtPath(derivedPath, made.buffer, made.contentType).catch((err) => {
+      console.error(`[objects] couldn't keep the ${width}px copy of ${objectPath}:`, (err as Error)?.message ?? err);
+    });
+    res.set({
+      "Content-Type": made.contentType,
+      "Content-Length": String(made.buffer.length),
+      "Cache-Control": `public, max-age=${DERIVATIVE_TTL}`,
+    });
+    res.end(made.buffer);
+    return true;
+  } catch (err) {
+    console.error(`[objects] couldn't build the ${width}px copy of ${objectPath}:`, (err as Error)?.message ?? err);
+    return false;
+  }
+}
+
+/** A day. A derivative is immutable — its path names the width it is — so this could be longer. */
+const DERIVATIVE_TTL = 86_400;
 
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
@@ -149,6 +207,22 @@ export function registerObjectStorageRoutes(app: Express): void {
       const objectFile = await objectStorageService.getObjectEntityFile(req.path);
 
       const aclPolicy = await getObjectAclPolicy(objectFile).catch(() => null);
+
+      /*
+       * `?w=` — the size it is actually being looked at.
+       *
+       * Only for objects the world can already read: a derivative is a second
+       * copy with its own life, and a copy of a private object is how a
+       * private object stops being private. Anything that fails on the way is
+       * answered with the original, because a wrong-sized picture beats a
+       * missing one and none of this is worth a 500.
+       */
+      const width = aclPolicy?.visibility === "private" ? null : wantedWidth(req.query?.w);
+      if (width) {
+        const served = await serveDerivative(objectStorageService, req.path, width, res);
+        if (served) return;
+      }
+
       if (aclPolicy && aclPolicy.visibility === "private") {
         const allowed = await objectStorageService.canAccessObjectEntity({
           userId: req.user?.id,

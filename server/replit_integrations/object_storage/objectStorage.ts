@@ -431,6 +431,30 @@ export class ObjectStorageService {
    * caller should say which of the two it means; callers that pass nothing get
    * the old behaviour and a line in the log naming the omission.
    */
+  /**
+   * Writes a buffer to an object path this server chose, rather than to a new
+   * random one.
+   *
+   * For things the server can make again from something it already has — a
+   * resized copy of an upload, today. The path has to be deterministic or the
+   * copy can never be found again, which is the whole point of keeping it.
+   */
+  async writeObjectAtPath(objectPath: string, buffer: Buffer, contentType: string): Promise<void> {
+    const rest = objectPath.replace(/^\/objects\//, "");
+    if (!rest || rest.includes("..")) throw new Error(`Refusing to write to ${objectPath}`);
+
+    if (isLocalFallback()) {
+      const target = path.join(LOCAL_OBJECT_ROOT, rest);
+      await fsPromises.mkdir(path.dirname(target), { recursive: true });
+      await fsPromises.writeFile(target, buffer);
+      // The local backend keeps metadata in a sidecar; without this the type is sniffed on every read.
+      await new LocalFile(target).setMetadata({ metadata: { contentType } });
+      return;
+    }
+    const { bucketName, objectName } = parseObjectPath(`${this.getPrivateObjectDir()}/${rest}`);
+    await objectStorageClient.bucket(bucketName).file(objectName).save(buffer, { contentType, resumable: false });
+  }
+
   async writeObjectBuffer(
     buffer: Buffer,
     contentType = "application/octet-stream",
