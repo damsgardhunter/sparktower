@@ -138,6 +138,7 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
 import { notifyWatchersOfNewProject } from "./scouting-alerts";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -2871,7 +2872,7 @@ RULES:
     const response = await openai.chat.completions.create({
       model: "gpt-5.2",
       messages: [
-        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.` },
+        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.\n${PROSE_STYLE_RULE}` },
         ...history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }))
       ],
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
@@ -2881,7 +2882,9 @@ RULES:
     // charged. It used to be stored as "I'm sorry, I couldn't…" and charged.
     const aiContent = response.choices[0].message.content?.trim();
     if (!aiContent) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
-    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
+    // Tidied before it is stored: the chat log is read back as plain text, so
+    // storing the hashes would make every later read of this reply carry them.
+    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", tidyProse(aiContent));
     
     await storage.deductCredits(userId, CREDIT_COSTS.novaChat);
     res.json(aiMessage);

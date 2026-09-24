@@ -71,6 +71,7 @@ import { whatMatters, explainWhatMatters, headlineWhatMatters, type Sensitivity 
 import { businessMoney, businessMoneyExact, currencyOf } from "@shared/currency";
 import { isSoftwareCategory } from "@shared/categories";
 import { cleanVerdict, overallScore, scoreBand, DIMENSIONS, type Verdict } from "@shared/sprints/scoring";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
 type Project = typeof projects.$inferSelect;
 
@@ -103,7 +104,11 @@ const CHECKIN_LIMIT = 104;
 /** Enough to compare a handful of decisions without the page becoming a filing cabinet. */
 const SCENARIO_LIMIT = 30;
 
-const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/*
+ * Every string Nova writes here reaches a `<p>`, not a Markdown renderer, so
+ * the decoration is tidied off before it is cut. See server/prose-style.ts.
+ */
+const str = (v: unknown, max: number): string => (typeof v === "string" ? tidyProse(v).slice(0, max) : "");
 const strList = (v: unknown, max: number, count: number): string[] =>
   Array.isArray(v) ? v.map((x) => str(x, max)).filter(Boolean).slice(0, count) : [];
 
@@ -288,6 +293,7 @@ The verdict for this one is: "${result.verdict}". Write to that verdict.
 The owner's own assumptions are listed below. Where the answer turns on one of them, say which one — that is the number they should go and check, and they can edit it and run this again for nothing.
 
 Plain English. Short sentences. No jargon, no consulting words, no exclamation marks. Talk about staff, customers, stock, rent, wages and the bank balance.
+${PROSE_STYLE_RULE}
 
 Respond ONLY with valid JSON of exactly this shape, no markdown fences:
 {"headline":"one sentence an owner would say out loud about this","body":"3-6 sentences on what happens and why","watchFor":["something that would have to be true for this to work"],"alsoAsk":["another question worth simulating, written as the owner would type it"]}`;
