@@ -456,6 +456,13 @@
       "when": 1790263914374,
       "tag": "0063_earnings_to_balance",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790282025640,
+      "tag": "0064_snapshots_catch_up",
+      "breakpoints": true
     }
   ]
 }
