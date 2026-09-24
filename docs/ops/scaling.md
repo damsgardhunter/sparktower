@@ -7,6 +7,12 @@ of thumb.
 Read [deploy.md](deploy.md) first for how the thing is deployed at all. This is
 only about making it hold more people.
 
+> **If you are launching straight into 200+ concurrent users**, the running
+> order is not the one below. Go to
+> [Launching above 200](#launching-above-200) — the work that this document
+> calls Stage 3 becomes prerequisite, and two things in the request path have
+> to change before any amount of hardware helps.
+
 ## What you are running today
 
 | | Setting | Where |
@@ -125,6 +131,8 @@ In this order, cheapest and highest-yield first.
 
 ## Stage 3 — past 200, or you want zero-downtime deploys
 
+Also the floor for anyone launching at 200+. See [Launching above 200](#launching-above-200).
+
 This is where you add a second instance, and **it is not a dropdown** — the app
 has state in process memory that two instances would not share.
 
@@ -186,6 +194,147 @@ Worth knowing, because it is the expensive half and it is done:
 
 ---
 
+# Launching above 200
+
+At 200 concurrent the app is not short of hardware, it is short of shape. Two
+things in the request path stop more hardware from helping, and one thing in
+process memory stops you from adding instances at all. Fix those three and the
+rest is a credit card.
+
+## The arithmetic
+
+Baseline load, before anybody clicks anything, from the polling table above:
+
+| Concurrent users on dashboards | Requests/second | Of which `/path` (write-locked) |
+|---|---|---|
+| 200 | 73 | 13 |
+| 500 | 183 | 33 |
+| 1,000 | 366 | 67 |
+| 2,000 | 733 | 133 |
+
+The second column is the one that hurts, and it is explained next.
+
+## 1. Make `/path` a read (do this first)
+
+`pathStatus` defaults to `sync: true`
+([phase-trees.ts](../../server/phase-trees.ts)), so **every poll of
+`/api/projects/:id/path` takes the project's advisory lock and performs a
+read-modify-write**. A dashboard polls it every 15 seconds.
+
+Three consequences, all fatal at scale:
+
+- It cannot be cached, and it cannot be served by a read replica, because it
+  writes.
+- It **serialises per project**. Five teammates with the tab open do not poll
+  concurrently; they queue behind each other's lock.
+- It consumes a lock-pool connection *and* main-pool connections for what is,
+  almost every time, a sync that finds nothing to do.
+
+Options, cheapest first:
+
+1. **Debounce the sync.** Keep a `path_synced_at` per project and skip the sync
+   when it ran in the last N seconds. One column, and it removes ~95% of lock
+   acquisitions immediately — the poll still returns fresh data because the
+   read below it is unchanged.
+2. **Sync on writes, not reads.** The tree only changes when something changes
+   it; run the sync where that happens and pass `{ sync: false }` from the
+   status route.
+3. **Sync in the worker.** Once a worker service exists (below), a periodic
+   pass keeps trees correct and the read path never writes.
+
+Do (1) before launch whatever else you choose. It is small and it is the
+difference between 13 write-locked requests a second and roughly none.
+
+## 2. Stop paying 10 connections per instance for sessions
+
+`connect-pg-simple` is handed a `conString`
+([replitAuth.ts](../../server/replit_integrations/auth/replitAuth.ts)), so it
+builds a second pool. Hand it the existing pool instead and the per-instance
+budget drops from 32 to 22 — a third of your connection headroom back for a
+one-line change.
+
+## 3. Put a connection pooler in front of Postgres
+
+This is the constraint that decides how many instances you can run at all.
+Even at 22 connections per instance, eight instances is 176 connections, and
+managed Postgres tiers cap well below what you would want.
+
+Run **PgBouncer in transaction mode** (as a private service, or a managed
+Postgres that includes a pooler) and point `DATABASE_URL` at it. Hundreds of
+application connections then multiplex onto a few dozen real ones.
+
+Two things in this codebase to check before you do:
+
+- **Advisory locks are transaction-scoped** (`pg_advisory_xact_lock` in
+  [project-lock.ts](../../server/project-lock.ts)), which is compatible with
+  transaction pooling. Session-scoped locks would not be. This was already the
+  right choice.
+- **`SET` statements must be transaction-local.** The lock's `lock_timeout` uses
+  `set_config(..., true)` and is fine. The connect-time
+  `idle_in_transaction_session_timeout` in the same file and the `SET TIME ZONE`
+  in [db.ts](../../server/db.ts) are session-level and will not survive
+  transaction pooling — move both into the pooler's server-side settings, or
+  set them on the database role, before switching.
+
+## 4. Cut the polling
+
+73 req/s at 200 users is self-inflicted. Nobody has clicked anything.
+
+- Raise the intervals. Doubling every one halves baseline load and costs a
+  constant.
+- Replace the count polls (`unread-count`, `notifications/count`,
+  `discover/new-count` — 9 req/min per user, on every page) with one
+  server-sent-events stream. That alone is 40% of baseline.
+- The 2-second poll in [simulation.tsx](../../client/src/pages/simulation.tsx)
+  is not viable at this scale.
+
+## 5. Then the infrastructure
+
+In this order, and not before the four above:
+
+1. **Postgres tier** sized for the working set. `basic-256mb` is a hobby tier.
+2. **A worker service** at `numInstances: 1` for the scheduled jobs and the
+   long-running work (Nova builds, code audits). This also removes the
+   double-run and double-spend problems in the Stage 3 blocker table, and stops
+   deploys from killing builds.
+3. **Web instances**, once the blockers below are cleared. Start at 3 and
+   measure; the per-user cost is known, so capacity is close to linear once
+   nothing serialises.
+4. **A CDN** for the static bundle and public objects.
+5. **A cache** (Redis) for the hot reads — counts especially. There is no cache
+   layer today; every count is a query.
+6. **Read replicas** for the read-heavy endpoints, which only becomes possible
+   after item 1 above makes them actual reads.
+
+## What must be true before instance number two
+
+These are prerequisites, not improvements. From the Stage 3 table:
+
+- Credit and money reservations moved out of process memory
+  ([credit-reservations.ts](../../server/credit-reservations.ts)).
+- Scheduled jobs moved to the worker, or given leader locks — particularly
+  [reputation-jobs.ts](../../server/reputation-jobs.ts), which calls the model
+  and would otherwise be paid for twice per instance.
+- Long-running work moved to the worker, so a build is observable and resumable
+  from any web instance.
+
+## A realistic order for a 200+ launch
+
+| | Work | Why it is here |
+|---|---|---|
+| 1 | Debounce the `/path` sync | Removes the serialisation; small |
+| 2 | Session store shares the main pool | One line, a third of the budget |
+| 3 | Credit reservations into Postgres | Blocks every instance after the first |
+| 4 | Worker service; jobs and builds move to it | Blocks instances; stops double AI spend |
+| 5 | Postgres tier up, PgBouncer in front | Now the connections exist |
+| 6 | Scale web instances to 3+, CDN in front | The easy part, last |
+| 7 | Cut polling, then cache counts | Buys the next multiple |
+
+Items 1–4 are application work and cannot be bought. Do them before you open
+the doors, not after.
+
+---
+
 ## Cloud storage
 
 You are already on Google Cloud Storage — [objectStorage.ts](../../server/replit_integrations/object_storage/objectStorage.ts)
@@ -230,6 +379,8 @@ Watch these four. Each has an action attached, which is the point.
 | `503` / `database_busy` appearing at all | Pool exhausted | Raise `DB_POOL_MAX` **after** the tier; find what is holding connections |
 | Deploys interrupting user work | One instance | Worker service, then a second web instance (Stage 3) |
 | Postgres CPU steady above ~70% | Tier is done | Upgrade before latency shows it |
+| Connection count near the tier's limit | Instances are multiplying connections | PgBouncer, and share the session pool |
+| One project's users all slow together | The `/path` sync is serialising them | Debounce or move the sync |
 
 ## What this does not cover
 
