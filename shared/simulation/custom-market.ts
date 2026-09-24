@@ -27,6 +27,7 @@
  * playable market or it returns null, and null means "use one of the seven".
  */
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
+import type { WorkKind } from "./workforce";
 
 /** What a small market is allowed to be. Below this the maths has nothing to work with. */
 export const MIN_SEGMENT_SIZE = 2_000;
@@ -152,6 +153,32 @@ function cleanIncumbents(raw: unknown): IncumbentSeed[] | null {
   }));
 }
 
+/**
+ * The people this business employs, as Nova described them.
+ *
+ * Anything missing or nonsensical falls back to the generic mix rather than
+ * failing the market: a season that cannot start because a model left a field
+ * out is a worse outcome than one whose people are called "operators".
+ */
+function cleanWorkforce(raw: unknown): WorkKind[] | undefined {
+  if (!Array.isArray(raw) || !raw.length) return undefined;
+  const kinds = raw.slice(0, 4).map((x, i) => {
+    const k = (x ?? {}) as Record<string, unknown>;
+    const does = k.does === "product" || k.does === "service" ? k.does : "room";
+    return {
+      id: str(k.id, 40, `kind_${i + 1}`).replace(/[^a-z0-9_]/gi, "_").toLowerCase(),
+      name: str(k.name, 60, "staff"),
+      one: str(k.one, 60, "a member of staff"),
+      does: does as WorkKind["does"],
+      // Nobody is free and nobody is worth ten times an ordinary salary.
+      pay: Math.max(0.4, Math.min(2.5, Number(k.pay) || 1)),
+      share: Math.max(0.01, Math.min(1, Number(k.share) || 0.25)),
+    };
+  });
+  // Two kinds at least, or it is not a mix and the generic one is better.
+  return kinds.length >= 2 ? kinds : undefined;
+}
+
 function cleanVoice(raw: unknown): NicheVoice {
   const v = (raw ?? {}) as Record<string, unknown>;
   const word = (k: string, fallback: string) => str(v[k], 40, fallback);
@@ -196,6 +223,7 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
     baseUnitCost: Math.round(num(m.baseUnitCost, 1, 50_000, 20)),
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
+    workforce: cleanWorkforce(m.workforce),
   };
 }
 

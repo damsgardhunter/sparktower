@@ -47,6 +47,11 @@ export const NICHES: Niche[] = [
     premise: "Everybody has an opinion and nobody admits to paying. Your best customers leave the moment you succeed.",
     baseUnitCost: 6,
     innovationPace: 1.2,
+        workforce: [
+      { id: "moderators", name: "moderators", one: "a moderator", does: "service", pay: 0.75, share: 0.4 },
+      { id: "engineers", name: "engineers", one: "an engineer", does: "product", pay: 1.6, share: 0.4 },
+      { id: "community", name: "community managers", one: "a community manager", does: "room", pay: 0.9, share: 0.2 },
+    ],
     voice: {
       customer: "subscriber",
       customers: "subscribers",
@@ -146,6 +151,11 @@ export const NICHES: Niche[] = [
     premise: "Ten minutes from warehouse to doorstep, if the weather holds and the regulator is in a good mood. Half the cost is the drone; the other half is explaining it to the neighbours.",
     baseUnitCost: 10,
     innovationPace: 0.9,
+        workforce: [
+      { id: "pilots", name: "pilots", one: "a pilot", does: "room", pay: 1.0, share: 0.5 },
+      { id: "mechanics", name: "mechanics", one: "a mechanic", does: "product", pay: 1.1, share: 0.25 },
+      { id: "dispatch", name: "dispatchers", one: "a dispatcher", does: "service", pay: 0.8, share: 0.25 },
+    ],
     voice: {
       customer: "customer",
       customers: "customers",
@@ -244,6 +254,11 @@ export const NICHES: Niche[] = [
     premise: "Free to start, free to listen, and the same twenty shows have sat at the top of the chart for five years. Listeners don't pay you; advertisers pay you to talk about mattresses.",
     baseUnitCost: 2,
     innovationPace: 1.35,
+        workforce: [
+      { id: "producers", name: "producers", one: "a producer", does: "product", pay: 1.1, share: 0.4 },
+      { id: "editors", name: "editors", one: "an editor", does: "room", pay: 0.85, share: 0.4 },
+      { id: "ad_ops", name: "ad sales", one: "an ad seller", does: "service", pay: 0.95, share: 0.2 },
+    ],
     voice: {
       customer: "listener",
       customers: "listeners",
@@ -343,6 +358,11 @@ export const NICHES: Niche[] = [
     premise: "Same menu in forty towns. The food is the easy part; the hard part is finding four hundred people who'll show up on a Saturday to cook it.",
     baseUnitCost: 6,
     innovationPace: 0.5,
+        workforce: [
+      { id: "kitchen", name: "chefs and kitchen staff", one: "a chef", does: "room", pay: 0.7, share: 0.5 },
+      { id: "front", name: "front of house", one: "a server", does: "service", pay: 0.6, share: 0.35 },
+      { id: "managers", name: "area managers", one: "an area manager", does: "product", pay: 1.4, share: 0.15 },
+    ],
     voice: {
       customer: "diner",
       customers: "diners",
@@ -442,6 +462,11 @@ export const NICHES: Niche[] = [
     premise: "Bid low, build slow, get paid late. Every job is a one-off, and every reputation is one bad roof from over.",
     baseUnitCost: 340,
     innovationPace: 0.45,
+        workforce: [
+      { id: "site", name: "site crews", one: "a site worker", does: "room", pay: 0.95, share: 0.55 },
+      { id: "engineers", name: "structural engineers", one: "an engineer", does: "product", pay: 1.7, share: 0.25 },
+      { id: "qs", name: "quantity surveyors", one: "a surveyor", does: "service", pay: 1.3, share: 0.2 },
+    ],
     voice: {
       customer: "client",
       customers: "clients",
@@ -539,6 +564,11 @@ export const NICHES: Niche[] = [
     premise: "Software for people who need to know who's doing what. Free for five users, priced per seat, and every company already has three of them.",
     baseUnitCost: 11,
     innovationPace: 1.25,
+        workforce: [
+      { id: "engineers", name: "engineers", one: "an engineer", does: "product", pay: 1.8, share: 0.45 },
+      { id: "success", name: "customer success", one: "a success manager", does: "service", pay: 1.0, share: 0.3 },
+      { id: "infra", name: "infrastructure", one: "an infrastructure engineer", does: "room", pay: 1.6, share: 0.25 },
+    ],
     voice: {
       customer: "seat",
       customers: "seats",
@@ -637,6 +667,11 @@ export const NICHES: Niche[] = [
     premise: "Five years and fifty million to make, and the players will judge it on the first weekend. Nobody plays an MMO alone, which is the whole point and the whole problem.",
     baseUnitCost: 4,
     innovationPace: 1.5,
+        workforce: [
+      { id: "devs", name: "game developers", one: "a developer", does: "product", pay: 1.7, share: 0.45 },
+      { id: "gm", name: "game masters", one: "a game master", does: "service", pay: 0.8, share: 0.3 },
+      { id: "ops", name: "server operations", one: "an operations engineer", does: "room", pay: 1.5, share: 0.25 },
+    ],
     voice: {
       customer: "player",
       customers: "players",

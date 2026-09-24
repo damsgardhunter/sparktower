@@ -1267,7 +1267,7 @@ export function resolveYear(
     // The finance seat's cost review comes off the overhead this year; the bill for it arrives next year.
     const review = company.kind === "player" ? reviewSaving(d?.cfo?.costReview) : 0;
     const fixed = company.kind === "player"
-      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * per
+      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche), niche) * per
         * focusEffects(d?.ceo?.focus).fixed * (1 - review) * sourcingOf(d?.coo?.sourcing).fixed
       : 0;
     if (review > 0) {

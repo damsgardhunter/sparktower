@@ -875,6 +875,53 @@ MMOs                  94%   26%     16%      £451k      22%     42%  0.30
 anchors            20-80%  5-25%  15-40%  £80-400k   5-40%  15-40%  0.1-0.25
 ```
 
+### Who works here: `shared/simulation/workforce.ts`
+
+The five are the players. Everybody beneath them is the operations seat's
+`headcount`, and a head was a head: one flat salary, identical in every
+market, and the only thing it bought back was service.
+
+A market now describes its own people, beside the rest of its vocabulary:
+
+```
+market              salary/head   room  product  service   who
+Restaurant chain        £65,450     50%      15%      35%   chefs and kitchen staff, front of house, area managers
+Drone delivery          £82,875     50%      25%      25%   pilots, mechanics, dispatchers
+Podcasts                £82,450     40%      40%      20%   producers, editors, ad sales
+Dating apps             £95,200     20%      40%      40%   moderators, engineers, community managers
+Construction           £102,638     55%      25%      20%   site crews, structural engineers, quantity surveyors
+MMOs                   £117,300     25%      45%      30%   game developers, game masters, server operations
+Project management     £128,350     25%      45%      30%   engineers, customer success, infrastructure
+```
+
+Each kind says what hiring it buys — **room** (the ability to serve at all),
+**product**, or **service**; nothing buys brand, because you cannot hire your
+way to being known — what one costs against an ordinary salary, and roughly
+what share of the payroll they are. `fixedCosts` charges the market's own
+weighted rate, so "should we take somebody on" is a genuinely different
+question in a kitchen from what it is in software rather than the same
+arithmetic with different nouns.
+
+**Nova writes one for a custom market**, from the same prompt that writes the
+voice and the segments, and it is asked to be specific: *"Staff" is not an
+answer; "dispatchers" is.* Anything missing, nonsensical or adding up to 1.4
+falls back or is normalised rather than failing the market — a season that
+cannot start because a model left a field out is worse than one whose people
+are called operators.
+
+The price licence came down from 12% to 9% on the back of this: a kitchen's
+people cost two thirds of a studio's, and moving that moved which strategy
+wins where.
+
+**What it does not do yet.** The realism numbers below barely moved, because
+wages only matter once somebody hires and hiring is still priced as a pure
+cost. Capacity remains a free-standing number with no people attached, so a
+bot that hires is a bot that spends more. Making a plant only able to serve
+what its staff can serve is the next piece — the model is now in place for
+it, the markets already differ in how many people a customer takes, and the
+optimiser already sizes headcount against capacity so it is the one table
+that would not be blindsided.
+
 **Nobody works at these companies.** Headcount ends at exactly five in every
 market, in every season — the five people in the chairs, and not one person
 hired in fourteen years:

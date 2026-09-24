@@ -181,6 +181,15 @@ export interface Niche {
   innovationPace: number;
   /** The words this market uses for the things every market has. */
   voice: NicheVoice;
+  /**
+   * The kinds of people a business in this market employs.
+   *
+   * A kitchen hires chefs and a studio hires engineers, and what the two of
+   * them cost and buy is not the same. Optional: a market that arrives
+   * without one is given a generic mix rather than refused. See
+   * `workforce.ts`.
+   */
+  workforce?: import("./workforce").WorkKind[];
 }
 
 /**

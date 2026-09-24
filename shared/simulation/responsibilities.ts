@@ -549,7 +549,7 @@ export function fundYear(company: Company, d: TeamDecisions, niche: Niche, econo
       : `There was only ${Math.round(spendable).toLocaleString()} to spend, cash and credit together, so ${became}`);
   }
 
-  const fixed = fixedCosts(company, d.coo?.headcount ?? 0, economy, reachOf(company, niche)) * focusEffects(d.ceo?.focus).fixed;
+  const fixed = fixedCosts(company, d.coo?.headcount ?? 0, economy, reachOf(company, niche), niche) * focusEffects(d.ceo?.focus).fixed;
   const split = seatAllowances({
     wanted: { cmo: marketing * floorCut, cto: product * floorCut, coo: ops * floorCut },
     budget: d.ceo?.budget,

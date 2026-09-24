@@ -36,6 +36,7 @@
  * CFO choosing a cheaper loan with a covenant over an expensive one without.
  */
 import type { Company, Economy, Niche, Role } from "./types";
+import { salaryIn } from "./workforce";
 import { saturate, atScale } from "./market";
 
 /** Price and how the market hears about you. */
@@ -709,9 +710,16 @@ export function plantOverhead(capacity: number, niche: Niche): number {
  * every way of playing intact and still makes a bad year a bad year.
  */
 
-export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1): number {
+export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1, niche?: Pick<Niche, "workforce">): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
-  const salaries = headcount * SALARY * economy.costIndex;
+  /*
+   * At this market's own rate. A kitchen's people cost £65,000 and a
+   * studio's £128,000, which is the difference between the two businesses
+   * as much as anything in their segments — and it is why "should we hire"
+   * is a different question in each. See `workforce.ts`.
+   */
+  const perHead = niche ? salaryIn(niche) : SALARY;
+  const salaries = headcount * perHead * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
   const executives = company.seats.length * EXECUTIVE;

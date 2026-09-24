@@ -91,7 +91,7 @@ export function headStartAgainst(segment: Segment, company: Company, year?: numb
 /**
  * The most a company can charge over what the segment expects, having earned it.
  *
- * Twelve per cent, at the very top of every axis the segment cares about.
+ * Nine per cent, at the very top of every axis the segment cares about.
  *
  * It was eighteen, set while the market could hold half again as many
  * customers as it had people. Once that was fixed the market became finite
@@ -100,7 +100,7 @@ export function headStartAgainst(segment: Segment, company: Company, year?: numb
  * chain back in the hands of the regional play and leaves every strategy a
  * market of its own — which is what `balance.test.ts` is there to hold.
  */
-export const PRICE_LICENCE_MAX = 0.12;
+export const PRICE_LICENCE_MAX = 0.09;
 
 /**
  * What this company has earned the right to charge.
