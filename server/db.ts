@@ -35,7 +35,57 @@ if (!process.env.DATABASE_URL) {
  * the client before anything else it will run, because pg runs one client's
  * queries in order.
  */
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+/**
+ * How long a request waits for a free connection before it is told no.
+ *
+ * node-postgres defaults this to 0, which means "wait forever", and forever is
+ * what it meant. When the project lock deadlocked the pool
+ * (server/project-lock.ts), every later request queued behind it silently: the
+ * process sat at 0% CPU with nothing failing, nothing logged and /_health
+ * answering 200, because no caller ever gave up. A wait that ends turns that
+ * into a burst of 503s — which is a thing a log shows, a monitor notices and a
+ * client can retry, rather than a site that is simply unreachable while
+ * claiming to be well.
+ *
+ * Ten seconds is far longer than a healthy checkout, which is microseconds. If
+ * this fires, the pool is exhausted, and the answer is never a longer wait.
+ */
+const CONNECT_WAIT_MS = Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 10_000);
+
+/**
+ * Connections in the pool. Stated rather than defaulted, because the default
+ * (10) is a number worth seeing when reading this file: it is the ceiling on
+ * concurrent queries, and it is shared with nothing — the session store and
+ * the project lock each keep their own.
+ */
+const POOL_MAX = Number(process.env.DB_POOL_MAX ?? 10);
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: POOL_MAX,
+  connectionTimeoutMillis: CONNECT_WAIT_MS,
+});
+
+/**
+ * Whether an error is "the pool had nothing free in time".
+ *
+ * Matched on the message because node-postgres gives it no code, and down the
+ * `cause` chain because nothing hands it over bare: Drizzle wraps it in a
+ * `Failed query: select …`, and whatever called Drizzle may wrap that again.
+ * The first version of this checked only the top-level message and so would
+ * never have fired on a real one — which a pool exhausted on purpose showed
+ * within a minute.
+ *
+ * Narrow on purpose: this decides whether a caller is told the database is
+ * busy (503, retryable) rather than that something broke (500), and every
+ * other database error should keep saying what it is.
+ */
+export function isPoolTimeout(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (/timeout exceeded when trying to connect/i.test(e.message)) return true;
+  }
+  return false;
+}
 pool.on("connect", (client) => {
   client.query("SET TIME ZONE 'UTC'").catch((err) => console.error("[db] couldn't set the session to UTC:", err));
 });
