@@ -799,11 +799,61 @@ credited a region that is about to open, at what it will reach when it gets
 there. The levers it was missing were precisely the long-payback ones, and no
 amount of widening the search reaches them without widening the horizon too.
 
-**It still does not beat the survivor**: 62% survival against 86%. But when it
-survives it now builds the bigger company — £214m against £127m in project
-management software, on 826,000 customers. It has become a high-conviction
-player, which wins larger and fails more often. Closing that means finding
-what kills the other 38%, not searching harder.
+### Closing the gap: it is the best table in the codebase now
+
+Over 70 seasons a side:
+
+```
+optimal    survived 84%   ended richer 81%
+survivor   survived 80%   ended richer 76%
+filler     survived 83%   ended richer 69%
+```
+
+The route there, each step measured:
+
+```
+                                                survives   richer
+one year ahead, valued on cash                     62%       57%
+  + net off the debt it borrowed                   62%       62%
+  + believe the engine over the forecast           62%       62%
+  + a plant that grows at a plant's speed          71%       71%
+  + value the position over the years left         76%       76%
+  + roll two years forward, not one                81%       81%
+  + a finer search (16 slices, not 10)             84%       81%
+```
+
+Tracing the deaths was worth more than any amount of searching harder. Every
+season it lost looked the same: **it spent nothing at all for the first three
+years**, held about a thousand customers, and bled fixed costs until it died.
+It was scoring correctly every one of those years — nine customers at £740 of
+margin against £700,000 of running costs is a bad year however much you spend
+on it — which is exactly why the objective was the thing to fix.
+
+Four findings, in the order they mattered:
+
+- **Borrowed money was counted as wealth.** The score read `me.cash` and never
+  subtracted `me.debt`, so drawing on the credit line was free points: it took
+  a million in its first year, spent none of it, and paid interest for the
+  privilege, in every season it lost.
+- **It exploited the forecast.** `forecastDemand` describes itself as a sketch
+  of the engine, and a search against an approximate model finds where the
+  approximation is generous. In dating apps it committed £5.7m against a
+  forecast of 350,000 customers, the year delivered 44,000, and it spent three
+  years paying for a plant four hundred thousand seats too big. The position is
+  now the smaller of what the sketch predicts and what the engine actually
+  produced: the forecast can argue the company down and no longer up.
+- **The plant was sized by that optimism.** Now it grows at most half as much
+  again as it is already serving — a fast year for an operation and an
+  absolute limit for one.
+- **One year of lookahead cannot see compounding**, which is the whole game.
+  Brand bought now pays by making next year's brand cheaper. Rolling a second
+  year forward — holding the same plan, one more run of the engine per
+  candidate — moved survival from 76% to 81% on its own, and it is the single
+  largest step in the table.
+
+It decides 16 of the game's 72 levers against the survivor's 40 and beats it
+anyway, which says the other 56 are worth less than knowing what a year is
+worth.
 
 What it is worth now is what a benchmark is worth. It is deterministic, it
 coordinates all five seats, and `test/unit/optimiser.test.ts` holds the

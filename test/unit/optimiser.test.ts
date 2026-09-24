@@ -116,10 +116,23 @@ describe("the optimiser", () => {
      * and is right to. Scoring the year *after* the plan has been played is
      * what makes a pipeline worth paying for.
      */
-    const plan = planFor(worldFor())!;
-    const product = (plan.decisions.cto!.featureSpend ?? 0) + (plan.decisions.cto!.reliabilitySpend ?? 0);
-    expect(product).toBeGreaterThan(0);
-  });
+    /*
+     * Asserted across a season rather than in the first year, because
+     * declining it in year one can be the right answer: dating apps opens
+     * onto a segment that weighs brand at 0.62 and quality at 0.30, so a
+     * company with nothing has better things to buy first. What the lookahead
+     * has to make possible is buying it at all.
+     */
+    let world = worldFor("product");
+    let bought = 0;
+    for (let year = 1; year <= 6; year++) {
+      const plan = optimise({ world, companyId: "us", year, economy: economyFor("product", year, 1) });
+      if (!plan) break;
+      bought += (plan.decisions.cto!.featureSpend ?? 0) + (plan.decisions.cto!.reliabilitySpend ?? 0);
+      world = resolveYear({ ...world, year }, [plan.decisions as never]).world;
+    }
+    expect(bought).toBeGreaterThan(0);
+  }, 60_000);
 
   it("beats filing nothing at all", () => {
     const played = (use: boolean) => {

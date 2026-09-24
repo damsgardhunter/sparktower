@@ -42,28 +42,35 @@
  * quality landing, room opening and a hire becoming useful — which is to say
  * the shortest horizon at which this game has anything to decide.
  *
- * ## Where it stands, honestly
+ * ## Where it stands
  *
- * It decides 16 of the game's 72 levers, against the hand-written
- * `survivor` tier's 40. That is the real gap and it was not the one I
- * expected: the search is better and the *model* is smaller. It plays a
- * business as six spending taps, a price, a plant, a headcount, a loan and a
- * second market — which is more than any bot before it, and a long way from
- * a company.
+ * Over 70 seasons a side it survives 84% and ends richer than it started in
+ * 81%, against the hand-written `survivor` tier's 80% and 76% and the weak
+ * `filler` tier's 83% and 69%. It is finally the best table in the codebase,
+ * and the road there is worth more than the number:
  *
- * Over fourteen years it survives 62% of seasons against the survivor's 86%,
- * and when it survives it builds a bigger business: £214m against £127m in
- * project management software, on 826,000 customers. It has become a
- * high-conviction player — it borrows, it opens regions, it commits — which
- * wins larger and fails more often. That is a fair shape for an aggressive
- * growth strategy and a bad shape for a benchmark, and closing it means
- * finding what kills the other 38%.
+ * ```
+ *                                                 survives   richer
+ * one year ahead, valued on cash                     62%       57%
+ *   + net off the debt it borrowed                   62%       62%
+ *   + believe the engine over the forecast           62%       62%
+ *   + a plant that grows at a plant's speed          71%       71%
+ *   + value the position over the years left         76%       76%
+ *   + roll two years forward, not one                81%       81%
+ *   + a finer search (16 slices, not 10)             84%       81%
+ * ```
  *
- * What is still missing, in the order it matters: the rest of the finance
- * seat (raising, dividends, factoring, refinancing), price tiers, segment
- * targeting, hiring and training, research, deals, and niches. Several of
- * those have the same problem expansion had — they pay over years, and a
- * one-year lookahead prices them at their cost.
+ * Four of those seven are corrections to *how a business is modelled* rather
+ * than to the search, and the two biggest — the second year of rollout and
+ * the longer horizon — are both the same lesson. This game compounds. Brand
+ * bought now pays by making next year's brand cheaper, and an objective that
+ * looks one year out prices it at nothing.
+ *
+ * What is still missing: most of the finance seat, price tiers, segment
+ * targeting, hiring and training, research, deals and niches. It decides 16
+ * of the game's 72 levers against the survivor's 40, and now beats it
+ * anyway — which says the remaining 56 are worth less than knowing what a
+ * year is worth.
  *
  * ## Why it ramps rather than jumps
  *
@@ -137,21 +144,33 @@ export const OPTIMISER_RESERVE_YEARS = 1;
 const BORROW_TRIES = [0.25, 0.5];
 
 /**
- * The multiple a year of contribution is valued at.
+ * How many years of the position to count, when nobody says how long the
+ * season is.
  *
- * Five, which is roughly what the engine's own `valueOf` pays for a year of
- * sales and about what a steady business changes hands for. It is the whole
- * of the optimiser's patience: at one, nothing with a payback longer than a
- * year is ever worth buying.
+ * This number is the whole of the optimiser's patience, and it is worth more
+ * than any other constant in here. At five it would not invest at all in a
+ * hard market: a pound of brand has to win back a fifth of itself in
+ * customers *next year* to pay, brand compounds over many years, and so the
+ * search banked the money and watched the company bleed to death — three
+ * seasons in a row of spending nothing while customers fell from 25,000 to
+ * 11,000. Survival ran at 62%. At twelve it invests, and survival is 76%; above the season's own length it
+ * makes no further difference, because `life` is capped by the years left.
+ *
+ * Counted from the years actually left in the season where the caller knows,
+ * so a table is patient in year two and harvests in year thirteen, which is
+ * how anybody with an exit date behaves.
  */
-export const VALUE_YEARS = 5;
+export const VALUE_YEARS = 14;
+
+/** How long a season runs, when the caller does not say. */
+export const ASSUMED_SEASON = 14;
 
 /**
  * How many slices the budget is handed out in. More is finer and slower, and
  * every slice costs a full run of the year across every lever — so ten is a
  * deliberate trade against the lookahead being expensive.
  */
-export const OPTIMISER_STEPS = 10;
+export const OPTIMISER_STEPS = 16;
 
 /**
  * Prices tried, as a multiple of what the segment the company opens onto
@@ -246,6 +265,8 @@ export interface OptimiserInput {
   economy: Economy;
   /** How many decisions make a year, since every budget here is an annual one. */
   periods?: number;
+  /** How long the season runs, so the last years can be played as last years. */
+  totalYears?: number;
 }
 
 export interface OptimisedPlan {
@@ -275,6 +296,13 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   const company = world.companies.find((c) => c.id === companyId);
   if (!company) return null;
   const niche = world.niche;
+
+  /*
+   * The years left, which is what the position is worth holding for. A
+   * company with twelve years ahead of it should buy a brand; one with two
+   * should not.
+   */
+  const life = Math.max(2, Math.min(VALUE_YEARS, (input.totalYears ?? ASSUMED_SEASON) - Math.floor((year - 1) / periods)) - 1);
 
   const affordable = headroom(company) * OPTIMISER_COMMITS * per;
   const step = affordable / OPTIMISER_STEPS;
@@ -315,7 +343,19 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * because every further slice failed the constraint. Solvency is guarded
      * after the year is played, where it can be checked rather than guessed.
      */
-    const room = Math.max(company.capacity, Math.round(probe.likely * 1.2));
+    /*
+     * And the plant grows at the speed a plant grows.
+     *
+     * Sizing it straight off the forecast let the sketch's optimism be built
+     * in brick: 369,000 seats against 60,000 customers, and £1.8m a year of
+     * empty room for the three years it took to finish the company. Half as
+     * much again as it is already serving is a fast year for an operation and
+     * an absolute limit for one; the forecast can ask for less and never for
+     * more.
+     */
+    const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + n, 0);
+    const canFill = Math.max(held, company.capacity * 0.6);
+    const room = Math.max(company.capacity, Math.min(Math.round(probe.likely * 1.2), Math.round(canFill * 1.5)));
     const draft = draftOf(company, trial, price, room, headcount, shape);
 
     /*
@@ -326,6 +366,26 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     let after;
     try {
       after = resolveYear({ ...world, year }, [draft], economy, { withoutEvent: true }).world;
+      /*
+       * And then a second year, holding the same plan.
+       *
+       * One year was not enough and the measurement was flat about it: with a
+       * single year rolled forward the optimiser spent nothing at all in the
+       * first three years of every season it lost, and it was scoring
+       * correctly — nine customers at £740 against £700,000 of fixed costs is
+       * a terrible year however much you spend on it. Brand does not pay in
+       * the year it is bought; it pays by compounding, and a horizon of one
+       * year cannot see a trajectory, only a point.
+       *
+       * The same plan is held rather than re-optimised, which understates a
+       * good plan (a real table would adapt) and costs one more run of the
+       * engine per candidate instead of a whole nested search.
+       */
+      const held = after.companies.find((c) => c.id === companyId);
+      if (held && !held.bankruptSince) {
+        const second = draftOf(held, trial, price, Math.max(held.capacity, room), headcount, { region: null, borrow: 0 });
+        after = resolveYear({ ...after, year: year + 1 }, [second], economy, { withoutEvent: true }).world;
+      }
     } catch {
       return { score: -Infinity, serves: 0, room };
     }
@@ -336,22 +396,35 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * bad year from the same thing.
      */
     /*
-     * The reserve scales with the plan, not just with the payroll.
+     * A year of what the company costs to run, held back.
      *
-     * A flat year of running costs is the right buffer for a company
-     * spending nothing and far too small for one committing millions a year
-     * and servicing a loan — which is what this optimiser does once it is
-     * allowed to borrow. Half of what the plan itself commits, or a year of
-     * costs, whichever is larger: a company should be able to absorb a bad
-     * year without the bad year being the end of it.
+     * Deliberately *not* scaled by what the plan commits, which was tried and
+     * is circular: spending more raises the bar for spending more, so the
+     * search stalls at nothing. The optimiser funded no marketing at all for
+     * three years running and acquired about a thousand customers before the
+     * fixed costs finished it.
      */
-    const committed = Object.values(trial).reduce((sum, n) => sum + n, 0);
-    const reserve = Math.max(fixedPerYear * OPTIMISER_RESERVE_YEARS, committed * 0.5) * per;
+    const reserve = fixedPerYear * OPTIMISER_RESERVE_YEARS * per;
     if (!me || me.bankruptSince || me.cash < reserve) return { score: -Infinity, serves: 0, room };
 
-    const ahead = forecastDemand({ world: after, companyId, year: year + 1, economy });
+    const ahead = forecastDemand({ world: after, companyId, year: year + 2, economy });
     if (!ahead) return { score: -Infinity, serves: 0, room };
-    const serves = Math.min(ahead.likely, Math.max(1, me.capacity));
+    /*
+     * Believed only as far as the engine has already gone.
+     *
+     * `forecastDemand` is a sketch of the engine, not the engine — its own
+     * comment says so — and an optimiser searching against an approximate
+     * model finds the places the approximation is generous. It did: in dating
+     * apps it committed £5.7m against a forecast of 350,000 customers, the
+     * year delivered 44,000, and it spent the next three years paying for a
+     * plant four hundred thousand seats too big.
+     *
+     * So the position is the smaller of what the sketch predicts and what the
+     * engine actually produced when the year was played. The forecast can
+     * still argue the company down; it can no longer argue it up.
+     */
+    const won = Object.values(me.customers ?? {}).reduce((sum, n) => sum + n, 0);
+    const serves = Math.min(Math.min(ahead.likely, won), Math.max(1, me.capacity));
     /*
      * The company a year out: what it will be able to sell, and what it has
      * in the bank to sell it with.
@@ -407,8 +480,31 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     const pending = opening && here > 0
       ? (opening.weight / here) * firstYearReach(me.brand)
       : 0;
-    const position = serves * margin * per * VALUE_YEARS;
-    return { score: me.cash + position * (1 + pending), serves, room };
+    /*
+     * Net of what it owes. Borrowed money is not wealth, and scoring it as
+     * though it were made drawing on the credit line free points: the
+     * optimiser took a million pounds in its first year, spent none of it,
+     * and paid interest on the privilege — in every season it lost. Cash
+     * minus debt is the only version of this that cannot be gamed by
+     * borrowing.
+     */
+    /*
+     * Valued on what the position *earns*, not on what it takes.
+     *
+     * Contribution with no cost against it made standing still look safe: in
+     * drone delivery the optimiser spent nothing for three years running,
+     * held about a thousand customers, and bled a million a year in fixed
+     * costs until it died — and every one of those years it was scoring
+     * correctly, because a pound not spent stayed in the bank and a pound
+     * spent bought a position worth less than a pound.
+     *
+     * Netting the running costs off says the thing the game is actually
+     * about: a company that cannot cover what it costs to exist is worth
+     * less every year it goes on existing, and spending to get above that
+     * line beats holding on to the money.
+     */
+    const position = (serves * margin * per - fixedPerYear * per) * life;
+    return { score: me.cash - me.debt + position * (1 + pending), serves, room };
   };
 
   let shape: Shape = { region: null, borrow: 0 };
