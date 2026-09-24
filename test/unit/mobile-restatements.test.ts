@@ -66,10 +66,17 @@ describe("where the app gets a picture from", () => {
       return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [{ path: p, text: readFileSync(p, "utf8") }] : [];
     });
 
-  it("never asks the document picker for an image", () => {
+  it("never asks the document picker for an image, outside the fallback", () => {
+    /*
+     * photos.ts is the exception and the reason the rule exists: when the
+     * build has no photo library in it, Files filtered to images is better
+     * than a button that throws. Everywhere else, asking Files for a picture
+     * is the bug this guards.
+     */
     const offenders = sources(mobileSrc)
       .filter((f) => /getDocumentAsync\([^)]*image\//s.test(f.text))
-      .map((f) => f.path.slice(join(__dirname, "..", "..").length + 1));
+      .map((f) => f.path.slice(join(__dirname, "..", "..").length + 1))
+      .filter((p) => p !== "mobile/src/photos.ts");
     expect(offenders, "these ask Files for a photo; mobile/src/photos.ts is what opens Photos").toEqual([]);
   });
 
