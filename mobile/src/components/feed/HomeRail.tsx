@@ -53,7 +53,7 @@ export function ProfileCard() {
   if (!data) return null;
   const { profile, stats } = data;
   const name = profile?.displayName || "Your profile";
-  const cover = assetUri(profile?.coverUrl);
+  const cover = assetUri(profile?.coverUrl, 640);
 
   const stat = (label: string, value: number | string, onPress: () => void, testID: string) => (
     <Pressable key={label} onPress={onPress} style={({ pressed }) => [s.stat, pressed && { backgroundColor: colors.surfaceRaised }]} testID={testID}>

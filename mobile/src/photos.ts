@@ -19,6 +19,7 @@
  */
 import { Linking, Platform } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 
 /** What an upload needs, in the shape `uploadFile` already takes. */
 export interface PickedFile {
@@ -64,7 +65,26 @@ function nameFor(asset: ImagePicker.ImagePickerAsset, mimeType: string): string 
  * one to a post came to do, and the server keeps the original either way.
  */
 export async function pickPhoto(opts: { videos?: boolean } = {}): Promise<PickedFile | null> {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  /*
+   * A build that predates the photo library.
+   *
+   * The picker is a native module, so a dev build or a TestFlight build made
+   * before it was added has the JavaScript half and not the native one — the
+   * call throws "Cannot find native module" at the moment it reaches across.
+   * Installing the package does not help; only a rebuild does, and somebody
+   * on yesterday's binary should not lose the ability to add a picture while
+   * they wait for one.
+   *
+   * Caught rather than predicted, because the JavaScript function exists in
+   * that build and answers every question you could ask it beforehand.
+   */
+  let permission: ImagePicker.PermissionResponse;
+  try {
+    permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  } catch (err) {
+    if (!isMissingNativeModule(err)) throw err;
+    return pickFromFiles(opts);
+  }
   if (!permission.granted) {
     /*
      * `canAskAgain` false means the system dialog will not appear again, so
@@ -80,17 +100,56 @@ export async function pickPhoto(opts: { videos?: boolean } = {}): Promise<Picked
     );
   }
 
-  const picked = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: opts.videos ? ["images", "videos"] : ["images"],
-    allowsMultipleSelection: false,
-    // Full quality: the server resizes, and a photo that has been through two
-    // lossy passes looks it — the first thing anybody uploads is a screenshot.
-    quality: 1,
-    exif: false,
-  });
+  let picked: ImagePicker.ImagePickerResult;
+  try {
+    picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: opts.videos ? ["images", "videos"] : ["images"],
+      allowsMultipleSelection: false,
+      /*
+       * Full quality. The server keeps a resized copy per width
+       * (server/image-derivatives.ts) and serves that, so squeezing it here
+       * as well would be two lossy passes to save bytes twice — and the first
+       * thing anybody uploads is a screenshot, which shows every one of them.
+       */
+      quality: 1,
+      exif: false,
+    });
+  } catch (err) {
+    if (!isMissingNativeModule(err)) throw err;
+    return pickFromFiles(opts);
+  }
   if (picked.canceled || !picked.assets?.[0]) return null;
 
   const asset = picked.assets[0];
   const mimeType = asset.mimeType || (asset.type === "video" ? "video/mp4" : "image/jpeg");
   return { uri: asset.uri, name: nameFor(asset, mimeType), mimeType, size: asset.fileSize };
+}
+
+/**
+ * The error a build without the native half gives.
+ *
+ * Matched on the message because that is all there is: Expo throws a plain
+ * Error from the bridge. Narrow on purpose — anything else is a real failure
+ * and belongs to the caller, who will say "couldn't open your photos" rather
+ * than silently opening something else.
+ */
+function isMissingNativeModule(err: unknown): boolean {
+  const message = String((err as Error)?.message ?? err);
+  return /cannot find native module|native module.*not (found|available)|requireNativeModule|ExponentImagePicker|ExpoImagePicker/i.test(message);
+}
+
+/** The old way in, kept for builds that have no photo library to open. */
+async function pickFromFiles(opts: { videos?: boolean }): Promise<PickedFile | null> {
+  const type = opts.videos
+    ? ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"]
+    : ["image/*"];
+  const picked = await DocumentPicker.getDocumentAsync({ type, copyToCacheDirectory: true });
+  if (picked.canceled || !picked.assets?.[0]) return null;
+  const file = picked.assets[0];
+  return {
+    uri: file.uri,
+    name: file.name || `photo-${Date.now()}.jpg`,
+    mimeType: file.mimeType || "image/jpeg",
+    size: file.size ?? undefined,
+  };
 }

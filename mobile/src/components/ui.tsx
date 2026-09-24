@@ -451,7 +451,7 @@ export function Avatar({ name, size = 40, uri, ring }: { name?: string | null; s
   return (
     <View style={[s.avatar, frame, ring && { borderWidth: Math.max(2, size / 24), borderColor: colors.background }]}>
       {source
-        ? <Image source={{ uri: assetUri(source)! }} style={[frame, { position: "absolute" }]} />
+        ? <Image source={{ uri: assetUri(source, 96)! }} style={[frame, { position: "absolute" }]} />
         : <Text style={{ color: colors.primary, fontSize: size * 0.42, fontFamily: fontFamily.bold }}>{initial}</Text>}
     </View>
   );
