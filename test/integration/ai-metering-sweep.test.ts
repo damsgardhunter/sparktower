@@ -185,6 +185,18 @@ const UNBILLED_FALLBACKS = [
   // The storyboard falls back to generic scenes; only Nova's scenes are billed (server/routes.ts).
   "POST /api/projects/:id/generate-video",
   /*
+   * A season from a project falls back to the nearest of the seven catalogue
+   * markets when Nova can't write one, because somebody who pressed the button
+   * should get a season either way (server/project-simulation-routes.ts).
+   *
+   * It meets the bar this list sets, on both halves. It does not charge — the
+   * deduction is under `if (!fellBack)`, so the hold is released untouched.
+   * And the person is told rather than left to assume: the response carries
+   * `fellBack`, and the market it hands back is marked `written: false`, which
+   * is what the page reads to say the market isn't theirs.
+   */
+  "POST /api/projects/:id/simulation",
+  /*
    * Reputation used to be here: the route asked Nova for the strategic pillar
    * and answered anyway when the model said nothing. It no longer reaches a
    * model at all — the weekly job does that (server/reputation-jobs.ts) — so

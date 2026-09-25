@@ -80,6 +80,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "targetCities", label: "Where you sell", kind: "cities",
       help: "Only people in a city you have opened can choose you, however good you are. Opening one costs money once and costs more to run for ever — spread faster than you can sell and you pay for reach you are not using." },
     { id: "forecast", label: "The forecast", kind: "count", min: 0, step: 1_000,
@@ -104,6 +108,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "The share of this year's marketing aimed at each region you sell in. A region pushed harder than its size is worth up to 40% more there, and one left short is worth up to 40% less — so this is concentration, not extra reach. Regions you leave out share what is left, evenly by size. Who lives where differs: pushing into a region full of the people you are for is worth more than pushing into the biggest one." },
     { id: "segmentFocus", label: "Who the marketing is for", kind: "allocation", min: 0, max: 100, step: 5,
       help: "The share of the year's marketing aimed at each kind of customer. A segment pushed harder than its size is worth up to 25% more, one left short up to 25% less. A campaign aimed at everybody is aimed at nobody — and one aimed at a segment you have priced out of reach is money spent twice on the same mistake." },
+    { id: "openNiche", label: "Go and find a niche", kind: "choice", options: [],
+      help: "Pick a kind of customer and go looking inside it for the people who want what you are already good at. They pay a little more, they are harder to shift once they choose, and for a while nobody else is even describing them as a group. It costs a year of marketing to find them and you only own them while you are the only one who fits — the better you are at something in particular, the more of them there turn out to be." },
     { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
       help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
@@ -120,6 +126,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "securitySpend", label: "Security", kind: "money", min: 0, step: 25_000,
       help: "Lowers the chance of a breach and how bad one is. Builds up over years and wears off a fifth a year. Nobody thanks you for the breach that didn't happen." },
     { id: "dataSpend", label: "Data and analytics", kind: "money", min: 0, step: 25_000,
@@ -150,8 +160,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
     { id: "programme", label: "Improvement programme", kind: "choice", options: [],
       help: "One a year, paying out a third of its effect in each of the next three years. Slow, cumulative and permanent — and the year you start one, it does nothing at all." },
-    { id: "expand", label: "Open the announced region", kind: "choice", options: [],
-      help: "The region announced for next year, opened at 70% of the usual cost. It opens next year, and in its first year you reach only as far as the brand does." },
+    { id: "expand", label: "Put the announced region to the table", kind: "choice", options: [],
+      help: "The region announced for next year, at 70% of the usual cost. You put it up and it counts as your vote for; the other four vote too, and a majority of the votes cast opens it. It opens next year, and in its first year you reach only as far as the brand does." },
     { id: "automationTarget", label: "Automate the plant", kind: "percent", min: 0, max: 100, step: 5,
       help: "How automated it should be next year. Every point takes a little off what each one costs to make — a quarter off at the top — and puts it onto what building more room costs, and onto how slowly the product can change. Paid for when ordered; it runs from next year. Taking it out again is immediate." },
     { id: "shiftCapacity", label: "Second shift", kind: "count", min: 0, step: 10_000,
@@ -194,6 +204,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "insurance", label: "Insure against", kind: "choice", options: [
       { value: "none", label: "Nothing", help: "Carry the risk. Most years, the cheapest answer." },
       { value: "breach", label: "Breaches", help: "The insurer pays 80% of a breach's clean-up. Never the reputation." },
@@ -234,6 +248,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "decline", label: "Turn it down", help: "Nothing happens." },
       { value: "vote", label: "Put it to the table", help: "The other four vote. A majority of those who vote decides it; a tie or silence turns it down." },
     ], options: [], help: "What arrives from outside: a partner, a campaign, sometimes a buyer. Accept, decline, or let the table decide." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "shockAnswer", label: "Answer the shock", kind: "choice", options: [],
       help: "What the company says about what happened. A statement wins back about half the reputation it cost; silence wins back nothing and reads as evasive; blaming a seat wins back the most and costs them dearly." },
     { id: "budget", label: "Split the budget", kind: "allocation", min: 0, max: 100, step: 5,
@@ -472,6 +490,8 @@ export function cleanDecision(
      * dropped, so it cannot be filed early by a client that shows it anyway.
      */
     year?: number;
+    /** How many decisions make a year, since `year` counts decisions. */
+    periods?: number;
     /** The market's segments: price tiers can only be set for ones that exist. */
     segmentIds?: readonly string[];
   } = {},
@@ -479,7 +499,7 @@ export function cleanDecision(
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
-    if (context.year !== undefined && !isUnlocked(role, field.id, context.year)) continue;
+    if (context.year !== undefined && !isUnlocked(role, field.id, context.year, context.periods ?? 1)) continue;
     const raw = source[field.id];
     switch (field.kind) {
       case "choice":
@@ -701,6 +721,14 @@ export function commitment(
     { role: "cto", spend: ((decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) + (decisions.cto?.researchSpend ?? 0) + (decisions.cto?.securitySpend ?? 0) + (decisions.cto?.dataSpend ?? 0) + betSpend(decisions, niche, prices)) * payEffect(decisions.cto?.engineerPay).cost },
     { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) + (decisions.coo?.recruitingSpend ?? 0) + (decisions.coo?.trainingSpend ?? 0)
       + oneOff(!!decisions.coo?.programme && !(company.programmes ?? []).some((p) => p.id === decisions.coo!.programme), niche, prices, "programme", programmeCost)
+      /*
+       * Opening the announced region is counted the moment operations puts
+       * it up, before the table has voted. It is an exposure rather than a
+       * commitment — the table may vote it down and the money stays — but
+       * the meter exists to stop a company filing a year it cannot pay
+       * for, and overstating what a year might cost is the safe side of
+       * that. The mobile mirror counts it the same way.
+       */
       + oneOff(!!decisions.coo?.expand, niche, prices, "expansion", () => 0)
       + plantSpend(company, decisions, niche, prices)
       + capacitySpend(company, decisions, niche, prices) },

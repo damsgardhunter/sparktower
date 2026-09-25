@@ -239,8 +239,9 @@ const YEAR_OF_COSTS = 1_100_000;
  * a marketplace with everything in it is a shopping list, and a marketplace
  * with three things in it is an argument about which one.
  */
-export function marketListings(input: { seasonId: string; year: number; niche: Niche; count?: number }): Listing[] {
-  const { seasonId, year, niche, count = 3 } = input;
+/** `year` counts periods; `periods` is how many make one, because a licence's life is written in years. */
+export function marketListings(input: { seasonId: string; year: number; niche: Niche; count?: number; periods?: number }): Listing[] {
+  const { seasonId, year, niche, count = 3, periods = 1 } = input;
   const seed = `${seasonId}:${year}:market`;
   const chosen = sample(seed, templatesFor(niche), count);
 
@@ -258,7 +259,9 @@ export function marketListings(input: { seasonId: string; year: number; niche: N
         name: template.name,
         effect: template.effect(niche),
         bookValue: price,
-        expiresIn: template.life,
+        // `expiresIn` is counted down once a tick, and a life is written in
+        // years, so a five-year licence is sixty months.
+        expiresIn: template.life === undefined ? undefined : template.life * Math.max(1, periods),
       },
     };
   });

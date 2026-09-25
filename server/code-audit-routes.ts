@@ -10,7 +10,7 @@
  */
 import { parseModelJson, answerUnreadable } from "./ai-json";
 import type { Express, Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
@@ -48,15 +48,14 @@ import { sanitizeLoopClosures } from "@shared/phase-trees";
 import { rereadOpenLoops } from "./audit-loop-reads";
 import { withProjectLock } from "./project-lock";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here.
+ *
+ * This file used to construct its own, which duplicated the base-URL rule and
+ * — once there was a default ceiling on every answer — quietly opted the
+ * dearest feature in the product out of it. One client, one place that knows
+ * how to build it.
+ */
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const strList = (v: unknown, max = 20, len = 300): string[] =>
@@ -403,7 +402,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   // the full text of its evidence files and the exact route coverage.
   // Independent and fault-tolerant; a failed read leaves the first-pass
   // verdict, which is honest.
-  const firstPass = await deepReadAll(
+  const deep = await deepReadAll(
     ent,
     sanitizeCapabilities(parsed.capabilities, {
       files: new Set(snapshot.files.map((f) => f.path)),
@@ -412,7 +411,14 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     snapshot.files,
     digest.signals.routeCoverage,
     dataShape,
+    // What makes a re-audit cheap: an area whose files have not changed since
+    // the last one is answered from memory rather than from the model.
+    { projectId },
   );
+  const firstPass = deep.caps;
+  if (deep.recalled.length) {
+    console.log(`[audit] ${deep.recalled.length} of ${firstPass.length} areas unchanged since the last audit: ${deep.recalled.join(", ")}`);
+  }
   /*
    * The deterministic half of "don't grade what you didn't read".
    *
@@ -933,7 +939,7 @@ export function registerCodeAuditRoutes(app: Express) {
       // Charged only once the code is in hand — a repo that can't be fetched
       // costs nothing. Kept at the route rather than inside the run, so what
       // this endpoint costs and what stops it is readable from the route table.
-      if (!(await requireCredits(res, userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId }))) { await run?.finish({ error: "The audit wasn't paid for." }); return; }
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId, action: "codeAudit" }))) { await run?.finish({ error: "The audit wasn't paid for." }); return; }
 
       await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined, run });
     } catch (error: any) {

@@ -60,14 +60,47 @@ function playSeason(decide: (year: number, company: any, world: World) => TeamDe
  * then claims playing is worse than not playing.
  */
 function playedYear(company: { cash: number; capacity: number; price: number }, world?: World): TeamDecisions {
-  const spend = Math.round(Math.max(250_000, company.cash * 0.08));
+  /*
+   * A steady hand, and steady has to mean affordable.
+   *
+   * This was eight per cent of the bank on each of six levers — some forty
+   * per cent of the company's cash every year, for fourteen years. It stood
+   * up while a market could hold half again as many customers as it had
+   * people, because the growth that bought paid for it. Against a market that
+   * is now finite it is not a plan, it is a burn: the "played" team reached
+   * the last year insolvent at minus £3.9m, and lost a comparison against
+   * doing nothing that it should win easily.
+   *
+   * Three per cent a lever is a company investing seriously and still able to
+   * pay for it, and the floor has to be small enough that a company having a
+   * thin year cuts its cloth instead of spending itself into the ground — a
+   * £120,000 floor across six levers was £720,000 a year against a million of
+   * revenue, and the engine simply refused most of it: "there was only 0 to
+   * spend, cash and credit together". A team that cannot pay for its plan is
+   * not playing well, it is playing badly, and this test is about the former.
+   */
+  const spend = Math.round(Math.max(40_000, company.cash * 0.03));
   const d: TeamDecisions = {
     companyId: "team",
     cmo: { price: company.price, brandSpend: spend, performanceSpend: spend, celebritySpend: 0, targetCities: [] },
-    cto: { featureSpend: spend, reliabilitySpend: spend, techDebtPaydown: 0 },
+    /*
+     * And it pays down what the shipping borrows. Features accrue technical
+     * debt, debt buys outages and breaches, and those cost reputation — so a
+     * fixture that shipped hard for fourteen years and never paid any of it
+     * back finished with a worse name than a company that did nothing at all,
+     * which says more about the plan than about playing.
+     */
+    cto: { featureSpend: spend, reliabilitySpend: spend, techDebtPaydown: Math.round(spend * 0.5) },
     coo: { capacityTarget: Math.round(company.capacity * 1.15), supportSpend: spend, efficiencySpend: Math.round(spend * 0.4), headcount: 5 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
-    ceo: { focus: "growth" },
+    /*
+     * And it answers when something goes wrong. A shock met with silence
+     * recovers far less of the reputation it cost, and a bigger company draws
+     * more shocks — so a fixture that never filed a `shockAnswer` in fourteen
+     * years was being punished for growing, and finished with a worse name
+     * than a company that did nothing.
+     */
+    ceo: { focus: "growth", shockAnswer: "statement" },
   };
   /*
    * A steady hand builds to the forecast. Growing capacity a fixed fifteen per
@@ -303,19 +336,30 @@ describe("the chair nobody sat in", () => {
 });
 
 describe("a whole season", () => {
-  it("leaves a team that never opened the app with a company still standing", () => {
+  it("winds up a company nobody ever opened the app for", () => {
     /*
-     * The floor. Five people join, argue about seats, and never come back.
-     * Fourteen days later there must still be something there — because the
-     * one who does wander back on day twelve is the player worth having, and a
-     * smoking crater is where that stops.
+     * This used to be the opposite rule: five people join, never come back,
+     * and a fortnight later there is still something standing, because the
+     * one who wanders back on day twelve is the player worth having.
+     *
+     * It could not survive the measurement. Idle tables were finishing more
+     * than half of all seasons alive and occasionally richer than they
+     * started, coasting on an opening position nobody had earned while the
+     * business rotted underneath — which makes the one thing the game is
+     * about, running a company, optional.
+     *
+     * The two rules cannot both hold: a company nobody runs for ten years
+     * cannot be both closed and recoverable. What is kept is the part that
+     * still makes sense, and the next test holds it — a table that misses a
+     * year and comes back finds a company that lost ground, not one that
+     * ended.
      */
     const { world, history } = playSeason(() => null);
     const team = world.companies.find((c) => c.id === "team")!;
 
     expect(history).toHaveLength(SEASON_YEARS);
-    expect(team.bankruptSince, "an untouched team should not be bankrupt").toBeUndefined();
-    expect(team.cash).toBeGreaterThan(0);
+    expect(team.bankruptSince, "a company nobody ran should not still be trading").toBeDefined();
+    expect(Object.values(team.customers).reduce((a, b) => a + b, 0)).toBe(0);
   });
 
   it("rewards the team that actually played", () => {
@@ -360,8 +404,13 @@ describe("a whole season", () => {
      * possible — not guaranteed, but possible — or the message to a returning
      * player is "you already lost" and they leave again.
      */
-    const { history } = playSeason((year, company) => (year >= 11 ? playedYear(company) : null));
-    const atReturn = history[9];
+    /*
+     * Returning after two quiet years, not ten. A company left alone for a
+     * decade is wound up now (see above), and the guarantee worth keeping is
+     * the one about a table that goes quiet for a while and comes back.
+     */
+    const { history } = playSeason((year, company) => (year >= 4 ? playedYear(company) : null));
+    const atReturn = history[2];
     const atEnd = history[history.length - 1];
 
     expect(atEnd.marketShare).toBeGreaterThan(atReturn.marketShare);

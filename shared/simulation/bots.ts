@@ -31,7 +31,9 @@ import { LEVER_FIELDS, defaultDraft, validateDecision } from "./levers";
 import type { City, Company, Niche } from "./types";
 import { assetEffects } from "./assets";
 import { isUnlocked, buildCostPerUnit } from "./responsibilities";
+import { EXECUTIVE } from "./decisions";
 import { researchCost } from "./world";
+import { bestPrice, bestSegment, regionsWorthKeeping } from "./bot-play";
 import { automationCost, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "./factory";
 import type { Role } from "./types";
 
@@ -60,6 +62,16 @@ export const botsForVenture = (ventureId: string, count: number, poolSize = BOT_
  * else is sitting in. ±12% moves a result without deciding it.
  */
 export const BOT_JITTER = 0.12;
+
+/**
+ * How often a bot reconsiders a choice it has already made.
+ *
+ * One year in five. Below that a company never adapts; above it, it has no
+ * identity from one year to the next — which is what every bot did before
+ * this, because the seed carries the year and so every choice was a fresh
+ * coin toss.
+ */
+export const RETHINK_ODDS = 0.2;
 
 /**
  * One numeric lever, nudged.
@@ -142,6 +154,29 @@ export const decisionSeed = (input: { ventureId: string; year: number; role: Rol
  * It is still not a tuned opponent: every number goes through the same levers,
  * the same validator and the same money a person has.
  */
+/**
+ * How well a bot company plays.
+ *
+ * `filler` is what bots have always been: a warm body in a seat somebody did
+ * not take, filing the obvious number so the company moves. It is the right
+ * behaviour for a seat nobody wanted, and deliberately not an opponent.
+ *
+ * `survivor` is a company that is actually trying. It exists because of what
+ * a filler cannot teach. A season opened where a real project is — no money,
+ * no customers, nobody has heard of you — is the one people most want to
+ * play, and watching every rival in it shrink from eighteen thousand
+ * customers to one thousand teaches nothing about entering a market. The
+ * lesson is supposed to be *how you survive*, and a table can only learn it
+ * from companies that demonstrate it.
+ *
+ * A survivor does the three things a person does and a filler never does:
+ * prices to win a foothold while nobody has heard of it, puts its marketing
+ * in one place instead of spreading it thin, and protects the spending that
+ * stops customers leaving when money is short. It is still bound by the same
+ * levers, the same validator and the same money.
+ */
+export type BotSkill = "filler" | "survivor";
+
 export function botAmbition(ventureId: string): number {
   return between(`bot:${ventureId}:ambition`, 0.75, 1.4);
 }
@@ -189,6 +224,67 @@ function turnoverOf(company: Company): number {
   return Math.max(0, customers * (Number(company.price) || 0));
 }
 
+/**
+ * What this company's plant could earn before anything is spent selling it:
+ * the margin on one unit, times the units it has room for.
+ *
+ * Potential rather than actual, deliberately. In year one a bot has no
+ * customers, so an actual figure would be zero, and a company that spends
+ * nothing never starts.
+ */
+function grossPotential(company: Company): number {
+  const margin = Math.max(0, (Number(company.price) || 0) - (Number(company.unitCost) || 0));
+  return margin * Math.max(0, Number(company.capacity) || 0);
+}
+
+/**
+ * What one seat may spend, as a share of what the plant could earn.
+ *
+ * Every company starts with the same cash in every market; what that cash can
+ * earn is not the same. Measured across the seven, the gross profit available
+ * at full capacity in the first year ran from £0.57m to £2.36m. A bot
+ * anchored to its bank balance therefore spent like a dating app in a market
+ * that returns a fifth as much, and lost — so spending is anchored to the
+ * return instead, which is the judgement the old cap was reaching for.
+ */
+export const BOT_SPEND_OF_GROSS = 0.05;
+
+/**
+ * Spending harder is *not* what makes a bot good, and measuring it was the
+ * only way to find that out.
+ *
+ * The obvious fix for "skill does not matter" was to let a survivor invest
+ * like an operator — a fifth of what the market could return instead of a
+ * twentieth. It made the survivor demonstrably better at running a company
+ * (brand 94 against 85, quality 93 against 89) and demonstrably worse at
+ * owning one: median cash fell from £70m to £33m and it started dying more
+ * often than the weak bot.
+ *
+ * The reason is that a pound of brand or product buys customers, and a
+ * company already running at 85% of its plant cannot serve them. What makes a
+ * survivor good is *room* — see `botCapacity` — and knowing that being good
+ * earns the right to charge more, which is `priceLicence` in `market.ts`.
+ * Both are kept; this is not.
+ */
+export const spendOfGross = (_skill: BotSkill): number => BOT_SPEND_OF_GROSS;
+
+/**
+ * And what it will still spend out of the bank when the year has gone badly.
+ *
+ * The want below falls with turnover, and turnover falls when customers
+ * leave, so a bad year cut the marketing that would have won them back and
+ * made the next year worse. Measured, that feedback was most of the game:
+ * companies either compounded into tens of millions or spiralled to nothing,
+ * with very little in between.
+ *
+ * Four seats, so about a sixth of the cash between them — enough to keep
+ * selling through a bad year, not enough to empty the account in one.
+ */
+export const BOT_DEFENCE_OF_CASH = 0.04;
+
+/** How long a company can still be described as early, for the purpose of raising. */
+export const RESCUE_UNTIL_YEAR = 6;
+
 /** Cash plus what the bank would still lend — what a bot is allowed to think with. */
 function headroom(company: Company): number {
   return Math.max(0, (Number(company.cash) || 0)) + Math.max(0, (Number(company.creditLimit) || 0) - (Number(company.debt) || 0));
@@ -220,8 +316,32 @@ export function botDecision(input: {
    * real places and real people rather than spraying it.
    */
   niche?: Niche;
+  /**
+   * Everyone else in this market, for the decisions that are only decisions
+   * against somebody: what to charge, and who to aim at. Without them a bot
+   * files what it always did.
+   */
+  rivals?: Company[];
+  /**
+   * How well this company plays. See `BotSkill`.
+   *
+   * Absent means `filler`, which is what bots have always been and what a
+   * seat somebody walked away from should stay.
+   */
+  skill?: BotSkill;
+  /**
+   * How many decisions make a year: 1, 4 or 12.
+   *
+   * Every budget below is an annual one — a share of the cash and of the
+   * year's takings — so a bot asked four times a year has to file a quarter
+   * of it each time. Without this a bot company spent its whole year's
+   * marketing every month and was bankrupt by the spring, and the humans were
+   * playing against a market of corpses.
+   */
+  periods?: number;
 }): Record<string, any> {
-  const { ventureId, year, role, company, previous, niche } = input;
+  const { ventureId, year, role, company, previous, niche, rivals, skill = "filler", periods = 1 } = input;
+  const perPeriod = 1 / Math.max(1, Math.round(periods));
   const base = defaultDraft(role, company, previous);
   const draft: Record<string, any> = { ...base };
   const fields = LEVER_FIELDS[role] ?? [];
@@ -243,12 +363,12 @@ export function botDecision(input: {
    */
   // A money lever that has only just arrived starts at nought, like any other.
   for (const f of fields) {
-    if (f.kind === "money" && draft[f.id] === undefined && isUnlocked(role, f.id, year)) draft[f.id] = 0;
+    if (f.kind === "money" && draft[f.id] === undefined && isUnlocked(role, f.id, year, periods)) draft[f.id] = 0;
   }
   const ambition = botAmbition(ventureId);
   // The chief executive's money is never spent by a bot on a human's behalf, and
   // a lever the seat has not been handed yet is not one it can spend on.
-  const money = role === "cfo" || role === "ceo" ? [] : fields.filter((f) => f.kind === "money" && isUnlocked(role, f.id, year));
+  const money = role === "cfo" || role === "ceo" ? [] : fields.filter((f) => f.kind === "money" && isUnlocked(role, f.id, year, periods));
   const openable = money.filter((f) => Number(draft[f.id]) === 0);
   const budgetSeed = decisionSeed({ ventureId, year, role, field: "_budget" });
   /*
@@ -263,10 +383,38 @@ export function botDecision(input: {
    * officer is still excluded — borrowing and raising are decisions, and a
    * bot inventing a loan is a bot making one.
    */
+  const appetite = between(budgetSeed, 0.05, 0.12);
   const want = money.length
-    ? ambition * between(budgetSeed, 0.05, 0.12) * ((Number(company.cash) || 0) + turnoverOf(company))
+    ? ambition * appetite * ((Number(company.cash) || 0) + turnoverOf(company))
     : 0;
-  const budget = Math.max(0, Math.min(want, headroom(company) * 0.25));
+  /*
+   * Bounded by what the market could pay back, and floored by what defending
+   * a position costs — so a company neither spends like a market it is not in
+   * nor goes quiet the moment it has a bad year.
+   */
+  const defending = Math.max(0, (Number(company.cash) || 0)) * BOT_DEFENCE_OF_CASH;
+  /*
+   * A company trying to get in protects the one seat that decides whether
+   * anybody hears of it.
+   *
+   * Brand is what stops customers leaving, and it is the first thing a
+   * company under pressure cuts — which is why a filler's customers fall
+   * every year once money is tight. A survivor lets the marketing seat spend
+   * against what the market could return rather than against what is left in
+   * the bank, and takes it out of the seats whose work can wait a year.
+   */
+  const trying = skill === "survivor" && (Number(company.brand) || 0) < 25;
+  const ofGross = spendOfGross(skill);
+  const share = trying
+    ? (role === "cmo" ? ofGross * 2.2 : ofGross * 0.6)
+    : ofGross;
+  const ceiling = Math.max(grossPotential(company) * share, defending);
+  /*
+   * A period's share of it. The caps are stocks — what the company has and
+   * what the market could return — so they are compared at full size and the
+   * answer is divided, rather than the other way round.
+   */
+  const budget = Math.max(0, Math.min(Math.max(want, defending), headroom(company) * 0.25, ceiling)) * perPeriod;
   /*
    * The same money, tracked as it is committed.
    *
@@ -291,7 +439,7 @@ export function botDecision(input: {
     const seed = decisionSeed({ ventureId, year, role, field: field.id });
 
     // A lever the seat does not have yet is not filed at all (see UNLOCKS).
-    if (!isUnlocked(role, field.id, year)) { delete draft[field.id]; continue; }
+    if (!isUnlocked(role, field.id, year, periods)) { delete draft[field.id]; continue; }
 
     /*
      * The newer levers each get a considered value rather than a random one.
@@ -371,6 +519,13 @@ export function botDecision(input: {
      * humans at the table should get the call.
      */
     if (field.id === "deals" || field.id === "dealVotes") { delete draft[field.id]; continue; }
+    /*
+     * A bot table never votes on the announced region, because a bot
+     * operations seat never puts one up: bot companies open regions through
+     * `targetCities` below, on their own purse. A vote on a proposal that
+     * cannot exist is noise in the filed decision.
+     */
+    if (field.id === "expandVote") { delete draft[field.id]; continue; }
     if (field.id === "shockAnswer") { draft[field.id] = "statement"; continue; }
     /*
      * An offer wins the people who watch the price, and costs margin on
@@ -400,6 +555,16 @@ export function botDecision(input: {
       continue;
     }
     if (field.id === "programme" || field.id === "expand") { draft[field.id] = ""; continue; }
+    /*
+     * Going and finding a niche is not a bot's call.
+     *
+     * It costs a year of research money and commits the company to a corner
+     * of the market for the rest of the season — a decision about what this
+     * company is for, which is the table's to make. A bot choosing one would
+     * be spending somebody else's money on a hunch, which is the line every
+     * other strategic lever here sits on the right side of.
+     */
+    if (field.id === "openNiche") { draft[field.id] = ""; continue; }
     /*
      * The plant and the balance sheet: a bot keeps what it has. Automating,
      * running a second shift, holding stock, selling what it is owed and
@@ -519,12 +684,29 @@ export function botDecision(input: {
     }
 
     if (field.kind === "choice" && field.options?.length) {
-      draft[field.id] = jitterChoice(seed, field.options.map((o) => o.value), value);
+      /*
+       * A company keeps doing what it was doing, mostly.
+       *
+       * Every choice in the game was re-rolled from scratch every year —
+       * positioning, pace, sourcing, how a feature is built — because the
+       * seed carries the year. A bot that picks a different market position
+       * every twelve months is not playing badly, it is not playing at all,
+       * and none of the levers that reward consistency could ever pay for it.
+       *
+       * So last year's answer stands unless the roll says otherwise. A weak
+       * table is one that changes its mind too rarely and too late, not one
+       * that changes it annually at random.
+       */
+      const options = field.options.map((o) => o.value);
+      const settled = value !== undefined && value !== null && options.includes(value as never);
+      draft[field.id] = settled && between(`${seed}:rethink`, 0, 1) > RETHINK_ODDS
+        ? value
+        : jitterChoice(seed, options, value);
       continue;
     }
 
     if (field.id === "capacityTarget") {
-      draft[field.id] = botCapacity({ seed, company, step: field.step, min: field.min, max: field.max });
+      draft[field.id] = botCapacity({ seed, company, step: field.step, min: field.min, max: field.max, skill });
       continue;
     }
 
@@ -634,8 +816,163 @@ export function botDecision(input: {
     if (one > 0 && one <= (Number(company.cash) || 0)) draft[field.id] = one;
   }
 
+  /*
+   * The finance seat keeps the company solvent, and does nothing else.
+   *
+   * A bot chief financial officer files nothing for money on purpose:
+   * borrowing and raising are decisions, and a bot inventing a loan is a bot
+   * making one with somebody else's company. But refusing to borrow while
+   * the company runs out of money is also a decision, and a worse one —
+   * measured, a company opened where a real project actually is, with no cash
+   * and a bot in the finance seat, survived one time in sixteen. It was not
+   * losing the argument; nobody was having it.
+   *
+   * So it draws what is needed to cover the year ahead and not a penny more.
+   * Never to spend, never to speculate, and never past what the line allows:
+   * the difference between a seat that will not gamble and a seat that will
+   * not act.
+   */
+  /*
+   * A company that is actually trying to get in.
+   *
+   * Three moves, all of them things a person makes and a filler never does,
+   * and all of them only while the company is still a newcomer: once it is
+   * established these become ordinary decisions with ordinary trade-offs,
+   * and a bot should not keep playing the opening for fourteen years.
+   */
+  if (skill === "survivor" && role === "cmo" && niche) {
+    const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+    const unknown = (Number(company.brand) || 0) < 25;
+    const aim = bestSegment(company, niche);
+
+    /*
+     * What to charge, worked out rather than inherited.
+     *
+     * A bot's price has always been last year's number nudged, which means
+     * the most powerful lever in the game is the one nobody in a bot company
+     * ever touches. This is share against the companies actually here, times
+     * what each customer is worth, maximised — see `bestPrice`.
+     */
+    if (aim && isUnlocked("cmo", "price", year, periods) && rivals?.length) {
+      const field = fields.find((f) => f.id === "price");
+      const want = bestPrice(company, aim, rivals);
+      draft.price = snap(want, field?.step, field?.min, field?.max, Number(draft.price) || want);
+    }
+
+    /*
+     * And who to aim at. A newcomer is unknown, so it should sell to the
+     * people who care least about that — which is what `bestSegment` works
+     * out, rather than chasing whichever segment is biggest.
+     */
+    if (aim && isUnlocked("cmo", "segmentFocus", year, periods)) {
+      draft.segmentFocus = { [aim.id]: 100 };
+    }
+
+    /*
+     * And put the marketing in one place. A newcomer's budget spread across
+     * six regions is invisible in all six; the same money in the biggest one
+     * it sells in is a company people there have heard of. A filler splits
+     * by regional weight, which is the reasonable-looking answer that loses.
+     */
+    if (isUnlocked("cmo", "regionFocus", year, periods)) {
+      const open = (company.cities ?? [])
+        .map((id) => niche.cities.find((c) => c.id === id))
+        .filter(Boolean) as City[];
+      if (open.length >= 2 && (unknown || held === 0)) {
+        const keep = regionsWorthKeeping(open, aim, 1)[0];
+        if (keep) draft.regionFocus = { [keep]: 100 };
+      }
+    }
+  }
+
+  if (role === "cfo" && isUnlocked("cfo", "borrow", year, periods)) {
+    const needed = runwayShortfall(company);
+    if (needed > 0) {
+      const room = Math.max(0, (Number(company.creditLimit) || 0) - (Number(company.debt) || 0));
+      const borrowField = fields.find((f) => f.id === "borrow");
+      const borrowed = Math.min(needed, room);
+      if (borrowed > 0) draft.borrow = snap(borrowed, borrowField?.step, borrowField?.min, borrowField?.max, 0);
+
+      /*
+       * And what the line will not cover is raised, not gone without.
+       *
+       * A company with no trading history has almost no credit — measured, a
+       * season opened where a real project actually is had a £200,000 line
+       * against £700,000 of salaries, borrowed all of it in year one, and
+       * then watched the line shrink every year as it weakened. Debt is what
+       * a company with a record uses. A company without one sells equity,
+       * which is what every early-stage founder actually does and what the
+       * `raiseAmount` lever is for.
+       *
+       * Dilution is the cost and the engine prices it against what the
+       * company is worth, so this is expensive exactly when the company is
+       * weak — which is the lesson, not a loophole.
+       */
+      const short = needed - borrowed;
+      if (short > 0 && isUnlocked("cfo", "raiseAmount", year, periods) && investable(company, year)) {
+        const raiseField = fields.find((f) => f.id === "raiseAmount");
+        draft.raiseAmount = snap(short, raiseField?.step, raiseField?.min, raiseField?.max, 0);
+      }
+    }
+  }
+
   const checked = validateDecision(role, draft, company);
   return checked.ok ? draft : base;
+}
+
+/**
+ * How short of a year's own costs a company is.
+ *
+ * A year of the salaries it cannot avoid, against the cash it has. Not a
+ * forecast and not a plan — the arithmetic of whether the doors stay open,
+ * which is the one piece of finance a bot should be trusted with.
+ */
+/**
+ * Whether anybody would still put money in.
+ *
+ * The first version of this raised whatever the credit line would not cover,
+ * every year, for ever — which fixed the two markets nobody could survive and
+ * broke the other five, because a company that can always top up can never
+ * fail. Measured, survival went from 62% to 94% and five of the seven markets
+ * became impossible to lose. A game you cannot lose is a slideshow.
+ *
+ * Investors are not a tap. They fund a company that is going somewhere, and
+ * they stop when it keeps missing what it promised — which the engine already
+ * tracks as strikes. Two is the point at which the story has stopped being
+ * "early" and started being "not working".
+ *
+ * And they fund a going concern. A company past its first couple of years
+ * with nobody buying anything is not an early-stage bet, it is a company with
+ * no customers, and the honest outcome of that is the one it gets.
+ */
+function investable(company: Company, year: number): boolean {
+  /*
+   * Patience runs out faster the longer the company has had. Somebody backing
+   * a business in its first few years expects misses and says so; somebody
+   * backing one in its tenth has stopped calling them early.
+   */
+  /*
+   * Early-stage money is early-stage. Somebody backing a business in its
+   * first years expects misses and says so; nobody is writing a seed cheque
+   * to a company in its eleventh. Bounding it by year is what lets a company
+   * that opened with nothing get going without making a funded one in year
+   * twelve impossible to kill — which is exactly what happened when the
+   * rescue had no bound: survival went to 94% and five markets became
+   * unloseable.
+   */
+  if (year > RESCUE_UNTIL_YEAR) return false;
+  const patience = year <= 5 ? 3 : 2;
+  if ((company.investors?.strikes ?? 0) >= patience) return false;
+  if (year <= 2) return true;
+  return Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0) > 0;
+}
+
+function runwayShortfall(company: Company): number {
+  const seats = Math.max(1, (company.seats ?? []).length);
+  const scale = Number(company.scale) || 1;
+  const yearOfSalaries = seats * EXECUTIVE * scale;
+  const cash = Math.max(0, Number(company.cash) || 0);
+  return Math.max(0, yearOfSalaries - cash);
 }
 
 /**
@@ -652,8 +989,23 @@ export function botDecision(input: {
  * assets will still be adding then (the ones in their last year won't be).
  * It only ever cuts when the company is mostly empty, and never by much.
  */
-export function botCapacity(input: { seed: string; company: Company; step?: number; min?: number; max?: number }): number {
-  const { seed, company, step, min, max } = input;
+/**
+ * How much room to have.
+ *
+ * This is the decision the whole game turns on and it used to be the same
+ * decision at every skill, which is most of why skill did not matter. A
+ * company running at 85% of its plant cannot use another customer, so every
+ * pound it puts into brand, product or service buys demand it then turns
+ * away — and spending nothing beats spending well. Measured on a fixed plan
+ * over ten years, room built generously returned £32.1m against £13.1m for
+ * room that followed demand: the same money, more than twice the company.
+ *
+ * So a survivor keeps real headroom and a filler keeps following. It is the
+ * one lever where being right early compounds for the rest of the season.
+ */
+export function botCapacity(input: { seed: string; company: Company; step?: number; min?: number; max?: number; skill?: BotSkill }): number {
+  const { seed, company, step, min, max, skill = "filler" } = input;
+  const ahead = skill === "survivor";
   const built = Math.max(0, Number(company.capacity) || 0);
   const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
   const assets = company.assets ?? [];
@@ -677,15 +1029,25 @@ export function botCapacity(input: { seed: string; company: Company; step?: numb
      * year.
      */
     if (held <= 0) return snap(built, step, min, max, built);
-    const keep = Math.max(held * 1.5, built * 0.5);
+    const keep = Math.max(held * (ahead ? 1.9 : 1.5), built * 0.5);
     return snap(Math.min(built, keep), step, min, max, built);
   }
   if (load < 0.85) {
-    // Comfortable: hold, or edge up. Never a cut on a busy operation.
+    /*
+     * Comfortable: hold, or edge up. Never a cut on a busy operation.
+     *
+     * A survivor does not wait to be full before it builds — by the time the
+     * plant is full the year is already lost, because room ordered now opens
+     * a year from now. It keeps about a third more than it is using.
+     */
+    if (ahead) {
+      const wantedAhead = held * (1 + between(`${seed}:ahead`, 0.3, 0.45));
+      return snap(Math.min(Math.max(built, wantedAhead), built * 1.6 + 10_000), step, min, max, built);
+    }
     return snap(built * (1 + between(`${seed}:edge`, 0, 0.08)), step, min, max, built);
   }
   const assetsNextYear = assetEffects(assets.filter((a) => a.expiresIn === undefined || a.expiresIn > 1)).capacity;
-  const wanted = held * (1 + between(`${seed}:ahead`, 0.1, 0.25)) - assetsNextYear;
+  const wanted = held * (1 + between(`${seed}:ahead`, ahead ? 0.35 : 0.1, ahead ? 0.55 : 0.25)) - assetsNextYear;
   // Room for growth, but not a factory five times the size in a year.
   return snap(Math.min(Math.max(built, wanted), built * 1.6 + 10_000), step, min, max, built);
 }

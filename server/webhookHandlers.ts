@@ -1,6 +1,6 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
+import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents, simSeatPurchases, companies, gamePlayPurchases } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
 import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
@@ -237,6 +237,81 @@ export class WebhookHandlers {
     }
 
     if (settledLater) return;
+
+    /*
+     * Seats on the simulation: a one-off payment, credited to the company that
+     * bought them rather than to the person who clicked. Keyed on the session
+     * so a redelivery inserts nothing and therefore credits nothing — the same
+     * shape as donations below, for the same reason.
+     */
+    if (session.metadata?.kind === 'simulation_seats') {
+      const companyId = session.metadata.companyId;
+      const seats = parseInt(session.metadata.seats ?? '0', 10);
+      if (!companyId || !Number.isInteger(seats) || seats < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      /*
+       * Which balance to credit. Read from the session's own metadata rather
+       * than inferred from what was paid: the price could change, and a seat
+       * credited to the wrong balance is a seat the company paid for and
+       * cannot spend. An old session from before the two tiers carries no
+       * `seatKind`, and every seat sold then was a Nova seat.
+       */
+      const COLUMNS = {
+        play: companies.simPlaySeatsPaid,
+        nova: companies.simNovaSeatsPaid,
+        quarterly: companies.simQuarterlySeatsPaid,
+        monthly: companies.simMonthlySeatsPaid,
+      } as const;
+      const FIELDS = {
+        play: 'simPlaySeatsPaid', nova: 'simNovaSeatsPaid',
+        quarterly: 'simQuarterlySeatsPaid', monthly: 'simMonthlySeatsPaid',
+      } as const;
+      const asked = session.metadata?.seatKind as keyof typeof COLUMNS | undefined;
+      const seatKind = asked && asked in COLUMNS ? asked : 'nova';
+      const column = COLUMNS[seatKind];
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(simSeatPurchases).values({
+          companyId,
+          seats,
+          kind: seatKind,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+          boughtBy: session.metadata?.userId ?? null,
+        }).onConflictDoNothing({ target: simSeatPurchases.stripeSessionId }).returning({ id: simSeatPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(companies)
+          .set({ [FIELDS[seatKind]]: sql`${column} + ${seats}` })
+          .where(eq(companies.id, companyId));
+      });
+      console.log(`Simulation seats credited: ${seats} ${seatKind} to company ${companyId}`);
+      return;
+    }
+
+    /*
+     * Another Ten Years valuation, at a dollar each. Same shape as the seats
+     * above and for the same reason: keyed on the session, so a redelivery
+     * inserts nothing and therefore credits nothing.
+     */
+    if (session.metadata?.kind === 'game_plays') {
+      const userId = session.metadata.userId;
+      const plays = parseInt(session.metadata.plays ?? '0', 10);
+      if (!userId || !Number.isInteger(plays) || plays < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(gamePlayPurchases).values({
+          userId,
+          plays,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+        }).onConflictDoNothing({ target: gamePlayPurchases.stripeSessionId }).returning({ id: gamePlayPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(users)
+          .set({ gamePlaysPaid: sql`${users.gamePlaysPaid} + ${plays}` })
+          .where(eq(users.id, userId));
+      });
+      console.log(`Game plays credited: ${plays} to ${userId}`);
+      return;
+    }
 
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;

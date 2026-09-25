@@ -202,6 +202,28 @@ export const FREE_IMAGE_RUNS = 1;
  * server refuses any amount not in this list, so the client can't name its own
  * price. A balance never expires — it is the person's money.
  */
+/**
+ * What an iPhone can buy, and what each one is worth.
+ *
+ * Apple will not let an app take money for digital goods any other way
+ * (Guideline 3.1.1), so the balance has to be sellable as In-App Purchases —
+ * consumables, since money on a balance is spent and gone rather than
+ * unlocking anything.
+ *
+ * The product identifiers are the ones created in App Store Connect and they
+ * are the *only* thing the server maps to money. A client that reports buying
+ * something not on this list is ignored: the amount is never taken from what
+ * the phone says it paid, because a phone can say anything.
+ *
+ * The amounts match the first three of `TOP_UP_CENTS`, because Apple's price
+ * tiers are fixed and these three are the ones that line up with them.
+ */
+export const APPLE_PRODUCTS: Record<string, number> = {
+  "com.sparktower.topup.500": 500,
+  "com.sparktower.topup.1000": 1000,
+  "com.sparktower.topup.2000": 2000,
+};
+
 export const TOP_UP_CENTS: readonly number[] = [500, 1000, 2000, 3000, 5000, 10000] as const;
 
 /** The three offered first, on a wallet with nothing particular to pay for. */
@@ -685,6 +707,175 @@ export const TASK_GEN_LIMIT: Record<TaskGenLevel, number> = {
  * sense of size, which is all a client ever drew them for ("this is a bigger
  * job than a chat turn"). Nothing is priced from them — see CHARGE_FOR.
  */
+// ─── What the AI actually costs, and the ceilings that bound it ──────────────
+
+/**
+ * What a credit actually costs to serve, in dollars.
+ *
+ * Measured, not estimated: about a thousand credits of real use cost about
+ * forty dollars of model spend. Everything below is derived from it, so when
+ * the number changes — a cheaper model, shorter prompts, caching — the
+ * ceilings move with it rather than staying where somebody once guessed.
+ *
+ * It is also the number that says the allowances are wrong. At four cents a
+ * credit, Starter's two hundred credits cost $8.00 against $7.46 of net
+ * revenue, Builder's seven hundred and fifty cost $30.00 against $16.20, and
+ * Pro's fair-use ceiling of five thousand costs $200.00 against $28.82. Those
+ * are not margins, they are subsidies, and they are only survivable while
+ * hardly anybody spends what they were promised.
+ *
+ * The ceilings in this file bound the damage. They do not fix it: a plan
+ * cannot be made profitable by a daily limit alone when its monthly promise
+ * is already underwater. See docs/ai-margins.md.
+ */
+export const COST_PER_CREDIT_USD = 0.04;
+
+/** Stripe takes 2.9% and thirty cents, so a plan's price is not its revenue. */
+export const netOf = (priceMonthly: number): number =>
+  priceMonthly > 0 ? priceMonthly - (priceMonthly * 0.029 + 0.30) : 0;
+
+/** How many credits a price can include at a given gross margin. The sizing tool for any repricing. */
+export const creditsAtMargin = (priceMonthly: number, margin = 0.7): number =>
+  Math.floor((netOf(priceMonthly) * (1 - margin)) / COST_PER_CREDIT_USD);
+
+/**
+ * The daily ceiling a price can carry, and the arithmetic behind it.
+ *
+ * Set so that the worst case — somebody spending the whole ceiling every day
+ * of the month — still breaks even rather than losing money. Anyone using the
+ * product normally lands far below it, around 40% of the cap on twenty days,
+ * which comes out near a 74% margin. The ceiling is not the plan; it is the
+ * floor under the plan.
+ *
+ * Measured against a real day of heavy use: a founder working on the product
+ * all day, across every surface, spent $7.76 — about 194 credits. No price
+ * under roughly $390 a month supports that uncapped. The ceiling is what makes
+ * the difference between a plan that occasionally serves a heavy user and one
+ * that is quietly funding somebody's full-time job.
+ */
+export const dailyCapFor = (priceMonthly: number): number =>
+  Math.floor(netOf(priceMonthly) / 30 / COST_PER_CREDIT_USD);
+
+/**
+ * What the whole platform may spend on AI in a day, in dollars.
+ *
+ * Per-account ceilings answer "can one person run up a bill". They do not
+ * answer the question that actually matters on a launch day, which is "can a
+ * thousand people who have paid nothing run up a bill between them". Twenty
+ * free credits is eighty pence of model spend; a thousand signups all
+ * spending them is $800 in a day, and a week of that is $5,600 against no
+ * revenue at all.
+ *
+ * So there is a ceiling over everything, checked in the same place as the
+ * per-account ones. It is a brake, not a budget: set it to what a bad day may
+ * cost before somebody has to look at it, rather than to what a good day
+ * should.
+ *
+ * The default. `AI_DAILY_SPEND_CAP_USD` overrides it — read on the server,
+ * because this file is shared with the browser and the browser has no
+ * business knowing. Setting it to 0 turns the brake off, which is a thing to
+ * do deliberately and not by accident.
+ */
+export const PLATFORM_DAILY_SPEND_USD = 250;
+
+/**
+ * Where free accounts stop, as a share of that ceiling.
+ *
+ * When the day is running hot, the people to stop first are the ones who have
+ * paid nothing — not the customer halfway through a piece of work who is the
+ * reason there is any revenue at all. Free accounts lose Nova at 60% of the
+ * day's ceiling; paying ones keep going to 100%.
+ */
+export const FREE_TIER_SPEND_SHARE = 0.6;
+
+/**
+ * What one account may spend in a day, in credits.
+ *
+ * The monthly allowance says what a subscription buys. It does not say when,
+ * and a month's worth spent in two days is the shape that costs money: the
+ * bill for the inference arrives now, the subscription renews in four weeks,
+ * and somebody who burns the lot in week one and leaves has been served at a
+ * loss.
+ *
+ * Set from what a day is allowed to cost rather than from a fraction of the
+ * allowance, because the allowance is the thing that is wrong. A Pro day is
+ * capped near five dollars of spend — generous next to any real use, and a
+ * twentieth of what an uncapped Pro month could cost today.
+ */
+export const DAILY_CREDIT_CAP: Record<TierId, number> = {
+  free: 10,      // $0.40 a day
+  starter: 25,   // $1.00
+  builder: 60,   // $2.40
+  pro: 120,      // $4.80
+};
+
+/*
+ * These are the ceilings the *proposed* prices can carry, not today's.
+ *
+ * `dailyCapFor` on the current prices gives 6, 13 and 24 — because Starter at
+ * $7.99 cannot carry 25 credits a day, and Pro at $29.99 cannot carry 120. The
+ * caps above are set for a ladder of roughly $19, $39 and $149, where they
+ * break even in the worst month and clear 74% in a normal one.
+ *
+ * Left deliberately at the generous end rather than cut to what today's prices
+ * afford, because dropping a paying customer from 120 credits a day to 24
+ * overnight is a decision about people, not arithmetic. Until the prices move,
+ * these bound the damage without being the fix. See docs/ai-margins.md.
+ */
+
+/**
+ * Ceilings on the actions whose real cost is nothing like their price.
+ *
+ * A credit is a price. It is not a cost, and for most actions the two are
+ * close enough that the credit cap is protection enough. For a few they are
+ * not: a codebase audit is eight credits and reads up to ten files across
+ * eleven areas, which is hundreds of thousands of tokens for about five
+ * pence. A daily credit cap alone would let a Pro account run thirty of those
+ * a day quite legitimately.
+ *
+ * So these are capped by the day *and* by the month, because they are not
+ * daily actions. Auditing a codebase is something a team does when something
+ * has changed, every few weeks — a limit of two a day and eight a month is
+ * more than anybody reasonable needs and far less than what breaks the plan.
+ *
+ * These numbers are a guess made without data, which is the honest thing to
+ * say about them. `ai_spend` now records the tokens behind every call; once
+ * there is a month of it, set these from what the actions actually cost.
+ */
+export interface ActionCeiling { day: number; month: number }
+export const HEAVY_ACTION_LIMITS: Record<string, Record<TierId, ActionCeiling>> = {
+  codeAudit: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 1, month: 3 },
+    builder: { day: 2, month: 8 },
+    pro:     { day: 3, month: 15 },
+  },
+  loopAudit: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 2, month: 8 },
+    builder: { day: 4, month: 20 },
+    pro:     { day: 6, month: 40 },
+  },
+  documentPlan: {
+    free:    { day: 1, month: 2 },
+    starter: { day: 3, month: 15 },
+    builder: { day: 8, month: 50 },
+    pro:     { day: 15, month: 120 },
+  },
+  roadmapRebuild: {
+    free:    { day: 1, month: 2 },
+    starter: { day: 2, month: 10 },
+    builder: { day: 5, month: 30 },
+    pro:     { day: 8, month: 60 },
+  },
+  simulationBuild: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 2, month: 10 },
+    builder: { day: 4, month: 25 },
+    pro:     { day: 6, month: 50 },
+  },
+};
+
 export const CREDIT_COSTS = {
   novaChat: 1,
   novaGuide: 1,
@@ -692,6 +883,18 @@ export const CREDIT_COSTS = {
   taskSequencing: 2,
   taskAssist: 4,
   novaAssist: 3,
+  /**
+   * Nova designs a whole season from the company's project: which market is
+   * shaped like their business, how much of the world, how many rivals, how
+   * many years, and what each thing in the game stands for in their business.
+   * Priced with a surface assist — one reasoned read, one answer — and the
+   * simulation itself is paid for by the seat, not by the credit.
+   */
+  simulationBuild: 3,
+  /**
+   * Nova audits the real codebase against the plan. Priced above a health
+   * check because it ingests and reasons over an entire repository.
+   */
   codeAudit: 8,
   loopAudit: 3,
   documentPlan: 5,

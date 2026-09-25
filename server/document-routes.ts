@@ -15,7 +15,7 @@
  */
 import { rateLimit } from "./moderation";
 import type { Express } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -32,15 +32,12 @@ import {
   type BlockKind, type DocumentPage, type DocumentSettings, type DocumentBlock,
 } from "@shared/documents";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -336,7 +333,7 @@ export function registerDocumentRoutes(app: Express) {
 
       // One price for the whole document: taken here, at the plan. Every fill,
       // re-plan and tighten inside it afterwards is free.
-      if (!(await requireCredits(res, userId, CHARGEABLE, "Writing your document", { outcome: "document", projectId }))) return;
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Writing your document", { outcome: "document", projectId, action: "documentPlan" }))) return;
 
       // No ids: this path writes prose, and a model shown ids cites them.
       const state = await buildOperableProjectState(projectId, { includeIds: false });
@@ -840,7 +837,7 @@ Return one entry per block you were asked to write, and nothing else.`,
 
       const { feedback, confirmDiscard } = req.body as { feedback?: string; confirmDiscard?: boolean };
       // Free, inside a document already paid for.
-      if (!(await requireCredits(res, userId, NO_CHARGE, "a document re-plan"))) return;
+      if (!(await requireCredits(res, userId, NO_CHARGE, "a document re-plan", { action: "documentPlan" }))) return;
 
       const pages = (doc.pages as DocumentPage[]) || [];
       const completion = await getOpenAI().chat.completions.create({

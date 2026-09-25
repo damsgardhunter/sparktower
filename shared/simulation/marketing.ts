@@ -368,6 +368,8 @@ export function schemeAsLever(input: SchemeInput, label: string) {
       newCustomersAtFull: Math.max(0, (input.newCustomersAtFull ?? 0) / atThisBudget),
       /* A written scheme is a budget, not a rota — it never claims the owner's hours. */
       newCustomersFromHours: 0,
+      /* Nor anybody else's: a scheme wins its customers with the budget above. */
+      newCustomersFromStaff: 0,
       halfSpend: half,
       pricePerMonth: Math.max(0, input.pricePerMonth ?? 0),
       monthlyChurn: clamp(input.monthlyChurn ?? 0.03, 0.001, 1),

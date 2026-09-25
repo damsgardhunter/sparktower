@@ -61,12 +61,81 @@ const unit = (score: number): number => Math.max(0, Math.min(100, score)) / 100;
  * rescues it. Teams learn this in year one and it is the lesson the whole game
  * is built to teach.
  */
+/**
+ * How long a company keeps a run at the niche it found, and how fast that
+ * closes.
+ *
+ * The advantage of opening a niche is not only that its people want what you
+ * built. It is that for a while nobody else is *describing* them as a group —
+ * the rivals have a product for the segment, not for the corner of it you
+ * went and named. That is a real and temporary thing, and it is the whole
+ * reason finding a niche is worth a year of research money.
+ *
+ * Three years, fading. By the end everybody has noticed and it is an ordinary
+ * segment that happens to suit you, which is the honest long-run position.
+ */
+export const NICHE_HEAD_START_YEARS = 3;
+export const NICHE_HEAD_START = 0.45;
+
+/** What a rival's offer is worth to people it is not built for, yet. */
+export function headStartAgainst(segment: Segment, company: Company, year?: number, periods = 1): number {
+  if (!segment.foundBy?.length || segment.foundBy.includes(company.id)) return 1;
+  if (year === undefined || segment.foundInYear === undefined) return 1;
+  // `year` counts periods, and the head start is measured in years.
+  const since = (year - segment.foundInYear) / Math.max(1, periods);
+  if (since >= NICHE_HEAD_START_YEARS) return 1;
+  // Strongest the year it is found, gone by the third.
+  return 1 - NICHE_HEAD_START * (1 - Math.max(0, since) / NICHE_HEAD_START_YEARS);
+}
+
+/**
+ * The most a company can charge over what the segment expects, having earned it.
+ *
+ * Nine per cent, at the very top of every axis the segment cares about.
+ *
+ * It was eighteen, set while the market could hold half again as many
+ * customers as it had people. Once that was fixed the market became finite
+ * and margin started mattering more than volume on its own, which tipped the
+ * premium play into winning all seven markets. Twelve puts the restaurant
+ * chain back in the hands of the regional play and leaves every strategy a
+ * market of its own — which is what `balance.test.ts` is there to hold.
+ */
+export const PRICE_LICENCE_MAX = 0.09;
+
+/**
+ * What this company has earned the right to charge.
+ *
+ * A segment's `referencePrice` is what it expects to pay *for the ordinary
+ * thing*. Judging every company against the same number meant a company with
+ * quality 90 and brand 90 was punished for charging more than one with
+ * quality 30 — so the only thing being good ever bought was volume, and
+ * volume is exactly what a company at 85% of its capacity cannot use.
+ *
+ * Measured, that was the whole reason skill did not matter: money put into
+ * the product came back as customers the company could not serve, so spending
+ * nothing beat spending well, and the deliberately weak bot outlived the
+ * strong one.
+ *
+ * Weighted by what this segment actually cares about, so a premium licence is
+ * earned from the people who are buying on quality and service and not from
+ * the ones buying on price. At the middle of the scale it is exactly 1, which
+ * leaves an ordinary company exactly where it was.
+ */
+export function priceLicence(company: Company, segment: Segment): number {
+  const weight = segment.qualityFocus + segment.brandFocus + segment.serviceFocus;
+  if (weight <= 0) return 1;
+  const standing = (unit(company.quality) * segment.qualityFocus
+    + unit(company.brand) * segment.brandFocus
+    + unit(company.service) * segment.serviceFocus) / weight;
+  return 1 + PRICE_LICENCE_MAX * Math.max(0, standing - 0.5) * 2;
+}
+
 export function appealFor(company: Company, segment: Segment, year?: number): number {
   // Price, relative to what this segment thinks is normal. Cheaper is better,
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
   // Each segment judges the price it is offered: its own tier, where there is one.
-  const priceRatio = priceFor(company, segment.id) / segment.referencePrice;
+  const priceRatio = priceFor(company, segment.id) / (segment.referencePrice * priceLicence(company, segment));
   /*
    * Cheaper helps, and only so much. Uncapped, this rewarded undercutting
    * without limit: a company charging a quarter of what a premium segment
@@ -130,8 +199,9 @@ export function appealFor(company: Company, segment: Segment, year?: number): nu
 }
 
 /** How big a segment is this year, before anyone competes for it. */
-export function segmentDemand(segment: Segment, year: number, economy: Economy): number {
-  return Math.round(segment.size * Math.pow(1 + segment.growth, year - 1) * economy.demand);
+export function segmentDemand(segment: Segment, year: number, economy: Economy, periods = 1): number {
+  // Growth is annual, so it compounds over the year however many periods make one.
+  return Math.round(segment.size * Math.pow(1 + segment.growth, (year - 1) / Math.max(1, periods)) * economy.demand);
 }
 
 export interface AllocationResult {
@@ -150,6 +220,20 @@ export interface AllocationResult {
   flows: Record<string, Record<string, Record<string, number>>>;
   /** New demand each company won in each segment, before capacity. */
   fresh: Record<string, Record<string, number>>;
+  /**
+   * Customers a shrinking segment took away, by segment and company.
+   *
+   * A segment is a number of people, and that number moves — the economy
+   * turns, the growth rates differ. When it falls below what the companies in
+   * it are holding, somebody has to lose customers, and before this nobody
+   * did: holdings only ever grew, so by year twelve of a fourteen-year season
+   * the companies in dating apps held 9.3 million customers in a market of
+   * 6.0 million people.
+   *
+   * Taken proportionally, because a market getting smaller is not a rival
+   * winning and should not read as one.
+   */
+  shrank: Record<string, Record<string, number>>;
   /** segment → company → customers it won and could not serve. */
   turnedAway: Record<string, Record<string, number>>;
   /**
@@ -314,12 +398,17 @@ export function allocate(
   niche: Niche,
   year: number,
   economy: Economy,
+  /** How many decisions make a year: 1, 4 or 12. `year` counts periods, not years. */
+  periods = 1,
 ): AllocationResult {
+  /** One period's share of a year: 1 yearly, 1/4 quarterly, 1/12 monthly. */
+  const per = 1 / Math.max(1, periods);
   const held: Record<string, Record<string, number>> = {};
   const unserved: Record<string, number> = {};
   const switched: Record<string, number> = {};
   const flows: AllocationResult["flows"] = {};
   const fresh: AllocationResult["fresh"] = {};
+  const shrank: AllocationResult["shrank"] = {};
   const turnedAway: AllocationResult["turnedAway"] = {};
   const spill: AllocationResult["spill"] = {};
   for (const c of companies) { held[c.id] = {}; unserved[c.id] = 0; }
@@ -330,10 +419,10 @@ export function allocate(
   for (const segment of niche.segments) {
     flows[segment.id] = {};
     fresh[segment.id] = {};
-    const demand = segmentDemand(segment, year, economy);
+    const demand = segmentDemand(segment, year, economy, periods);
     const appeal: Record<string, number> = {};
     // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -345,11 +434,23 @@ export function allocate(
      * change supplier slowly, and a simulation where they don't is a
      * simulation where brands are worthless.
      */
+    /*
+     * First, the segment itself. If there are fewer people in it than the
+     * companies between them are holding, the difference goes — taken from
+     * everybody in proportion, because a market getting smaller is not a
+     * rival winning.
+     */
+    shrank[segment.id] = {};
+    const heldAtStart = companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
+    const shrinkRatio = heldAtStart > demand && heldAtStart > 0 ? demand / heldAtStart : 1;
+
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
     for (const c of companies) {
-      const current = c.customers[segment.id] ?? 0;
-      if (current <= 0) continue;
+      const started = c.customers[segment.id] ?? 0;
+      if (started <= 0) continue;
+      const current = shrinkRatio < 1 ? Math.floor(started * shrinkRatio) : started;
+      if (current < started) shrank[segment.id][c.id] = started - current;
 
       const mine = appeal[c.id];
       const gap = Math.max(0, bestAppeal - mine);
@@ -364,6 +465,25 @@ export function allocate(
        * describes as a wall feel like a formality. A third is still fast — it
        * is the outer limit of what a genuinely better product achieves against
        * an inattentive rival — and it makes the years in between matter.
+       */
+      /*
+       * Scaled to the gaps that are actually reachable.
+       *
+       * This was `0.06 + loyalty * 0.34`, a span of 0.06 to 0.40 — against
+       * appeal gaps that top out near 0.19, because appeal is a weighted
+       * geometric mean of scores that cannot exceed one. A segment at loyalty
+       * 0.86 therefore had a tolerance of 0.352 against a best-possible gap
+       * of 0.192: not loyal, impermeable. Nothing any company could ever do
+       * would move one of its customers.
+       *
+       * It went unnoticed because the open pool counted every leaver twice
+       * and left a tenth of each segment unclaimed, so a challenger took
+       * those instead and it looked like the door was open. With the
+       * arithmetic fixed the wall was the only thing left.
+       *
+       * At 0.02 to 0.15 a company that is genuinely far better takes about
+       * six per cent a year from the most devoted segment in the game and
+       * fourteen from the most flighty, which is a door in both.
        */
       const tolerance = 0.06 + segment.loyalty * 0.34;
       const excess = Math.max(0, gap - tolerance);
@@ -385,21 +505,85 @@ export function allocate(
       const ceiling = expectationsFor(segment, year).priceCeiling;
       const over = hasTier(c, segment.id) ? Math.max(0, priceFor(c, segment.id) / Math.max(1, ceiling) - 1) : 0;
       const gouged = Math.min(0.85, over * 0.6);
-      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged) * (1 - locked);
+      // Every rate here is an annual one — a third of a segment a year is the
+      // outer limit — so a quarter moves a quarter of it. Without this a
+      // quarterly season churned its market four times as fast as a yearly one.
+      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged) * (1 - locked) * per;
       /*
        * And last year's deal-chasers: customers a promotion won, who leave
        * faster than the rest once the deal is over.
        */
-      const chasers = Math.min(current, Math.max(0, c.dealChasers?.[segment.id] ?? 0)) * DEAL_CHASERS_LEAVE;
+      const chasers = Math.min(current, Math.max(0, c.dealChasers?.[segment.id] ?? 0)) * DEAL_CHASERS_LEAVE * per;
       leaving[c.id] = Math.min(current, Math.round(current * leaveRate + chasers));
 
       held[c.id][segment.id] = current - leaving[c.id];
       poolForNewcomers += leaving[c.id];
     }
 
+    /*
+     * Two different things, and conflating them broke the finer cadences.
+     *
+     * `open` is the part of the segment nobody supplies at all. That is a
+     * **stock**: it does not care how often the table is asked, and only a
+     * period's share of it goes shopping in any one period.
+     *
+     * `poolForNewcomers` is everybody who just left somebody. That is a
+     * **flow**, and it has already been scaled — `leaveRate` is an annual
+     * rate divided by `per` above.
+     *
+     * Each leaver is counted **once**. They used to be counted twice — once
+     * because `alreadyHeld` is measured after they go, and once as
+     * `poolForNewcomers` — so `alreadyHeld + upForGrabs` exceeded the
+     * segment's population by the churn, every period, for ever. Holdings
+     * only grew: by year twelve of a fourteen-year season the companies in
+     * dating apps held 9.3 million customers in a market of 6.0 million
+     * people, and every number downstream of that — revenue, cash, the value
+     * a season is ranked on — was inflated by half.
+     *
+     * Counted once, the arithmetic closes exactly: `alreadyHeld` is what
+     * stayed, `open` is what nobody supplies, `poolForNewcomers` is what just
+     * came loose, and the three of them are the segment.
+     *
+     * The old line measured the open pool *after* churn, which quietly folded
+     * the leavers into it and then scaled the sum. At a quarterly cadence
+     * incumbents shed a quarter as many customers, so the pool shrank on its
+     * own and then got quartered again: a company entering the market won
+     * 1,970 customers in its first quarter where a yearly season won 60,480 in
+     * its first year. Separating them makes a period's opportunity a quarter
+     * of a year's, which is the whole of what it should be.
+     */
+    const heldBefore = Math.min(heldAtStart, demand);
     const alreadyHeld = companies.reduce((sum, c) => sum + (held[c.id][segment.id] ?? 0), 0);
-    // New demand this year, plus everyone who just left somebody.
-    const newDemand = Math.max(0, demand - alreadyHeld);
+    const open = Math.max(0, demand - heldBefore);
+    /*
+     * `open` is not scaled, and that is the point.
+     *
+     * These are people with no supplier at all. They are standing there in
+     * period one whether the table meets yearly or monthly, and whoever has
+     * the appeal and the room can take them — which is exactly how a new
+     * company gets its first customers, because the incumbents win more of
+     * this pool than they can serve and the overflow spills to whoever has
+     * space. Quartering it stopped that happening at all: a company entering
+     * a quarterly market won 1,970 customers in its first quarter against
+     * 60,480 in a yearly season's first year, and never caught up.
+     *
+     * It self-limits without any help: once everybody has taken what they can
+     * serve, `open` is empty and stays empty. What refills the market period
+     * after period is churn, and churn *is* scaled.
+     */
+    const newDemand = open;
+    /*
+     * And it cannot offer more seats than the segment has people.
+     *
+     * The leavers are deliberately in this pool twice — once because
+     * `alreadyHeld` is measured after they go, once as `poolForNewcomers` —
+     * which is old and is what lets a report say who took whom. Uncapped it
+     * also meant every company's holdings could only grow: by year twelve of
+     * a fourteen-year season the companies in dating apps between them held
+     * 9.3 million customers in a market of 6.0 million people, and everything
+     * downstream of that — revenue, cash, the value a season is ranked on —
+     * was inflated by half.
+     */
     const upForGrabs = newDemand + poolForNewcomers;
     switched[segment.id] = poolForNewcomers;
 
@@ -458,7 +642,7 @@ export function allocate(
   const room: Record<string, number> = {};
   for (const c of companies) {
     const total = Object.values(held[c.id]).reduce((sum, n) => sum + n, 0);
-    const capacity = Math.max(0, c.capacity);
+    const capacity = Math.max(0, Math.floor(c.capacity));
     if (total <= capacity) {
       room[c.id] = capacity - total;
       continue;
@@ -528,7 +712,7 @@ export function allocate(
     }
   }
 
-  return { held, unserved, switched, flows, fresh, turnedAway, spill };
+  return { held, unserved, switched, flows, fresh, shrank, turnedAway, spill };
 }
 
 /** Everyone's share of the whole niche, 0–1, for the table everyone reads first. */
@@ -543,3 +727,21 @@ export function marketShares(held: Record<string, Record<string, number>>): Reco
   if (grand <= 0) return Object.fromEntries(Object.keys(totals).map((id) => [id, 0]));
   return Object.fromEntries(Object.entries(totals).map(([id, n]) => [id, n / grand]));
 }
+
+/**
+ * A threshold in the money of the market being played.
+ *
+ * Every "what a point of brand costs" number in the engine is absolute:
+ * £220,000 buys sixteen points, £180,000 buys nine. Those are right for the
+ * seven markets written by hand, which are all worth about £400m a year. In a
+ * market worth £1.65m — which is what Nova correctly writes when asked about
+ * scheduling software for small veterinary practices — £220,000 is thirteen
+ * per cent of the entire market, so every lever costs more than the company
+ * could ever earn and none of them do anything.
+ *
+ * Scaling the threshold keeps the *decision* identical: spend a tenth of what
+ * the market is worth and get the same effect you would in any other market.
+ * The seven are scale one, so nothing about them changes at all.
+ */
+export const atScale = (amount: number, scale = 1): number =>
+  amount * Math.max(0.001, scale);

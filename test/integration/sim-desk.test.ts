@@ -542,3 +542,90 @@ describe("when the board has taken the chair", () => {
     expect(cmo.status, JSON.stringify(cmo.body)).toBe(200);
   }, 120_000);
 });
+
+/**
+ * Opening a region is the decision that commits the company for years, so it
+ * stopped being one seat's to take. What has to hold over HTTP: every seat is
+ * sent the same region and the same price, a vote only counts once operations
+ * has put it up, the running count is the server's rather than the screen's,
+ * and the table comes back with faces on it.
+ */
+describe("the table votes on where to expand", () => {
+  it("sends every seat the region, counts only what operations put up, and carries a face", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    // Year four, which is when the lever arrives.
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = { ...(season.world as any), year: 4 };
+    await db.update(simSeasons).set({ world, year: 4 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = async (role: "ceo" | "cmo" | "cfo" | "cto" | "coo") =>
+      (await seat(role).agent.get(`/api/sim/ventures/${ventureId}/desk`)).body;
+
+    const coo = await desk("coo");
+    expect(coo.expansion, "a region is announced for year four").toBeTruthy();
+    const region = coo.expansion.region.id as string;
+    expect(coo.expansion.proposed).toBe(false);
+    expect(coo.expansion.carried, "nothing is carried before it is put up").toBe(false);
+
+    // The voting seats are sent the same region, at the same price.
+    const cfoBefore = await desk("cfo");
+    expect(cfoBefore.expansion.region.id).toBe(region);
+    expect(cfoBefore.expansion.cost).toBe(coo.expansion.cost);
+    const voteField = cfoBefore.fields.find((f: any) => f.id === "expandVote");
+    expect(voteField.options.map((o: any) => o.value)).toEqual([region]);
+
+    // A vote filed before operations puts it up counts for nothing.
+    const against = { expandVote: { [region]: "no" } };
+    expect((await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0, ...against } })).status).toBe(200);
+    expect((await desk("cfo")).expansion.votes, "nothing is on the table yet").toEqual({});
+
+    // Operations puts it up, which is its own vote for.
+    expect((await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { supportSpend: 0, efficiencySpend: 0, headcount: 0, expand: region } })).status).toBe(200);
+
+    const now = await desk("cmo");
+    expect(now.expansion.proposed).toBe(true);
+    expect(now.expansion.votes).toEqual({ coo: "yes", cfo: "no" });
+    expect(now.expansion.carried, "one each is a tie, and a tie leaves it shut").toBe(false);
+    expect(now.expansion.yes).toBe(1);
+    expect(now.expansion.no).toBe(1);
+
+    // One more for, and it carries — counted by the server, the same way the engine will.
+    expect((await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 40, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], expandVote: { [region]: "yes" } } })).status).toBe(200);
+    const carried = await desk("ceo");
+    expect(carried.expansion.carried).toBe(true);
+    expect(carried.expansion.yes).toBe(2);
+
+    // And the table carries what the screen needs to put a face against a vote.
+    expect(carried.table.every((t: any) => "avatarUrl" in t)).toBe(true);
+    expect(carried.table.map((t: any) => t.role).sort()).toEqual(["ceo", "cfo", "cmo", "coo", "cto"]);
+  }, 120_000);
+
+  it("asks nobody to vote once the operations seat is gone", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    /*
+     * Dissolving a seat stops that seat's decisions for good, and putting the
+     * region up is operations'. The other four must not be shown a region and
+     * asked to vote on a proposal that can never be made.
+     */
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = {
+      ...(season.world as any),
+      year: 4,
+      companies: (season.world as any).companies.map((c: any) => c.id === ventureId
+        ? { ...c, seats: c.seats.filter((r: string) => r !== "coo") }
+        : c),
+    };
+    await db.update(simSeasons).set({ world, year: 4 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = (await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/desk`)).body;
+    expect(desk.expansion, "no operations seat, no proposal, nothing to vote on").toBeNull();
+    expect(desk.fields.find((f: any) => f.id === "expandVote").options).toEqual([]);
+  }, 120_000);
+});

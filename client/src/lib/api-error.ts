@@ -74,3 +74,23 @@ export function errorText(error: unknown, fallback = "Something went wrong. Try 
   }
   return raw || fallback;
 }
+
+/**
+ * The year turned over between the screen loading and the person acting.
+ *
+ * The server refuses these with `year_closing` specifically so a client can
+ * say "a moment" rather than "something went wrong" — the request was fine,
+ * it simply arrived during the seconds a year is being resolved. Nothing
+ * checked for it, so the one refusal the server went out of its way to make
+ * gentle was arriving as a red error about a failure that had not happened.
+ *
+ * A screen that sees this should say so kindly and refetch: it is now looking
+ * at a year that has closed.
+ */
+export const YEAR_CLOSING = "year_closing";
+
+export function isYearClosing(error: unknown): boolean {
+  if (error instanceof ApiError) return error.code === YEAR_CLOSING;
+  const body = (error as { body?: { code?: unknown } } | null)?.body;
+  return typeof body?.code === "string" && body.code === YEAR_CLOSING;
+}

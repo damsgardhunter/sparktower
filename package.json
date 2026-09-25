@@ -22,6 +22,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "sim:scale": "tsx scripts/season-scale.mjs",
+    "sim:balance": "tsx scripts/balance-report.mjs",
+    "sim:realism": "tsx scripts/realism-report.mjs",
+    "price:model": "tsx scripts/price-model.mjs",
     "lint": "eslint .",
     "audit:deps": "node scripts/audit-dependencies.mjs",
     "check:email-auth": "node scripts/check-email-auth.mjs",
@@ -32,6 +36,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "@google-cloud/storage": "^7.19.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
@@ -86,6 +91,7 @@
     "google-auth-library": "^10.6.1",
     "helmet": "^8.3.0",
     "input-otp": "^1.4.2",
+    "jose": "^6.2.12",
     "lucide-react": "^0.453.0",
     "memoizee": "^0.4.17",
     "memorystore": "^1.6.7",

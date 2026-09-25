@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "sim_seats_paid" integer DEFAULT 0 NOT NULL;

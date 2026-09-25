@@ -132,7 +132,23 @@ export function registerMarketingRoutes(app: Express): void {
     /* A scheme selling a subscription says so with these three; churn arrives as a percentage. */
     const pricePerMonth = Math.max(0, Math.round(Number(req.body?.pricePerMonth) || 0));
     const churnPerMille = Math.min(1000, Math.max(0, Math.round((Number(req.body?.monthlyChurnPct) || 0) * 10)));
-    const newCustomersAtFull = Math.max(0, Math.round(Number(req.body?.newCustomersAtFull) || 0));
+    const statedNewCustomers = Math.max(0, Math.round(Number(req.body?.newCustomersAtFull) || 0));
+    /*
+     * How many a month, worked back from the money when nobody said.
+     *
+     * A scheme is recurring only if it comes with a price, a churn rate *and*
+     * a number of customers a month (`isRecurring`), and the form has never
+     * asked for the third — so a marketer who filled in "$299 a month, 3%
+     * churn" had their scheme judged as a one-off campaign: no lifetime value,
+     * no cost per customer, no payback month, and a subscription's whole
+     * economics missing from the score. The third number was there all along,
+     * in the two they did give: a return of $2,700 a month at $299 each is
+     * nine customers. Derived rather than demanded, and only where the price
+     * makes it meaningful.
+     */
+    const newCustomersAtFull = statedNewCustomers > 0 || pricePerMonth <= 0
+      ? statedNewCustomers
+      : Math.round(expectedMonthlyReturn / pricePerMonth);
     const marketSize = Math.max(0, Math.round(Number(req.body?.marketSize) || 0));
     const recurring = { pricePerMonth, monthlyChurn: churnPerMille / 1000, newCustomersAtFull, marketSize };
     if (monthlyBudget <= 0) {

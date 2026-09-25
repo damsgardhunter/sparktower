@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send } from "lucide-react";
+import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -21,9 +21,11 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SCOPES } from "@shared/simulation/geography";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CompanyView } from "@/pages/company";
+import { SeatsNotice, useSeats } from "@/components/company/simulation-seats";
 
 interface SeasonRow {
   id: string;
@@ -32,11 +34,14 @@ interface SeasonRow {
   niche: { id: string; name: string };
   year: number;
   totalYears: number;
-  yearMinutes: number | null;
+  periodMinutes: number | null;
+  cadence: string | null;
   nextTickAt: string | null;
   rooms: number;
   roomsReady: number;
   players: number;
+  /** Which seat this season costs: one of our markets, or one Nova built. */
+  seatKind: "play" | "nova";
   bots: number;
   inviteCode: string | null;
   joinUrl: string | null;
@@ -51,8 +56,15 @@ interface StaffRow {
   founderValue: number | null; profit: number | null; read: string;
 }
 
-/** The lengths offered for a year. A day is the public game's pace; the rest are for a workshop. */
-const YEAR_OPTIONS: { value: string; label: string }[] = [
+/**
+ * The lengths offered for one decision. A day is the public game's pace; the
+ * rest are for a workshop that only has an afternoon.
+ *
+ * This is how much *real* time a table gets, which is a separate question
+ * from how much simulated time passes — a monthly season still gets a day per
+ * decision, it just covers a month of trading instead of a year.
+ */
+const PERIOD_OPTIONS: { value: string; label: string }[] = [
   { value: "10", label: "10 minutes" },
   { value: "15", label: "15 minutes" },
   { value: "20", label: "20 minutes" },
@@ -64,7 +76,27 @@ const YEAR_OPTIONS: { value: string; label: string }[] = [
   { value: "day", label: "A day (like the public game)" },
 ];
 
-const yearLength = (minutes: number | null) =>
+/** How often the table decides, and what that costs a seat. */
+const CADENCE_OPTIONS = [
+  { value: "yearly", label: "Once a year", note: "The classic season. Fourteen years of trading." },
+  { value: "quarterly", label: "Every quarter", note: "Four decisions a year — you see a bad year in time to fix it. $6 a seat." },
+  { value: "monthly", label: "Every month", note: "Twelve decisions a year, and the most news. $10 a seat." },
+] as const;
+
+/** Simulated years on offer, which narrows as the cadence gets finer. */
+const YEARS_FOR: Record<string, number[]> = {
+  yearly: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  quarterly: [1, 2, 3, 4, 5, 6],
+  monthly: [1, 2],
+};
+
+const PERIOD_WORD: Record<string, { one: string; many: string }> = {
+  yearly: { one: "year", many: "years" },
+  quarterly: { one: "quarter", many: "quarters" },
+  monthly: { one: "month", many: "months" },
+};
+
+const periodLength = (minutes: number | null) =>
   minutes == null ? "a day" : minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minutes`;
 
 const STATUS_LABEL: Record<SeasonRow["status"], string> = {
@@ -81,6 +113,7 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
   const key = [`/api/companies/${companyId}/seasons`];
   const { data, isLoading } = useQuery<{ seasons: SeasonRow[] }>({ queryKey: key, refetchInterval: 30_000 });
   const [creating, setCreating] = useState(false);
+  const [novaBuilding, setNovaBuilding] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -91,10 +124,18 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
           a season can fit in an afternoon.
         </p>
         {canManage && !creating && (
-          <Button onClick={() => setCreating(true)} data-testid="button-new-season"><Plus className="h-4 w-4 mr-1.5" /> New season</Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={() => setNovaBuilding(true)} data-testid="button-nova-build">
+              <Sparkles className="h-4 w-4 mr-1.5" /> Let Nova Build My Simulation
+            </Button>
+            <Button variant="outline" onClick={() => setCreating(true)} data-testid="button-new-season">
+              <Plus className="h-4 w-4 mr-1.5" /> New season
+            </Button>
+          </div>
         )}
       </div>
 
+      {novaBuilding && <NovaBuild companyId={companyId} onDone={() => setNovaBuilding(false)} />}
       {creating && <CreateSeason companyId={companyId} onDone={() => setCreating(false)} />}
 
       {isLoading ? (
@@ -112,17 +153,136 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
   );
 }
 
+/**
+ * Nova builds it.
+ *
+ * The questions a first-time company cannot answer — which of seven markets is
+ * shaped like ours, how much of the world, how many rivals, how many years —
+ * answered from the project this company is already running here. The brief
+ * comes back before anything is shared, because the mapping is the thing worth
+ * arguing with: a team that disagrees with "your capacity is your delivery
+ * team" has learned something about their business.
+ */
+function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => void }) {
+  const [, navigate] = useLocation();
+  const { data: seats } = useSeats(companyId);
+  const [built, setBuilt] = useState<NovaBrief | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [needsSeats, setNeedsSeats] = useState(false);
+
+  const build = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons/nova`, {}),
+    onSuccess: async (res: any) => {
+      const body = await res.json();
+      setBuilt(body.brief as NovaBrief);
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
+    },
+    onError: (err: any) => {
+      if (err?.body?.code === "seats_required") { setNeedsSeats(true); setError(err.body.message); return; }
+      setError(err?.body?.message ?? "Nova couldn't build that. Try again.");
+    },
+  });
+
+  return (
+    <Card data-testid="card-nova-build">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="font-semibold">Nova builds your simulation</h3>
+        </div>
+
+        {!built && (
+          <p className="text-sm text-muted-foreground">
+            Nova reads what this company is building — the project, the path, how far it has got — and sets up the
+            market closest in shape to yours, with the rivals and the reach you are really up against. It will say
+            what in the game stands for what in your business, and you can argue with it before anyone plays.
+          </p>
+        )}
+
+        {seats && !built && (
+          <SeatsNotice companyId={companyId} kind="nova" seats={seats} onError={setError} />
+        )}
+
+        {built && (
+          <div className="space-y-3" data-testid="nova-brief">
+            <div>
+              <p className="text-sm font-medium">{built.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {built.marketName} · {built.totalYears} years · {built.botTeams} rival{built.botTeams === 1 ? "" : "s"}
+              </p>
+            </div>
+            <p className="text-sm">{built.why}</p>
+            {built.mapping.length > 0 && (
+              <div className="rounded-lg border p-3">
+                <p className="text-xs font-medium mb-1.5">In the game → in your business</p>
+                {built.mapping.map((m) => (
+                  <p key={m.inTheGame} className="text-[11px] text-muted-foreground">
+                    <span className="text-foreground font-medium">{m.inTheGame}</span> — {m.inYourBusiness}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && <p className="text-sm text-destructive" data-testid="text-nova-error">{error}</p>}
+
+        <div className="flex gap-2 flex-wrap">
+          {needsSeats ? null : built ? (
+            <Button onClick={() => { onDone(); navigate(`/companies/${companyId}`); }} data-testid="button-brief-done">
+              Done
+            </Button>
+          ) : (
+            <Button onClick={() => build.mutate()} disabled={build.isPending} data-testid="button-nova-go">
+              {build.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+              Build it
+            </Button>
+          )}
+          <Button type="button" variant="ghost" onClick={onDone}>{built ? "Close" : "Cancel"}</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface NovaBrief {
+  name: string;
+  marketName: string;
+  totalYears: number;
+  botTeams: number;
+  why: string;
+  mapping: { inTheGame: string; inYourBusiness: string }[];
+}
+
 function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => void }) {
   const { data: niches } = useQuery<{ niches: { id: string; name: string; premise: string }[] }>({ queryKey: ["/api/sim/niches"] });
   const [nicheId, setNicheId] = useState("");
   const [name, setName] = useState("");
-  const [year, setYear] = useState("30");
+  const [period, setPeriod] = useState("30");
+  const [cadence, setCadence] = useState("yearly");
   const [totalYears, setTotalYears] = useState("6");
+  /*
+   * A finer cadence covers fewer simulated years, so the span on offer moves
+   * under the choice. Snap to something legal rather than letting the form
+   * post a number the server will reject.
+   */
+  const yearsOnOffer = YEARS_FOR[cadence] ?? YEARS_FOR.yearly;
+  const years = yearsOnOffer.includes(Number(totalYears)) ? totalYears : String(yearsOnOffer[yearsOnOffer.length - 1]);
+  const word = PERIOD_WORD[cadence] ?? PERIOD_WORD.yearly;
+  /*
+   * How much of the world, and who else is in it. Both open on the game every
+   * public season plays, because a company that just wants a season should get
+   * one without deciding anything about continents.
+   */
+  const [scope, setScope] = useState<string>("home");
+  const [botTeams, setBotTeams] = useState("0");
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
     mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons`, {
-      nicheId, name, totalYears: Number(totalYears), yearMinutes: year === "day" ? null : Number(year),
+      nicheId, name, totalYears: Number(years), periodMinutes: period === "day" ? null : Number(period),
+      cadence, scope, botTeams: Number(botTeams),
     }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
@@ -132,7 +292,7 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
   });
 
   const picked = niches?.niches.find((n) => n.id === nicheId);
-  const minutes = year === "day" ? null : Number(year);
+  const minutes = period === "day" ? null : Number(period);
 
   return (
     <Card>
@@ -155,20 +315,64 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <Label>Each year lasts</Label>
-              <Select value={year} onValueChange={setYear}>
-                <SelectTrigger data-testid="select-year-length"><SelectValue /></SelectTrigger>
-                <SelectContent>{YEAR_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              <Label>The table decides</Label>
+              <Select value={cadence} onValueChange={setCadence}>
+                <SelectTrigger data-testid="select-cadence"><SelectValue /></SelectTrigger>
+                <SelectContent>{CADENCE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">{CADENCE_OPTIONS.find((o) => o.value === cadence)?.note}</p>
             </div>
             <div>
-              <Label>Number of years</Label>
-              <Select value={totalYears} onValueChange={setTotalYears}>
+              <Label>Each {word.one} lasts</Label>
+              <Select value={period} onValueChange={setPeriod}>
+                <SelectTrigger data-testid="select-period-length"><SelectValue /></SelectTrigger>
+                <SelectContent>{PERIOD_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">How long the table gets to file, in real time.</p>
+            </div>
+            <div>
+              <Label>Years of trading</Label>
+              <Select value={years} onValueChange={setTotalYears}>
                 <SelectTrigger data-testid="select-total-years"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: 11 }, (_, i) => i + 4).map((y) => <SelectItem key={y} value={String(y)}>{y} years</SelectItem>)}
+                  {yearsOnOffer.map((y) => <SelectItem key={y} value={String(y)}>{y} {y === 1 ? "year" : "years"}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {Number(years) * (cadence === "monthly" ? 12 : cadence === "quarterly" ? 4 : 1)} {word.many} of decisions
+                {period === "day" ? ", one a day" : ""}.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Where they compete</Label>
+              <Select value={scope} onValueChange={setScope}>
+                <SelectTrigger data-testid="select-scope"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SCOPES.map((o) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground mt-1" data-testid="text-scope-blurb">
+                {SCOPES.find((o) => o.id === scope)?.blurb}
+              </p>
+            </div>
+            <div>
+              <Label>Rival companies</Label>
+              <Select value={botTeams} onValueChange={setBotTeams}>
+                <SelectTrigger data-testid="select-bot-teams"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Only the teams you invite</SelectItem>
+                  {[1, 2, 3, 5, 8, 12, 20, 35, 50].map((n) => (
+                    <SelectItem key={n} value={String(n)}>{n} run by Nova</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {botTeams === "0"
+                  ? "A season with one table in it is a company with no competition."
+                  : `${botTeams} companies that price, build and bid against yours from year one.`}
+              </p>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -195,6 +399,8 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  // Only the people who can start it are shown the price of starting it.
+  const { data: seats } = useSeats(canManage ? companyId : "");
 
   const fullLink = season.joinUrl ? `${window.location.origin}${season.joinUrl}` : null;
   const copy = async () => {
@@ -246,7 +452,7 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
               <Badge variant={season.status === "running" ? "default" : "secondary"}>{STATUS_LABEL[season.status]}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {season.niche.name} · {progress} · each year lasts {yearLength(season.yearMinutes)}
+              {season.niche.name} · {progress} · each {PERIOD_WORD[season.cadence ?? "yearly"]?.one ?? "year"} lasts {periodLength(season.periodMinutes)}
             </p>
             <p className="text-xs text-muted-foreground">
               {season.players} {season.players === 1 ? "person" : "people"} at {season.rooms} {season.rooms === 1 ? "table" : "tables"}
@@ -271,6 +477,10 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
               {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />} {copied ? "Copied" : "Copy link"}
             </Button>
           </div>
+        )}
+
+        {canManage && season.status === "forming" && season.players > 0 && (
+          <SeatsNotice companyId={companyId} kind={season.seatKind} seats={seats} />
         )}
 
         {canManage && (

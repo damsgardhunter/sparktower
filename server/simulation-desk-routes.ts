@@ -20,12 +20,17 @@
  * argument between them rather than an ambush by the engine.
  */
 import type { Express } from "express";
+import { periodsPerYear, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles, companies, projects } from "@shared/schema";
+import { currencyOf, DEFAULT_CURRENCY, type CurrencyCode } from "@shared/currency";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, rateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
+import { marketOf } from "./simulation-scope";
+import { canEnter, continentOf, regionById } from "@shared/simulation/geography";
+import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
@@ -41,7 +46,7 @@ import { STAFF_QUALITY_START, WARN_AT, overrulable, personOf } from "@shared/sim
 import { breachChance, featureCost, featureMenu, outageChance } from "@shared/simulation/product";
 import { AUTOMATION_RATE, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
 import {
-  EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, programmeCost, researchCost, statementCost,
+  EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, expansionOutcome, programmeCost, researchCost, statementCost,
   type ProgrammeId,
 } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
@@ -73,6 +78,24 @@ function nudgeSeasons(): void {
 }
 
 /** The seat this person holds in this venture, or nothing. */
+
+/**
+ * The currency of the business a season was built from.
+ *
+ * A season belongs to a company; a company made from a project carries that
+ * project. A company somebody set up directly has no project and gets the
+ * default, which is the honest answer — nobody told us otherwise.
+ */
+async function currencyForSeason(companyId: string | null | undefined): Promise<CurrencyCode> {
+  if (!companyId) return DEFAULT_CURRENCY;
+  const [row] = await db
+    .select({ currency: projects.currency })
+    .from(companies)
+    .leftJoin(projects, eq(projects.id, companies.projectId))
+    .where(eq(companies.id, companyId));
+  return currencyOf(row?.currency);
+}
+
 async function seatOf(ventureId: string, userId: string) {
   const [seat] = await db.select().from(simSeats)
     .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, userId)));
@@ -174,13 +197,21 @@ export function registerSimulationDeskRoutes(app: Express): void {
       });
     }
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const world = season.world as World;
     const company = world.companies.find((c) => c.id === venture.id);
     if (!company) return res.status(404).json({ message: "No such company." });
 
     const year = season.year;
+    const periods = periodsPerYear(season.cadence as Cadence);
     const { decisions, filedBy } = await draftFor(venture.id, year);
+    /*
+     * And what the table filed last year, which is the only record of it
+     * anywhere: the desk has always shown this year's decisions and the
+     * report has always shown what they produced, with nothing joining the
+     * two. A team could not look back at what it actually decided.
+     */
+    const lastFiled = year > 1 ? (await draftFor(venture.id, year - 1)) : null;
     const economy = economyFor(season.id, year);
     /*
      * The year's offers, worked out once: the chief executive answers them,
@@ -203,7 +234,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
 
     const seats = await db
-      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, lastName: users.lastName, isBot: users.isBot, displayName: userProfiles.displayName })
+      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, lastName: users.lastName, isBot: users.isBot, displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl })
       .from(simSeats)
       .leftJoin(users, eq(users.id, simSeats.userId))
       .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
@@ -236,6 +267,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
      * next move was visible would be a puzzle rather than an opponent, and the
      * player teams' drafts are their own business until the tick.
      */
+    /*
+     * The continent this company is from — the one its first region is on.
+     * Being from somewhere is worth more than any amount of money on a guarded
+     * market, so everything about entry is measured against it.
+     */
+    const home = continentOf((company.cities ?? [])[0] ?? "");
+
     const rivals = world.companies
       .filter((c) => c.id !== company.id)
       .map((c) => ({
@@ -249,11 +287,48 @@ export function registerSimulationDeskRoutes(app: Express): void {
       }))
       .sort((a, b) => b.customers - a.customers);
 
+    /*
+     * Where everybody stands, for a market you can look at rather than read.
+     *
+     * Price against quality with the size of the company as the size of the
+     * dot, plus what each one is rated to borrow at. A rival's standing is
+     * already public here — the standings screen shows its distress, and the
+     * point of a market is that you can see who you are up against — and a
+     * rating nobody can compare theirs to teaches nothing.
+     */
+    const standing = world.companies.map((c) => ({
+      id: c.id,
+      name: c.name,
+      kind: c.kind,
+      isYou: c.id === company.id,
+      price: Math.round(c.price),
+      quality: Math.round(c.quality),
+      service: Math.round(c.service),
+      brand: Math.round(c.brand),
+      customers: Object.values(c.customers).reduce((sum, n) => sum + n, 0),
+      positioning: c.positioning ?? null,
+      grade: c.kind === "player" ? ratingGrade(c.creditScore ?? RATING_START) : null,
+      creditScore: c.kind === "player" ? Math.round(c.creditScore ?? RATING_START) : null,
+    }));
+
+    /*
+     * What this company counts its money in.
+     *
+     * Both desks — the web one and the phone one — had a pound sign written
+     * into the formatter, so every season in the game was priced in sterling
+     * whatever the business behind it actually used. The season does not carry
+     * a currency of its own; the project it was built from does, and that is
+     * the business being rehearsed, so it is read from there and falls back to
+     * the default rather than to a guess.
+     */
+    const currency = await currencyForSeason(season.companyId);
+
     res.json({
       phase: season.status === "finished" ? "finished" : "running",
       ventureId: venture.id,
       name: venture.name,
       product: venture.product,
+      currency,
       /*
        * The market's own words, carried to the screen. The engine says
        * "customers" and "capacity" everywhere because the arithmetic is the
@@ -285,7 +360,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
        */
       fields: seat.role ? LEVER_FIELDS[seat.role as Role]
         // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
-        .filter((base) => isUnlocked(seat.role as Role, base.id, year))
+        .filter((base) => isUnlocked(seat.role as Role, base.id, year, periods))
         .map((base) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
@@ -325,6 +400,28 @@ export function registerSimulationDeskRoutes(app: Express): void {
             ],
           };
         }
+        /*
+         * The kinds of customer this company could go looking inside. Its own
+         * niche is left off — one a season — and so is a segment somebody has
+         * already carved this company's corner out of.
+         */
+        if (field.id === "openNiche") {
+          const opened = ((season.world as World | null)?.openedNiches ?? []);
+          if (opened.some((o) => o.openedBy === company.id)) return { ...field, options: [] };
+          return {
+            ...field,
+            options: [
+              { value: "", label: "Not this year", help: "Keep the year's research money." },
+              ...niche.segments
+                .filter((seg) => !opened.some((o) => o.id === seg.id))
+                .map((seg) => ({
+                  value: seg.id,
+                  label: `Look inside ${seg.name.toLowerCase()}`,
+                  help: `${seg.description} Costs ${researchCost(niche).toLocaleString()}, and what you find depends on what you are already better at than everyone else.`,
+                })),
+            ],
+          };
+        }
         // The improvement programmes not already running, and what one costs.
         if (field.id === "programme") {
           const running = new Set((company.programmes ?? []).map((p) => p.id));
@@ -338,17 +435,35 @@ export function registerSimulationDeskRoutes(app: Express): void {
             ],
           };
         }
-        // The region announced for next year, if the company has not committed to one already.
-        if (field.id === "expand") {
-          const announced = company.expanding ? null : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+        /*
+         * The region announced for next year, if the company has not
+         * committed to one already — put up by operations, voted on by the
+         * other four. The same region and the same price on both levers, so
+         * a seat voting is reading exactly what it is voting on.
+         */
+        if (field.id === "expand" || field.id === "expandVote") {
+          // No operations seat, no proposal, so nothing for anyone to vote on.
+          const announced = company.expanding || !company.seats.includes("coo")
+            ? null
+            : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+          const price = announced ? Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString() : "";
+          if (!announced) return { ...field, options: [] };
+          if (field.id === "expandVote") {
+            return {
+              ...field,
+              options: [{
+                value: announced.id,
+                label: `Open ${announced.name}`,
+                help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Operations has to put it up for your vote to count.`,
+              }],
+            };
+          }
           return {
             ...field,
-            options: announced
-              ? [
-                  { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
-                  { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString()} now, opening next year — and in its first year you reach only as far as the brand does.` },
-                ]
-              : [],
+            options: [
+              { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
+              { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Putting it up counts as your vote for it.` },
+            ],
           };
         }
         /*
@@ -462,7 +577,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       },
       /** The levers this seat gets next year, by label, so nobody is surprised by them. */
       arrivingNextYear: seat.role
-        ? arrivingIn(seat.role as Role, year + 1).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
+        ? arrivingIn(seat.role as Role, year + 1, periods).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
         : [],
       /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
       draft: seat.role
@@ -536,10 +651,28 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * seat picks from this; everyone else needs it to understand why a good
        * product is reaching so few people.
        */
-      cities: niche.cities.map((city) => ({
-        ...city,
-        open: (company.cities ?? niche.cities.map((c) => c.id)).includes(city.id),
-      })),
+      cities: niche.cities.map((city) => {
+        const open = (company.cities ?? niche.cities.map((c) => c.id)).includes(city.id);
+        const region = regionById(city.id);
+        return {
+          ...city,
+          open,
+          /*
+           * Where this region is, and what it costs to be foreign in it.
+           *
+           * A season played on the map has regions a company cannot simply
+           * buy its way into: another continent is dearer and works less
+           * well, a guarded market much more so, and a closed one cannot be
+           * entered at all from outside. The desk says which, because the
+           * alternative is a team filing an expansion that quietly does
+           * nothing.
+           */
+          continent: region?.continent ?? null,
+          access: region?.access ?? "open",
+          enterable: open || !region || canEnter(region, home),
+          foreign: region ? region.continent !== home : false,
+        };
+      }),
       /** Seats that could be filled again, for the chief executive's rehire lever. */
       dissolvedSeats: (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !company.seats.includes(r)),
 
@@ -603,6 +736,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         // spend a fortnight deciding things with.
         isBot: !!s.isBot,
         isYou: s.userId === req.user.id,
+        /** For showing a face against a vote, which is the point of voting at a table. */
+        avatarUrl: s.avatarUrl ?? null,
         /** How this chair stands with the room: loyalty, how good, how hard pushed. The chief executive's own is not tracked. */
         person: s.role && s.role !== "ceo" ? (() => {
           const p = personOf(company, s.role as Role);
@@ -611,6 +746,88 @@ export function registerSimulationDeskRoutes(app: Express): void {
       })),
       /** What the world is offering this year, in full, for every seat to read. */
       offers,
+      /*
+       * The region on the table, and where the vote stands right now.
+       *
+       * Counted here rather than on the screen so that what a seat is shown
+       * before the year runs and what the engine does when it runs are the
+       * same rule. The screen's job is to put a face next to each vote.
+       */
+      /*
+       * The niche this table went and found, if they have one.
+       *
+       * Worth its own block rather than being left to be inferred from the
+       * segment list: a table that spent a year's research on this should be
+       * told what it bought, how long the run at those people lasts, and —
+       * the part they will most want to know — whether somebody else has
+       * turned up in the same corner.
+       */
+      ours: (() => {
+        const opened = ((season.world as World | null)?.openedNiches ?? []);
+        const mine = opened.find((o) => o.openedBy === venture.id || (o.alsoFoundBy ?? []).some((a) => a.companyId === venture.id));
+        if (!mine) return null;
+
+        const segment = niche.segments.find((sg) => sg.id === mine.id);
+        const parent = niche.segments.find((sg) => sg.id === mine.parentId);
+        const sharers = [mine.openedBy, ...(mine.alsoFoundBy ?? []).map((a) => a.companyId)].filter((id) => id !== venture.id);
+        const since = year - mine.openedInYear;
+        return {
+          id: mine.id,
+          name: mine.name,
+          foundInYear: mine.openedInYear,
+          from: parent?.name ?? mine.parentId,
+          people: segment?.size ?? 0,
+          /** What they pay against the segment they came from. */
+          premium: Math.round((mine.priceIndex - 1) * 100),
+          /** Years left before everybody else has noticed. Zero means they have. */
+          headStartLeft: Math.max(0, NICHE_HEAD_START_YEARS - since),
+          /** Anybody else who went looking in the same place and found the same people. */
+          sharedWith: sharers.map((id) => world.companies.find((c) => c.id === id)?.name ?? "Another company"),
+          /** How many of these people are yours. */
+          held: Math.round(company.customers?.[mine.id] ?? 0),
+        };
+      })(),
+
+      expansion: (() => {
+        /*
+         * Nothing at all if the operations seat is gone.
+         *
+         * Dissolving a seat stops that seat's decisions "this year or any year
+         * after" (see `dissolve_seat` in `shared/simulation/recovery.ts`), and
+         * putting the region up is operations'. Without this the other four
+         * would be shown a region and asked to vote on a proposal that can
+         * never be made — a card that says "operations has not put it up"
+         * about a seat that no longer exists.
+         */
+        const announced = company.expanding
+          || !company.seats.includes("coo")
+          || !isUnlocked("coo", "expand", year, periods)
+          ? null
+          : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
+        if (!announced) return null;
+        const proposed = decisions.coo?.expand === announced.id;
+        /*
+         * Nothing is counted until operations has put the region up, which is
+         * what the engine does: a vote filed against a proposal that does not
+         * exist is not a vote. Sending it anyway would draw a tally on the
+         * desk that the year would then ignore.
+         */
+        const votes: Record<string, "yes" | "no"> = {};
+        if (proposed) {
+          votes.coo = "yes";
+          for (const r of ["ceo", "cmo", "cfo", "cto"] as const) {
+            const v = (decisions as any)[r]?.expandVote?.[announced.id];
+            if (v === "yes" || v === "no") votes[r] = v;
+          }
+        }
+        return {
+          region: { id: announced.id, name: announced.name, note: announced.note },
+          cost: Math.round(announced.entryCost * EXPANSION_DISCOUNT),
+          proposed,
+          votes,
+          ...expansionOutcome(Object.values(votes)),
+        };
+      })(),
       /** A shock the chief executive has still to answer, if there is one. */
       shock: company.shock ?? null,
       /** What the table bought: a research report, if the marketing seat filed for one. */
@@ -619,7 +836,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       productRisk: {
         security: Math.round(company.security ?? 0),
         data: Math.round(company.data ?? 0),
-        breachChance: isUnlocked("cto", "securitySpend", year) ? Math.round(breachChance(company.security, company.techDebt) * 100) : 0,
+        breachChance: isUnlocked("cto", "securitySpend", year, periods) ? Math.round(breachChance(company.security, company.techDebt) * 100) : 0,
         outageChance: Math.round(outageChance(company.techDebt, 0) * 100),
         features: (company.features ?? []).map((f) => ({
           id: f.id, name: f.name, segment: f.segment, mode: f.mode,
@@ -632,7 +849,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
       filed: decisions,
       preview,
       lastYear: lastReport?.report ?? null,
+      lastFiled: lastFiled ? { decisions: lastFiled.decisions, filedBy: lastFiled.filedBy } : null,
       rivals,
+      standing,
 
       /*
        * This seat's own objective for the year.
@@ -689,8 +908,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
       return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
     }
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
+    const periods = periodsPerYear(season.cadence as Cadence);
     const world = { ...(season.world as World), niche, year };
 
     const { decisions: filed } = await draftFor(venture.id, year);
@@ -707,7 +927,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
       try {
         const raw = JSON.parse(req.query.draft);
-        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) }) };
+        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) }) };
       } catch {
         return res.status(400).json({ message: "That draft couldn't be read." });
       }
@@ -751,7 +971,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     // Refused once the year is due: the tick may already have read this year's filings.
     if (yearClosing(season)) return res.status(409).json(YEAR_CLOSING);
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const world = season.world as World;
     const company = world.companies.find((c) => c.id === venture.id);
     if (!company) return res.status(404).json({ message: "No such company." });
@@ -775,7 +995,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     // Only the fields this seat owns, taken from the lever list rather than
     // from the request — the same cleaning a bot's decision goes through.
-    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) });
+    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) });
 
     await db.insert(simDecisions)
       .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean, submittedAt: new Date() })

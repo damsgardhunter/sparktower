@@ -158,6 +158,51 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
  * `NaN` and the screen shows an owner twelve dashes with no explanation. The
  * engine is the last place that can refuse to spread it.
  */
+/**
+ * How long a stated growth rate takes to halve, doing nothing about it.
+ *
+ * `growth` used to compound flat for the whole horizon, which is the single
+ * most distorting thing the engine did. Twelve per cent a month — an ordinary
+ * figure for a business with four customers — is fifty-nine times over three
+ * years, so a company taking £1,200 a month "does nothing" its way to £73,000
+ * a month, and every plan that costs money to start loses to standing still.
+ * The comparison the whole tool is built on ("against doing nothing") was
+ * being made against a rocket.
+ *
+ * A growth *rate* is not a property a business owns, it is a thing it has to
+ * keep re-winning, and it gets harder: the easy customers go first, the market
+ * thins, rivals answer. Every business that has ever compounded at a launch
+ * rate has slowed down, and the ones that slowed least are the reason anybody
+ * believes otherwise. So the rate decays rather than the level: early months
+ * keep very nearly the rate that was typed — which is the part the owner
+ * actually knows about themselves — and the far months, which nobody can know,
+ * flatten out.
+ *
+ * A year is deliberately short. It puts a business growing 12% a month at
+ * about six times its size after three years instead of fifty-nine, which is
+ * still an excellent three years, and it leaves room for a decision to be the
+ * thing that beats the curve rather than a rounding error beside it.
+ *
+ * Symmetric for decline: a business shrinking 8% a month does not shrink to
+ * nothing either, it finds a floor, and the same decay says so.
+ */
+export const GROWTH_HALF_LIFE_MONTHS = 12;
+
+/** The stated rate, worn down by how long it has had to be re-won. */
+export const growthAt = (growth: number, month: number): number =>
+  growth * Math.pow(0.5, Math.max(0, month - 1) / GROWTH_HALF_LIFE_MONTHS);
+
+/**
+ * What one pound of today's revenue has become by `month`, having done nothing.
+ *
+ * Month 1 is 1 — the first month is today, not a month of growth.
+ */
+export function growthMultiplier(growth: number, month: number): number {
+  let mult = 1;
+  for (let m = 1; m < month; m += 1) mult *= 1 + growthAt(growth, m);
+  return mult;
+}
+
 export function cleanBaseline(raw: unknown): Baseline {
   const b = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -372,6 +417,18 @@ export interface SubscriptionLever extends LeverBase {
    * nobody.
    */
   newCustomersFromHours: number;
+  /**
+   * New paying customers a month won by people on the payroll, rather than by
+   * the spend or by the owner's own week.
+   *
+   * The counterpart to `newCustomersFromHours` for a business that hires
+   * instead of doing it itself. A salesperson's cost belongs in a `hire`
+   * lever, which is where an author naturally puts it — so without this the
+   * subscription lever beside it has nothing driving acquisition and wins
+   * nobody, and the plan reads as a pure cost. See the note beside `fromStaff`
+   * in `subscriptionAt`.
+   */
+  newCustomersFromStaff: number;
   /** The spend that wins half of that — the same saturating curve `spend` uses. */
   halfSpend: number;
   /** What one of them pays a month. */
@@ -578,13 +635,38 @@ export function cleanLever(raw: unknown): Lever | null {
         monthlyAmount: Math.max(0, num(l.monthlyAmount)),
         months: clamp(Math.round(num(l.months)), 0, MAX_MONTHS),
       };
-    case "subscription":
+    case "subscription": {
+      const monthlyAmount = Math.max(0, num(l.monthlyAmount));
+      const atFull = Math.max(0, num(l.newCustomersAtFull));
+      const fromHours = Math.max(0, num(l.newCustomersFromHours));
+      const fromStaff = Math.max(0, num(l.newCustomersFromStaff));
+      const reinvestShare = clamp(num(l.reinvestShare), 0, 1);
+      const wordOfMouth = clamp(num(l.wordOfMouth), 0, 0.5);
+      /*
+       * A rate nobody is driving is the rate the author meant.
+       *
+       * `newCustomersAtFull` is a ceiling on the *spend* curve, so a lever
+       * that states it and then spends nothing — no `monthlyAmount`, nothing
+       * reinvested, no owner hours, no word of mouth, nobody on the payroll —
+       * wins zero customers every month for the whole horizon. That shape is
+       * not a plan anybody writes on purpose; it is what comes back when the
+       * money lives in a `hire` lever beside this one, which is exactly how
+       * somebody would describe hiring a salesperson.
+       *
+       * Read as the flat rate it plainly is, and attributed to staff, because
+       * that is the only driver that fits: an author who says "three a month"
+       * with no budget is telling you about people, not advertising. Repaired
+       * here rather than in the engine so every scenario already in the
+       * database is read the same way as a new one.
+       */
+      const noDriver = monthlyAmount === 0 && reinvestShare === 0 && fromHours === 0 && fromStaff === 0 && wordOfMouth === 0;
       return {
         ...base, kind,
-        monthlyAmount: Math.max(0, num(l.monthlyAmount)),
+        monthlyAmount,
         months: clamp(Math.round(num(l.months)), 0, MAX_MONTHS),
-        newCustomersAtFull: Math.max(0, num(l.newCustomersAtFull)),
-        newCustomersFromHours: Math.max(0, num(l.newCustomersFromHours)),
+        newCustomersAtFull: atFull,
+        newCustomersFromHours: fromHours,
+        newCustomersFromStaff: noDriver && atFull > 0 ? atFull : fromStaff,
         halfSpend: Math.max(1, num(l.halfSpend, 1)),
         pricePerMonth: Math.max(0, num(l.pricePerMonth)),
         /*
@@ -608,9 +690,10 @@ export function cleanLever(raw: unknown): Lever | null {
         // Capped well below 1: a customer who brings one every month is not
         // word of mouth, it is a pyramid, and the curve it draws would
         // discredit everything beside it.
-        wordOfMouth: clamp(num(l.wordOfMouth), 0, 0.5),
-        reinvestShare: clamp(num(l.reinvestShare), 0, 1),
+        wordOfMouth,
+        reinvestShare,
       };
+    }
     case "job":
       return {
         ...base, kind,
@@ -740,6 +823,24 @@ export interface Run {
   lowestMonth: number;
   /** The first month the bank balance goes below zero, or null if it never does. */
   runsOutIn: number | null;
+  /**
+   * The month the balance comes back above zero for good, or null if it never
+   * went under — or went under and stayed there.
+   *
+   * The difference between a gap and a failure, and the engine could not tell
+   * them apart. A plan that dips in month eight, comes back in month fourteen
+   * and ends two hundred thousand up was called "it runs you out of money" and
+   * counted as ruined in every one of its own trials, beside a median ending
+   * balance of £211,000 — the verdict and the number under it flatly
+   * contradicting each other. Both were computed from "was the balance ever
+   * negative", which is the wrong question to hang a verdict on: it is the
+   * question a bank asks about an overdraft, not the one an owner asks about a
+   * business. What they need to know is whether it comes back, and what it
+   * takes to get there.
+   */
+  recoversBy: number | null;
+  /** The deepest the balance goes while it is under, as a positive number. 0 if it never goes under. */
+  fundingGap: number;
   /** Everything earned across the horizon, less everything spent. */
   cumulativeProfit: number;
   /** What the owner actually drew across the horizon. */
@@ -895,15 +996,34 @@ export function subscriptionAt(
       // What is left of the market, which is what makes the next customer dearer.
       const left = reachable > 0 ? Math.max(0, 1 - everWon / reachable) : 1;
       /*
-       * Three sources, and only the middle one is throttled by the owner's
-       * week: the ads run whether or not she has the evening, the phone calls
-       * do not, and a recommendation costs her nothing either way.
+       * Four sources, and only the second is throttled by the owner's week:
+       * the ads run whether or not she has the evening, the salesperson's
+       * week is their own, the phone calls do not wait on her, and a
+       * recommendation costs her nothing either way.
        */
       const fromSpend = spending ? lift(spendNow, lever.halfSpend, lever.newCustomersAtFull) : 0;
       const fromHours = spending ? (Number.isFinite(lever.newCustomersFromHours) ? lever.newCustomersFromHours : 0) * stretch : 0;
+      /*
+       * Customers won by somebody on the payroll.
+       *
+       * The missing source, and the one that made the most ordinary question
+       * anybody asks this thing come back wrong: "if I hire a salesperson who
+       * signs three restaurants a month, does it pay for itself?" The wage
+       * belongs to a `hire` lever and the customers to this one, so the
+       * subscription arrived with `monthlyAmount: 0` — no spend, no owner
+       * hours, no word of mouth yet, therefore nobody ever joined. The engine
+       * then reported, with a straight face and two hundred and forty runs
+       * behind it, that the hire never pays for itself, because in the model
+       * it had sold nothing at all.
+       *
+       * Not scaled by `stretch`: that throttles the *owner's* week, and an
+       * employee's week is not hers to run out of. It is scaled by `scale`
+       * with everything else, so a cautious run still assumes they land fewer.
+       */
+      const fromStaff = spending ? (Number.isFinite(lever.newCustomersFromStaff) ? lever.newCustomersFromStaff : 0) : 0;
       const fromWord = base * word;
       /* Nobody signs up for a market-stall app in January. */
-      joined = (fromSpend + fromHours + fromWord) * scale * left * season;
+      joined = (fromSpend + fromHours + fromStaff + fromWord) * scale * left * season;
     }
     if (joined > 0) cohorts.push({ age: 0, size: joined });
     joinedAt.push(joined);
@@ -1206,7 +1326,7 @@ export function runMonths(input: {
   for (let month = 1; month <= horizon; month += 1) {
     const season = seasonOf(month);
     // What the company would have taken this month having done nothing.
-    const baseRevenue = baseline.monthlyRevenue * Math.pow(1 + baseline.growth, month - 1) * season;
+    const baseRevenue = baseline.monthlyRevenue * growthMultiplier(baseline.growth, month) * season;
 
     /*
      * The owner's week, before anything is earned from it.
@@ -1380,6 +1500,19 @@ export function runMonths(input: {
 
   const lowest = rows.reduce((low, r) => (r.cash < low.cash ? r : low), rows[0]);
   const broke = rows.find((r) => r.cash < 0) ?? null;
+  /*
+   * Recovery means it stays recovered. A balance that bobs above zero for a
+   * month and goes under again has not come back, and saying so would be the
+   * same flattery the old single-dip test managed in the other direction.
+   */
+  let recoversBy: number | null = null;
+  if (broke) {
+    const from = rows.findIndex((r) => r === broke);
+    for (let i = from + 1; i < rows.length; i += 1) {
+      if (rows.slice(i).every((r) => r.cash >= 0)) { recoversBy = rows[i].month; break; }
+    }
+  }
+  const fundingGap = broke ? Math.abs(Math.min(0, lowest.cash)) : 0;
 
   return {
     months: rows,
@@ -1390,6 +1523,8 @@ export function runMonths(input: {
     lowestCash: lowest.cash,
     lowestMonth: lowest.month,
     runsOutIn: broke ? broke.month : null,
+    recoversBy,
+    fundingGap: Math.round(fundingGap),
     cumulativeProfit: Math.round(cumulativeProfit),
     drawnTotal: Math.round(drawnTotal),
     drawnShortfall: Math.round(drawnShortfall),
@@ -1433,10 +1568,14 @@ export const FRAGILE = 0.25;
 export interface RuinRead {
   /** How many runs were tried. */
   trials: number;
-  /** How many of them ran the bank balance below zero. */
+  /** How many of them ran the bank balance below zero at any point. */
   ruined: number;
+  /** How many of those never came back above zero inside the horizon. */
+  neverRecovered: number;
   /** Ruined as a share, 0–1. */
   risk: number;
+  /** The deepest gap to fund among the runs that came back, at the median. */
+  typicalGap: number;
   /** The median month of ruin among the runs that failed, or null if none did. */
   typicalMonth: number | null;
   /** The worst ending balance seen, and the best. */
@@ -1482,6 +1621,8 @@ export function ruinRisk(input: {
   const rand = seeded(input.seed ?? 12345);
   const ends: number[] = [];
   const ruinMonths: number[] = [];
+  const gaps: number[] = [];
+  let neverRecovered = 0;
 
   for (let t = 0; t < trials; t += 1) {
     /*
@@ -1515,15 +1656,30 @@ export function ruinRisk(input: {
     }
     const run = runMonths({ baseline, levers, months, confidence: "likely", startingMonth: 1, scale, delay, shockRevenue, shockCosts });
     ends.push(run.endCash);
-    if (run.runsOutIn != null) ruinMonths.push(run.runsOutIn);
+    if (run.runsOutIn != null) {
+      /*
+       * Still counted as ruin, for the same reason the verdict is: needing
+       * money you have not got is the risk, whether or not the curve would
+       * have come good afterwards. `neverRecovered` is the sharper half of
+       * it, so the fact can tell a gap from a grave without this number —
+       * which every fragility comparison is ordered by — quietly changing
+       * meaning underneath them.
+       */
+      ruinMonths.push(run.runsOutIn);
+      gaps.push(run.fundingGap);
+      if (run.recoversBy == null) neverRecovered += 1;
+    }
   }
 
   ends.sort((a, b) => a - b);
   ruinMonths.sort((a, b) => a - b);
+  gaps.sort((a, b) => a - b);
   return {
     trials,
     ruined: ruinMonths.length,
+    neverRecovered,
     risk: ruinMonths.length / trials,
+    typicalGap: gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : 0,
     typicalMonth: ruinMonths.length ? ruinMonths[Math.floor(ruinMonths.length / 2)] : null,
     worstEnd: Math.round(ends[0]),
     bestEnd: Math.round(ends[ends.length - 1]),
@@ -1669,6 +1825,18 @@ export function answer(input: {
   const ruin = ruinRisk({ baseline, levers: input.levers, months });
 
   const verdict: Verdict =
+    /*
+     * Any month below zero, recovered or not.
+     *
+     * It is tempting to soften this when the balance climbs back — a plan that
+     * dips in month nine and ends two hundred thousand up does not *feel* like
+     * ruin. It is still the right headline: a business that cannot make March
+     * payroll does not get to month twenty-eight to find out it would have
+     * been fine. What the recovery changes is what you do about it, not
+     * whether you have to do something, so it is said in the facts — with the
+     * month it comes back and what it would take to bridge — rather than by
+     * quietly downgrading the verdict.
+     */
     cautious.runsOutIn !== null ? "it runs you out of money"
     /*
      * Still a loss in cash, and still said so — but a decision whose whole
@@ -1702,8 +1870,20 @@ export function answer(input: {
   facts.push(
     `At its worst, if it goes slowly, the bank balance bottoms out at ${money(cautious.lowestCash)} in ${monthName(cautious.lowestMonth)}.`,
   );
-  if (cautious.runsOutIn !== null) {
-    facts.push(`If it goes slowly you run out of money in ${monthName(cautious.runsOutIn)}. That is the number that decides this.`);
+  if (cautious.runsOutIn !== null && cautious.recoversBy === null) {
+    facts.push(`If it goes slowly you run out of money in ${monthName(cautious.runsOutIn)}, and do not come back inside the ${months} months. That is the number that decides this.`);
+  } else if (cautious.runsOutIn !== null) {
+    /*
+     * The gap, named as a gap. The verdict above still says it runs you out
+     * of money, and it should — but "in month nine, back by month twenty-one,
+     * about £16,000 to bridge" is a different problem from the same sentence
+     * with no way back, and it is the one the owner can actually go and
+     * solve. Said here rather than by softening the headline.
+     */
+    facts.push(
+      `If it goes slowly you run out of money in ${monthName(cautious.runsOutIn)} — but it is a gap, not the end of it: the balance is back above zero by ${monthName(cautious.recoversBy!)}, `
+      + `about ${money(cautious.fundingGap)} would carry it through, and it ends the ${months} months at ${money(cautious.endCash)}.`,
+    );
   }
   /*
    * What it could pay its owner, once it works.
@@ -1836,10 +2016,25 @@ export function answer(input: {
    * computed facts because it is the one that recolours the others.
    */
   if (ruin.ruined > 0) {
+    /*
+     * Two numbers, because one of them was doing the work of both and
+     * contradicting the sentence beside it: "runs out of money in 100% of
+     * them. The middle outcome ends at $211,000." Both true, and together
+     * they read as a mistake — the first is about the journey and the second
+     * about the destination, and nothing said so. How many of the failures
+     * are permanent is the part that decides whether this is an overdraft
+     * conversation or a different plan.
+     */
+    const stayed = ruin.neverRecovered;
     facts.push(
       `Run ${ruin.trials} times with the returns, the timing and the churn varied around your own figures — and a bad month allowed for — it runs out of money in ${Math.round(ruin.risk * 100)}% of them`
       + (ruin.typicalMonth ? `, usually around ${monthName(ruin.typicalMonth)}` : "")
-      + `. The middle outcome ends at ${money(ruin.medianEnd)}; the worst at ${money(ruin.worstEnd)}.`,
+      + (stayed === 0
+        ? `, and comes back every time — about ${money(ruin.typicalGap)} would bridge the deepest of them.`
+        : stayed === ruin.ruined
+          ? `, and never comes back.`
+          : `. ${Math.round((stayed / ruin.trials) * 100)}% never come back; the rest need about ${money(ruin.typicalGap)} to bridge the gap.`)
+      + ` The middle outcome ends at ${money(ruin.medianEnd)}; the worst at ${money(ruin.worstEnd)}.`,
     );
   } else {
     facts.push(

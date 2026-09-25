@@ -39,6 +39,7 @@
  */
 import type { Company, Economy, Niche, IncumbentPosture } from "./types";
 import { appealFor, saturate } from "./market";
+import { between } from "./random";
 
 /** How an incumbent's year comes out, before the market is resolved. */
 export interface IncumbentMoves {
@@ -211,8 +212,36 @@ const clamp = (n: number): number => Math.max(0, Math.min(100, n));
  * innovator holds the quality-led customers; a coaster is fat on the ones who
  * have not looked around in years and is the obvious first target.
  */
-export function seedIncumbents(niche: Niche): Company[] {
+/**
+ * How much an incumbent's strength varies between one season and the next.
+ *
+ * Five points on each axis and a sixth of the share. Enough that the same
+ * market is a different problem twice, not so much that a market stops being
+ * itself.
+ */
+export const INCUMBENT_SPREAD = 5;
+export const INCUMBENT_SHARE_SPREAD = 0.16;
+
+/**
+ * The incumbents, as this particular season found them.
+ *
+ * They used to be a fixed picture: every season in a market opened against
+ * exactly the same four companies at exactly the same strength, so the
+ * opening was a fixed puzzle with a fixed answer and the only thing that
+ * varied between seasons was the weather. Measured over twenty seasons,
+ * podcasts, project management and MMOs never once killed a company.
+ *
+ * Drawn from the season now, so entering a market means finding out what is
+ * already in it.
+ */
+export function seedIncumbents(niche: Niche, seasonId = ""): Company[] {
   return niche.incumbents.map((seed) => {
+    const vary = (axis: string, value: number) =>
+      Math.max(5, Math.min(99, value + between(`${seasonId}:${seed.id}:${axis}`, -INCUMBENT_SPREAD, INCUMBENT_SPREAD)));
+    const quality = vary("quality", seed.quality);
+    const brand = vary("brand", seed.brand);
+    const service = vary("service", seed.service);
+    const startingShare = Math.max(0.02, seed.startingShare * between(`${seasonId}:${seed.id}:share`, 1 - INCUMBENT_SHARE_SPREAD, 1 + INCUMBENT_SHARE_SPREAD));
     const customers: Record<string, number> = {};
     for (const segment of niche.segments) {
       // Weight their hold by how well the segment suits their posture, then
@@ -222,7 +251,7 @@ export function seedIncumbents(niche: Niche): Company[] {
         : seed.posture === "brawler" ? 0.6 + segment.priceSensitivity * 0.8
         : seed.posture === "fortress" ? 0.6 + segment.loyalty * 0.8
         : 0.6 + (1 - segment.loyalty) * 0.5;
-      customers[segment.id] = Math.round(segment.size * seed.startingShare * fit);
+      customers[segment.id] = Math.round(segment.size * startingShare * fit);
     }
     const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
     const price = niche.segments[0].referencePrice * seed.priceIndex;
@@ -235,10 +264,10 @@ export function seedIncumbents(niche: Niche): Company[] {
       cash: held * price * 0.35,
       debt: 0,
       creditLimit: held * price * 0.5,
-      reputation: 55 + seed.quality * 0.25,
-      quality: seed.quality,
-      brand: seed.brand,
-      service: seed.service,
+      reputation: 55 + quality * 0.25,
+      quality,
+      brand,
+      service,
       capacity: Math.round(held * 1.15),
       unitCost: niche.baseUnitCost * (seed.posture === "brawler" ? 0.88 : 1),
       price,

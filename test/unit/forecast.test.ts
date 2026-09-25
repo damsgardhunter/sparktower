@@ -267,7 +267,10 @@ describe("the year-end report adds up", () => {
       for (const s of r.segments!) {
         const lost = s.lostTo.reduce((a, f) => a + f.count, 0);
         const won = s.wonFrom.reduce((a, f) => a + f.count, 0);
-        expect(s.start - lost + won + s.fresh - s.turnedAway + s.pickedUp + s.other, `${niche} y${r.year} ${s.segmentId}`).toBe(s.end);
+        // `leftMarket` is the segment itself shrinking and taking a share of
+        // everybody's customers with it — nobody won them, so it is its own
+        // term and not part of `other`.
+        expect(s.start - lost - s.leftMarket + won + s.fresh - s.turnedAway + s.pickedUp + s.other, `${niche} y${r.year} ${s.segmentId}`).toBe(s.end);
         expect(s.start).toBe(before.customers[s.segmentId] ?? 0);
         // Rounding across millions — never a real number of people hiding in the line.
         expect(Math.abs(s.other), `${niche} y${r.year} ${s.segmentId} rounding`).toBeLessThan(Math.max(60, s.end * 0.01));

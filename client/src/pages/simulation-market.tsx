@@ -35,7 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { errorText } from "@/lib/api-error";
+import { errorText, isYearClosing } from "@/lib/api-error";
 import { Loader2, Store, Gavel, Package, Info } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
 
@@ -164,7 +164,8 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
       toast({ title: "Bid placed", description: "Nobody else can see it. You can change it until the year resolves." });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
     },
-    onError: (err: any) => toast({ title: "Couldn't bid", description: err?.body?.message ?? "Try again.", variant: "destructive" }),
+    onError: (err) => refusal(err, "Couldn't bid", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   const withdraw = useMutation({
@@ -175,10 +176,8 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
      * ended, and the button just stopped doing anything. Say why, and refetch
      * so the card shows what actually happened to the bid.
      */
-    onError: (err) => {
-      toast({ title: "Couldn't withdraw the bid", description: errorText(err), variant: "destructive" });
-      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
-    },
+    onError: (err) => refusal(err, "Couldn't withdraw the bid", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   const n = Number(amount);
@@ -257,13 +256,36 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
   );
 }
 
+/**
+ * A refusal, said the way it deserves.
+ *
+ * `year_closing` is not a failure: the request was fine and arrived during
+ * the seconds a year is being resolved. The server marks it specially so a
+ * screen can say "a moment" instead of going red, and every screen that
+ * forgets to check turns that care back into an error message.
+ */
+function refusal(err: unknown, title: string, toast: (o: any) => void, refetch: () => void) {
+  if (isYearClosing(err)) {
+    toast({ title: "That year just closed", description: "Next year is opening now — the market is catching up." });
+  } else {
+    toast({ title, description: errorText(err, "Try again."), variant: "destructive" });
+  }
+  refetch();
+}
+
 function HoldingRow({ holding, ventureId, listed }: {
-  holding: Holding; ventureId: string; listed: { name: string }[];
+  holding: Holding; ventureId: string; listed: { id: string; name: string; status: string }[];
 }) {
   const { toast } = useToast();
   const [reserve, setReserve] = useState(String(holding.willingSale));
   const [selling, setSelling] = useState(false);
-  const alreadyUp = listed.some((l) => l.name === holding.name);
+  /*
+   * The listing this holding is, if it is up. Kept whole rather than reduced
+   * to a yes/no, because taking it down needs its id — which the screen was
+   * already being sent and was throwing away, which is why the web could put
+   * something up for sale and never take it down again while the phone could.
+   */
+  const up = listed.find((l) => l.name === holding.name) ?? null;
 
   const list = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/listings`, { assetId: holding.id, reserve: Number(reserve) }),
@@ -272,11 +294,18 @@ function HoldingRow({ holding, ventureId, listed }: {
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
       setSelling(false);
     },
-    onError: (err: any) => toast({
-      title: "Couldn't list it",
-      description: err?.body?.message ?? "Try again.",
-      variant: "destructive",
-    }),
+    onError: (err) => refusal(err, "Couldn't list it", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
+  });
+
+  const withdraw = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/listings/${up!.id}`),
+    onSuccess: () => {
+      toast({ title: "Taken off the market", description: "Nobody can bid on it now." });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
+    },
+    onError: (err) => refusal(err, "Couldn't withdraw it", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   return (
@@ -300,8 +329,17 @@ function HoldingRow({ holding, ventureId, listed }: {
         </div>
       </div>
 
-      {alreadyUp ? (
-        <p className="text-xs text-muted-foreground mt-2">Already up for sale.</p>
+      {up ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">Up for sale.</p>
+          <Button
+            size="sm" variant="ghost" onClick={() => withdraw.mutate()} disabled={withdraw.isPending}
+            data-testid={`button-withdraw-${holding.id}`}
+          >
+            {withdraw.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+            Take it down
+          </Button>
+        </div>
       ) : selling ? (
         <div className="mt-2 flex flex-wrap gap-2 items-center">
           <Input type="number" value={reserve} onChange={(e) => setReserve(e.target.value)} className="w-36 tabular-nums" data-testid={`input-reserve-${holding.id}`} />

@@ -14,12 +14,11 @@
  * passed through Drizzle, never compared against the database's own clock.
  */
 import type { Express, Response } from "express";
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   companies, companyMembers, projectCheckins, projectMembers, projects, quarterGoals, recurringJobRuns, recurringJobs,
-  rhythmSettings, insertProjectSchema,
-} from "@shared/schema";
+  rhythmSettings, insertProjectSchema, simSeasons } from "@shared/schema";
 import { users } from "@shared/models/auth";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -155,7 +154,113 @@ export function registerCompanyRhythmRoutes(app: Express): void {
      * outside collaborator. They see that the project belongs to a company
      * and nothing they could act on, which is the truth.
      */
-    res.json({ company, role: membership?.role ?? null, powers: membership ? powersOf(membership) : [] });
+    /*
+     * The markets this project has already had written, so they can be played
+     * again for nothing.
+     *
+     * Only the ones with a market of their own: a season playing one of the
+     * seven has nothing of theirs to replay, and offering it would be offering
+     * them their own money back for something they never bought. Listed here
+     * rather than from the company's season list because this is the question
+     * the project's panel asks, and it already asks it.
+     */
+    const seasonsWithMarket = await db
+      .select({
+        seasonId: simSeasons.id,
+        nicheId: simSeasons.nicheId,
+        name: simSeasons.name,
+        cadence: simSeasons.cadence,
+        status: simSeasons.status,
+        createdAt: simSeasons.createdAt,
+        market: simSeasons.customMarket,
+      })
+      .from(simSeasons)
+      .where(and(eq(simSeasons.companyId, company.id), isNotNull(simSeasons.customMarket)))
+      .orderBy(desc(simSeasons.createdAt))
+      .limit(60);
+
+    /*
+     * One row per market, not one per season.
+     *
+     * A replay copies the market and keeps its `nicheId`, so playing the same
+     * world four times used to put four identical rows on the panel — the
+     * same name, the same four rivals, four buttons that all did the same
+     * thing. What somebody is choosing between is *markets*; how many times
+     * they have played each one is a fact about it, not another entry.
+     */
+    /*
+     * How each of those went, for the person looking at them.
+     *
+     * The panel could already say what a market *is* and offer to play it
+     * again, and said nothing at all about how it went last time — which is
+     * the first thing anybody wants from a list of things they have already
+     * done. One row per season they held a seat in, newest first; the map
+     * below keeps the newest per market.
+     */
+    const finishes = seasonsWithMarket.length === 0 ? { rows: [] } : await db.execute(sql`
+      select v.season_id as season_id, r.year as year, r.report as report,
+             (select count(*) from sim_reports f where f.season_id = v.season_id and f.year = r.year)::int as field
+      from sim_seats st
+      join sim_ventures v on v.id = st.venture_id
+      join sim_reports r on r.venture_id = v.id
+      where st.user_id = ${req.user.id}
+        and v.season_id in (${sql.join(seasonsWithMarket.map((x) => sql`${x.seasonId}`), sql`, `)})
+        and r.year = (select max(r2.year) from sim_reports r2 where r2.venture_id = v.id)
+    `);
+    const finishBySeason = new Map<string, { rank: number; field: number; marketShare: number; profitable: boolean; bankrupt: boolean; year: number }>();
+    for (const row of ((finishes as any).rows ?? finishes) as any[]) {
+      const rep = row.report ?? {};
+      finishBySeason.set(String(row.season_id), {
+        rank: Number(rep.rank) || 0,
+        field: Math.max(2, Number(row.field) || 2),
+        marketShare: Number(rep.marketShare) || 0,
+        profitable: Number(rep.profit) > 0,
+        bankrupt: !!rep.bankrupt,
+        year: Number(row.year) || 0,
+      });
+    }
+
+    const byMarket = new Map<string, typeof seasonsWithMarket[number] & {
+      plays: number;
+      finish: ReturnType<typeof finishBySeason.get>;
+    }>();
+    for (const row of seasonsWithMarket) {
+      const seen = byMarket.get(row.nicheId);
+      const finish = finishBySeason.get(row.seasonId);
+      if (seen) {
+        seen.plays += 1;
+        /*
+         * The newest season is the one to replay *from*, but it is usually the
+         * one nobody has played yet — building or replaying makes a season
+         * before anybody sits down. So the result shown is the newest one that
+         * was actually played, which is the answer to "how did this go", and
+         * the two are rarely the same row.
+         */
+        if (!seen.finish && finish) seen.finish = finish;
+      } else {
+        byMarket.set(row.nicheId, { ...row, plays: 1, finish });
+      }
+    }
+    const replayable = [...byMarket.values()].slice(0, 8);
+
+    res.json({
+      company,
+      role: membership?.role ?? null,
+      powers: membership ? powersOf(membership) : [],
+      replayable: replayable.map((r) => ({
+        seasonId: r.seasonId,
+        name: r.name,
+        cadence: r.cadence ?? "yearly",
+        status: r.status,
+        createdAt: r.createdAt,
+        marketName: (r.market as any)?.name ?? null,
+        rivals: ((r.market as any)?.incumbents ?? []).map((i: any) => i?.name).filter(Boolean).slice(0, 4),
+        /** How many seasons this project has run in this market, replays included. */
+        plays: r.plays,
+        /** How the most recent run of it ended, or null if it was never played. */
+        lastFinish: r.finish ?? null,
+      })),
+    });
   });
 
   app.get("/api/projects/:id/rhythm", isAuthenticated, async (req: any, res) => {

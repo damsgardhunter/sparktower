@@ -12,7 +12,7 @@
  * audit trail as every other write Nova makes.
  */
 import type { Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
@@ -20,17 +20,12 @@ import { packFor, NOVA_PACK_VERSION, type NovaPromptPack } from "@shared/nova-pr
 import { applyProjectOperations, buildOperableProjectState, stripIdFragments, collectProjectIds } from "./project-operations";
 import { parseModelJson } from "./ai-json";
 
-let _openai: OpenAI | null = null;
-const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    _openai = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
-    });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 export interface FirstPlanStep { title: string; done: string; why?: string }
 export interface FirstPlan { summary: string; steps: FirstPlanStep[] }

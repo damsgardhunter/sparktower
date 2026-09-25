@@ -701,7 +701,7 @@ export function registerMcpRoutes(app: Express) {
 
       const snapshot = snapshotFromFiles(files, `worktree:${str(req.body?.label, 120) || "working tree"}`);
       // Charged once the tree is in hand, as on the web route.
-      if (!(await requireCredits(res, ctx.userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId: ctx.projectId }))) return;
+      if (!(await requireCredits(res, ctx.userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId: ctx.projectId, action: "codeAudit" }))) return;
 
       await runCodeAudit({
         projectId: ctx.projectId, userId: ctx.userId, project: ctx.project, ent, res,

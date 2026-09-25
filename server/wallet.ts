@@ -114,6 +114,29 @@ export async function spend(
   about: { outcome: PricedOutcomeId; note?: string; projectId?: string | null },
 ): Promise<SpendRecord | null> {
   if (cents <= 0) return { id: "", amountCents: 0, balanceAfter: (await walletOf(userId)).balanceCents };
+  /*
+   * A developer's account, outside production: the price is nothing.
+   *
+   * The switch says "Everything free — nothing charges and the allowance
+   * stops moving", and for small actions it was true, because those go
+   * through `requireCredits` which has honoured the flag for a long time.
+   * Priced outcomes do not go through it — they come straight here — so the
+   * one thing the toggle exists to let somebody test was the one thing it
+   * could not: opening the $14.99 whole-business build ended at a Stripe
+   * checkout, on an account whose own wallet said `devUnlimited: true` in the
+   * same response that refused it.
+   *
+   * Put here rather than at each of the seven call sites so a new priced
+   * outcome cannot quietly miss it, and guarded the same two ways
+   * `requireCredits` is: only outside production, and never on a server
+   * holding live Stripe keys, because a switch that turns off charging is
+   * worth being paranoid about twice.
+   */
+  if (process.env.NODE_ENV !== "production"
+      && !process.env.STRIPE_SECRET_KEY?.startsWith("sk_live")
+      && await devUnlimited(userId)) {
+    return { id: "", amountCents: 0, balanceAfter: (await walletOf(userId)).balanceCents };
+  }
   return db.transaction(async (tx) => {
     const [row] = await tx.update(users)
       .set({ balanceCents: sql`${users.balanceCents} - ${cents}` })

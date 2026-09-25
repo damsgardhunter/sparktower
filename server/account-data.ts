@@ -42,6 +42,15 @@ export const MINE: Owned[] = [
   { table: "contest_participants", column: "user_id" },
   { table: "direct_messages", column: "sender_id" },
   { table: "user_task_stats", column: "user_id" },
+  /*
+   * A game somebody paid to play. Listed as theirs rather than kept, because
+   * that is what the database actually does with it: `user_id` is `not null`
+   * and `on delete cascade`, so the row goes when the account does whatever
+   * this list says. Calling it kept would have been a promise the schema
+   * breaks — so it is exported with the rest of their things first, which is
+   * the half we do control.
+   */
+  { table: "game_play_purchases", column: "user_id" },
   { table: "health_finding_feedback", column: "user_id" },
   { table: "project_storyboards", column: "user_id" },
   { table: "investor_artifacts", column: "user_id" },
@@ -251,6 +260,19 @@ export const KEPT: Owned[] = [
   { table: "project_operation_applications", column: "user_id" },
   // Who asked what it would take to reach a target: the roadmap is the company's, the name on it is a record.
   { table: "what_would_it_take_roadmaps", column: "generated_by" },
+  /*
+   * Seats a company bought for a season: a payment record, kept like every
+   * other one here, and `bought_by` is already `on delete set null` — so what
+   * survives the account is the purchase, pointing at the tombstone, not the
+   * person. The company paid for those seats and still holds them.
+   */
+  { table: "sim_seat_purchases", column: "bought_by" },
+  /*
+   * Who last changed the platform's AI economics. An admin action on a
+   * setting that belongs to the platform rather than to them, and the same
+   * `set null` as the other reviewer columns above.
+   */
+  { table: "ai_settings", column: "updated_by" },
 ];
 
 /**

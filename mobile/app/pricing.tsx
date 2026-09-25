@@ -1,262 +1,194 @@
-import { useState } from "react";
-import { ScrollView, Text, View, Platform } from "react-native";
-import { Stack } from "expo-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as WebBrowser from "expo-web-browser";
-import { api } from "../src/api/client";
-import { useEntitlementsQuery } from "../src/hooks/useEntitlements";
-import { colors, font, fontFamily, radius, shadow, spacing } from "../src/theme";
-import { Btn, Icon, Loading, NovaGradient, Progress, type IconName } from "../src/components/ui";
-import { Callout, Pill } from "../src/components/MoreKit";
-import { NoticeBanner, useNotice } from "../src/components/Sheet";
-
-const TIER_ORDER = ["free", "starter", "builder", "pro"];
-const STAGE_ICONS: Record<string, IconName> = { Explore: "compass", Start: "sparkles", Build: "map", Accelerate: "rocket" };
-
 /**
- * Plans, usage, and upgrading — the web's /pricing.
+ * Your balance, and the things it buys — the web's /pricing.
  *
- * Checkout and the billing portal are Stripe pages, so they open in an in-app
- * browser; when it closes, the subscription is re-synced so a new plan shows
- * straight away. (App Store review can require in-app purchase for digital
- * subscriptions on iOS.)
+ * This screen used to sell four subscription tiers. There are no tiers any
+ * more: the web moved to a balance and per-outcome prices a while ago, every
+ * plan became free, and this screen carried on offering to upgrade people to
+ * something that no longer existed. Somebody who pressed "Upgrade to Pro" was
+ * sent to a Stripe page for a product the server had stopped honouring.
  *
- * On iOS the plans are shown but upgrading and managing happen on the web:
- * Apple requires in-app purchase for digital subscriptions sold inside an iOS
- * app (Guideline 3.1.1), and StoreKit isn't wired up. Android and the web
- * preview open Stripe in the in-app browser.
+ * What it shows now is what the account actually has: money on the balance,
+ * what is left of the month's free Nova actions, and the two things that can
+ * be bought outright — more actions, and a day of images. Everything else is
+ * priced where it is used, which is why this screen does not list eleven
+ * outcomes: a price only means something next to the thing it buys.
+ *
+ * ## Adding money
+ *
+ * Through Stripe Checkout in an in-app browser on Android and the web
+ * preview. On iOS it is In-App Purchase or nothing — see `Pay.tsx` and
+ * `src/iap.ts` for the whole of that argument; this screen only asks.
  */
-const IOS_NO_WEB_CHECKOUT = Platform.OS === "ios";
-export default function Pricing() {
+import { useState } from "react";
+import { Text, View } from "react-native";
+import { Stack } from "expo-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "../src/api/client";
+import { colors, font, fontFamily, radius, spacing } from "../src/theme";
+import { Body, Btn, Card, Label, Loading, Meta, Screen } from "../src/components/ui";
+import { NoticeBanner, useNotice } from "../src/components/Sheet";
+import { WALLET_KEY, topUpLabel, topUpRoute, useBuy, useTopUp, useWallet } from "../src/components/Pay";
+import { useAppleTopUp } from "../src/iap";
+
+/** What the server will take, from TOP_UP_CENTS. Three is a choice; six is a form. */
+const AMOUNTS = [500, 1000, 2000];
+
+export default function WalletScreen() {
   const qc = useQueryClient();
   const { notice, show, clear } = useNotice();
-  const [pendingTier, setPendingTier] = useState<string | null>(null);
-  const ent = useEntitlementsQuery();
+  const wallet = useWallet();
+  const topUp = useTopUp();
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({ queryKey: ["plans"], queryFn: () => api<any>("/api/plans") });
+  /*
+   * Two ways to add money, one button. Stripe Checkout in a browser where the
+   * store rules allow it, the App Store where they do not — the screen asks
+   * for an amount and does not otherwise care which.
+   */
+  const appStore = useAppleTopUp(
+    () => { qc.invalidateQueries({ queryKey: WALLET_KEY }); show({ tone: "success", text: "Added to your balance." }); },
+    (text) => show({ tone: "error", text }),
+  );
+  const addMoney = (cents: number) => {
+    if (topUpRoute === "appstore") { appStore.buy(cents); return; }
+    topUp.mutate(cents, { onError: (e: any) => show({ tone: "error", text: e?.message ?? "Couldn't start that payment." }) });
+  };
+  const addingMoney = topUp.isPending || appStore.busy;
 
-  // The web lands back on /pricing?success=true and syncs; the phone syncs when
-  // the in-app browser closes, and says so when the plan actually changed.
-  const afterBrowser = async (before: string) => {
-    let tier: string | undefined;
-    try { tier = (await api<{ tier?: string }>("/api/stripe/sync-subscription", { method: "POST" })).tier; } catch { /* the webhook will catch up */ }
-    // Entitlements shape nearly every screen, so refresh everything, as the web's tier switch does.
-    await qc.invalidateQueries();
-    if (tier && tier !== before) {
-      show(tier === "free"
-        ? { tone: "info", text: "You're on the Free plan now." }
-        : { tone: "success", text: "You're all set! Your plan is active. Nova just leveled up." });
-    }
+  const actions = useBuy("/api/nova/day-pass");
+  const images = useBuy("/api/nova/image-pass");
+
+  const w = wallet.data;
+
+  const buy = (what: "actions" | "images") => {
+    const m = what === "actions" ? actions : images;
+    setBusy(what);
+    m.mutate(undefined, {
+      onSuccess: () => show({
+        tone: "success",
+        text: what === "actions" ? "25 more Nova actions, on the account." : "Images are unlimited for the next 24 hours.",
+      }),
+      /*
+       * A refusal for money is not toasted: the app-wide paywall has already
+       * been handed the 402 by the api client and is showing the price and
+       * the way to pay it. Anything else is an ordinary failure.
+       */
+      onError: (e: any) => { if (e?.status !== 402) show({ tone: "error", text: e?.message ?? "That didn't go through." }); },
+      onSettled: () => { setBusy(null); qc.invalidateQueries({ queryKey: WALLET_KEY }); },
+    });
   };
 
-  const checkout = useMutation({
-    mutationFn: ({ priceId }: { priceId: string; tier: string }) => api<{ url?: string; switched?: boolean }>("/api/checkout", { method: "POST", body: { priceId } }),
-    onSuccess: async (r) => {
-      setPendingTier(null);
-      // Already subscribed: the plan changed on the existing subscription, never a second one.
-      if (r.switched) {
-        await qc.invalidateQueries();
-        show({ tone: "success", text: "Plan changed. The difference is prorated on your next invoice." });
-        return;
-      }
-      if (!r.url) { show({ tone: "error", text: "Couldn't start checkout: no checkout link came back." }); return; }
-      await WebBrowser.openBrowserAsync(r.url);
-      await afterBrowser(ent.tier);
-    },
-    onError: (e: any) => { setPendingTier(null); show({ tone: "error", text: e?.message || "Couldn't start checkout. Please try again." }); },
-  });
-
-  const portal = useMutation({
-    mutationFn: () => api<{ url?: string }>("/api/billing-portal", { method: "POST" }),
-    onSuccess: async (r) => {
-      if (!r.url) { show({ tone: "error", text: "Couldn't open the billing portal." }); return; }
-      await WebBrowser.openBrowserAsync(r.url);
-      await afterBrowser(ent.tier);
-    },
-    onError: (e: any) => show({ tone: "error", text: e?.message === "No active subscription" ? "You don't have a paid subscription to manage." : "Couldn't open the billing portal." }),
-  });
-
-  if (isLoading || ent.isLoading) return <Loading />;
-
-  const plans: any[] = [...(data?.plans ?? [])].sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier));
-  const current = plans.find((p) => p.tier === ent.tier);
-  const pct = ent.isUnlimited || ent.creditsLimit <= 0 ? 0 : Math.min(100, (ent.creditsUsed / ent.creditsLimit) * 100);
-  const costs = data?.creditCosts;
-
   return (
-    <>
-      <Stack.Screen options={{ title: "Plans & credits" }} />
-      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ padding: spacing.md, gap: spacing.lg, paddingBottom: spacing.xxl * 2 }}>
-        {/* Sell the outcome, not the credits. */}
-        <View style={{ gap: spacing.sm, paddingHorizontal: spacing.xs, paddingTop: spacing.sm }}>
-          <Text style={{ color: colors.text, fontSize: font.xxl, lineHeight: 34, fontFamily: fontFamily.bold, letterSpacing: -0.5 }}>Tell Nova where you want to go.</Text>
-          <Text style={{ color: colors.textSecondary, fontSize: font.base, lineHeight: 22, fontFamily: fontFamily.regular }}>
-            Nova helps you figure out how to get there — turning a vague idea into a project, a plan, and the people you need to build it.
-          </Text>
-        </View>
-
-        {/* Usage first on a phone: it's what you came to check. */}
-        <View style={cardStyle}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>Your Nova usage this month</Text>
-              <Text style={meta}>
-                {ent.isUnlimited ? `${ent.creditsUsed.toLocaleString()} actions used — unlimited on your plan` : `${ent.creditsUsed} of ${ent.creditsLimit} credits used`}
-              </Text>
-            </View>
-            <Pill label={current?.name ?? "Free"} />
-          </View>
-          {!ent.isUnlimited && (
-            <View style={{ gap: 6 }}>
-              <Progress value={pct} />
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <Text style={small}>{ent.creditsRemaining} remaining</Text>
-                <Text style={small}>Resets at the start of each month</Text>
+    <View style={{ flex: 1 }}>
+      <Stack.Screen options={{ title: "Balance" }} />
+      <Screen canvas onRefresh={() => wallet.refetch()} refreshing={wallet.isRefetching}>
+        {wallet.isLoading || !w ? (
+          <Loading label="Reading your balance…" />
+        ) : (
+          <>
+            <Card>
+              <View style={{ gap: spacing.xs }}>
+                <Label>On your account</Label>
+                <Text style={{ color: colors.text, fontSize: font.xxl, fontFamily: fontFamily.bold }}>
+                  {w.devUnlimited ? "Everything free" : w.balanceDisplay}
+                </Text>
+                <Meta>
+                  {w.allowanceRemaining} of {w.allowanceLimit} free Nova actions left this month
+                  {w.actionsBought > 0 ? `, and ${w.actionsBought} you've bought` : ""}.
+                  {w.imagePassActive ? " Images are unlimited right now." : ""}
+                </Meta>
+                <Meta>Money you add never expires, and an action that fails is refunded automatically.</Meta>
               </View>
-            </View>
-          )}
-          {costs && (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-              {[
-                ["Nova chat", 1], ["Roadmap", costs.roadmapGeneration], ["Roadmap update", costs.roadmapUpdate],
-                ["Health check", costs.healthCheck], ["Video", costs.videoGeneration],
-              ].filter(([, v]) => v != null).map(([k, v]) => (
-                <View key={String(k)} style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.surfaceRaised, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3 }}>
-                  <Text style={small}>{k}</Text>
-                  <Text style={[small, { color: colors.text, fontFamily: fontFamily.semibold }]}>{v}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
+            </Card>
 
-        {!data?.stripeConfigured && (
-          <Callout tone="warn" title="Checkout isn't connected yet" body="Plans are shown from the catalog, but paid upgrades need Stripe configured on the server." />
-        )}
-
-        {plans.map((plan) => {
-          const isCurrent = ent.tier === plan.tier;
-          const featured = plan.featured;
-          const busy = checkout.isPending && pendingTier === plan.tier;
-          return (
-            <View key={plan.tier} style={[cardStyle, { padding: 0, overflow: "hidden" }, featured && { borderColor: colors.primary, borderWidth: 1.5 }, isCurrent && !featured && { borderColor: colors.primary }]}>
-              {featured && (
-                <NovaGradient style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 6 }}>
-                  <Icon name="sparkles" size={13} color="#FFFFFF" />
-                  <Text style={{ color: "#FFFFFF", fontSize: font.xs, fontFamily: fontFamily.bold, letterSpacing: 0.5 }}>MOST POPULAR</Text>
-                </NovaGradient>
-              )}
-              <View style={{ padding: spacing.lg, gap: spacing.md }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: featured ? colors.primary : colors.primarySoft }}>
-                    <Icon name={STAGE_ICONS[plan.stage] ?? "compass"} size={17} color={featured ? "#FFFFFF" : colors.primary} />
-                  </View>
-                  <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 1.5, textTransform: "uppercase" }}>{plan.stage}</Text>
-                  {isCurrent && <Pill label="Your plan" icon="checkmark" />}
+            {/* ── Adding money ── */}
+            <Card>
+              <View style={{ gap: spacing.md }}>
+                <View style={{ gap: 2 }}>
+                  <Label>Add money</Label>
+                  <Meta>
+                    Nova's bigger jobs have a price — $3 to simulate a decision, $6 to score a marketing scheme,
+                    $14.99 for a whole business built out. They come off this balance.
+                  </Meta>
                 </View>
+
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  {AMOUNTS.map((cents) => (
+                    <Btn
+                      key={cents}
+                      label={topUpLabel(cents)}
+                      variant="outline"
+                      small
+                      style={{ flex: 1 }}
+                      loading={addingMoney}
+                      disabled={addingMoney}
+                      onPress={() => addMoney(cents)}
+                      testID={`button-topup-${cents}`}
+                    />
+                  ))}
+                </View>
+                <Meta>
+                  {topUpRoute === "appstore"
+                    ? "Through the App Store, like anything else bought in an app."
+                    : "Through Stripe, in a browser that opens over this one."}
+                </Meta>
+              </View>
+            </Card>
+
+            {/* ── The two things sold outright ── */}
+            <Card>
+              <View style={{ gap: spacing.md }}>
+                <View style={{ gap: 2 }}>
+                  <Label>More Nova actions</Label>
+                  <Meta>
+                    $5 buys 25 more, spent one at a time. What you buy when the month's free ones have run out —
+                    they never expire, so nothing is wasted by buying them on a quiet week.
+                  </Meta>
+                </View>
+                <Btn
+                  label="Buy 25 actions — $5"
+                  variant="outline"
+                  loading={busy === "actions"}
+                  disabled={!!busy}
+                  onPress={() => buy("actions")}
+                  testID="button-buy-actions"
+                />
+
+                <View style={{ height: 1, backgroundColor: colors.border }} />
 
                 <View style={{ gap: 2 }}>
-                  <Text style={{ color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold }}>{plan.name}</Text>
-                  <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{plan.promise}</Text>
+                  <Label>A day of images</Label>
+                  <Meta>
+                    $5 for unlimited image generation for 24 hours — project pages, post images, storyboards,
+                    badges. Up to 50 an hour.
+                  </Meta>
                 </View>
-                <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>{plan.pitch}</Text>
+                <Btn
+                  label={w.imagePassActive ? "Running now" : "Buy a day — $5"}
+                  variant="outline"
+                  loading={busy === "images"}
+                  disabled={!!busy || w.imagePassActive}
+                  onPress={() => buy("images")}
+                  testID="button-buy-images"
+                />
 
-                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
-                  <Text style={{ color: colors.text, fontSize: 34, fontFamily: fontFamily.bold, letterSpacing: -0.5 }}>{plan.price === 0 ? "Free" : `$${Number(plan.price).toFixed(2)}`}</Text>
-                  {plan.price > 0 && <Text style={meta}>/month</Text>}
-                </View>
-
-                <View style={{ gap: 8 }}>
-                  {(plan.highlights ?? []).map((h: string, i: number) => (
-                    <View key={i} style={{ flexDirection: "row", gap: 8 }}>
-                      <Icon name="checkmark" size={17} color={featured ? colors.primary : "#B07CC6"} />
-                      <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>{h}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                {IOS_NO_WEB_CHECKOUT && plan.tier !== "free" && !isCurrent ? (
-                  <Text style={[small, { textAlign: "center" }]}>Upgrade on the web at sparktower.app/pricing</Text>
-                ) : IOS_NO_WEB_CHECKOUT && isCurrent && plan.tier !== "free" ? (
-                  <Text style={[small, { textAlign: "center" }]}>Manage your plan on the web at sparktower.app/pricing</Text>
-                ) : IOS_NO_WEB_CHECKOUT && plan.tier === "free" && !isCurrent ? (
-                  // Switching to Free is the Stripe billing portal on the web — also a web-only step on iOS.
-                  <Text style={[small, { textAlign: "center" }]}>Switch plans on the web at sparktower.app/pricing</Text>
-                ) : isCurrent ? (
-                  plan.tier === "free"
-                    ? <Btn label="Your current plan" variant="outline" disabled />
-                    : <Btn label="Manage plan" icon="open-outline" variant="outline" loading={portal.isPending} onPress={() => portal.mutate()} />
-                ) : plan.tier === "free" ? (
-                  <Btn label="Switch to Free" variant="outline" loading={portal.isPending} onPress={() => portal.mutate()} />
-                ) : (
-                  <Btn label={plan.priceId ? plan.cta : "Unavailable"} variant={featured ? "primary" : "outline"}
-                    disabled={!plan.priceId || checkout.isPending} loading={busy}
-                    onPress={() => { setPendingTier(plan.tier); checkout.mutate({ priceId: plan.priceId, tier: plan.tier }); }} />
-                )}
-                {plan.footnote ? <Text style={[small, { textAlign: "center" }]}>{plan.footnote}</Text> : null}
+                <Meta>Both come off your balance.</Meta>
               </View>
-            </View>
-          );
-        })}
+            </Card>
 
-        {!!data?.comparison?.length && (
-          <View style={{ gap: spacing.sm }}>
-            <View style={{ gap: 2, paddingHorizontal: spacing.xs }}>
-              <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>Compare every plan</Text>
-              <Text style={meta}>All the details, including credit limits.</Text>
-            </View>
-            <View style={[cardStyle, { padding: 0, overflow: "hidden" }]}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View>
-                  <View style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceRaised }}>
-                    <Text style={[cell, featureCell, { fontFamily: fontFamily.semibold, color: colors.textTertiary }]}>Feature</Text>
-                    {TIER_ORDER.map((t) => {
-                      const p = plans.find((x) => x.tier === t);
-                      return (
-                        <View key={t} style={[valueCell, { paddingVertical: 8 }]}>
-                          <Text style={{ fontSize: 9, letterSpacing: 1, color: colors.textTertiary, fontFamily: fontFamily.semibold, textTransform: "uppercase" }}>{p?.stage}</Text>
-                          <Text style={{ fontSize: font.sm, color: p?.featured ? colors.primary : colors.text, fontFamily: fontFamily.semibold }}>{p?.name}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                  {data.comparison.map((row: any, i: number) => (
-                    <View key={row.label} style={{ flexDirection: "row", borderTopWidth: i ? 1 : 0, borderColor: colors.borderSubtle, alignItems: "center" }}>
-                      <Text style={[cell, featureCell]}>{row.label}</Text>
-                      {TIER_ORDER.map((t) => {
-                        const v = row.values[t];
-                        return (
-                          <View key={t} style={valueCell}>
-                            {v === true ? <Icon name="checkmark" size={17} color={colors.primary} />
-                              : v === false ? <Icon name="remove" size={17} color={colors.border} />
-                              : <Text style={{ fontSize: font.xs, color: colors.text, fontFamily: fontFamily.medium, textAlign: "center" }}>{String(v)}</Text>}
-                          </View>
-                        );
-                      })}
-                    </View>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-          </View>
+            <Card>
+              <View style={{ gap: 2 }}>
+                <Label>No plans, no subscription</Label>
+                <Meta>
+                  Paying never buys standing, reach or features — only Nova doing work for you. Everything the
+                  product does is free; what costs money is asking Nova to do a long job.
+                </Meta>
+              </View>
+            </Card>
+          </>
         )}
-
-        <View style={{ gap: 6, paddingHorizontal: spacing.md }}>
-          {data?.fairUseNotice ? <Text style={[small, { textAlign: "center" }]}>{data.fairUseNotice}</Text> : null}
-          <Text style={[small, { textAlign: "center" }]}>Cancel anytime from the billing portal. Payments are processed securely by Stripe.</Text>
-        </View>
-      </ScrollView>
+      </Screen>
       <NoticeBanner notice={notice} onDismiss={clear} />
-    </>
+    </View>
   );
 }
-
-const cardStyle = {
-  backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border,
-  padding: spacing.lg, gap: spacing.md, ...shadow.card,
-} as const;
-const meta = { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular } as const;
-const small = { color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular } as const;
-const cell = { color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular, paddingVertical: 10, paddingHorizontal: spacing.md } as const;
-const featureCell = { width: 150 } as const;
-const valueCell = { width: 84, alignItems: "center" as const, justifyContent: "center" as const, paddingVertical: 10, paddingHorizontal: 4 };

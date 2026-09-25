@@ -30,6 +30,7 @@ const PUBLIC_WRITES: Record<string, string> = {
   "POST /api/auth/mobile/register": "creates the account; limited per address",
   "POST /api/auth/mobile/login": "the password it checks",
   "POST /api/auth/mobile/google": "Google's signed ID token",
+  "POST /api/auth/mobile/apple": "Apple's signed identity token, verified against Apple's JWKS",
   "POST /api/auth/mobile/refresh": "the refresh token, by hash, rotated once, reuse ends every session",
   "POST /api/auth/mobile/mfa/verify": "a signed challenge, plus a code",
   "POST /api/auth/mobile/logout": "the refresh token it revokes; it can only end that session",

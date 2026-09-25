@@ -20,7 +20,27 @@ export const users = pgTable("users", {
   passwordHash: varchar("password_hash"),
   authProvider: varchar("auth_provider").default("local"),
   googleId: varchar("google_id").unique(),
+  /**
+   * Apple's stable identifier for this person *in this app* (`sub`).
+   *
+   * Unique, like Google's, and the only reliable way to recognise somebody who
+   * signs in with Apple: the email is optional — Apple's "Hide My Email"
+   * returns a per-app relay address instead — and is only handed over on the
+   * very first authorization. `sub` is there every time and never changes, so
+   * it is what an account is matched on.
+   */
+  appleId: varchar("apple_id").unique(),
   stripeCustomerId: varchar("stripe_customer_id"),
+  /**
+   * Extra Ten Years valuations this person has bought, at a dollar each.
+   *
+   * The game is free to play and free to be valued once a day, because it is
+   * how people meet the product. The valuation is a model call we pay for and
+   * charge no credits against, so the second one in a day is a dollar rather
+   * than a subsidy. Banked rather than dated: a play bought today is still
+   * there next week.
+   */
+  gamePlaysPaid: integer("game_plays_paid").default(0).notNull(),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionTier: varchar("subscription_tier").default("free"),
   /**

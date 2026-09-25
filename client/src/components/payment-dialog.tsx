@@ -374,8 +374,20 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
   const settle = (ok: boolean) => { pending?.resolve(ok); setPending(null); };
 
   const cents = pending?.price.cents ?? 0;
-  const covered = wallet ? wallet.balanceCents >= cents : true;
-  const after = wallet ? wallet.balanceCents - cents : null;
+  /*
+   * A development account pays nothing, and the dialog has to know.
+   *
+   * The server has always been the one that decides what something costs, and
+   * it lets a `devUnlimited` account through for free — but this gate runs
+   * first, on the balance alone, so the answer never got asked for. The
+   * switch two feet to the left said "Everything free. Nothing charges", and
+   * the dialog in front of it said "that's $14.99 more than your balance;
+   * continuing takes you to checkout". One of them was wrong, and it was the
+   * one that had not checked.
+   */
+  const freeHere = !!wallet?.devUnlimited;
+  const covered = freeHere || (wallet ? wallet.balanceCents >= cents : true);
+  const after = wallet ? (freeHere ? wallet.balanceCents : wallet.balanceCents - cents) : null;
 
   return (
     <PurchaseConfirmContext.Provider value={confirmPurchase}>
@@ -393,7 +405,11 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
             <div className="rounded-lg border bg-muted/40 p-3 space-y-1.5 text-sm">
               <p className="flex items-center justify-between font-medium">
                 <span>Price</span>
-                <span data-testid="text-confirm-price">{pending.price.display}</span>
+                <span data-testid="text-confirm-price">
+                  {freeHere
+                    ? <><span className="line-through text-muted-foreground mr-1.5">{pending.price.display}</span>Free</>
+                    : pending.price.display}
+                </span>
               </p>
               <p className="flex items-center justify-between text-muted-foreground">
                 <span className="flex items-center gap-1.5"><WalletIcon className="h-4 w-4" /> Balance</span>
@@ -402,6 +418,11 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
                   {wallet && covered && after != null && <span className="ml-1">→ {formatMoney(after)}</span>}
                 </span>
               </p>
+              {freeHere && (
+                <p className="text-muted-foreground" data-testid="text-confirm-dev-free">
+                  Development mode is on, so this one costs nothing and your balance won't move.
+                </p>
+              )}
               {wallet && !covered && (
                 /*
                  * Said here rather than left to the 402: it is the difference
@@ -428,7 +449,7 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
                 * finished on the way back); the surprise was not.
                 */}
               <Button onClick={() => settle(true)} data-testid="button-confirm-purchase">
-                {covered ? `Pay ${pending.price.display}` : "Add money and continue"}
+                {freeHere ? "Run it — free" : covered ? `Pay ${pending.price.display}` : "Add money and continue"}
               </Button>
             </DialogFooter>
           </DialogContent>

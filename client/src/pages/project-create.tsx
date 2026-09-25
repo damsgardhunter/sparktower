@@ -302,7 +302,17 @@ export default function ProjectCreate() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowIntro(false);
-      setMessages([
+      /*
+       * Only when there is nothing to come back to.
+       *
+       * This used to set the greeting flat, two seconds after mount, which is
+       * a second and a half after the draft above has finished restoring —
+       * so coming back to a half-finished project wiped the conversation that
+       * produced it and left the form beside a Nova saying hello for the
+       * first time. Everything the two of you worked out was still in
+       * localStorage; the page just talked over it.
+       */
+      setMessages((prev) => prev.length ? prev : [
         {
           role: "assistant",
           content:

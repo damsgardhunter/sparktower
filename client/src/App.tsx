@@ -62,6 +62,7 @@ import AdminSecurity from "@/pages/admin-security";
 import AdminConsole from "@/pages/admin-console";
 import { ErrorBoundary } from "@/components/error-boundary";
 import AdminAnalytics from "@/pages/admin-analytics";
+import AdminAiSpend from "@/pages/admin-ai-spend";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
@@ -355,6 +356,7 @@ function Router() {
             {/* The customer console. Its own API answers 404 to anyone who shouldn't know it exists, and the page draws that as a 404 too. */}
             <Route path="/admin/console" component={AdminConsole} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
+            <Route path="/admin/ai-spend" component={AdminAiSpend} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />

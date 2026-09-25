@@ -1,3 +1,4 @@
+import type { ContinentId } from "./geography";
 /**
  * The market simulation's domain: what a world is made of, before anything
  * decides what happens to it.
@@ -97,6 +98,21 @@ export interface Segment {
   loyalty: number;
   /** What this segment considers a normal price, in whole currency units. */
   referencePrice: number;
+  /**
+   * Who went and found these people, for a segment that was not in the market
+   * to begin with. See `niche-openings.ts`.
+   *
+   * Absent on every segment a market was written with. Present on one a
+   * company carved out, and it is what gives that company a run at them
+   * before anybody else is even describing them as a group.
+   *
+   * A list, because two tables can go looking in the same place and come back
+   * with the same people. When that happens neither of them has found a
+   * corner nobody else knows about — they have found each other — so the run
+   * at those people is against everybody except the companies who found them.
+   */
+  foundBy?: string[];
+  foundInYear?: number;
 }
 
 /** A market a team can choose to enter. The niche decides who the customers are and who already serves them. */
@@ -138,12 +154,42 @@ export interface Niche {
   incumbents: IncumbentSeed[];
   /** Where this market exists. A company only sells where it has opened. */
   cities: City[];
+  /**
+   * Where those regions are, on the world map (see `geography.ts`).
+   *
+   * Four of these markets are a country's worth of regions — Leeds, Manchester,
+   * the North West — and they sit inside one region of the map. Naming it is
+   * what lets a season widen from "the UK in ten pieces" to "the world in
+   * thirty-five, one piece of which is the UK in ten". A market whose regions
+   * are already continental leaves it unset and widens straight onto the map.
+   */
+  worldHome?: string;
+  /**
+   * How much of this market lives on each continent, relative to how much
+   * money lives there.
+   *
+   * One means "as you would expect from the population and the money". Drone
+   * delivery in Central Africa is not a fifth of a market the way its people
+   * and money suggest, because there is nowhere to land; a mobile game in
+   * Southeast Asia is more than its money suggests, because that is where the
+   * players are. Anything unlisted is one.
+   */
+  penetration?: Partial<Record<ContinentId, number>>;
   /** What it costs to make one unit, before anyone improves anything. */
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
   innovationPace: number;
   /** The words this market uses for the things every market has. */
   voice: NicheVoice;
+  /**
+   * The kinds of people a business in this market employs.
+   *
+   * A kitchen hires chefs and a studio hires engineers, and what the two of
+   * them cost and buy is not the same. Optional: a market that arrives
+   * without one is given a generic mix rather than refused. See
+   * `workforce.ts`.
+   */
+  workforce?: import("./workforce").WorkKind[];
 }
 
 /**
@@ -265,13 +311,39 @@ export type IncumbentPosture = "fortress" | "brawler" | "coaster" | "innovator";
 export interface Company {
   id: string;
   name: string;
-  /** Absent for the AI-run incumbents. */
-  teamId?: string;
   kind: "player" | "incumbent";
+  /**
+   * The year this company arrived, for one that was not here at the start.
+   *
+   * Absent for everybody who opened the season. Present on a company that
+   * turned up because the market looked worth entering — which is a thing a
+   * table should be told rather than left to notice.
+   */
+  enteredInYear?: number;
+  /** And the segment that attracted them, which is usually the one somebody just proved. */
+  enteredAfter?: string;
   /** How it behaves, for incumbents only. */
   posture?: IncumbentPosture;
 
   cash: number;
+  /**
+   * How big a business this is, against a market of the reference size.
+   *
+   * One for every market written by hand; a fraction of one for a market Nova
+   * wrote for a single business. Everything absolute about the company —
+   * salaries, the bank, what a bad year costs — is multiplied by it, so a
+   * small market gets a small business rather than an absurd one. See
+   * `marketScale`.
+   */
+  scale?: number;
+  /**
+   * How many periods in a row nobody has filed anything for this company.
+   *
+   * A business nobody runs does not sit still, it winds down: the people
+   * leave, the room goes, and the customers find somebody who answers. See
+   * `windDown` in `resolve.ts`.
+   */
+  unsteered?: number;
   debt: number;
   /** What the bank will lend, given reputation and what the company owns. */
   creditLimit: number;
@@ -546,6 +618,35 @@ export interface World {
   companies: Company[];
   /** The macro climate — it moves on its own and nobody controls it. */
   economy: Economy;
+  /**
+   * Niches companies have gone and found during this season.
+   *
+   * Stored on the world rather than on the market, because the market is
+   * rebuilt from code every year so that balance edits reach seasons already
+   * running — which would wipe anything a season invented. Composed back onto
+   * the market in the one place the engine reads it. See `niche-openings.ts`.
+   */
+  openedNiches?: import("./niche-openings").OpenedNiche[];
+  /**
+   * How many decisions make a year: 1, 4 or 12.
+   *
+   * The engine resolves one *period*, and a period is a year divided by this.
+   * Absent means one, which is what a season has always been and what every
+   * existing world replays as.
+   *
+   * Everything that is a flow — salaries, interest, revenue, the money a
+   * lever costs, what a segment grows by, what a brand loses by standing
+   * still — is divided by it. Everything that is a stock is not. See
+   * `cadence.ts`, which is where that distinction is written down properly.
+   */
+  periodsPerYear?: number;
+  /**
+   * Market events still in force, each with the period it runs out.
+   *
+   * A yearly event drawn in a quarterly season has to last the year, so it is
+   * written down here rather than applied once and forgotten.
+   */
+  weather?: import("./events").Weather[];
 }
 
 /**

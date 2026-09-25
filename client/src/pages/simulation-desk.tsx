@@ -27,7 +27,8 @@
  * last confirmed, and a submit that fails puts the message under the field
  * that caused it rather than in a toast that scrolls away.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { symbolOf, DEFAULT_CURRENCY, type CurrencyCode } from "@shared/currency";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -54,7 +55,11 @@ import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
+  Crosshair,
 } from "lucide-react";
+
+import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
+import { ExpansionVote, type ExpansionVoteData } from "@/components/sim/expansion-vote";
 
 interface Desk {
   phase: "not_started" | "over" | "running" | "finished";
@@ -62,6 +67,8 @@ interface Desk {
   name: string | null;
   product: string | null;
   niche: { id: string; name: string; premise: string; voice: Record<string, string> };
+  /** What this company counts its money in — the project's currency, or the default. */
+  currency?: CurrencyCode;
   year: number;
   totalYears: number;
   resolvesAt: string | null;
@@ -112,8 +119,17 @@ interface Desk {
   valuation: number;
   /** How fast this market's products move, which scales what research buys. */
   innovationPace: number;
+  /** The niche this table went and found, if they have one. */
+  ours: {
+    id: string; name: string; foundInYear: number; from: string; people: number;
+    premium: number; headStartLeft: number; sharedWith: string[]; held: number;
+  } | null;
+  /** The region operations may put to the table this year, and where the vote stands. */
+  expansion: ExpansionVoteData | null;
   table: {
     userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean;
+    /** For putting a face against a vote. */
+    avatarUrl?: string | null;
     /** The chair's standing with the room. Not tracked for the chief executive. */
     person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
   }[];
@@ -128,10 +144,15 @@ interface Desk {
     revenue: number; costs: number; profit: number; cash: number; debt: number;
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
     market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+    auctions?: AuctionRow[];
     event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
     founderValue?: number; founderShare?: number;
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
+  /** Every company in the market, placed — for the map on the Past tab. */
+  standing?: Standing[];
+  /** What the table filed last year, which is the only record of it anywhere. */
+  lastFiled?: { decisions: Record<string, any>; filedBy: Record<string, string> } | null;
   challenge: Challenge | null;
   lastChallenge: ChallengeResult | null;
   distress: {
@@ -160,11 +181,32 @@ interface ChallengeResult {
 /** A market's noun as a column heading: "subscribers" → "Subscribers". */
 const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
-const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
-const compact = (n: number) =>
-  n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+/**
+ * What the season counts in, for every figure on this desk.
+ *
+ * Both formatters had a pound sign written into them, so a company built from
+ * a project that counts in dollars was still priced in sterling on every
+ * screen of the game it was rehearsing. The desk now says which currency it
+ * is (`currency` on its payload) and a context carries it, because the
+ * figures are drawn by six components and threading a prop through all of
+ * them would be six chances to miss one.
+ */
+const DeskCurrency = createContext<CurrencyCode>(DEFAULT_CURRENCY);
+
+function useMoney() {
+  const code = useContext(DeskCurrency);
+  const sym = symbolOf(code);
+  return {
+    money: (n: number) => `${sym}${Math.round(n).toLocaleString()}`,
+    compact: (n: number) =>
+      n >= 1_000_000 ? `${sym}${(n / 1_000_000).toFixed(1)}m`
+      : n >= 1_000 ? `${sym}${Math.round(n / 1_000)}k`
+      : `${sym}${Math.round(n)}`,
+  };
+}
 
 export default function SimulationDeskPage() {
+  const { money, compact } = useMoney();
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -215,8 +257,24 @@ export default function SimulationDeskPage() {
     },
     onError: (err: any) => {
       const body = err?.body ?? err?.response ?? {};
-      if (body?.errors) setErrors(body.errors);
-      else toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
+      if (body?.errors) { setErrors(body.errors); return; }
+      /*
+       * The year turned over while they were typing.
+       *
+       * `YEAR_CLOSING` exists precisely so this can say "a moment" rather
+       * than "something went wrong" — and nothing checked for it, so the one
+       * refusal the server went out of its way to make gentle arrived as a
+       * red error about a failure that had not happened. The desk is also a
+       * year out of date at this point, so it refetches: what they typed was
+       * for a year that has closed, and next year's screen is the one to be
+       * looking at.
+       */
+      if (body?.code === "year_closing") {
+        toast({ title: "That year just closed", description: "Next year is opening now — your screen is catching up." });
+        queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${id}/desk`] });
+        return;
+      }
+      toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
     },
   });
 
@@ -337,6 +395,7 @@ export default function SimulationDeskPage() {
   const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
 
   return (
+    <DeskCurrency.Provider value={desk.currency ?? DEFAULT_CURRENCY}>
     <Shell
       title={desk.name ?? "Your company"}
       subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
@@ -397,6 +456,30 @@ export default function SimulationDeskPage() {
 
         {/* What happened to the market, which is the thing people talk about. */}
         {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
+
+        {/*
+          * And then the two that say why: what the five of you actually filed
+          * and what it bought, and where that left everybody on the map. Both
+          * only exist once there is a year behind you.
+          */}
+        {desk.lastYear && (
+          <WhatTheTableDecided
+            year={desk.lastYear.year}
+            seats={desk.table.map((t) => ({ userId: t.userId, name: t.name, role: t.role, title: t.title, isYou: t.isYou }))}
+            filed={desk.lastFiled?.decisions ?? null}
+            auctions={desk.lastYear.auctions ?? []}
+            standing={desk.standing ?? []}
+            onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)}
+          />
+        )}
+        {desk.lastYear && (desk.standing?.length ?? 0) > 0 && (
+          <WhereTheMarketSits
+            standing={desk.standing!}
+            segments={desk.segments}
+            cities={desk.cities}
+            voice={desk.niche.voice}
+          />
+        )}
         {/*
           * 2. Where the company stands, as KPIs rather than a grid of equal
           * labels. Grouped by the question each answers — the money, the
@@ -535,6 +618,15 @@ export default function SimulationDeskPage() {
         )}
         {/* Your own thing to win, and how last year's went. */}
         {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+        {/* What the year's research bought, if this table went looking. */}
+        {desk.ours && <OurNiche niche={desk.ours} customersWord={v.customers} />}
+
+        {/*
+          * The region on the table. Shown to every seat, not only the one
+          * whose lever it is, because it is the one decision here the five of
+          * them settle between them.
+          */}
+        {desk.expansion && <ExpansionVote data={desk.expansion} seats={desk.table} />}
         {/* 3. The decision. */}
         {desk.phase === "finished" ? (
           <Card><CardContent className="p-6 text-sm text-muted-foreground">
@@ -786,6 +878,7 @@ export default function SimulationDeskPage() {
       <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
       <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
     </Shell>
+    </DeskCurrency.Provider>
   );
 }
 
@@ -798,6 +891,7 @@ export default function SimulationDeskPage() {
  * tells them whether *they* played well.
  */
 function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
+  const { money, compact } = useMoney();
   return (
     <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
@@ -850,6 +944,7 @@ function ChallengeCard({ challenge, last }: { challenge: Challenge; last: Challe
 function DistressCard({ distress, isCeo, seats, ventureId }: {
   distress: Desk["distress"]; isCeo: boolean; seats: Role[]; ventureId: string;
 }) {
+  const { money, compact } = useMoney();
   const { toast } = useToast();
   const [seat, setSeat] = useState<Role | "">("");
 
@@ -1198,6 +1293,7 @@ function WayRow({ label, value, when, warn }: { label: string; value: string; wh
 
 /** Last year, said plainly, with the engine's own explanation of why. */
 function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
+  const { money, compact } = useMoney();
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
@@ -1253,6 +1349,7 @@ function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYea
  * The count says how much is in there without anyone having to open it.
  */
 function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"]>; up: boolean; down: boolean }) {
+  const { money, compact } = useMoney();
   const [open, setOpen] = useState(false);
   const market = report.market ?? [];
   /*
@@ -1332,6 +1429,7 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
   /** For price tiers: what a segment with no tier pays. */
   listPrice?: number;
 }) {
+  const { money, compact } = useMoney();
   const badge = isNew ? <Badge variant="secondary" className="ml-2 text-[10px] align-middle" data-testid={`badge-new-${field.id}`}>New this year</Badge> : null;
 
   /*
@@ -1507,6 +1605,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
                 : field.id === "overrule" ? "Nothing to overrule — every seat's own decision stands."
                   : field.id === "replaceSeat" ? "Nobody to replace — the table is as you want it."
                     : field.id === "deals" ? "No offers on the table this year."
+                      : field.id === "expand" ? "Nowhere new announced this year, or you are already committed to one."
+                        : field.id === "expandVote" ? "No region on the table — operations has to put one up."
                       : "Nothing to choose here this year."}
           </p>
         )}
@@ -1577,6 +1677,7 @@ function Criteria({ segment: s, company: c }: {
   segment: Desk["segments"][number];
   company: Desk["company"];
 }) {
+  const { money, compact } = useMoney();
   const parts: { key: keyof typeof s.weights; label: string; tone: string }[] = [
     { key: "price", label: "price", tone: "bg-sky-500" },
     { key: "quality", label: "quality", tone: "bg-violet-500" },
@@ -1629,6 +1730,7 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
   forecast: Forecast; voice: Record<string, string>; price: number; capacity: number; idleCostPerUnit: number;
   yours: "capacity" | "price" | null;
 }) {
+  const { money, compact } = useMoney();
   const curve = [...forecast.curve].sort((a, b) => a.price - b.price);
   const at = (p: number): number => {
     if (!Number.isFinite(p) || curve.length === 0) return forecast.likely;
@@ -1797,3 +1899,67 @@ function ProductRiskLine({ risk }: { risk: ProductRisk }) {
     </p>
   );
 }
+
+
+/**
+ * The niche this table went and found.
+ *
+ * A year of research money bought these people, and until now nothing on the
+ * screen said so. Three things it has to answer, in the order a table asks
+ * them: who are they, how long do we have them to ourselves, and has anybody
+ * else turned up.
+ *
+ * The last one is the one that stings, so it is said plainly rather than
+ * buried: somebody thinking the same thing at the same time is the most
+ * ordinary event in a market and the most surprising one to be on the
+ * receiving end of.
+ */
+function OurNiche({ niche, customersWord }: {
+  niche: NonNullable<Desk["ours"]>;
+  customersWord: string;
+}) {
+  const { money, compact } = useMoney();
+  const shared = niche.sharedWith.length > 0;
+  return (
+    <Card className="rounded-2xl" data-testid="card-our-niche">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Crosshair className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h2 className="font-semibold truncate">{niche.name}</h2>
+              {shared
+                ? <Badge variant="secondary" data-testid="badge-niche-shared">Shared</Badge>
+                : niche.headStartLeft > 0
+                  ? <Badge data-testid="badge-niche-yours">Yours for now</Badge>
+                  : <Badge variant="outline" data-testid="badge-niche-open">Everybody knows</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Found in year {niche.foundInYear}, inside {niche.from.toLowerCase()}.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+          <Stat label={`These ${customersWord}`} value={compact(niche.people)} />
+          <Stat label="Yours" value={compact(niche.held)}
+            sub={niche.people > 0 ? `${Math.round((niche.held / niche.people) * 100)}% of them` : undefined} />
+          <Stat label="They pay" value={`+${niche.premium}%`} sub="against the segment they came from" />
+          <Stat
+            label="Head start"
+            value={niche.headStartLeft > 0 ? `${niche.headStartLeft} year${niche.headStartLeft === 1 ? "" : "s"}` : "Gone"}
+            sub={niche.headStartLeft > 0 ? "before everybody notices" : "an ordinary segment now"}
+          />
+        </div>
+
+        {shared && (
+          <p className="text-xs text-amber-600 mt-3" data-testid="text-niche-shared">
+            {niche.sharedWith.join(" and ")} went looking in the same place and came back with the same
+            people. Neither of you has a head start on the other — you are both selling to them now.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+

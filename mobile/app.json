@@ -75,7 +75,8 @@
             ]
           }
         ]
-      }
+      },
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "com.sparktower.app",
@@ -133,7 +134,9 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-apple-authentication",
+      "expo-iap"
     ],
     "extra": {
       "//": "Production API. Every build profile in eas.json also sets EXPO_PUBLIC_API_URL explicitly, which wins over this; this value is the safe default if it is ever missing. Local development points at localhost through mobile/.env (see .env.example).",

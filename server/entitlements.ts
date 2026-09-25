@@ -8,6 +8,7 @@ import {
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
+import { overCeiling, type Refusal } from "./ai-spend";
 import { holdCredits, holdMoney, holdCovered, holdAction } from "./credit-reservations";
 import { spend, walletOf, dayPassActive, hasBuildPass, spendBoughtAction, devUnlimited } from "./wallet";
 
@@ -141,12 +142,69 @@ export function paymentRequired(opts: {
  * Returns the entitlements when the work may proceed, or null after writing
  * the response — callers `return` immediately on null, as they always have.
  */
+/**
+ * A ceiling refused, said in a way somebody can act on.
+ *
+ * 429 rather than 403: nothing is wrong with the account or the request, it
+ * has simply arrived too soon, and the client should say "tomorrow" rather
+ * than "upgrade". `retryAfterSeconds` is deliberately absent — the window is
+ * a rolling day and the exact second it frees depends on which call rolls
+ * off, which is more precision than the sentence needs.
+ */
+function refuseCeiling(res: Response, over: Refusal, tier: string): void {
+  if (over.kind === "platform") {
+    /*
+     * The platform's own ceiling, not this person's. 503 rather than 429: it
+     * is the service that is unavailable, nothing about their account is
+     * wrong, and they should be told that plainly rather than left to think
+     * they have done something.
+     */
+    res.status(503).json({
+      code: "ai_paused",
+      message: over.tier === "free"
+        ? "Nova is paused for free accounts for the rest of today — more people arrived than we planned for. It comes back tomorrow, and a paid plan isn't affected."
+        : "Nova is paused for the rest of today while we sort out capacity. Nothing has been charged. Sorry — this one is on us.",
+      tier: over.tier,
+      upgradeUrl: over.tier === "free" ? "/pricing" : undefined,
+    });
+    return;
+  }
+
+  const body = over.kind === "daily_credits"
+    ? {
+        message: `That's today's limit of ${over.cap} AI credits. It resets as the day rolls on — or upgrade for a bigger one.`,
+        code: "daily_credit_cap",
+        spentToday: over.spent, dailyCap: over.cap, cost: over.amount,
+      }
+    : over.kind === "action_day"
+      ? {
+          message: `You've run that ${over.cap} time${over.cap === 1 ? "" : "s"} today, which is the limit for this plan. It's one of the expensive ones — try again tomorrow.`,
+          code: "action_daily_cap",
+          action: over.action, used: over.used, cap: over.cap,
+        }
+      : {
+          message: `You've run that ${over.cap} times in the last thirty days, which is the limit for this plan.`,
+          code: "action_monthly_cap",
+          action: over.action, used: over.used, cap: over.cap,
+        };
+  res.status(429).json({ ...body, tier, upgradeUrl: "/pricing" });
+}
+
 export async function requireCredits(
   res: Response,
   userId: string,
   amount: number,
   label: string,
-  opts?: { outcome?: PricedOutcomeId; projectId?: string | null }
+  opts?: {
+    outcome?: PricedOutcomeId;
+    projectId?: string | null;
+    /**
+     * The action's key, for the few that carry a ceiling of their own (see
+     * `HEAVY_ACTION_LIMITS`). Optional: a call that names none is still bound
+     * by the platform brake and, on the allowance path, the daily credit cap.
+     */
+    action?: string;
+  }
 ): Promise<UserEntitlements | null> {
   /*
    * Every AI endpoint passes through here, which makes this the one place a
@@ -187,6 +245,43 @@ export async function requireCredits(
 
   const outcome = opts?.outcome;
   const projectId = opts?.projectId ?? null;
+
+  /*
+   * The ceilings, before anything is charged.
+   *
+   * Only the platform brake is enforced here, and the two account ceilings
+   * are deliberately not, because both were written against a subscription
+   * model that pay-per-use replaced. Under it a tier meant a price and an
+   * allowance; here every tier is free, every tier draws the same monthly
+   * allowance, and what bounds spending is the price of the outcome. The
+   * tables did not come across with that, and applying them as they stand
+   * does the opposite of what they were for:
+   *
+   *   - `HEAVY_ACTION_LIMITS` gives the free tier `{day: 0}` for codeAudit,
+   *     loopAudit and simulationBuild — an honest cap when free meant the
+   *     unpaid tier, and a total block now that it is the only tier anybody
+   *     is on. Enforcing it would refuse those three to every user, and for
+   *     the priced ones it would refuse them *after* taking the money.
+   *
+   *   - `DAILY_CREDIT_CAP` no longer counts anything real. It still rises
+   *     10/25/60/120 across tiers that are now identical, so two of its
+   *     entries exceed the whole 25-action month they are drawn from. Worse,
+   *     the units stopped matching: this path charges **one** per small
+   *     action while the cap counts the CREDIT_COSTS-weighted `amount`, so an
+   *     eight credit action would count eight times against a ten credit day
+   *     while taking one off the allowance.
+   *
+   * So `action` is threaded through and passed on, and the day those tables
+   * are retuned for a world where every account is free this becomes a
+   * one-line change — but nothing refuses on them until somebody does that
+   * sum. Burst is bounded by the AI rate limit at the top of this function,
+   * and cost by the price.
+   */
+  const over = await overCeiling(userId, ent.tier, 0, opts?.action);
+  if (over?.kind === "platform") {
+    refuseCeiling(res, over, ent.tier);
+    return null;
+  }
 
   // --- A priced outcome: dollars. ---
   if (outcome) {

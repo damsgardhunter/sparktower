@@ -51,6 +51,9 @@ import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
 import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
 import { registerAnalyticsRoutes } from "./analytics-routes";
+import { registerAiSpendRoutes } from "./ai-spend-routes";
+import { registerProjectSimulationRoutes } from "./project-simulation-routes";
+import { registerAppleIapRoutes } from "./apple-iap";
 import { captureAttribution } from "./attribution";
 import { registerNovaAssistRoutes } from "./nova-assist-routes";
 import { registerMcpRoutes } from "./mcp-routes";
@@ -404,6 +407,9 @@ export async function registerRoutes(
   app.use(captureWrites);
   registerAnalyticsIngest(app);
   registerAnalyticsRoutes(app);
+  registerAiSpendRoutes(app);
+  registerProjectSimulationRoutes(app);
+  registerAppleIapRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   // The app's way into web pages it doesn't have yet, signed in (server/web-handoff.ts).
@@ -649,7 +655,11 @@ After each user message, respond conversationally AND include a JSON block in yo
 Format: Respond with your conversational message, then on a new line include:
 <project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "run_company", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, run→restaurant|service|retail|agency|software|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
-Only include fields you have enough info to fill. Start empty if needed.`;
+Only include fields you have enough info to fill. Start empty if needed.
+
+WHAT THAT BLOCK ACTUALLY DOES — never contradict it:
+The <project_update> block is not a suggestion for the user to copy out. It fills the project form on the right-hand side of their screen as you write it: the title, description, category, roles, tech stack, team size and timeline all update in place, in front of them. So you CAN set a project up, and you must never say otherwise. Do not say you lack access, lack permission, cannot create or publish a project, or that they will have to paste it in themselves — all of that is false, and it tells somebody watching you fill the form in that it did not work.
+When asked to set the project up, do it: put the values in the block and say plainly what you have filled in and what is left, e.g. "Filled in the form on the right — title, description, category and stack. Pick your goal on the next step and press Create." The one thing you do not do is press Create; that stays theirs, which is a choice about consent, not a limit on you.`;
 
       const messages = [
         { role: "system" as const, content: systemPrompt },
@@ -2499,10 +2509,6 @@ ${sectionContext}`;
 
 YOUR ROLE: You are the user's dedicated project advisor. You guide them through building their project from the ground up — from defining their vision to launching their product.
 
-COACHING DEPTH: ${coachingDirectiveFor(ent)}
-
-${projectContext}
-
 USING THE CODEBASE AUDIT:
 - An audit is the only evidence in this project of what has actually been built. The tasks and milestones are what the builder *intends*; the audit is what the code *shows*.
 - When they ask "where am I", "what's left", or "what should I do next", answer from the audit if there is one — and name it as the source.
@@ -2528,14 +2534,14 @@ READABILITY (this is a narrow chat panel):
 - Say what you did in plain words ("Rewrote three tasks so none mentions the old onboarding flow"), not what you are "going to" do.
 
 GUIDED ONBOARDING FLOW (for new projects):
-1. Welcome them warmly, acknowledge their project "${project.title}"
+1. Welcome them warmly, acknowledging their project by name (it is in PROJECT CONTEXT, below)
 2. Help define their ONE-LINER positioning (who they help, what they do, how)
 3. Help articulate their MISSION (why this exists, what it's working toward)
 4. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
 5. Work through their PROBLEM STATEMENT and SUCCESS METRICS
 6. Help define their SCOPE (MVP features vs nice-to-have)
 7. Create initial TASKS to get started
-8. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
+8. Create MILESTONES/ROADMAP for their journey, if this plan has them (see YOUR PLAN, below)
 9. Ask what they want to FOCUS ON FIRST
 
 CONTEXT-AWARE ASSISTANCE (based on current tab):
@@ -2547,7 +2553,7 @@ CONTEXT-AWARE ASSISTANCE (based on current tab):
   it — don't just print the text in chat and leave the field empty.
 - Kanban tab: Help create/prioritize tasks, suggest what to work on next, and
   reword or re-prioritise existing ones via edit_project
-- Milestones tab: ${isPremium ? "Help create milestones and roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped" : "Explain milestones, suggest upgrading for AI roadmap creation"}
+- Milestones tab: if this plan has milestones, help create them and the roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped. If it does not, explain what milestones are and say the Builder plan unlocks them.
 - Team tab: Advise on roles needed, team structure
 - Research tab: Help plan user interviews, design experiments
 - Strategy tab: Help with pricing strategy, legal document templates
@@ -2579,7 +2585,7 @@ Available actions:
 3. create_tasks: Create kanban tasks
    <nova_action>{"type": "create_tasks", "data": {"tasks": [{"title": "...", "description": "...", "priority": "high|medium|low"}]}}</nova_action>
 
-4. create_milestones: Create project milestones (${canCreateMilestones ? "AVAILABLE" : "NOT AVAILABLE on this plan. Mention that the Builder plan unlocks AI roadmaps and milestones."})
+4. create_milestones: Create project milestones (only on a plan that has them — see YOUR PLAN, below)
    <nova_action>{"type": "create_milestones", "data": {"milestones": [{"title": "...", "description": "...", "targetDate": "YYYY-MM-DD"}]}}</nova_action>
 
 5. complete_onboarding: Mark onboarding as complete
@@ -2598,7 +2604,7 @@ Available actions:
    re-date, or re-sequence something they can already see.
    <nova_action>{"type": "edit_project", "data": {"operations": [ ... ]}}</nova_action>
 ${OPERATION_SCHEMA_INSTRUCTIONS}
-   Milestone and roadmap operations require the Builder plan${canCreateMilestones ? " — this user has it" : " — this user does NOT have it, so say so instead of trying"}.
+   Milestone and roadmap operations require the Builder plan — see YOUR PLAN, below, for whether this user has it.
 
 RULES:
 - NEVER write an id in your visible reply. Ids exist so you can put them inside
@@ -2619,16 +2625,47 @@ RULES:
       // "Nova project memory" — how far back Nova can see. This is the tier
       // difference between Basic / Expanded / Full memory.
       const priorMessages = history.slice(0, -1).slice(-memoryLimitFor(ent));
+
+      /*
+       * Where the project's current state goes, and why it is not in the
+       * system prompt.
+       *
+       * A prompt is cached by exact prefix. The board changes — often inside
+       * a single conversation, because Nova itself edits it — so holding that
+       * state at the top made every message after it uncacheable: the whole
+       * instruction block *and* every turn of the history, re-bought on every
+       * reply. Carried on the live turn instead, the static instructions and
+       * the entire conversation behind them are a stable prefix, and only the
+       * part that actually moved is charged at full price.
+       *
+       * It reads better to the model this way too: the state of the board is
+       * a fact about right now, which is where the question is.
+       */
+      const liveContext = `YOUR PLAN: ${isPremium ? "Premium" : "Free"} (${ent.tier}). Milestones and roadmaps are ${canCreateMilestones ? "AVAILABLE — this user has them" : "NOT AVAILABLE on this plan; say so plainly rather than trying, and mention that the Builder plan unlocks AI roadmaps and milestones"}.
+
+COACHING DEPTH: ${coachingDirectiveFor(ent)}
+${projectContext}`;
+
       const messages = [
         { role: "system" as const, content: systemPrompt },
         ...priorMessages.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        { role: "user" as const, content: message }
+        { role: "user" as const, content: `${liveContext}\n\n---\n\n${message}` }
       ];
 
       const response = await openai.chat.completions.create({
         model: modelFor(ent),
         messages,
         temperature: 0.7,
+        /*
+         * A ceiling on the answer, which this call did not have.
+         *
+         * The prompt tells Nova to stay under 150 words in a narrow chat
+         * panel, and almost every reply does. A ceiling is for the reply that
+         * does not — a loop, a pasted file read back, a model having a bad
+         * day — which is paid for by the token and read by nobody. Set far
+         * above any honest answer, including one carrying several actions.
+         */
+        max_completion_tokens: 2000,
       });
 
       // An empty answer is a failed call: 502, nothing charged. It used to be
@@ -3572,7 +3609,7 @@ RULES:
         return res.status(400).json({ message: `Write every loop first — still to do: ${still.join(", ")}.`, code: "loops_incomplete", missing: read.coverage.missing, unwritten: read.coverage.unwritten });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops", { projectId });
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops", { projectId, action: "loopAudit" });
       if (!ent) return;
       const brief = [formatProjectBriefForPrompt(project), project.novaNotes ? `THE BUILDER'S STANDING NOTES (these outrank the brief)\n${project.novaNotes}` : ""].filter(Boolean).join("\n\n");
       let result: Awaited<ReturnType<typeof auditLoopsAgainstCompetition>>;
@@ -5398,7 +5435,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       });
       // A rebuild re-plans everything, so it is the roadmap purchase again — `cost` is now only a size hint.
       void cost;
-      if (!(await requireCredits(res, userId, CHARGEABLE, "Rebuilding your roadmap", { outcome: "roadmap", projectId }))) return;
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Rebuilding your roadmap", { outcome: "roadmap", projectId, action: "roadmapRebuild" }))) return;
 
       const { whatChanged, newGoal, startingPoint: newStartingPoint } = req.body as {
         whatChanged?: string; newGoal?: string; startingPoint?: string;
@@ -7077,12 +7114,24 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           label: OUTCOME_COPY.business.name, outcome: "business", cents, wallet,
         }));
       }
+      /*
+       * What was actually taken, not what it lists at.
+       *
+       * `spend` hands back a record of nothing on a development account (see
+       * the note there), so writing the list price into the pass, the receipt
+       * and the refund had all three claiming $14.99 against a balance that
+       * never moved — and the refund would have been the worst of them, since
+       * it puts money on an account that never spent any.
+       */
+      const tookCents = taken.amountCents;
       try {
-        await db.insert(novaBuildPasses).values({ userId, projectId, paidCents: cents });
+        await db.insert(novaBuildPasses).values({ userId, projectId, paidCents: tookCents });
       } catch (err) {
         // The pass didn't stick, so the money doesn't either.
         const { refund } = await import("./wallet");
-        await refund(userId, cents, { outcome: "business", projectId, note: "Refunded — the build pass couldn't be recorded" });
+        if (tookCents > 0) {
+          await refund(userId, tookCents, { outcome: "business", projectId, note: "Refunded — the build pass couldn't be recorded" });
+        }
         throw err;
       }
       /*
@@ -7092,7 +7141,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
        * (GET /api/projects/:id/nova-build).
        */
       startBusinessBuild(projectId, userId);
-      res.status(201).json({ projectId, paidCents: cents, started: true, wallet: await walletOf(userId) });
+      res.status(201).json({ projectId, paidCents: tookCents, started: true, wallet: await walletOf(userId) });
     } catch (error) {
       console.error("Build-my-business error:", error);
       res.status(500).json({ message: "Couldn't start that build." });

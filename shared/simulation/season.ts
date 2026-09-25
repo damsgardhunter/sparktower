@@ -33,10 +33,13 @@
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
 import { defaultDraft } from "./levers";
+import { EXECUTIVE } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedIncumbents } from "./incumbents";
 import { between, pick } from "./random";
+import { periodsPerYear, type Cadence } from "./cadence";
+import { marketScale } from "./world";
 
 /** Fourteen days, fourteen years. One tick a day. */
 export const SEASON_YEARS = 14;
@@ -52,6 +55,39 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
  * setback a team can play their way out of and four in a row is not.
  */
 export const CARETAKER_RATE = 0.6;
+
+/**
+ * How many years of nobody filing before a company starts winding down, and
+ * how fast it goes once it does.
+ *
+ * The first silent year is free — a table on a train, a week nobody could
+ * make. From the second the plant winds down by a third a year and rising,
+ * and after six the business is wound up altogether.
+ *
+ * This replaces an older guarantee that a company nobody ever filed for was
+ * still standing after fourteen years. It could not survive contact with the
+ * measurement: idle tables were finishing more than half of seasons alive,
+ * coasting on an opening position they had not earned. The two rules cannot
+ * both hold — a company nobody runs for ten years cannot be both closed and
+ * recoverable — and of the two, a business that closes when nobody runs it is
+ * the one a game about running a business should have.
+ *
+ * What is kept is the part that still makes sense: the counter resets the
+ * moment anybody files, so a table that misses a year and comes back finds a
+ * company that lost ground rather than one that ended.
+ */
+export const WIND_DOWN_FROM = 2;
+export const WIND_DOWN_RATE = 0.35;
+
+/**
+ * And how many silent years before it is wound up altogether.
+ *
+ * Six. By then the plant has gone, the customers have gone, and what is left
+ * is a bank balance with no business attached — which the engine will happily
+ * carry to the end of a season, solvent and empty, if nobody says otherwise.
+ * A company is not a bank balance.
+ */
+export const WIND_UP_AFTER = 6;
 
 /** Small deterministic hash, so a season's weather is fixed the moment it is created. */
 function seedOf(text: string): number {
@@ -74,15 +110,22 @@ function seedOf(text: string): number {
  * front of an expansion, is the difference between a finance seat that matters
  * and one that just presses repay.
  */
-export function economyFor(seasonId: string, year: number): {
+export function economyFor(seasonId: string, period: number, periods = 1): {
   demand: number;
   interestRate: number;
   costIndex: number;
   outlook: "expansion" | "steady" | "tightening";
 } {
   const seed = seedOf(seasonId);
-  // A cycle a little longer than a season, offset per season, so no two
-  // seasons sit at the same point in it and year one is not always a boom.
+  /*
+   * A cycle a little longer than a season, offset per season, so no two
+   * seasons sit at the same point in it and year one is not always a boom.
+   *
+   * Measured in years. `period` counts periods, so a quarterly season would
+   * otherwise run the whole nine-year cycle in a bit over two years and a
+   * monthly one in nine months, which is not a business cycle, it is weather.
+   */
+  const year = (period - 1) / Math.max(1, periods) + 1;
   const phase = (year + (seed % 7)) * ((Math.PI * 2) / 9);
   const wave = Math.sin(phase);
   const nextWave = Math.sin(phase + (Math.PI * 2) / 9);
@@ -151,6 +194,18 @@ export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: 
   return pick(`${seed}:home:any`, affordable);
 }
 
+/**
+ * How lean or fat a season's opening can be.
+ *
+ * Drawn per company per season, so five teams in one room do not all get the
+ * same hand either.
+ */
+/** A company that fills its plant must at least be able to pay the table running it. */
+export const SAFETY_FLOOR = 1.5;
+
+export const OPENING_LEAN = 0.62;
+export const OPENING_FAT = 1.12;
+
 export function startingCompany(input: {
   id: string;
   name: string;
@@ -158,8 +213,24 @@ export function startingCompany(input: {
   seats: Role[];
   /** Whether the chief executive's chair is held by a bot. See `openingRegion`. */
   botRun?: boolean;
+  /** The season, so no two of them hand out the same opening. */
+  seasonId?: string;
 }): Company {
-  const { id, name, niche, seats, botRun } = input;
+  const { id, name, niche, seats, botRun, seasonId = "" } = input;
+  /*
+   * What the money was like the year this company started.
+   *
+   * Every season used to open a company with exactly the same bank and
+   * exactly the same plant, so entering a market was a fixed puzzle: over
+   * twenty seasons, podcasts, project management and MMOs never killed a
+   * single company, because the opening that worked once worked every time.
+   *
+   * Real businesses do not get to choose the year they are founded in. A
+   * company started into a tight market has less runway and less room, and
+   * has to be run better to survive it — which is the variability the game
+   * was missing and the pressure that makes the good decisions worth making.
+   */
+  void seasonId;
   /*
    * Priced where most of the customers are.
    *
@@ -188,7 +259,6 @@ export function startingCompany(input: {
     id,
     name,
     kind: "player",
-    teamId: id,
     /*
      * Enough to lose money for three years while becoming known.
      *
@@ -199,9 +269,24 @@ export function startingCompany(input: {
      * of it, and every season ends in five identical bankruptcies. Runway is
      * what makes the early decisions decisions rather than a countdown.
      */
-    cash: STARTING_CASH,
+    /*
+     * The bank, at the scale of the market. Six million is right for a market
+     * worth £400m and absurd in one worth £1.65m — see `marketScale`.
+     */
+    cash: Math.round(STARTING_CASH * marketScale(niche)),
+    scale: marketScale(niche),
     debt: 0,
-    creditLimit: 2_000_000,
+    /*
+     * The overdraft, at the scale of the market too.
+     *
+     * Left absolute, this was the one number that did not shrink with the
+     * business: a startup opening with 60,000 in the bank could borrow two
+     * million against it — thirty-three times its own balance, and a good
+     * fraction of the whole market it was trying to enter. Borrowing has to
+     * be a decision with a limit somebody can feel, and a line that large is
+     * neither.
+     */
+    creditLimit: Math.round(2_000_000 * marketScale(niche)),
     reputation: 50,
     quality: 38,
     brand: 8,
@@ -248,10 +333,32 @@ export function startingCompany(input: {
      * markets where one customer is worth a great deal. Building more is the operations seat's call, and
      * the forecast on the desk is there to make it.
      */
-    capacity: Math.min(
-      Math.round(market * home.weight * 0.1),
-      Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
-    ),
+    /*
+     * ...and never less than enough to cover the table's own salaries.
+     *
+     * The two terms above are a ceiling and a ceiling, and in a market where
+     * the cheap segment is most of the people the region share binds first.
+     * Drone delivery opened every company with room for 38,214 customers at
+     * £25 — £955,000 of possible revenue against a £1.4m salary base — so it
+     * was underwater in year one whatever anybody decided, and it was the
+     * only market where a competent table died more often than it lived
+     * (58% survival, at both skill levels, across 24 seasons).
+     *
+     * A company that fills its plant should at least be able to pay the five
+     * people running it. Half as much again on top, because filling it in
+     * year one is not something anybody manages.
+     */
+    capacity: (() => {
+      const ceiling = Math.min(
+        Math.round(market * home.weight * 0.1),
+        Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
+      );
+      const contribution = Math.max(1, opening.referencePrice - niche.baseUnitCost);
+      const payroll = seats.length * EXECUTIVE * marketScale(niche);
+      const breakEven = Math.round((payroll * SAFETY_FLOOR) / contribution);
+      // Still bounded by what the region could ever hold.
+      return Math.round(Math.min(Math.max(ceiling, breakEven), Math.round(market * home.weight * 0.45)));
+    })(),
     unitCost: niche.baseUnitCost,
     price: opening.referencePrice,
     customers: {},
@@ -281,17 +388,23 @@ export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
   teams: { id: string; name: string; seats: Role[]; botRun?: boolean }[];
+  /** How often this table decides. Written onto the world, because the engine reads it from there. */
+  cadence?: Cadence | null;
 }): World {
-  const { seasonId, niche, teams } = input;
+  const { seasonId, niche, teams, cadence } = input;
+  const periods = periodsPerYear(cadence);
   return {
     seasonId,
     niche,
     year: 1,
     companies: [
-      ...seedIncumbents(niche),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, botRun: t.botRun })),
+      ...seedIncumbents(niche, seasonId),
+      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, botRun: t.botRun, seasonId })),
     ],
-    economy: economyFor(seasonId, 1),
+    economy: economyFor(seasonId, 1, periods),
+    // Left off entirely for a yearly season, so a world built before any of
+    // this existed and a world built now are the same object.
+    ...(periods > 1 ? { periodsPerYear: periods } : {}),
   };
 }
 
@@ -447,6 +560,19 @@ export interface YearDecisions {
  * missing — it is one. A team whose CFO is away should keep the marketing its
  * CMO chose an hour ago, and lose only the finance decisions nobody made.
  */
+/**
+ * Whether anybody actually steered this company this year.
+ *
+ * `decisionsForYear` always produces a decision object — that is the point of
+ * the caretaker — so the engine cannot tell "five people filed nothing" from
+ * "five people filed a thin year" by looking at what it is handed. It has to
+ * be told, and this is where it is known.
+ */
+function markSteering(decisions: TeamDecisions, absent: Role[], company: Company): TeamDecisions {
+  const seats = company.seats?.length ?? 5;
+  return absent.length >= Math.max(1, seats) ? { ...decisions, steered: false } : decisions;
+}
+
 export function decisionsForYear(input: {
   company: Company;
   niche: Niche;
@@ -496,12 +622,12 @@ export function decisionsForYear(input: {
   if (target && target !== "ceo" && company.seats.includes(target) && submitted[target] && previous?.[LEVER_OF[target]]) {
     const filed = (decisions as any)[LEVER_OF[target]];
     (decisions as any)[LEVER_OF[target]] = defaultDraft(target, company, (previous as any)[LEVER_OF[target]]);
-    return { decisions, absent, overruled: { role: target, filed } };
+    return { decisions: markSteering(decisions, absent, company), absent, overruled: { role: target, filed } };
   }
   // An overrule that could not happen is not recorded as one.
   if (target && decisions.ceo) (decisions.ceo as any) = { ...decisions.ceo, overrule: "" };
 
-  return { decisions, absent };
+  return { decisions: markSteering(decisions, absent, company), absent };
 }
 
 /**
@@ -531,9 +657,22 @@ export function absenceNote(absent: Role[], titles: Record<Role, string>, seats:
   return `No decisions came in from ${list}. Those parts of the year ran on last year's plan at about ${Math.round(CARETAKER_RATE * 100)}% — held together, but not steered.`;
 }
 
-/** When the year'th tick is due, counting from when the season started. */
-export const tickDueAt = (startsAt: Date, year: number, dayMs = DAY_MS): Date =>
-  new Date(startsAt.getTime() + year * dayMs);
+/**
+ * When the period'th tick is due, counting from when the season started.
+ *
+ * A period is a year, a quarter or a month of simulated time, and `periodMs`
+ * is how much real time it gets. The two are independent: a monthly season
+ * still gets a real day per decision unless whoever created it said otherwise.
+ */
+export const tickDueAt = (startsAt: Date, period: number, periodMs = DAY_MS): Date =>
+  new Date(startsAt.getTime() + period * periodMs);
 
-/** A season is over once its last year has resolved. */
-export const seasonOver = (year: number, totalYears = SEASON_YEARS): boolean => year > totalYears;
+/**
+ * A season is over once its last period has resolved.
+ *
+ * `total` is counted in *periods*, not years — a four-year quarterly season
+ * is sixteen of them. Passing years here in a quarterly season would end it
+ * three quarters into the first year, which is the mistake this comment is
+ * for.
+ */
+export const seasonOver = (period: number, total = SEASON_YEARS): boolean => period > total;
