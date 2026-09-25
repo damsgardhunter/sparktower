@@ -169,6 +169,27 @@ first you hear of it. Run `check:env` first.
 
 Which variable does what, per environment: [env-contract.md](../env-contract.md).
 
+### Stripe Connect has a setup step that is not a variable
+
+Paying people *out* — the "Connect a bank account" button on `/earnings` —
+needs **Connect switched on for the platform's own Stripe account**, in the
+Stripe dashboard. A secret key alone is not enough, and nothing about having
+one hints that the rest is missing.
+
+Until it is on, `stripe.accounts.create({ type: "express" })` is refused with
+*"Only Stripe Connect platforms can work with other accounts"*, which is the
+first call the button makes. Everything else Stripe does here — checkout,
+top-ups, webhooks — works perfectly without it, so this is only ever found by
+the first person who tries to take money out.
+
+To switch it on: Stripe dashboard → **Connect** → get started, then complete
+the **platform profile**. Express accounts additionally need the platform's
+branding (name and icon) filled in, or account creation is refused for that
+instead. Do it in test mode first; it is a separate switch per mode.
+
+The routes say so now rather than answering 500
+(`server/stripe-connect-errors.ts`), so if this was missed the page names it.
+
 ## Where the database lives
 
 Render Postgres, in the same region as the web service, wired to the web

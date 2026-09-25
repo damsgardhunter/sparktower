@@ -116,8 +116,16 @@ test("a creator with no bank account is pointed at their balance, and cannot cho
    * can set this up before there is money waiting on it.
    */
   await expect(page.getByTestId("earnings-empty")).toBeVisible();
-  await expect(page.getByTestId("card-bank")).toContainText("Connect a bank account");
-  await expect(page.getByTestId("button-connect-bank")).toBeVisible();
+  /*
+   * This server has no Stripe: the browser suite blanks STRIPE_SECRET_KEY on
+   * purpose (playwright.config.ts). So the card says payouts aren't switched
+   * on, and — the part worth holding — it does not offer a button that cannot
+   * work. It used to offer one anyway, because `available` was hardcoded true
+   * for anybody who had never connected an account, and pressing it failed
+   * inside the Stripe client with "Failed to create connect account".
+   */
+  await expect(page.getByTestId("card-bank")).toContainText("aren't switched on");
+  await expect(page.getByTestId("button-connect-bank")).toHaveCount(0);
 
   // The balance is where money goes until they say otherwise.
   await expect(page.getByTestId("pick-balance")).toHaveAttribute("aria-pressed", "true");
@@ -131,7 +139,9 @@ test("a creator with no bank account is pointed at their balance, and cannot cho
   await expect(page.getByTestId("pick-bank")).toBeDisabled();
   const refused = await creator.api.patch("/api/earnings/target", { data: { target: "bank" } });
   expect(refused.status()).toBe(422);
-  expect((await refused.json()).message).toMatch(/connect/i);
+  // Either honest reason will do — that it is off here, or that they have no
+  // account yet. What matters is that it is refused and said in words.
+  expect((await refused.json()).message).toMatch(/switched on|connect/i);
 
   /* Refusing it must not have changed anything. */
   const after = (await sql("SELECT payout_target FROM users WHERE id = $1", [creator.id])).rows[0];

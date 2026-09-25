@@ -242,7 +242,18 @@ export async function setPayoutTarget(
 async function bankStateFor(userId: string): Promise<EarningsRead["bank"]> {
   const [user] = await db.select({ accountId: users.stripeConnectAccountId })
     .from(users).where(eq(users.id, userId));
-  const none = { connected: false, payoutsEnabled: false, detailsSubmitted: false, available: true };
+  /*
+   * `available` is answered from the server's own configuration, not from a
+   * Stripe call that only happens once somebody already has an account.
+   *
+   * It used to be hardcoded true here, so a server with no Stripe keys showed
+   * "Connect a bank account" to everyone who had never connected one — and the
+   * button failed somewhere inside the SDK when pressed. The one case the
+   * comment on the field describes, "Stripe isn't configured on this server at
+   * all", was the case it got wrong.
+   */
+  const { isStripeConfigured } = await import("./stripeClient");
+  const none = { connected: false, payoutsEnabled: false, detailsSubmitted: false, available: isStripeConfigured() };
   if (!user?.accountId) return none;
   try {
     const { getUncachableStripeClient } = await import("./stripeClient");

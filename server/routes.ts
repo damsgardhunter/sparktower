@@ -86,7 +86,7 @@ import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
-import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { getUncachableStripeClient, getStripePublishableKey, isStripeConfigured } from "./stripeClient";
 import { earningsFor, setPayoutTarget } from "./earnings";
 import { platformRevenue } from "./platform-revenue";
 import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
@@ -145,6 +145,7 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 import { openai } from "./openai-client";
 import { notifyWatchersOfNewProject } from "./scouting-alerts";
 import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
+import { connectFailure } from "./stripe-connect-errors";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -6790,6 +6791,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
+      /*
+       * Said plainly, before the SDK is asked. Without keys the create call
+       * fails somewhere inside Stripe's client and arrives as a refusal that
+       * reads like the person's fault rather than the server's.
+       */
+      if (!isStripeConfigured()) {
+        return res.status(503).json({
+          message: "Bank payouts aren't switched on for this server. Your earnings stay in your balance.",
+          code: "stripe_not_configured",
+        });
+      }
 
       if (user.stripeConnectAccountId) {
         return res.json({ accountId: user.stripeConnectAccountId });
@@ -6810,7 +6822,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ accountId: account.id });
     } catch (error) {
       console.error("Connect account error:", error);
-      res.status(500).json({ message: "Failed to create connect account" });
+      const { status, body } = connectFailure(error, "Couldn't start the bank setup");
+      res.status(status).json(body);
     }
   });
 
@@ -6840,7 +6853,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ url: link.url });
     } catch (error) {
       console.error("Connect onboarding error:", error);
-      res.status(500).json({ message: "Failed to get onboarding link" });
+      const { status, body } = connectFailure(error, "Couldn't open the bank setup");
+      res.status(status).json(body);
     }
   });
 
@@ -6857,7 +6871,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ url: link.url });
     } catch (error) {
       console.error("Connect dashboard error:", error);
-      res.status(500).json({ message: "Failed to get dashboard link" });
+      const { status, body } = connectFailure(error, "Couldn't open your Stripe dashboard");
+      res.status(status).json(body);
     }
   });
 
