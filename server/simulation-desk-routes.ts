@@ -613,11 +613,31 @@ export function registerSimulationDeskRoutes(app: Express): void {
       arrivingNextYear: seat.role
         ? arrivingIn(seat.role as Role, year + 1, periods).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
         : [],
-      /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
+      /**
+       * What to show in the form: what they filed already, else last period's,
+       * else a sensible opening.
+       *
+       * A solo founder holds all five desks, so their filing is written as
+       * five rows — one per role, because the engine reads decisions per role
+       * and a role with no row is treated as absent. This is the other half of
+       * that, and it was missing: handing back only `decisions[seat.role]` gave
+       * them the chief executive's fields and nothing else, so every price,
+       * every spend and every target they had filed came back empty the moment
+       * the page remounted. The work was never lost — it was in the database
+       * the whole time, in the four rows this line did not read.
+       */
       draft: seat.role
-        ? (decisions as any)[seat.role] ?? defaultDraft(seat.role as Role, company, (previous as any)?.[seat.role])
+        ? (solo
+            ? Object.assign(
+                {},
+                ...ROLES.map((r) => (decisions as any)[r] ?? defaultDraft(r, company, (previous as any)?.[r])),
+              )
+            : (decisions as any)[seat.role] ?? defaultDraft(seat.role as Role, company, (previous as any)?.[seat.role]))
         : null,
-      submitted: seat.role ? !!(decisions as any)[seat.role] : false,
+      /* Filed when every desk they hold has a row, which for a solo table is all five. */
+      submitted: seat.role
+        ? (solo ? ROLES.every((r) => !!(decisions as any)[r]) : !!(decisions as any)[seat.role])
+        : false,
 
       company: {
         cash: Math.round(company.cash),

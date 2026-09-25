@@ -629,3 +629,66 @@ describe("the table votes on where to expand", () => {
     expect(desk.fields.find((f: any) => f.id === "expandVote").options).toEqual([]);
   }, 120_000);
 });
+
+/**
+ * A founder holding every desk files once and gets all of it back.
+ *
+ * Their filing is written as five rows, one per role, because the engine reads
+ * decisions per role and a role with no row for the period is treated as
+ * absent — "that part of the year ran on last year's plan at about 60%". That
+ * half worked. The read-back did not: the desk handed over
+ * `decisions[seat.role]`, which is the chief executive's row and nothing else,
+ * so every price, spend and target filed from the other four desks came back
+ * empty the moment the page remounted. Nothing was lost — it was in the
+ * database the whole time, in the four rows that line did not read — but a
+ * person switching tabs saw their decisions reset to zero, which is the same
+ * thing from where they are sitting.
+ */
+describe("a solo founder's filing", () => {
+  it("comes back whole after the page is reloaded", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    // One chair: the same shape a project's solo season is built with.
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const ceo = seat("ceo");
+    const filed = await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: {
+        focus: "growth",
+        price: 20,
+        brandSpend: 5_000,
+        capacityTarget: 10_000,
+        borrow: 1_000,
+        featureSpend: 2_500,
+      },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    const again = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(again.status).toBe(200);
+    expect(again.body.solo, "one chair is a solo table").toBe(true);
+    expect(again.body.submitted, "every desk they hold has a row").toBe(true);
+
+    // The part that was broken: four desks' worth of fields, not one.
+    expect(again.body.draft.focus, "the chief executive's own").toBe("growth");
+    expect(again.body.draft.price, "marketing's").toBe(20);
+    expect(again.body.draft.brandSpend).toBe(5_000);
+    expect(again.body.draft.capacityTarget, "operations'").toBe(10_000);
+    expect(again.body.draft.borrow, "finance's").toBe(1_000);
+    expect(again.body.draft.featureSpend, "technology's").toBe(2_500);
+  }, 120_000);
+
+  /* And a five-person table is untouched: each seat still gets its own desk. */
+  it("does not hand a shared table somebody else's levers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 30, brandSpend: 1_000 } });
+    const cfo = await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+
+    expect(cfo.body.solo).toBe(false);
+    expect(cfo.body.draft.price, "the finance seat does not file a price").toBeUndefined();
+  }, 120_000);
+});

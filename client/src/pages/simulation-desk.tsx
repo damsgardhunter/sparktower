@@ -235,6 +235,18 @@ export default function SimulationDeskPage() {
    */
   const { money, compact } = useMoney(desk?.currency);
   const period = usePeriod(desk?.period);
+  /*
+   * Which desks this person is filing for.
+   *
+   * Normally one. A solo founder holds all five, and everywhere the screen
+   * asked "is this my desk?" to decide whether the live draft or the filed
+   * number should be shown, it was asking `yourRole === "cmo"` — which is
+   * false for a founder whose seat is the chief executive's. So somebody
+   * typing a price watched the forecast ignore it, and somebody asking for ten
+   * thousand seats watched the room stay where it was, because both were
+   * reading the filed number instead of the one under their cursor.
+   */
+  const holds = (role: string) => desk?.solo || desk?.yourRole === role;
 
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -671,7 +683,7 @@ export default function SimulationDeskPage() {
                       fresh={desk.fields.filter((f) => f.unlocksIn === desk.year).map((f) => f.label)}
                       coming={desk.arrivingNextYear ?? []}
                     />
-                    {desk.yourRole === "cto" && desk.productRisk && <ProductRiskLine risk={desk.productRisk} />}
+                    {holds("cto") && desk.productRisk && <ProductRiskLine risk={desk.productRisk} />}
                   </div>
                   {desk.submitted && (
                     <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
@@ -696,14 +708,14 @@ export default function SimulationDeskPage() {
                   ))}
                 </div>
 
-                {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
+                {holds("cfo") && Number(draft.raiseAmount) > 0 && (
                   <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
                     Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
                     founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
                     of whatever this becomes. It never has to be repaid, and it never comes back.
                   </p>
                 )}
-                {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
+                {holds("cto") && desk.company.techDebt > 40 && (
                   <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
                     The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
                     {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
@@ -711,7 +723,7 @@ export default function SimulationDeskPage() {
                     every number after it.
                   </p>
                 )}
-                {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
+                {holds("cto") && Number(draft.researchSpend) > 0 && (
                   <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
                     Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
                     landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
@@ -849,16 +861,16 @@ export default function SimulationDeskPage() {
           <ForecastCard
             forecast={desk.forecast}
             voice={v}
-            price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
+            price={Number(holds("cmo") && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
             /*
              * The room the company actually has this year. Capacity ordered now
              * opens next year, so the lever's value is next year's room — set
              * against next year's demand in the projection above, not here.
              * A cut is immediate, so the smaller of the two is what serves.
              */
-            capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
+            capacity={Math.min(c.capacity, Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
             idleCostPerUnit={desk.idleCostPerUnit}
-            yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
+            yours={holds("coo") ? "capacity" : holds("cmo") ? "price" : null}
           />
         )}
         {/* What is already in motion: the economy's turn, and the work that lands later (lag.ts). */}
