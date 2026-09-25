@@ -247,6 +247,51 @@ rather than a failed deploy. Keep it that way when adding migrations; the
 guard test in `test/unit/migration-journal.test.ts` covers the journal, not the
 SQL.
 
+### When two branches each wrote a 0051
+
+The high-water mark has one more failure in it, and it is the one this
+repository actually hit. `main` and `pay-per-use` each grew their own
+migrations from 0051 to 0066. Merging brought both series into one journal,
+and every database has one series and is missing the other — so each one's
+mark sits above the entries it never took.
+
+**Restamping cannot fix this.** Pushing one series above the mark pushes the
+other out of reach on the database that has *it*. There is no ordering that
+satisfies both, because there is only one mark. `db:reconcile` says so
+explicitly when it finds it:
+
+```
+⚠️  16 migration(s) have no row AND sit below the mark, so the
+   migrator will never reach them.
+```
+
+**`npm run db:catch-up` is the repair.** It ignores the mark and asks the
+honest question instead — which journal entries have no row here, matched by
+content hash — then runs those in journal order and records each. Report-only
+until `-- --apply`.
+
+It refuses any migration it cannot prove is safe to re-run, because it is
+applied against databases that may already have some of it. The sixteen from
+the merged series were guarded for this (`IF NOT EXISTS`, and a `DO` block
+around the renames and constraints, which have no such form). Keep them that
+way; `test/unit/catch-up-guard.test.ts` fails if one stops being re-runnable.
+
+**On a database that has fallen behind, the order is:**
+
+```bash
+DATABASE_URL=<external url> npm run db:reconcile            # read it first
+DATABASE_URL=<external url> npm run db:reconcile -- --apply # align rows, archive orphans
+DATABASE_URL=<external url> npm run db:catch-up             # read it first
+DATABASE_URL=<external url> npm run db:catch-up -- --apply  # the ones the mark hides
+DATABASE_URL=<external url> npm run db:migrate              # anything genuinely new
+DATABASE_URL=<external url> npm run db:verify               # every entry has a row
+```
+
+Once every entry has a row, the mark means what it is supposed to again and
+`db:migrate` works normally for everything that comes next. A *new* database
+never had the problem — it applies all of them in order — which is why this
+only shows up on the ones that matter.
+
 **The root cause, so it isn't repeated:** the journal's `when` values were
 edited by hand after those migrations had already run, which is what put the
 databases and the file out of step. Don't renumber or restamp an entry that has
