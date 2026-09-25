@@ -32,8 +32,7 @@ you can raise anything else:
 
 | Pool | Default | Env |
 |---|---|---|
-| Main query pool | 10 | `DB_POOL_MAX` |
-| Session store | 10 | — (hard-coded by `connect-pg-simple`) |
+| Main query pool — application **and** sessions | 20 | `DB_POOL_MAX` |
 | Project lock | 12 | `PROJECT_LOCK_POOL_MAX` |
 | **Per instance** | **32** | |
 
@@ -214,12 +213,19 @@ Baseline load, before anybody clicks anything, from the polling table above:
 
 The second column is the one that hurts, and it is explained next.
 
-## 1. Make `/path` a read (do this first)
+## 1. Make `/path` a read — done, partly
 
 `pathStatus` defaults to `sync: true`
 ([phase-trees.ts](../../server/phase-trees.ts)), so **every poll of
-`/api/projects/:id/path` takes the project's advisory lock and performs a
+`/api/projects/:id/path` used to take the project's advisory lock and perform a
 read-modify-write**. A dashboard polls it every 15 seconds.
+
+`syncPathTree` is now debounced: a reconcile is recorded in `path_sync_state`
+against the inputs it depended on, and a later call with the same inputs inside
+the window (`PATH_SYNC_DEBOUNCE_MS`, 60s) returns without taking the lock. At a
+15-second poll that is roughly one reconcile in four, and none of them contend.
+Option (2) or (3) below is still the better end state — the read path no longer
+*usually* writes, but it still can.
 
 Three consequences, all fatal at scale:
 
@@ -245,13 +251,19 @@ Options, cheapest first:
 Do (1) before launch whatever else you choose. It is small and it is the
 difference between 13 write-locked requests a second and roughly none.
 
-## 2. Stop paying 10 connections per instance for sessions
+## 2. Sessions share the application's pool — done
 
-`connect-pg-simple` is handed a `conString`
+`connect-pg-simple` used to be handed a `conString`
 ([replitAuth.ts](../../server/replit_integrations/auth/replitAuth.ts)), so it
-builds a second pool. Hand it the existing pool instead and the per-instance
-budget drops from 32 to 22 — a third of your connection headroom back for a
-one-line change.
+built a second pool of its own with node-postgres's defaults — including
+waiting forever for a connection, the failure the main pool was fixed for.
+It is handed the application's pool now, and `DB_POOL_MAX` went from 10 to 20
+to cover both.
+
+The total against the database is unchanged at 32 per instance. What changed is
+that the two workloads lend capacity to each other, the session query inherits
+the bounded wait, and there is one number to size rather than two — one of
+which could not be sized at all.
 
 ## 3. Put a connection pooler in front of Postgres
 
@@ -322,8 +334,8 @@ These are prerequisites, not improvements. From the Stage 3 table:
 
 | | Work | Why it is here |
 |---|---|---|
-| 1 | Debounce the `/path` sync | Removes the serialisation; small |
-| 2 | Session store shares the main pool | One line, a third of the budget |
+| ~~1~~ | ~~Debounce the `/path` sync~~ — **done** | Removed the serialisation |
+| ~~2~~ | ~~Session store shares the main pool~~ — **done** | One elastic pool, bounded waits |
 | 3 | Credit reservations into Postgres | Blocks every instance after the first |
 | 4 | Worker service; jobs and builds move to it | Blocks instances; stops double AI spend |
 | 5 | Postgres tier up, PgBouncer in front | Now the connections exist |

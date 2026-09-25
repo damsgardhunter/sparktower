@@ -2035,6 +2035,31 @@ export const projectTracks = pgTable("project_tracks", {
 
 export type ProjectTrack = typeof projectTracks.$inferSelect;
 
+/**
+ * When a section's path tree was last reconciled, and for which inputs.
+ *
+ * Pure bookkeeping for `syncPathTree`, which runs from a GET that every open
+ * dashboard polls: these let it skip a write-locked reconcile when nothing it
+ * depends on has changed since the last one.
+ *
+ * Its own table rather than columns on `project_tracks`, because a track row
+ * exists only once a section has been started, and this has to work for every
+ * project that can be read. Bookkeeping that silently does nothing for half
+ * its cases is worse than none.
+ */
+export const pathSyncState = pgTable("path_sync_state", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  /** `goal|subcategory|route` — everything the reconcile's result depends on. */
+  syncedKey: text("synced_key").notNull(),
+}, (t) => [
+  unique("path_sync_state_project_goal").on(t.projectId, t.goal),
+]);
+
+export type PathSyncState = typeof pathSyncState.$inferSelect;
+
 export const exploreSeen = pgTable("explore_seen", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

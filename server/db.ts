@@ -53,12 +53,19 @@ if (!process.env.DATABASE_URL) {
 const CONNECT_WAIT_MS = Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 10_000);
 
 /**
- * Connections in the pool. Stated rather than defaulted, because the default
- * (10) is a number worth seeing when reading this file: it is the ceiling on
- * concurrent queries, and it is shared with nothing — the session store and
- * the project lock each keep their own.
+ * Connections in the pool: the ceiling on concurrent queries.
+ *
+ * Twenty rather than node-postgres's ten because this pool now serves the
+ * session store too (replit_integrations/auth/replitAuth.ts), which used to
+ * keep a separate ten of its own. The total against the database is unchanged;
+ * what changed is that the two workloads can now lend capacity to each other,
+ * and there is one number to size instead of two.
+ *
+ * The other pool an instance opens is the project lock's, which is small and
+ * deliberately separate — see server/project-lock.ts for why that one must not
+ * share.
  */
-const POOL_MAX = Number(process.env.DB_POOL_MAX ?? 10);
+const POOL_MAX = Number(process.env.DB_POOL_MAX ?? 20);
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
