@@ -36,7 +36,7 @@ import { defaultDraft } from "./levers";
 import { EXECUTIVE, officersOf } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
-import { seedIncumbents } from "./incumbents";
+import { seedFragmentedTail, seedIncumbents } from "./incumbents";
 import { between, pick } from "./random";
 import { periodsPerYear, type Cadence } from "./cadence";
 import { marketScale } from "./world";
@@ -403,6 +403,11 @@ export function buildWorld(input: {
     year: 1,
     companies: [
       ...seedIncumbents(niche, seasonId),
+      /*
+       * And whoever holds the rest of it. Null when the named rivals already
+       * hold all but the open tenth, which is every catalogue market.
+       */
+      ...[seedFragmentedTail(niche, seasonId)].filter((c): c is NonNullable<typeof c> => c !== null),
       ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId })),
     ],
     economy: economyFor(seasonId, 1, periods),

@@ -281,5 +281,73 @@ export function seedIncumbents(niche: Niche, seasonId = ""): Company[] {
   });
 }
 
+/**
+ * How much of a market is genuinely unspoken for once it has been seated.
+ *
+ * The seven hand-written markets seat rivals holding 90%, so a tenth of the
+ * customers belong to nobody and that tenth is what a new company is playing
+ * for. Everything below that is the same tenth.
+ */
+export const TRULY_OPEN_SHARE = 0.1;
+
+/**
+ * The rest of the market: everybody too small to name.
+ *
+ * The world used to contain the named rivals and nothing else, so every
+ * customer they did not hold belonged to no one at all. In the seven
+ * catalogue markets that is a tenth and barely matters. In a market Nova
+ * wrote it can be half — a founder's own season came back 23/12/9/6, with
+ * nineteen thousand customers sitting in the middle of the board waiting to be
+ * collected by whoever could build room fastest. They took 6.6% of the market
+ * in their first quarter and 22% in their second, more than the largest
+ * incumbent, and were never once limited by demand.
+ *
+ * Real markets do not have that hole in them. What is not held by the four
+ * companies worth naming is held by fifty that are not, and taking those
+ * customers is still taking them from somebody. So the remainder is seated as
+ * one company standing for all of them: no posture worth modelling, no
+ * strategy, middling on every axis, and holding everything except the tenth
+ * that is genuinely there to win.
+ *
+ * Deliberately weak rather than absent. It does not defend cleverly, it will
+ * lose customers steadily to anyone doing anything well, and that is the
+ * point — a fragmented tail is the easiest share in the market to take, and it
+ * should still have to be taken.
+ */
+export function seedFragmentedTail(niche: Niche, seasonId = ""): Company | null {
+  const named = niche.incumbents.reduce((sum, i) => sum + i.startingShare, 0);
+  const share = 1 - named - TRULY_OPEN_SHARE;
+  /* Nothing to seat: the named rivals already hold all but the open tenth. */
+  if (share <= 0.02) return null;
+
+  const customers: Record<string, number> = {};
+  for (const segment of niche.segments) customers[segment.id] = Math.round(segment.size * share);
+  const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
+  const price = niche.segments[0].referencePrice;
+
+  return {
+    id: "the_rest",
+    name: "Everybody else",
+    kind: "incumbent" as const,
+    posture: "coaster",
+    cash: held * price * 0.2,
+    debt: 0,
+    creditLimit: held * price * 0.25,
+    reputation: 50,
+    /* Middling on every axis: this is the share that goes to whoever is better. */
+    quality: 42,
+    brand: 35,
+    service: 42,
+    capacity: Math.round(held * 1.05),
+    unitCost: niche.baseUnitCost,
+    price,
+    customers,
+    assets: [],
+    cities: [],
+    founderShare: 1,
+    seats: [],
+  };
+}
+
 /** Kept for the tests that check spend scales with pressure rather than jumping. */
 export const pressureCurve = (threat: number, patience: number): number => saturate(Math.max(0, threat - patience * 0.3), 0.25);

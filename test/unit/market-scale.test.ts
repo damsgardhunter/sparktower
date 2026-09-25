@@ -26,6 +26,7 @@ import { buildCustomMarket } from "@shared/simulation/custom-market";
 import { ROLES, type Niche } from "@shared/simulation/types";
 import { distressOf } from "@shared/simulation/recovery";
 import { yearOfCostsFor } from "@shared/simulation/decisions";
+import { TRULY_OPEN_SHARE, seedFragmentedTail, seedIncumbents } from "@shared/simulation/incumbents";
 
 const ECONOMY = { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" as const };
 const open = (niche: Niche) => startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] });
@@ -207,5 +208,66 @@ describe("whether a company is in trouble", () => {
   it("leaves a full-size company where it was", () => {
     const big = startup({ scale: 1, officers: 5, cash: 100_000, creditLimit: 0 });
     expect(distressOf(big)).toBe("distressed");
+  });
+});
+
+/**
+ * Somebody holds the rest of the market.
+ *
+ * The world contained the named rivals and nothing else, so every customer
+ * they did not hold belonged to no one. In the seven catalogue markets that is
+ * a tenth and barely matters. In a market Nova wrote it can be half: a
+ * founder's own season came back 23/12/9/6, leaving nineteen thousand
+ * customers in the middle of the board to be collected by whoever built room
+ * fastest. They took 6.6% of the market in their first quarter and 22% in
+ * their second — more than the largest incumbent — and were never once limited
+ * by demand.
+ */
+describe("who holds a market nobody named", () => {
+  const fragmented = buildCustomMarket({
+    name: "Builder tools", premise: "Tools.", baseUnitCost: 20, innovationPace: 1,
+    segments: [
+      { id: "a", name: "A", description: "x", size: 20_000, growth: 0.05, priceSensitivity: 0.5, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.5, loyalty: 0.5, referencePrice: 40 },
+      { id: "b", name: "B", description: "y", size: 18_800, growth: 0.05, priceSensitivity: 0.5, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.5, loyalty: 0.5, referencePrice: 40 },
+    ],
+    regions: [
+      { id: "r1", name: "R1", weight: 0.4, entryCost: 1_000, note: "" },
+      { id: "r2", name: "R2", weight: 0.35, entryCost: 1_000, note: "" },
+      { id: "r3", name: "R3", weight: 0.25, entryCost: 1_000, note: "" },
+    ],
+    /* Exactly the shares the founder's own market came back with. */
+    incumbents: [0.23, 0.12, 0.09, 0.06].map((startingShare, i) => ({
+      id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
+      quality: 50, brand: 50, service: 50, priceIndex: 1,
+    })),
+  }, "f")!;
+
+  const total = (n: typeof fragmented) => n.segments.reduce((s, x) => s + x.size, 0);
+  const holds = (c: { customers: Record<string, number> } | null) =>
+    c ? Object.values(c.customers).reduce((a, b) => a + b, 0) : 0;
+
+  it("seats a tail for the half nobody named", () => {
+    const tail = seedFragmentedTail(fragmented);
+    expect(tail, "half a market cannot belong to nobody").toBeTruthy();
+    expect(tail!.name).toBe("Everybody else");
+  });
+
+  it("leaves about a tenth genuinely free, as the catalogue markets do", () => {
+    const named = seedIncumbents(fragmented).reduce((s, c) => s + holds(c), 0);
+    const free = total(fragmented) - named - holds(seedFragmentedTail(fragmented));
+    expect(free / total(fragmented)).toBeCloseTo(TRULY_OPEN_SHARE, 1);
+  });
+
+  /* And the seven, which already hold 90%, get no tail and are unchanged. */
+  it("seats nothing in a market that is already spoken for", () => {
+    for (const n of NICHES) expect(seedFragmentedTail(n), n.id).toBeNull();
+  });
+
+  /* It is meant to be beatable — the easiest share in the market, still taken. */
+  it("is weak, because a fragmented tail should be the easiest share to take", () => {
+    const tail = seedFragmentedTail(fragmented)!;
+    for (const rival of seedIncumbents(fragmented)) {
+      expect(tail.brand, "weaker than anyone worth naming").toBeLessThan(rival.brand);
+    }
   });
 });

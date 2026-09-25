@@ -7,6 +7,33 @@ than ticked.
 
 ## Owed, and why it was deferred
 
+### From a founder playing their own season, Sept 2026
+
+Reported in one sitting while playing a quarterly solo season. Ordered as we
+agreed to take them; struck through here when done rather than deleted, so the
+list stays readable against what was reported.
+
+1. ~~Growth is too fast — 6.6% of the market taken in the first quarter, and
+   capacity full in period one.~~ **Done.** The unheld half of the market
+   belonged to nobody; it is seated as "Everybody else" now, leaving a tenth
+   genuinely free as the catalogue markets do. Free customers in that founder's
+   market: 18,975 → 3,455.
+2. ~~The capacity projection is not shown.~~ **Done.** The forecast bar carries
+   a second marker for the room the lever actually sets, and says so.
+3. A market lot should say what it would do to *this* company — "your capacity
+   would be X", "your quality would be Y" — rather than a bare "+2,692".
+4. Nothing ever bids against the player. Every lot in the first season went
+   "nobody met the reserve". Incumbents should take a lot roughly one time in
+   ten, a little over the reserve, so an auction can be lost.
+5. The price has to be entered again every period; it should carry forward
+   from what was last filed.
+6. The unit cost Nova writes is dearer than the founder's real product. Wants
+   grounding in the project rather than a guess.
+7. The forecast still does not move when a decision changes. Reported again
+   after the `holds(role)` fix, so either that fix did not reach it or there
+   is a second cause. Unverified.
+
+
 ### A sealed bid is invisible to the commitment meter
 The desk's meter shows what the seats plan to spend against what the company
 has. A sealed bid sits outside it, so a table can file a year that looks

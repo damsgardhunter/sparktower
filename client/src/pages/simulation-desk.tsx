@@ -50,6 +50,7 @@ import { CompanyProfile } from "@/components/sim/company-profile";
 import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
+import { capacityBuild } from "@shared/simulation/lag";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
 import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock";
 import { NOVA_GRADIENT } from "@/components/manager/tabs";
@@ -869,6 +870,17 @@ export default function SimulationDeskPage() {
              * A cut is immediate, so the smaller of the two is what serves.
              */
             capacity={Math.min(c.capacity, Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
+            /*
+             * And the room the lever is actually setting, which is the number
+             * nobody could see. The bar shows what serves *now* — correct, and
+             * unmoved by the one decision on this screen that changes it, so
+             * asking for ten thousand seats looked like it did nothing.
+             */
+            capacityNext={capacityBuild(
+              { capacity: c.capacity },
+              Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity),
+              1 / (period.perYear ?? 1),
+            ).next + (c.assetCapacity ?? 0)}
             idleCostPerUnit={desk.idleCostPerUnit}
             yours={holds("coo") ? "capacity" : holds("cmo") ? "price" : null}
           />
@@ -1858,10 +1870,14 @@ function Criteria({ segment: s, company: c }: {
  * rival if it comes in high. That is the whole decision, and until now it had
  * no cost on one side.
  */
-function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours }: {
-  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number; idleCostPerUnit: number;
+function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCostPerUnit, yours }: {
+  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number;
+  /** What the capacity lever opens for next period — the thing it actually sets. */
+  capacityNext: number;
+  idleCostPerUnit: number;
   yours: "capacity" | "price" | null;
 }) {
+  const period = usePeriod();
   const { money, compact } = useMoney();
   const curve = [...forecast.curve].sort((a, b) => a.price - b.price);
   const at = (p: number): number => {
@@ -1944,9 +1960,23 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
             <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full nova-chip opacity-70" /> likely range</span>
             <span className="flex items-center gap-1.5"><span className="h-3 w-[3px] rounded-full bg-foreground/80" /> most likely</span>
             <span className="flex items-center gap-1.5"><span className="h-3 w-0.5 bg-foreground" /> your room: {Math.round(capacity).toLocaleString()}{roomOffScale && " (off the scale)"}</span>
+            {/*
+              * The second marker, and the reason this card was confusing. The
+              * bar was drawn against the room that serves *this* period, which
+              * the capacity lever cannot change — so a founder asking for ten
+              * thousand seats watched the line stay exactly where it was and
+              * concluded the lever did nothing.
+              */}
+            {Math.round(capacityNext) !== Math.round(capacity) && (
+              <span className="flex items-center gap-1.5" data-testid="text-room-next">
+                <span className="h-3 w-0.5 bg-primary" /> after this {period.one}: {Math.round(capacityNext).toLocaleString()}
+              </span>
+            )}
           </div>
           {yours === "capacity" && (
-            <p className="mt-1 text-[11px] text-muted-foreground">Room you order now opens next year — size it to next year's demand.</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Room you order now opens over the next year — size it to the demand you expect then, not to this {period.one}'s.
+            </p>
           )}
         </div>
 
