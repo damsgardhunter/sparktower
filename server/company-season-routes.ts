@@ -1024,6 +1024,121 @@ export function registerCompanySeasonRoutes(app: Express): void {
   });
 
   /**
+   * The room, while it is still playing: every table, and who has committed.
+   *
+   * The report above answers "how did that go" once a season is over. This
+   * answers the question somebody running the session asks every few minutes
+   * with a room in front of them: **are we waiting on anybody?** Without it the
+   * only way to know was to ask out loud, and the only way to find out a table
+   * was stuck was for them to say so.
+   *
+   * ## What it shows, and what it deliberately does not
+   *
+   * Every table, every chair, and whether that chair has filed this year — the
+   * facilitator's whole job is knowing whether to wait or to resolve the year,
+   * and that is answered by counts rather than contents.
+   *
+   * Whether the *contents* come too depends on where the viewer is sitting.
+   * Somebody running a season they are not playing in can read what each table
+   * filed: it is a training exercise, they are about to debrief it, and the
+   * final report shows it anyway. Somebody running a season they *are* seated
+   * in cannot, because that is every rival's plan handed to a player before
+   * the year resolves — an advantage nobody else at the table can have, handed
+   * over by an accident of who owns the company. They keep the counts, which
+   * is what the job needs, and lose the detail, which is what the game cannot
+   * survive them having.
+   */
+  app.get("/api/companies/:id/seasons/:seasonId/watch", isAuthenticated, async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+      const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
+      if (!season) return;
+
+      const ventures = await db.select().from(simVentures).where(eq(simVentures.seasonId, season.id));
+      const ventureIds = ventures.map((v) => v.id);
+
+      const seats = ventureIds.length
+        ? await db.select({
+            ventureId: simSeats.ventureId, userId: simSeats.userId, role: simSeats.role,
+            firstName: users.firstName, lastName: users.lastName, isBot: users.isBot,
+          })
+          .from(simSeats)
+          .leftJoin(users, eq(users.id, simSeats.userId))
+          .where(inArray(simSeats.ventureId, ventureIds))
+        : [];
+
+      const filed = ventureIds.length
+        ? await db.select({
+            ventureId: simDecisions.ventureId, role: simDecisions.role,
+            userId: simDecisions.userId, payload: simDecisions.payload,
+          })
+          .from(simDecisions)
+          .where(and(inArray(simDecisions.ventureId, ventureIds), eq(simDecisions.year, season.year)))
+        : [];
+
+      /*
+       * Is the person reading this also playing? Asked of the season rather
+       * than of one table: a seat anywhere in it is enough to make every other
+       * table's plan an unfair advantage.
+       */
+      const playing = seats.some((s) => s.userId === req.user.id);
+
+      const filedFor = new Map(filed.map((d) => [`${d.ventureId}:${d.role}`, d]));
+
+      res.json({
+        season: {
+          id: season.id,
+          name: season.name,
+          status: season.status,
+          year: season.year,
+          totalYears: season.totalYears,
+          nextTickAt: season.nextTickAt,
+          seatCount: season.seatCount,
+        },
+        /** True when the reader is seated in this season, and so is shown counts only. */
+        playing,
+        tables: ventures
+          .filter((v) => v.phase !== "retired")
+          .map((venture) => {
+            const here = seats.filter((s) => s.ventureId === venture.id);
+            const chairs = here.map((seat) => {
+              const decision = seat.role ? filedFor.get(`${venture.id}:${seat.role}`) : undefined;
+              return {
+                userId: seat.userId,
+                name: seat.isBot
+                  ? [seat.firstName, seat.lastName].filter(Boolean).join(" ") || "A stand-in"
+                  : seat.firstName || "Someone",
+                isBot: Boolean(seat.isBot),
+                role: seat.role,
+                roleTitle: seat.role ? ROLE_TITLES[seat.role as Role] ?? seat.role : null,
+                /** The thing the facilitator is actually looking for. */
+                filed: Boolean(decision),
+                /* Withheld from a reader who is playing — see the note above. */
+                decision: !playing && decision ? decision.payload : null,
+              };
+            });
+            return {
+              ventureId: venture.id,
+              name: venture.name,
+              product: venture.product,
+              phase: venture.phase,
+              /** Chairs nobody has taken yet: a table that cannot start. */
+              empty: Math.max(0, (season.seatCount ?? 5) - here.length),
+              filed: chairs.filter((c) => c.filed).length,
+              of: chairs.length,
+              waitingOn: chairs.filter((c) => !c.filed && !c.isBot).map((c) => c.name),
+              chairs,
+            };
+          }),
+      });
+    } catch (error) {
+      console.error("Season watch error:", error);
+      res.status(500).json({ message: "Failed to read the season" });
+    }
+  });
+
+  /**
    * The staff report: for each colleague who played, what they did and how
    * their table did.
    *

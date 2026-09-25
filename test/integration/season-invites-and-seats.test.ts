@@ -227,3 +227,105 @@ describe("arriving after the season has started", () => {
     expect(late.body.code).toBe("season_started");
   }, 300_000);
 });
+
+/**
+ * Watching the room while it plays.
+ *
+ * The report answers "how did that go" once a season is over. This answers the
+ * question somebody running a session asks every few minutes with a room in
+ * front of them: are we waiting on anybody?
+ */
+describe("watching a season as it runs", () => {
+  it("shows every table, who is in each chair, and who has not filed yet", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 9);
+    await giveSeats(companyId, 10);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    const tables = await seatEveryone(people, inviteCode);
+    expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
+
+    const before = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/watch`);
+    expect(before.status, JSON.stringify(before.body).slice(0, 300)).toBe(200);
+    expect(before.body.tables.length, "both tables are being watched").toBe(2);
+    expect(before.body.season.year).toBe(1);
+
+    for (const table of before.body.tables) {
+      expect(table.of, "five chairs to a table").toBe(5);
+      expect(table.filed, "nobody has filed yet").toBe(0);
+      expect(table.waitingOn.length, "so the whole table is being waited on").toBe(5);
+      expect(new Set(table.chairs.map((c: any) => c.role)).size).toBe(5);
+      expect(table.chairs.every((c: any) => c.roleTitle), "every chair says what it is").toBe(true);
+    }
+
+    /* One person files, and the room's view moves by exactly one. */
+    const [firstVenture] = [...tables.keys()];
+    const filer = (tables.get(firstVenture) ?? [])[0];
+    const filedRes = await filer.agent.post(`/api/sim/ventures/${firstVenture}/decisions`)
+      .send({ decision: { focus: "growth", positioning: "" } });
+    expect(filedRes.status, JSON.stringify(filedRes.body).slice(0, 200)).toBe(200);
+
+    const after = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/watch`);
+    const watched = after.body.tables.find((t: any) => t.ventureId === firstVenture);
+    expect(watched.filed, "one chair has committed").toBe(1);
+    expect(watched.waitingOn.length, "and four are still being waited on").toBe(4);
+    const committed = watched.chairs.find((c: any) => c.filed);
+    expect(committed.name, "the facilitator can see who it was").toBeTruthy();
+  }, 300_000);
+
+  /*
+   * The rule that keeps this from being a cheat. A facilitator running a
+   * season they are not in can read what each table filed — they are about to
+   * debrief it, and the final report shows it anyway. One who is *seated* in
+   * it cannot, because that is every rival's plan handed to a player before
+   * the year resolves.
+   */
+  it("hands the decisions to a facilitator who is not playing", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    await giveSeats(companyId, 10);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    /* The five colleagues play; the owner runs it and sits out. */
+    const tables = await seatEveryone(people.slice(1, 6), inviteCode);
+    await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+
+    const [ventureId] = [...tables.keys()];
+    await (tables.get(ventureId) ?? [])[0].agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { focus: "margin", positioning: "" } });
+
+    const watch = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/watch`);
+    expect(watch.body.playing, "the owner took no seat").toBe(false);
+    const filed = watch.body.tables.flatMap((t: any) => t.chairs).find((c: any) => c.filed);
+    expect(filed.decision, "a facilitator who is not playing sees what was filed").toBeTruthy();
+    expect(filed.decision.focus).toBe("margin");
+  }, 300_000);
+
+  it("withholds them from a facilitator who is playing in it", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 4);
+    await giveSeats(companyId, 10);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    /* This time the owner sits down with everybody else. */
+    const tables = await seatEveryone(people.slice(0, 5), inviteCode);
+    await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+
+    const [ventureId] = [...tables.keys()];
+    await (tables.get(ventureId) ?? [])[1].agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 19 } });
+
+    const watch = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/watch`);
+    expect(watch.body.playing, "the owner is seated in this season").toBe(true);
+    const chairs = watch.body.tables.flatMap((t: any) => t.chairs);
+    expect(chairs.some((c: any) => c.filed), "they can still see that somebody filed").toBe(true);
+    expect(chairs.every((c: any) => c.decision === null), "but not a single decision's contents").toBe(true);
+  }, 300_000);
+
+  it("is not readable by somebody who only works there", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 1);
+    await giveSeats(companyId, 5);
+    const { seasonId } = await privateSeason(owner, companyId);
+    const colleague = people[1];
+    const tried = await colleague.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/watch`);
+    expect([403, 404]).toContain(tried.status);
+  }, 180_000);
+});

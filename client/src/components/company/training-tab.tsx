@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send, Sparkles } from "lucide-react";
+import { Check, CheckCircle2, Circle, Copy, Eye, FastForward, FileText, Loader2, Play, Plus, Send, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -402,6 +402,7 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [watching, setWatching] = useState(false);
   // Only the people who can start it are shown the price of starting it.
   const { data: seats } = useSeats(canManage ? companyId : "");
 
@@ -514,6 +515,11 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
                 {resolve.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <FastForward className="h-4 w-4 mr-1.5" />} End this year now
               </Button>
             )}
+            {season.status === "running" && (
+              <Button variant="outline" size="sm" onClick={() => setWatching((v) => !v)} data-testid={`button-watch-${season.id}`}>
+                <Eye className="h-4 w-4 mr-1.5" /> {watching ? "Hide the room" : "Watch the room"}
+              </Button>
+            )}
             {season.status !== "forming" && (
               <Button variant="outline" size="sm" onClick={() => setShowReport((v) => !v)} data-testid={`button-report-${season.id}`}>
                 <FileText className="h-4 w-4 mr-1.5" /> {showReport ? "Hide staff report" : "Staff report"}
@@ -534,6 +540,7 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
           </p>
         )}
 
+        {watching && <SeasonWatch companyId={companyId} seasonId={season.id} />}
         {showReport && <StaffReport companyId={companyId} seasonId={season.id} />}
         {inviting && <InviteDialog companyId={companyId} season={season} onClose={() => setInviting(false)} />}
       </CardContent>
@@ -648,6 +655,97 @@ function StaffReport({ companyId, seasonId }: { companyId: string; seasonId: str
       </div>
       {data.notPlaying.length > 0 && (
         <p className="text-xs text-muted-foreground">Not playing: {data.notPlaying.map((p) => p.name).join(", ")}.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The room, while it plays.
+ *
+ * What somebody running a session is actually doing between years is looking
+ * up and asking whether everyone is done. Before this the only way to know was
+ * to ask out loud, and the only way to learn a table was stuck was for them to
+ * say so. So: every table, every chair, and who has committed — refreshed on
+ * its own, because a facilitator watching a screen should not have to press
+ * anything to find out that they can move on.
+ *
+ * Whether the decisions themselves come with it is the server's call, not
+ * this component's: a facilitator seated in their own season is handed counts
+ * and no contents, because every rival's plan before the year resolves is an
+ * advantage nobody else at the table can have. `playing` says which it is, and
+ * this says so out loud rather than leaving a reader wondering why the detail
+ * is missing.
+ */
+function SeasonWatch({ companyId, seasonId }: { companyId: string; seasonId: string }) {
+  const { data, isLoading } = useQuery<{
+    season: { year: number; totalYears: number; status: string; seatCount: number };
+    playing: boolean;
+    tables: {
+      ventureId: string; name: string | null; phase: string; empty: number;
+      filed: number; of: number; waitingOn: string[];
+      chairs: { userId: string; name: string; isBot: boolean; role: string | null; roleTitle: string | null; filed: boolean; decision: Record<string, unknown> | null }[];
+    }[];
+  }>({
+    queryKey: [`/api/companies/${companyId}/seasons/${seasonId}/watch`],
+    // A room moves while you are looking at it.
+    refetchInterval: 10_000,
+  });
+
+  if (isLoading || !data) {
+    return <div className="h-24 animate-pulse rounded-lg bg-muted/40" data-testid="season-watch-loading" />;
+  }
+
+  const waiting = data.tables.reduce((n, t) => n + (t.of - t.filed), 0);
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3" data-testid="season-watch">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-sm font-medium">
+          Year {data.season.year} of {data.season.totalYears}
+        </p>
+        <p className="text-xs text-muted-foreground" data-testid="text-watch-waiting">
+          {waiting === 0
+            ? "Everyone has filed — you can end the year."
+            : `Waiting on ${waiting} ${waiting === 1 ? "person" : "people"}.`}
+        </p>
+      </div>
+
+      {data.tables.map((table) => (
+        <div key={table.ventureId} className="rounded-md border border-border/60 p-2.5" data-testid={`watch-table-${table.ventureId}`}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-sm font-medium">{table.name ?? "A table still choosing its name"}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">{table.filed} of {table.of} filed</span>
+          </div>
+          {table.empty > 0 && (
+            <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-500">
+              {table.empty} {table.empty === 1 ? "chair is" : "chairs are"} still empty.
+            </p>
+          )}
+          <ul className="mt-1.5 space-y-1">
+            {table.chairs.map((chair) => (
+              <li key={chair.userId} className="flex items-center gap-2 text-xs" data-testid={`watch-chair-${chair.userId}`}>
+                {chair.filed
+                  ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                  : <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                <span className="font-medium">{chair.name}</span>
+                <span className="text-muted-foreground">{chair.roleTitle ?? "no seat yet"}</span>
+                {chair.isBot && <Badge variant="outline" className="text-[10px]">stand-in</Badge>}
+                {chair.decision && (
+                  <span className="ml-auto truncate text-[11px] text-muted-foreground" title={JSON.stringify(chair.decision)}>
+                    {Object.keys(chair.decision).length} {Object.keys(chair.decision).length === 1 ? "choice" : "choices"} in
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+
+      {data.playing && (
+        <p className="text-[11px] text-muted-foreground" data-testid="text-watch-playing">
+          You have a seat in this season, so you can see who has committed but not what they chose.
+        </p>
       )}
     </div>
   );
