@@ -24,6 +24,8 @@ import { fixedCosts } from "@shared/simulation/decisions";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { buildCustomMarket } from "@shared/simulation/custom-market";
 import { ROLES, type Niche } from "@shared/simulation/types";
+import { distressOf } from "@shared/simulation/recovery";
+import { yearOfCostsFor } from "@shared/simulation/decisions";
 
 const ECONOMY = { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" as const };
 const open = (niche: Niche) => startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] });
@@ -158,5 +160,52 @@ describe("what a table has committed to salaries", () => {
     const big = fixedCosts({ ...solo, scale: 1 }, 0, econ as any, 1, niche);
     const small = fixedCosts({ ...solo, scale: 0.01 }, 0, econ as any, 1, niche);
     expect(small / big).toBeCloseTo(0.01, 4);
+  });
+});
+
+/**
+ * A profitable company with no debt is not in trouble.
+ *
+ * `distressOf` measured headroom against a flat 1,100,000 — the salary bill of
+ * a company in one of the seven catalogue markets, which are all sized around
+ * it. A market Nova wrote for a startup runs at a hundredth of that and a solo
+ * founder employs one person, so a company holding $308,000 against $1,400 of
+ * yearly costs was told every period that it had less than a year of costs in
+ * reach, and offered a rescue investor who would take a third of it. Nothing
+ * it could earn would ever have cleared a bar set for a business a hundred
+ * times its size.
+ */
+describe("whether a company is in trouble", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const startup = (over: Record<string, unknown> = {}) => ({
+    ...startingCompany({ id: "s", name: "S", niche, seats: ["ceo", "cmo", "cfo", "cto", "coo"], officers: 1 }),
+    scale: 0.01, officers: 1, cash: 12_000, debt: 0, creditLimit: 296_000,
+    ...over,
+  }) as any;
+
+  it("measures a year of costs at the size of the company", () => {
+    // A fifth of a full table, at a hundredth of catalogue scale.
+    expect(yearOfCostsFor(startup())).toBeCloseTo(1_100_000 * (1 / 5) * 0.01, 6);
+  });
+
+  /* And a full table at full scale is exactly the figure it always was. */
+  it("leaves the reference company's number untouched", () => {
+    expect(yearOfCostsFor({ seats: [...ROLES], scale: 1 })).toBe(1_100_000);
+  });
+
+  it("calls a solvent, debt-free startup healthy", () => {
+    expect(distressOf(startup())).toBe("healthy");
+  });
+
+  /* The bar still exists — it is just set where this company lives. */
+  it("still says distressed when the money really is nearly gone", () => {
+    expect(distressOf(startup({ cash: 200, creditLimit: 0 }))).toBe("distressed");
+    expect(distressOf(startup({ cash: 0, creditLimit: 0 }))).toBe("insolvent");
+  });
+
+  /* And a catalogue-scale company is judged exactly as it always was. */
+  it("leaves a full-size company where it was", () => {
+    const big = startup({ scale: 1, officers: 5, cash: 100_000, creditLimit: 0 });
+    expect(distressOf(big)).toBe("distressed");
   });
 });

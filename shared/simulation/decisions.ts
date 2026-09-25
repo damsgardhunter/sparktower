@@ -36,6 +36,7 @@
  * CFO choosing a cheaper loan with a covenant over an expensive one without.
  */
 import type { Company, Economy, Niche, Role } from "./types";
+import { ROLES } from "./types";
 import { salaryIn } from "./workforce";
 import { saturate, atScale } from "./market";
 
@@ -592,6 +593,33 @@ export const FOCUS_NOTES: Record<Focus, string> = {
  */
 export const officersOf = (company: { seats?: Role[]; officers?: number }): number =>
   Math.max(1, company.officers ?? (company.seats ?? []).length);
+
+/**
+ * A year of this company's running costs — the unit distress is measured in.
+ *
+ * Three places wanted this number and two of them wrote a flat 1,100,000: the
+ * salary bill of a company in one of the seven catalogue markets, which are
+ * all sized around that. A market Nova wrote for a startup runs at a
+ * hundredth of it and a solo founder employs one person, so a company with
+ * $308,000 of headroom and a profit was measured against a corporation's
+ * payroll and told, every period, that it had less than a year of costs in
+ * reach. It never had a way to stop being told that: nothing it could earn
+ * would clear a bar set for a business a hundred times its size.
+ *
+ * Officers and scale, the same two facts the fixed-cost sum uses, because it
+ * is the same salary bill seen from a different screen.
+ *
+ * Expressed as the old figure moved, not rebuilt from executive salaries. It
+ * was never only executives — it is a year of everything a company of five
+ * running at catalogue scale pays out — so recomputing it as `officers *
+ * EXECUTIVE` came to 700,000 and quietly moved the threshold for the seven
+ * markets as well, which the tests on them caught. A full table at full scale
+ * gets exactly the number it always got.
+ */
+export const REFERENCE_YEAR_OF_COSTS = 1_100_000;
+
+export const yearOfCostsFor = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
+  REFERENCE_YEAR_OF_COSTS * (officersOf(company) / ROLES.length) * (Number(company.scale) || 1);
 
 export const SALARY = 85_000;
 export const EXECUTIVE = 140_000;

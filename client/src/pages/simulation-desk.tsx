@@ -1498,6 +1498,57 @@ function Trade({ outcome, tight }: { outcome: Outcome | null; tight?: boolean })
   );
 }
 
+/**
+ * A number you can actually clear and retype.
+ *
+ * The field was `value={value ?? 0}` with an onChange that turned "" into 0 —
+ * so pressing backspace on the last digit set the state to 0, which re-rendered
+ * the box as "0", which is what the backspace had just deleted. The only way
+ * to enter a number was to select the whole thing first, and every keystroke
+ * fought whoever was typing.
+ *
+ * So the box holds text while it is being typed in, and the lever holds the
+ * number. Empty is a legitimate thing to be mid-edit — it means "I have not
+ * finished" — and it reads as 0 to everything downstream, so a forecast never
+ * sees NaN. Leaving it empty settles back to 0 on blur, which is what somebody
+ * who cleared a field and changed their mind meant.
+ *
+ * Synced numerically rather than by string, so a value arriving from outside
+ * (a nudge, the seeded draft, a period turning over) replaces the text, while
+ * "" and 0 are treated as agreeing and an empty box is left alone.
+ */
+function NumberBox({ id, value, min, max, step, onChange, testId }: {
+  id?: string; value: number; min?: number; max?: number; step?: number;
+  onChange: (n: number) => void; testId?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text || 0) !== Number(value)) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <Input
+      id={id}
+      type="number"
+      inputMode="numeric"
+      value={text}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value === "" ? 0 : Number(e.target.value));
+      }}
+      onBlur={() => {
+        if (text === "" || Number.isNaN(Number(text))) { setText("0"); onChange(0); }
+      }}
+      className="tabular-nums"
+      data-testid={testId}
+    />
+  );
+}
+
 function Field({ field, role, value, error, onChange, cities, isNew, listPrice }: {
   field: LeverField; role: Role | null; value: any; error?: string; onChange: (v: any) => void;
   cities?: Desk["cities"];
@@ -1728,17 +1779,14 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
         <Trade outcome={leverOutcome(role, field.id)} />
       <div className="flex gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(-step)} data-testid={`button-${field.id}-down`}>−</Button>
-        <Input
+        <NumberBox
           id={`field-${field.id}`}
-          type="number"
-          inputMode="numeric"
-          value={value ?? 0}
+          value={Number(value ?? 0)}
           min={field.min}
           max={field.max}
           step={step}
-          onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-          className="tabular-nums"
-          data-testid={`input-${field.id}`}
+          onChange={onChange}
+          testId={`input-${field.id}`}
         />
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(step)} data-testid={`button-${field.id}-up`}>+</Button>
       </div>

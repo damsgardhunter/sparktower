@@ -31,7 +31,7 @@
  */
 import type { Company, CompanyAsset } from "./types";
 import { resaleValue } from "./assets";
-import { EXECUTIVE, officersOf } from "./decisions";
+import { EXECUTIVE, officersOf, yearOfCostsFor } from "./decisions";
 
 export type Distress = "healthy" | "strained" | "distressed" | "insolvent";
 
@@ -47,7 +47,8 @@ export function distressOf(company: Company): Distress {
   if (company.bankruptSince !== undefined) return "insolvent";
 
   const headroom = company.cash + Math.max(0, company.creditLimit - company.debt);
-  const yearOfCosts = 1_100_000;
+  /* This company's costs, not a catalogue company's — see `yearOfCostsFor`. */
+  const yearOfCosts = yearOfCostsFor(company);
 
   if (headroom <= 0) return "insolvent";
   if (headroom < yearOfCosts * 0.75) return "distressed";
