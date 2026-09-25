@@ -792,6 +792,8 @@ export function registerCompanySeasonRoutes(app: Express): void {
             /** The year being played now; past the last one once it's over. */
             year: s.year,
             totalYears: s.totalYears,
+            /* What `year` counts — see the note on the desk route. */
+            totalPeriods: totalPeriods(s.totalYears, (s.cadence ?? "yearly") as Cadence),
             periodMinutes: s.periodMinutes,
             cadence: s.cadence,
             nextTickAt: s.nextTickAt,

@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CompanyView } from "@/pages/company";
 import { SeatsNotice, useSeats } from "@/components/company/simulation-seats";
+import { PERIOD_NAME, type Cadence } from "@shared/simulation/cadence";
 
 interface SeasonRow {
   id: string;
@@ -34,6 +35,8 @@ interface SeasonRow {
   niche: { id: string; name: string };
   year: number;
   totalYears: number;
+  /** What `year` counts: years times the cadence. See the seasons route. */
+  totalPeriods?: number;
   periodMinutes: number | null;
   cadence: string | null;
   nextTickAt: string | null;
@@ -438,8 +441,12 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
   const allReady = season.rooms > 0 && season.roomsReady === season.rooms;
 
   const progress =
-    season.status === "running" ? `Year ${season.year} of ${season.totalYears}`
-    : season.status === "finished" ? `All ${season.totalYears} years played`
+    /*
+     * Counted in decisions, because `year` is a period counter: a four-year
+     * quarterly season showed "Year 5 of 4" once it passed its first year.
+     */
+    season.status === "running" ? `${PERIOD_NAME[(season.cadence ?? "yearly") as Cadence].one.replace(/^./, (ch: string) => ch.toUpperCase())} ${season.year} of ${season.totalPeriods ?? season.totalYears}`
+    : season.status === "finished" ? `All ${season.totalPeriods ?? season.totalYears} ${PERIOD_NAME[(season.cadence ?? "yearly") as Cadence].many} played`
     : `${season.totalYears} years`;
 
   return (

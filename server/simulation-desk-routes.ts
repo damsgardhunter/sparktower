@@ -20,7 +20,7 @@
  * argument between them rather than an ambush by the engine.
  */
 import type { Express } from "express";
-import { PERIOD_NAME, periodsPerYear, type Cadence } from "@shared/simulation/cadence";
+import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles, companies, projects } from "@shared/schema";
@@ -343,6 +343,17 @@ export function registerSimulationDeskRoutes(app: Express): void {
       niche: { id: niche.id, name: niche.name, premise: niche.premise, voice: niche.voice },
       year,
       totalYears: season.totalYears,
+      /**
+       * How many decisions the season is, which is what `year` counts.
+       *
+       * `year` has counted periods for a long time and `totalYears` is in
+       * years, so a screen dividing one by the other told a quarterly season
+       * four years long that it was on "Year 5 of 4" — past its own end, and
+       * still counting down to the next one. The engine has never been
+       * confused about this (`seasonOver` takes `totalPeriods`); only the
+       * screens were.
+       */
+      totalPeriods: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence),
       /**
        * What one decision is called here.
        *

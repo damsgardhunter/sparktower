@@ -31,6 +31,9 @@ interface StandingsRow {
 }
 interface Standings {
   year: number; totalYears: number; status: string;
+  /** What `year` counts, and what one of them is called. */
+  totalPeriods?: number;
+  period?: { one: string; many: string; of: string };
   niche: { id: string; name: string; voice: Record<string, string> } | null;
   rows: StandingsRow[];
   history: { year: number; share: number; customers: number; profit: number; rank: number; founderValue: number | null }[];
@@ -76,7 +79,13 @@ export function SeasonStanding({ ventureId }: { ventureId: string }) {
     : moved > 0 ? `up ${moved} place${moved === 1 ? "" : "s"}`
     : `down ${-moved} place${moved === -1 ? "" : "s"}`;
 
-  const progress = data.totalYears > 0 ? Math.min(1, data.year / data.totalYears) : 0;
+  /*
+   * Counted in the unit `year` is actually in. Dividing a period counter by a
+   * year count told a four-year quarterly season it was on "Year 5 of 4".
+   */
+  const total = data.totalPeriods ?? data.totalYears;
+  const word = data.period?.one ?? "year";
+  const progress = total > 0 ? Math.min(1, data.year / total) : 0;
 
   return (
     <div className="space-y-3" data-testid="season-standing">
@@ -84,10 +93,10 @@ export function SeasonStanding({ ventureId }: { ventureId: string }) {
       <div className="space-y-1.5">
         <div className="flex items-baseline gap-2">
           <p className="text-sm font-semibold" data-testid="text-season-year">
-            Year {data.year} of {data.totalYears}
+            {word.charAt(0).toUpperCase() + word.slice(1)} {data.year} of {total}
           </p>
           <p className="text-xs text-muted-foreground">
-            {data.year >= data.totalYears ? "the last one" : `${data.totalYears - data.year} to go`}
+            {data.year >= total ? "the last one" : `${total - data.year} to go`}
           </p>
         </div>
         <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>

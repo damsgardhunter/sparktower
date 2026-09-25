@@ -25,6 +25,8 @@ import { PERIOD_NAME } from "@shared/simulation/cadence";
 import { LEVER_FIELDS, speak } from "@shared/simulation/levers";
 import { nicheById } from "@shared/simulation/niches";
 import { capacityBuild } from "@shared/simulation/lag";
+import { totalPeriods } from "@shared/simulation/cadence";
+import { seasonOver } from "@shared/simulation/season";
 
 describe("how often a table decides", () => {
   it("is a year, a quarter or a month, and nothing else", () => {
@@ -383,5 +385,33 @@ describe("what the capacity lever admits about the wait", () => {
   /* Only this lever, and only its own sentence — the swap must not eat it. */
   it("is not itself turned into 'takes a quarter' by the period swap", () => {
     expect(help("quarterly", 4)).not.toContain("Building takes a quarter");
+  });
+});
+
+/**
+ * A season's length, counted in the unit its progress is counted in.
+ *
+ * `year` on a season row has counted periods for a long time, and `totalYears`
+ * is in years. Every screen that showed progress divided one by the other, so
+ * a four-year quarterly season — sixteen decisions — announced "Year 5 of 4"
+ * the moment it passed its first year, and went on counting down to a next one
+ * it claimed not to have. The engine was never confused: `seasonOver` takes
+ * `totalPeriods`, which is why the season kept running, correctly, while the
+ * header said it was over.
+ */
+describe("how long a season is", () => {
+  it("is counted in decisions, not in years", () => {
+    expect(totalPeriods(4, "quarterly"), "four years of quarters").toBe(16);
+    expect(totalPeriods(4, "monthly")).toBe(48);
+    expect(totalPeriods(4, "yearly"), "a yearly season is unchanged").toBe(4);
+  });
+
+  /* The exact season that showed it. */
+  it("puts a quarterly season's fifth decision inside its first year", () => {
+    const total = totalPeriods(4, "quarterly");
+    const year = 5;
+    expect(year, "period five of sixteen is not past the end").toBeLessThanOrEqual(total);
+    expect(seasonOver(year, total)).toBe(false);
+    expect(seasonOver(total + 1, total), "and the end is still the end").toBe(true);
   });
 });

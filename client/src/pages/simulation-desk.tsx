@@ -85,6 +85,8 @@ interface Desk {
   currency?: CurrencyCode;
   year: number;
   totalYears: number;
+  /** How many decisions the season is — what `year` counts. See the desk route. */
+  totalPeriods?: number;
   resolvesAt: string | null;
   seasonId?: string;
   /** Set only for developers and for companies running this season. */
@@ -453,12 +455,12 @@ export default function SimulationDeskPage() {
     <DeskPeriod.Provider value={desk.period ?? { one: "year", many: "years", of: "this year" }}>
     <Shell
       title={desk.name ?? "Your company"}
-      subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
+      subtitle={`${desk.niche.name} · ${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${desk.year} of ${desk.totalPeriods ?? desk.totalYears}`}
       nicheId={desk.niche.id}
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
       year={desk.year}
-      totalYears={desk.totalYears}
+      totalYears={desk.totalPeriods ?? desk.totalYears}
       tabs={(compact) => (
         <DeskTabs
           tab={tab}
@@ -657,7 +659,7 @@ export default function SimulationDeskPage() {
             seasonId={desk.seasonId}
             ventureId={desk.ventureId}
             year={desk.year}
-            totalYears={desk.totalYears}
+            totalYears={desk.totalPeriods ?? desk.totalYears}
             as={desk.canAdvance}
           />
         )}

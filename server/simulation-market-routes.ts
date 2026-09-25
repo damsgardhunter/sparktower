@@ -23,7 +23,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { marketOf } from "./simulation-scope";
-import { PERIOD_NAME, periodsPerYear, type Cadence } from "@shared/simulation/cadence";
+import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { currencyForSeason } from "./simulation-desk-routes";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
 import { assetEffects, marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
@@ -491,7 +491,11 @@ const BID_IS_THE_CEOS = {
 
     res.json({
       year: season.year,
+      /* Years, kept for anything that still wants them. */
       totalYears: season.totalYears,
+      /* And the denominator `year` is actually counted in. See the desk route. */
+      totalPeriods: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence),
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
       yourRole: seat.role,
       resolvesAt: season.nextTickAt,
       /** Where the season is, so a finished one does not render as a live screen. */
@@ -823,7 +827,11 @@ const BID_IS_THE_CEOS = {
 
     res.json({
       year: season.year,
+      /* Years, kept for anything that still wants them. */
       totalYears: season.totalYears,
+      /* And the denominator `year` is actually counted in. See the desk route. */
+      totalPeriods: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence),
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
       status: season.status,
       /*
        * The market's own vocabulary, so a league table of restaurants counts
