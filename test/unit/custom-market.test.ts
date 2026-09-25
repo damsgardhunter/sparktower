@@ -18,6 +18,7 @@ import {
 import { resolveYear } from "@shared/simulation/resolve";
 import { startingCompany } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
+import { LEVER_FIELDS, speak } from "@shared/simulation/levers";
 import { ROLES, type World } from "@shared/simulation/types";
 
 const sane = {
@@ -242,5 +243,68 @@ describe("how contested the market is", () => {
     const m = withShares(0.6, 0.3);   // 90% — over the ceiling
     expect(held(m)).toBeCloseTo(INCUMBENT_SHARE_MAX, 6);
     expect(m.incumbents[0].startingShare / m.incumbents[1].startingShare).toBeCloseTo(2, 6);
+  });
+});
+
+/**
+ * A market Nova wrote has every word a desk needs.
+ *
+ * `cleanVoice` filled nine of the fourteen fields and ended with
+ * `as NicheVoice`, so the other five were `undefined` at runtime on a type
+ * that promised strings. It went unnoticed because the levers reading them
+ * belong to the operations and technology desks, and a seat is only ever sent
+ * its own desk's levers — so a Nova-built season crashed for the chief
+ * operating officer and for nobody else. A solo founder holding all five desks
+ * hit it on the first poll: `voice.capacityShort.charAt` of undefined, 500,
+ * forever.
+ *
+ * The test walks every lever of every desk, because that is the thing that was
+ * actually broken and checking the keys exist would not have caught a
+ * fifteenth being added later.
+ */
+describe("the words a written market speaks", () => {
+  /* Exactly what a model actually returned: nine of the fourteen fields. */
+  const bare = {
+    ...sane,
+    voice: {
+      per: "per active builder per month", unit: "active builder", brand: "cred",
+      place: "city hub", places: "city hubs", quality: "signal",
+      capacity: "active build squads", customer: "builder", customers: "builders",
+    },
+  };
+
+  it("fills in every word the model left out", () => {
+    const m = buildCustomMarket(bare, "fallback")!;
+    expect(m).toBeTruthy();
+    for (const [key, value] of Object.entries(m.voice)) {
+      expect(typeof value, `voice.${key}`).toBe("string");
+      expect(value, `voice.${key} is empty`).not.toBe("");
+    }
+  });
+
+  it("speaks every lever on every desk without throwing", () => {
+    const m = buildCustomMarket(bare, "fallback")!;
+    for (const role of ROLES) {
+      for (const field of LEVER_FIELDS[role]) {
+        expect(() => speak(field, m.voice), `${role}.${field.id}`).not.toThrow();
+      }
+    }
+  });
+
+  /* Derived from what the model did say, not replaced by a generic word. */
+  it("borrows the market's own vocabulary for the words it invents", () => {
+    const m = buildCustomMarket(bare, "fallback")!;
+    expect(m.voice.capacityShort).toContain("builders");
+    expect(m.voice.turnedAway).toContain("builders");
+  });
+
+  /* And the same holds for the four-word voice the other tests here use. */
+  it("leaves nothing undefined however little the model said", () => {
+    const m = buildCustomMarket(sane, "fallback")!;
+    for (const role of ROLES) {
+      for (const field of LEVER_FIELDS[role]) {
+        expect(() => speak(field, m.voice), `${role}.${field.id}`).not.toThrow();
+      }
+    }
   });
 });

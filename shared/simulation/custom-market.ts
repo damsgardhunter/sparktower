@@ -266,20 +266,46 @@ function cleanWorkforce(raw: unknown): WorkKind[] | undefined {
   return kinds.length >= 2 ? kinds : undefined;
 }
 
+/**
+ * Every word a market needs, whether or not the model said it.
+ *
+ * This used to fill nine of the fourteen and end with `as NicheVoice`, and the
+ * cast was the bug: the five it left out were `undefined` at runtime on a type
+ * that promised strings. Nothing noticed for a long time because the levers
+ * that read them belong to the operations and technology desks, and the seat
+ * looking at the screen only ever gets its own desk's levers — so a Nova-built
+ * season crashed for the chief operating officer and nobody else, and only
+ * when they opened it. A founder holding all five desks at once found it
+ * immediately: `voice.capacityShort.charAt` on undefined, 500, every poll.
+ *
+ * Derived from what the model *did* say rather than defaulted to generic
+ * words, because "capacity" is already in its vocabulary for this market and
+ * "capacity you can serve" reads better than "capacity". No cast at the end,
+ * so leaving a field out is now a compile error rather than a crash months
+ * later on one desk.
+ */
 function cleanVoice(raw: unknown): NicheVoice {
   const v = (raw ?? {}) as Record<string, unknown>;
   const word = (k: string, fallback: string) => str(v[k], 40, fallback);
+  const customers = word("customers", "customers");
+  const capacity = word("capacity", "capacity");
   return {
     customer: word("customer", "customer"),
-    customers: word("customers", "customers"),
+    customers,
     unit: word("unit", "sale"),
     per: word("per", "per customer"),
-    capacity: word("capacity", "capacity"),
+    capacity,
+    /* A label on a count of customers served in a year — see the note on the field. */
+    capacityShort: word("capacityShort", `${customers} you can serve`),
     place: word("place", "region"),
     places: word("places", "regions"),
     quality: word("quality", "quality"),
     brand: word("brand", "brand"),
-  } as NicheVoice;
+    service: word("service", "service"),
+    turnedAway: word("turnedAway", `${customers} you turn away`),
+    market: word("market", "the market"),
+    rivals: word("rivals", "rivals"),
+  };
 }
 
 /**
