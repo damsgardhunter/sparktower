@@ -26,7 +26,7 @@ import { marketOf } from "./simulation-scope";
 import { PERIOD_NAME, periodsPerYear, type Cadence } from "@shared/simulation/cadence";
 import { currencyForSeason } from "./simulation-desk-routes";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
-import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
+import { assetEffects, marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
 import { valuation, canOffer, assessOffer, alreadySold } from "@shared/simulation/mergers";
 import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
@@ -181,6 +181,21 @@ export function registerSimulationMarketRoutes(app: Express): void {
       periods: periodsPerYear(season.cadence as Cadence),
       /* What this company counts money in. The page had £ hardcoded in its own formatter. */
       currency: await currencyForSeason(season.companyId),
+      /*
+       * Where this company stands on each axis a lot can move.
+       *
+       * A listing said "+6 quality" and "+4,038 capacity" and left a founder to
+       * do the arithmetic against numbers held on a different screen — which is
+       * the whole decision. Sent so the listing can say what winning it would
+       * make *this* company, rather than what it would add to somebody.
+       */
+      you: {
+        quality: Math.round(company.quality),
+        brand: Math.round(company.brand),
+        service: Math.round(company.service),
+        capacity: Math.round(company.capacity) + assetEffects(company.assets ?? []).capacity,
+        unitCost: Math.round(company.unitCost * 100) / 100,
+      },
       resolvesAt: season.nextTickAt,
       /** Cash plus what is still borrowable — what a bid can actually be backed by. */
       funds: biddableFunds(company),

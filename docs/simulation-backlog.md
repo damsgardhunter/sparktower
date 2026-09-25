@@ -20,13 +20,17 @@ list stays readable against what was reported.
    market: 18,975 → 3,455.
 2. ~~The capacity projection is not shown.~~ **Done.** The forecast bar carries
    a second marker for the room the lever actually sets, and says so.
-3. A market lot should say what it would do to *this* company — "your capacity
-   would be X", "your quality would be Y" — rather than a bare "+2,692".
-4. Nothing ever bids against the player. Every lot in the first season went
-   "nobody met the reserve". Incumbents should take a lot roughly one time in
-   ten, a little over the reserve, so an auction can be lost.
-5. The price has to be entered again every period; it should carry forward
-   from what was last filed.
+3. ~~A market lot should say what it would do to *this* company.~~ **Done.**
+   The market sends where the company stands on each axis, and a lot reads
+   "quality 54 → 60" where that is known.
+4. ~~Nothing ever bids against the player.~~ **Done.** Each incumbent takes a
+   tenth of a chance on each lot, a little over the reserve. Measured over 56
+   periods: 36% of lots contested. In-memory rather than written to `sim_bids`,
+   whose `venture_id` is a foreign key to a room an incumbent does not have.
+5. ~~The price has to be entered again every period.~~ **Already fixed**, by
+   the read-back change — `defaultDraft` always carried it, but a solo
+   founder's draft was being rebuilt from the chief executive's row alone.
+   Covered by a test now, across a real period boundary.
 6. ~~The unit cost Nova writes is dearer than the founder's real product.~~
    **Done.** It was unbounded against the prices in the same answer: 18, with
    segments paying 12 and 7, so two of four could never be sold to. Capped at

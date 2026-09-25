@@ -39,7 +39,7 @@ import {
 import { advanceVenture } from "./simulation-routes";
 import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
 import type { BotSkill } from "@shared/simulation/bots";
-import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
+import { incumbentBids, marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
 import { applyAcquisition } from "@shared/simulation/mergers";
@@ -1314,13 +1314,34 @@ async function settleMarket(input: {
 
     const funds: Record<string, number> = {};
     for (const company of world.companies) {
-      if (company.kind === "player") funds[company.id] = biddableFunds(company);
+      /*
+       * Incumbents too, now that they bid. Same rule as everyone else — cash
+       * plus what is still borrowable — so a rival who turns up for a lot it
+       * cannot afford loses it at settlement like anybody would.
+       */
+      funds[company.id] = biddableFunds(company);
     }
 
-    const bids: Bid[] = bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount }));
+    /*
+     * The rivals' bids, held in memory rather than written to `sim_bids`.
+     *
+     * That table's `venture_id` is a foreign key to a room, and an incumbent
+     * has no room — it is a company in the world and nothing else. Nothing is
+     * lost by not storing them: they are deterministic from the season, the
+     * period and the lot, so a re-run of this tick deals exactly the same
+     * auction, which is the property the stored bids exist to give.
+     */
+    const bids: Bid[] = [
+      ...bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount })),
+      ...incumbentBids({
+        seasonId, year, listings,
+        incumbents: world.companies.filter((c) => c.kind === "incumbent"),
+      }),
+    ];
     const awards = resolveBids(listings, bids, funds);
 
-    for (const b of bids) {
+    for (const b of bidRows) {
+      /* Only what a room actually filed: `bidsBy` is read back per venture. */
       const mine = bidsBy.get(b.ventureId) ?? new Map<string, number>();
       mine.set(b.listingId, b.amount);
       bidsBy.set(b.ventureId, mine);

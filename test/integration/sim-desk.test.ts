@@ -748,3 +748,68 @@ describe("a solo founder's unfiled draft", () => {
     expect(a.demand.likely, "the finance seat does not set a price").toBe(b.demand.likely);
   }, 120_000);
 });
+
+/**
+ * Last period's plan is this period's starting point.
+ *
+ * A price is not a fresh decision every period — it is a standing one that
+ * somebody occasionally changes. `defaultDraft` has always carried it forward,
+ * resetting only the levers that should never repeat by default (a raise, a
+ * celebrity deal, a rented room), so this is really a test that the carrying
+ * survives the path a solo founder's draft takes, which is not the path it
+ * was written for.
+ */
+describe("what a new period opens with", () => {
+  it("carries the last filed price forward instead of asking again", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 42, brandSpend: 3_000, capacityTarget: 9_000, focus: "margin" } })
+      .expect(200);
+    /* Bring the clock forward: the tick only runs a period that is due. */
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const next = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(next.status).toBe(200);
+    expect(next.body.year, "a period has passed").toBe(2);
+    expect(next.body.submitted, "and nothing is filed for it yet").toBe(false);
+
+    expect(next.body.draft.price, "the price stands until it is changed").toBe(42);
+    expect(next.body.draft.capacityTarget, "and so does the room being built to").toBe(9_000);
+    expect(next.body.draft.focus, "and what the company is for").toBe("margin");
+  }, 120_000);
+
+  /* The one-shot levers do not repeat: a raise is not a standing instruction. */
+  it("does not quietly raise money again every period", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      /* A sponsorship is sold in 100,000 steps — see the lever's own `step`. */
+      /*
+       * `focus` included because a solo filing is validated against all five
+       * desks at once — the chief executive's is one of them, and it requires
+       * a focus. That is the filing working, not a quirk of the test.
+       */
+      .send({ decision: { focus: "growth", price: 30, celebritySpend: 100_000 } })
+      .expect(200);
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const next = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(next.body.draft.price, "the standing one carries").toBe(30);
+    expect(next.body.draft.celebritySpend, "a celebrity deal is signed once, not annually").toBe(0);
+    expect(next.body.draft.raiseAmount, "and a raise is never a standing instruction").toBe(0);
+    expect(next.body.draft.borrow).toBe(0);
+  }, 120_000);
+});

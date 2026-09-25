@@ -49,8 +49,14 @@ interface Holding {
   id: string; name: string; kind: string; effect: Effect; expiresIn: number | null;
   bookValue: number; willingSale: number; forcedSale: number;
 }
+/** Where this company stands on each axis a lot can move. */
+interface You {
+  quality: number; brand: number; service: number; capacity: number; unitCost: number;
+}
+
 interface Market {
   year: number;
+  you?: You | null;
   /** What one decision is called here, and how many make a year. */
   period?: { one: string; many: string; of: string };
   periods?: number;
@@ -65,14 +71,33 @@ interface Market {
 
 
 /** What an asset does, in the words a player would use rather than as a field dump. */
-function describe(effect: Effect): string[] {
+/**
+ * What a lot would do, said against the company that might buy it.
+ *
+ * "+6 quality" and "+4,038 capacity" are what the asset adds to somebody. The
+ * decision is what they make *this* company, and answering that meant holding
+ * two numbers from two screens in your head — a founder said so. Where the
+ * company's own standing is known the line reads "quality 54 → 60", and where
+ * it is not it falls back to the bare addition rather than inventing one.
+ *
+ * Capacity deliberately counts what the company's existing assets already
+ * add, because that is what "your room" means everywhere else on the desk; a
+ * number here that disagreed with the one there would be worse than no number.
+ */
+function describe(effect: Effect, you?: You | null): string[] {
   const parts: string[] = [];
-  if (effect.brand) parts.push(`+${effect.brand} brand`);
-  if (effect.quality) parts.push(`+${effect.quality} quality`);
-  if (effect.service) parts.push(`+${effect.service} service`);
-  if (effect.capacity) parts.push(`+${effect.capacity.toLocaleString()} capacity`);
+  const move = (label: string, add: number, from: number | undefined) =>
+    from === undefined
+      ? `+${add.toLocaleString()} ${label}`
+      : `${label} ${Math.round(from).toLocaleString()} → ${Math.round(from + add).toLocaleString()}`;
+
+  if (effect.brand) parts.push(move("brand", effect.brand, you?.brand));
+  if (effect.quality) parts.push(move("quality", effect.quality, you?.quality));
+  if (effect.service) parts.push(move("service", effect.service, you?.service));
+  if (effect.capacity) parts.push(move("room", effect.capacity, you?.capacity));
   if (effect.unitCost && effect.unitCost !== 1) {
-    parts.push(`${Math.round((1 - effect.unitCost) * 100)}% off every unit`);
+    const off = `${Math.round((1 - effect.unitCost) * 100)}% off every unit`;
+    parts.push(you?.unitCost ? `${off} — ${you.unitCost} → ${Math.round(you.unitCost * effect.unitCost * 100) / 100}` : off);
   }
   return parts;
 }
@@ -129,7 +154,7 @@ export default function SimulationMarketPage() {
       {market.listings.length === 0 ? (
         <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">Nothing is for sale this year.</CardContent></Card>
       ) : (
-        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} isCeo={isCeo} />)
+        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} isCeo={isCeo} you={market.you} />)
       )}
 
       <Card className="rounded-2xl nova-ring-soft">
@@ -166,7 +191,11 @@ export default function SimulationMarketPage() {
   );
 }
 
-function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; ventureId: string; funds: number; isCeo: boolean }) {
+function ListingCard({ listing, ventureId, funds, isCeo, you }: {
+  listing: Listing; ventureId: string; funds: number; isCeo: boolean;
+  /** This company's own standing, so the lot can say what it would make it. */
+  you?: You | null;
+}) {
   const { compact } = useMoney();
   const period = usePeriod();
   const { toast } = useToast();
@@ -217,7 +246,7 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
         </div>
 
         <div className="flex flex-wrap gap-1.5 mt-3">
-          {describe(listing.effect).map((part) => (
+          {describe(listing.effect, you).map((part) => (
             <span key={part} className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5">{part}</span>
           ))}
           <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5">

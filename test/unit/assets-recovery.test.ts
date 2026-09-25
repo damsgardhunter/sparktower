@@ -19,6 +19,8 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Company, type CompanyAsset } from "@shared/simulation/types";
+import { INCUMBENT_BID_MAX, incumbentBids } from "@shared/simulation/assets";
+import { seedIncumbents } from "@shared/simulation/incumbents";
 
 const niche = nicheById("dating_apps")!;
 const company = (over: Partial<Company> = {}): Company => ({
@@ -402,5 +404,85 @@ describe("the arc out of it", () => {
     const before = company({ cash: 500_000, debt: 2_000_000, creditLimit: 2_000_000 });
     expect(climbing(before, company({ cash: 900_000, debt: 1_800_000, creditLimit: 2_000_000 }))).toBe(true);
     expect(climbing(before, company({ cash: 600_000, debt: 2_400_000, creditLimit: 2_000_000 }))).toBe(false);
+  });
+});
+
+/**
+ * Somebody else turns up to the auction.
+ *
+ * `fileBotBids` covers bot-run *player* companies, and a season built from
+ * somebody's own project has none — so every lot in the first season anybody
+ * played came back "nobody met the reserve", five lots a period, for the whole
+ * season. An auction nobody else attends is not an auction; it is a shop with
+ * a fixed price and a longer wait.
+ */
+describe("the rivals at the auction", () => {
+  const niche = nicheById("dating_apps")!;
+  const lots = (count = 5) => marketListings({ seasonId: "s1", year: 1, niche, count });
+  const rivals = seedIncumbents(niche).map((c) => ({ id: c.id }));
+
+  it("bids for some lots and not others", () => {
+    /* Over many periods, so the sample is not one roll of the dice. */
+    let contested = 0;
+    let total = 0;
+    for (let year = 1; year <= 40; year += 1) {
+      const listings = marketListings({ seasonId: "s1", year, niche });
+      const bids = incumbentBids({ seasonId: "s1", year, listings, incumbents: rivals });
+      total += listings.length;
+      contested += new Set(bids.map((b) => b.listingId)).size;
+    }
+    const rate = contested / total;
+    expect(rate, "some lots are contested").toBeGreaterThan(0.1);
+    expect(rate, "and most are still there for the taking").toBeLessThan(0.7);
+  });
+
+  it("bids a little over the reserve, never under it", () => {
+    for (let year = 1; year <= 20; year += 1) {
+      const listings = marketListings({ seasonId: "s1", year, niche });
+      for (const b of incumbentBids({ seasonId: "s1", year, listings, incumbents: rivals })) {
+        const lot = listings.find((l) => l.id === b.listingId)!;
+        expect(b.amount, "over the reserve, or it buys nothing").toBeGreaterThan(lot.reserve);
+        expect(b.amount, "and not a wild number").toBeLessThanOrEqual(Math.round(lot.reserve * INCUMBENT_BID_MAX));
+      }
+    }
+  });
+
+  /* Sealed means sealed: the same auction twice, and no reading of the table. */
+  it("deals the same auction on a re-run", () => {
+    const listings = lots();
+    expect(incumbentBids({ seasonId: "s1", year: 3, listings, incumbents: rivals }))
+      .toEqual(incumbentBids({ seasonId: "s1", year: 3, listings, incumbents: rivals }));
+  });
+
+  /*
+   * Across a run of periods rather than one. At a tenth each, a single period
+   * where neither season's rivals turn up is an ordinary outcome, not a
+   * failure — and a test that reads it as one fails on the dice.
+   */
+  it("is a different auction in a different season", () => {
+    const seasonRuns = (seasonId: string) =>
+      JSON.stringify(Array.from({ length: 20 }, (_, i) => {
+        const listings = marketListings({ seasonId, year: i + 1, niche });
+        return incumbentBids({ seasonId, year: i + 1, listings, incumbents: rivals });
+      }));
+    expect(seasonRuns("s1")).not.toEqual(seasonRuns("s2"));
+  });
+
+  /* An incumbent selling a thing does not bid for it back. */
+  it("never bids on its own lot", () => {
+    const own = lots().map((l) => ({ ...l, sellerId: rivals[0].id }));
+    const bids = incumbentBids({ seasonId: "s1", year: 1, listings: own, incumbents: rivals });
+    expect(bids.some((b) => b.ventureId === rivals[0].id)).toBe(false);
+  });
+
+  /* And a player who bids properly still beats them. */
+  it("loses to a player who bids above them", () => {
+    const listings = lots(1);
+    const lot = listings[0];
+    const theirs = incumbentBids({ seasonId: "s1", year: 1, listings, incumbents: rivals });
+    const high = Math.round(lot.reserve * (INCUMBENT_BID_MAX + 0.2));
+    const awards = resolveBids(listings, [...theirs, { ventureId: "me", listingId: lot.id, amount: high }],
+      { me: high * 2, ...Object.fromEntries(rivals.map((r) => [r.id, high * 2])) });
+    expect(awards[0].winnerId).toBe("me");
   });
 });

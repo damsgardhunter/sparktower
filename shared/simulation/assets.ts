@@ -411,6 +411,60 @@ export function resaleValue(asset: CompanyAsset, opts: { forced: boolean }): num
   return Math.round(asset.bookValue * wear * distress);
 }
 
+/**
+ * How often an incumbent turns up to the auction, per lot.
+ *
+ * Nothing ever bid against a solo founder. `fileBotBids` covers bot-run
+ * *player* companies, and a season built from somebody's project has none — so
+ * every lot in the first season anybody played came back "nobody met the
+ * reserve", five times a period, for the whole season. An auction nobody else
+ * attends is not an auction; it is a shop with a fixed price and a longer wait.
+ *
+ * Per incumbent per lot, so four rivals give roughly a third of lots a
+ * contest — often enough that a reserve-matching bid is a real risk, rare
+ * enough that turning up is usually still enough.
+ */
+export const INCUMBENT_BID_CHANCE = 0.1;
+
+/** A little over the reserve: enough to beat somebody who bid exactly it. */
+export const INCUMBENT_BID_MIN = 1.02;
+export const INCUMBENT_BID_MAX = 1.15;
+
+/**
+ * The incumbents' sealed bids for this period's lots.
+ *
+ * Deterministic from the season, the period and the pair, so a re-run of a
+ * tick deals the same auction and a replayed season plays out identically.
+ * Seeded on nothing that is already in the table, which is what keeps the
+ * auction sealed: they are not reacting to the player's number, they are
+ * turning up or not.
+ *
+ * Deliberately blunt. An incumbent does not value a lot, work out what it is
+ * worth to them, or bid strategically — it offers a little over the reserve or
+ * it stays home. What it buys is the possibility of losing, which is the whole
+ * of what was missing.
+ */
+export function incumbentBids(input: {
+  seasonId: string;
+  year: number;
+  listings: Listing[];
+  incumbents: { id: string }[];
+}): Bid[] {
+  const { seasonId, year, listings, incumbents } = input;
+  const out: Bid[] = [];
+  for (const listing of listings) {
+    /* Never their own: an incumbent selling to itself is not a market. */
+    for (const who of incumbents) {
+      if (listing.sellerId === who.id) continue;
+      const seed = `${seasonId}:${year}:${listing.id}:${who.id}`;
+      if (rng(`${seed}:turnup`)() >= INCUMBENT_BID_CHANCE) continue;
+      const over = INCUMBENT_BID_MIN + rng(`${seed}:amount`)() * (INCUMBENT_BID_MAX - INCUMBENT_BID_MIN);
+      out.push({ ventureId: who.id, listingId: listing.id, amount: Math.round(listing.reserve * over) });
+    }
+  }
+  return out;
+}
+
 export interface Bid {
   ventureId: string;
   listingId: string;
