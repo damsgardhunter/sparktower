@@ -81,10 +81,29 @@ describe("the change is words only", () => {
     }
   });
 
-  it("still deals three things a season, the same three on a replay", () => {
+  it("deals five things a season, the same five on a replay", () => {
     const niche = nicheById("dating_apps")!;
     const once = marketListings({ seasonId: "s1", year: 2, niche });
-    expect(once).toHaveLength(3);
+    expect(once).toHaveLength(5);
     expect(marketListings({ seasonId: "s1", year: 2, niche })).toEqual(once);
+  });
+
+  /*
+   * A company is not offered what it already holds — and the rest of the hand
+   * is untouched by that, because settlement deals the same five from the same
+   * seed with no company to filter for. A pool filtered before the sample
+   * would put listings on one team's screen that nothing would ever settle.
+   */
+  it("hides what a company already owns without changing anybody else's hand", () => {
+    const niche = nicheById("dating_apps")!;
+    const all = marketListings({ seasonId: "s1", year: 2, niche });
+    const owned = [all[0].asset.name, all[2].asset.name];
+    const mine = marketListings({ seasonId: "s1", year: 2, niche, owned });
+
+    expect(mine.map((l) => l.id), "the two it holds are gone").toEqual(
+      all.filter((l) => !owned.includes(l.asset.name)).map((l) => l.id),
+    );
+    // Same ids, same prices: only the offer was filtered, not the deal.
+    for (const l of mine) expect(l).toEqual(all.find((a) => a.id === l.id));
   });
 });

@@ -1,1 +1,1 @@
-ALTER TABLE "sim_ventures" ADD COLUMN "bot_only" boolean DEFAULT false NOT NULL;
+ALTER TABLE "sim_ventures" ADD COLUMN IF NOT EXISTS "bot_only" boolean DEFAULT false NOT NULL;

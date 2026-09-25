@@ -19,6 +19,7 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { startingCompany } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { LEVER_FIELDS, speak } from "@shared/simulation/levers";
+import { marketListings, templatesFor } from "@shared/simulation/assets";
 import { ROLES, type World } from "@shared/simulation/types";
 
 const sane = {
@@ -306,5 +307,64 @@ describe("the words a written market speaks", () => {
         expect(() => speak(field, m.voice), `${role}.${field.id}`).not.toThrow();
       }
     }
+  });
+});
+
+/**
+ * A market Nova wrote names the things it sells.
+ *
+ * The nine asset slots are shapes — a distribution deal, somewhere to serve
+ * people from — and the seven catalogue markets name theirs by hand. A written
+ * market had no catalogue entry, so it fell through to the generic slot names,
+ * and a founder rehearsing a SaaS business was offered a retail shelf
+ * agreement and a carrier bundle for a product with no shelves.
+ */
+describe("what a written market calls the things it sells", () => {
+  const named = (assets: unknown) => buildCustomMarket({ ...sane, assets }, "f")!;
+
+  it("uses the market's own names where the kinds line up", () => {
+    const m = named([
+      { kind: "distribution", name: "App store placement", blurb: "Found without looking." },
+      { kind: "distribution", name: "Reseller agreement", blurb: "Somebody else sells it." },
+      { kind: "celebrity", name: "Founder residency", blurb: "A name people know." },
+      { kind: "patent", name: "Scheduling patent", blurb: "Yours, permanently." },
+      { kind: "patent", name: "Interface portfolio", blurb: "A fence round the screen." },
+      { kind: "facility", name: "Another cloud region", blurb: "Room to serve more clinics." },
+      { kind: "facility", name: "Automated onboarding", blurb: "Cheaper per clinic, for good." },
+      { kind: "brand_licence", name: "Association endorsement", blurb: "Borrowed credibility." },
+      { kind: "brand_licence", name: "Journal partnership", blurb: "Quieter than a celebrity." },
+    ]);
+    const names = templatesFor(m).map((t) => t.name);
+    expect(names).toContain("Another cloud region");
+    expect(names).toContain("App store placement");
+    expect(names, "and none of retail's").not.toContain("Retail shelf agreement");
+  });
+
+  /*
+   * One bad entry costs its own slot and nothing else's. Taken by kind rather
+   * than by position precisely so a dropped entry cannot shift a patent's
+   * economics onto something called a warehouse.
+   */
+  it("keeps the rest when one entry names the wrong kind", () => {
+    const m = named([
+      { kind: "warehouse", name: "Nonsense", blurb: "Not a kind." },
+      { kind: "facility", name: "Another cloud region", blurb: "Room to serve more." },
+    ]);
+    const facility = templatesFor(m).filter((t) => t.kind === "facility");
+    expect(facility[0].name, "the good one still lands on a facility").toBe("Another cloud region");
+    for (const t of templatesFor(m)) expect(t.name).not.toBe("Nonsense");
+  });
+
+  it("falls back to the generic slots when the model said nothing usable", () => {
+    expect(templatesFor(named([])).map((t) => t.name))
+      .toEqual(templatesFor(buildCustomMarket(sane, "f")!).map((t) => t.name));
+  });
+
+  /* Priced at the size of the market, not at a corporation's. */
+  it("prices what it sells against this market's payroll", () => {
+    const startup = buildCustomMarket({ ...sane, segments: sane.segments.map((s) => ({ ...s, size: 400, referencePrice: 30 })) }, "f")!;
+    const big = buildCustomMarket(sane, "f")!;
+    const cheapest = (n: typeof big) => Math.min(...marketListings({ seasonId: "s", year: 1, niche: n }).map((l) => l.reserve));
+    expect(cheapest(startup)).toBeLessThan(cheapest(big));
   });
 });

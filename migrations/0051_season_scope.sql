@@ -1,2 +1,2 @@
-ALTER TABLE "sim_seasons" ADD COLUMN "scope" text DEFAULT 'home' NOT NULL;--> statement-breakpoint
-ALTER TABLE "sim_seasons" ADD COLUMN "bot_teams" integer DEFAULT 0 NOT NULL;
+ALTER TABLE "sim_seasons" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'home' NOT NULL;--> statement-breakpoint
+ALTER TABLE "sim_seasons" ADD COLUMN IF NOT EXISTS "bot_teams" integer DEFAULT 0 NOT NULL;

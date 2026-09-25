@@ -32,6 +32,7 @@
 import { CATALOGUES } from "./catalogues";
 import type { Company, CompanyAsset, Niche } from "./types";
 import { hash, rng, sample } from "./random";
+import { marketScale } from "./world";
 
 /** What an asset does while you hold it, applied on top of what the company built itself. */
 export interface AssetEffect {
@@ -200,10 +201,39 @@ const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => s
  * worse than a generic label.
  */
 export function templatesFor(niche: Niche): AssetTemplate[] {
+  /*
+   * The market's own words first, then the catalogue, then the generic slot.
+   *
+   * A market Nova wrote has no catalogue entry, so a founder rehearsing a SaaS
+   * business was offered a retail shelf agreement and a carrier bundle — the
+   * generic names, which are retail's. `niche.assets` is that market naming
+   * its own, and it wins over the catalogue because a market that came with
+   * its own vocabulary is more specific than an id lookup that missed.
+   */
   const catalogue = CATALOGUES[niche.id];
-  if (!catalogue) return SLOTS;
+  const written = niche.assets;
+  if (!catalogue && !written) return SLOTS;
+
+  /*
+   * A written market's entries are taken by kind, in order, rather than by
+   * position. A catalogue is hand-written and lines up by construction; a
+   * model's answer is not, and one entry dropped for naming the wrong kind
+   * would shift every later one onto the wrong slot — a patent's economics
+   * under a warehouse's name. Queueing per kind means a bad entry costs its
+   * own slot and nothing else's.
+   */
+  const queue = new Map<string, { name: string; blurb: string }[]>();
+  for (const entry of written ?? []) {
+    if (!entry?.name) continue;
+    const list = queue.get(entry.kind) ?? [];
+    list.push({ name: entry.name, blurb: entry.blurb });
+    queue.set(entry.kind, list);
+  }
+
   return SLOTS.map((slot, i) => {
-    const entry = catalogue[i];
+    const mine = queue.get(slot.kind)?.shift();
+    if (mine) return { ...slot, name: mine.name, blurb: mine.blurb || slot.blurb };
+    const entry = catalogue?.[i];
     return entry && entry.kind === slot.kind ? { ...slot, name: entry.name, blurb: entry.blurb } : slot;
   });
 }
@@ -223,13 +253,29 @@ export interface Listing {
 }
 
 /**
- * Roughly a year of payroll, which is the unit a team already understands.
+ * Roughly a year of payroll in one of the seven catalogue markets.
  *
- * Pricing assets against the salary bill rather than a flat number means a
- * listing means the same thing in both markets and stays meaningful if the
- * economy is rebalanced again.
+ * Pricing assets against the salary bill rather than a flat number was the
+ * intention and this was the flat number: a constant, applied whole to every
+ * market including the ones Nova writes for a startup. Those run at a
+ * hundredth of a catalogue market, so a founder holding £46,000 was shown
+ * three things to buy at £1.4m, £1.6m and £2.5m, each labelled "more than the
+ * company can back" — a shop with nothing in it they could afford, every year,
+ * for the whole season.
+ *
+ * `yearOfCosts` is the figure the comment always described. Unchanged for the
+ * seven, which are all sized around this.
  */
 const YEAR_OF_COSTS = 1_100_000;
+
+/**
+ * A year of payroll in *this* market.
+ *
+ * The same `marketScale` the opening bank, the salaries and the challenge
+ * rewards are all sized by, so an asset costs what it should relative to the
+ * company that might buy it rather than relative to a market it is not in.
+ */
+const yearOfCosts = (niche: Niche): number => YEAR_OF_COSTS * marketScale(niche);
 
 /**
  * What the open market is offering this year.
@@ -240,14 +286,53 @@ const YEAR_OF_COSTS = 1_100_000;
  * with three things in it is an argument about which one.
  */
 /** `year` counts periods; `periods` is how many make one, because a licence's life is written in years. */
-export function marketListings(input: { seasonId: string; year: number; niche: Niche; count?: number; periods?: number }): Listing[] {
-  const { seasonId, year, niche, count = 3, periods = 1 } = input;
+export function marketListings(input: {
+  seasonId: string; year: number; niche: Niche; count?: number; periods?: number;
+  /**
+   * Names this company already owns, which are not worth offering it again.
+   *
+   * A second copy of a patent it holds is not a second patent — `applyAsset`
+   * would stack two of the same effect, and a team spending a year's cash on
+   * something it already has is a trap rather than a decision. The pool is
+   * still the whole market's, so removing what one company holds does not
+   * change what the others are shown; it only stops this one being offered
+   * its own shelf back.
+   */
+  owned?: string[];
+}): Listing[] {
+  const { seasonId, year, niche, count = 5, periods = 1 } = input;
   const seed = `${seasonId}:${year}:market`;
-  const chosen = sample(seed, templatesFor(niche), count);
+  /*
+   * Dealt first, hidden second — and that order is not a detail.
+   *
+   * Settlement (`settleAuctions`) deals this same hand from the same seed to
+   * decide who won what, and it has no company to filter for. Removing a
+   * template *before* the sample would make one company's screen show
+   * listings that do not exist in the settlement's set, so a bid would be
+   * placed against an id nothing would ever settle. The pool stays whole; a
+   * company simply is not shown the thing it already owns.
+   */
+  const held = new Set(input.owned ?? []);
+  const chosen = sample(seed, templatesFor(niche), count)
+    .filter((t) => !held.has(t.name));
 
   return chosen.map((template, i) => {
-    const jitter = 0.85 + rng(`${seed}:${i}:price`)() * 0.35;
-    const price = Math.round((template.weight * YEAR_OF_COSTS * jitter) / 50_000) * 50_000;
+    /*
+     * Seeded on the template, not on its position in the list.
+     *
+     * With the index in the seed, hiding one listing from a company shifted
+     * every later one up a place and repriced it — so the same asset had one
+     * price on the screen and another at settlement. What a thing costs is a
+     * fact about the thing, not about how many rows are above it.
+     */
+    const jitter = 0.85 + rng(`${seed}:${template.name}:price`)() * 0.35;
+    /*
+     * Rounded to something that reads like a price, at the size of this
+     * market. A flat £50,000 step made every listing in a startup market
+     * round to the same number — or to nothing at all.
+     */
+    const step = Math.max(500, Math.round((yearOfCosts(niche) / 22) / 500) * 500);
+    const price = Math.max(step, Math.round((template.weight * yearOfCosts(niche) * jitter) / step) * step);
     return {
       id: `mkt_${hash(`${seed}:${template.name}`).toString(36)}`,
       blurb: template.blurb,

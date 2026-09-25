@@ -190,6 +190,22 @@ export interface Niche {
    * `workforce.ts`.
    */
   workforce?: import("./workforce").WorkKind[];
+  /**
+   * What this market's version of each buyable asset is called.
+   *
+   * The nine slots in `assets.ts` are the shapes — a distribution deal, a
+   * patent, somewhere to serve people from — and every market expresses them
+   * differently. The seven catalogue markets name theirs in `catalogues.ts`;
+   * a market Nova wrote for somebody's project gets to name its own, so a
+   * SaaS founder is offered "another region of cloud capacity" rather than a
+   * retail shelf agreement they have no shelves for.
+   *
+   * Ordered and matched by kind against `ASSET_SLOTS`, exactly as a catalogue
+   * is. An entry whose kind does not line up is ignored rather than
+   * misapplied — a patent's economics on a thing called a warehouse is worse
+   * than the generic name it replaced.
+   */
+  assets?: { kind: string; name: string; blurb: string }[];
 }
 
 /**

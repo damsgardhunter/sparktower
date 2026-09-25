@@ -16,6 +16,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:baseline": "tsx script/baseline-migrations.ts",
     "db:reconcile": "tsx script/reconcile-migrations.ts",
+    "db:catch-up": "tsx script/catch-up-migrations.ts",
     "db:verify": "tsx script/verify-migrations.ts",
     "mfa:reset": "tsx script/reset-mfa.ts",
     "stripe:seed": "tsx --env-file=.env server/seed-stripe.ts",

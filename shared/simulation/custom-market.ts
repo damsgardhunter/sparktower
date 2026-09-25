@@ -28,6 +28,7 @@
  */
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
 import type { WorkKind } from "./workforce";
+import { ASSET_SLOTS } from "./assets";
 
 /** What a small market is allowed to be. Below this the maths has nothing to work with. */
 export const MIN_SEGMENT_SIZE = 2_000;
@@ -309,6 +310,37 @@ function cleanVoice(raw: unknown): NicheVoice {
 }
 
 /**
+ * What this market calls each of the nine things a company can buy.
+ *
+ * Matched to `ASSET_SLOTS` by position and kind, exactly as a catalogue is,
+ * and anything that does not line up is dropped rather than bent into place:
+ * a patent's economics attached to something called a warehouse is worse than
+ * the generic name it would have replaced. Undefined when the model said
+ * nothing usable, which puts the market back on the generic slots.
+ */
+function cleanAssets(raw: unknown): { kind: string; name: string; blurb: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  /*
+   * Kept if the kind is one of the nine, wherever it appears in the answer.
+   *
+   * Not checked against the slot at the same index: a model that returns the
+   * kinds in a different order, or omits one, is answering imperfectly rather
+   * than uselessly, and `templatesFor` places these by kind anyway. Validating
+   * positionally here threw away good entries for the sin of being in the
+   * wrong row.
+   */
+  const kinds = new Set<string>(ASSET_SLOTS.map((s) => s.kind));
+  const out: { kind: string; name: string; blurb: string }[] = [];
+  for (const entry of raw.slice(0, ASSET_SLOTS.length * 2)) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const kind = str(e.kind, 40, "");
+    const name = str(e.name, 60, "");
+    if (name && kinds.has(kind)) out.push({ kind, name, blurb: str(e.blurb, 200, "") });
+  }
+  return out.length ? out : undefined;
+}
+
+/**
  * A market from whatever the model said, or null if there is not one in there.
  *
  * Null is a real answer and the caller must have somewhere to go with it: the
@@ -337,6 +369,7 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
     workforce: cleanWorkforce(m.workforce),
+    assets: cleanAssets(m.assets),
   };
 }
 
