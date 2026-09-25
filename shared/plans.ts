@@ -68,10 +68,12 @@ export type PricedOutcomeId =
   | "codeAudit"
   | "business"
   | "seasonSeat"
+  | "customSeason"
   | "wwit"
   | "simulations"
   | "challenge"
   | "marketing"
+  | "brand"
   | "imagePass";
 
 /**
@@ -125,6 +127,15 @@ export type PricedOutcomeId =
  *                of thing — one commissioned piece of work with an answer at
  *                the end — and it is included in `business`, which buys the
  *                lot. A project that already ran it on credits keeps it.
+ *   brand      — a placeholder logo and a cover image drawn to match it, for
+ *                one project. A dollar, which is the lowest price on this list
+ *                and the only one that could be lower: it is two pictures and
+ *                it is explicitly a stand-in for a designer, so pricing it
+ *                like a piece of commissioned work would be selling it as one.
+ *                It is a dollar rather than free because two images cost real
+ *                money on every press, and free image generation attached to a
+ *                project is the one thing here a script would sit on all
+ *                night. Included in `business`, which buys the project.
  */
 export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   actionPack: 500,
@@ -133,10 +144,12 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   codeAudit: 500,
   business: 1499,
   seasonSeat: 300,
+  customSeason: 1000,
   wwit: 300,
   simulations: 300,
   challenge: 499,
   marketing: 600,
+  brand: 100,
   imagePass: 500,
 };
 
@@ -353,6 +366,7 @@ export type NovaActionId =
   | "roadmapGeneration" | "roadmapUpdate" | "roadmapRebuild"
   | "documentPlan" | "documentFill" | "documentReplan" | "documentTighten"
   | "codeAudit"
+  | "brandKit"
   | "buildMyBusiness";
 
 export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
@@ -416,6 +430,12 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   documentTighten: "free",
 
   codeAudit: "codeAudit",
+
+  /**
+   * A placeholder logo and the cover drawn from it. One press, two pictures,
+   * one price — and free on a project the whole-business build has bought.
+   */
+  brandKit: "brand",
 
   /** The whole path, once, for one project. Everything on it is free afterwards. */
   buildMyBusiness: "business",
@@ -514,6 +534,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
     name: "Simulate a decision",
     blurb: "Ask what happens if you hire, borrow, put prices up or spend on marketing, and see it month by month against your own numbers — three ways it could go, and against doing nothing. Bought once for a project; every question after that is free.",
   },
+  brand: {
+    name: "Draw me a logo and cover",
+    blurb: "Pick a direction — a name logo, artistic, simple or symmetric — and Nova draws a placeholder logo from your brief, then a cover image built around that logo so the two match. Yours to replace the day you have a designer.",
+  },
   marketing: {
     name: "Test a marketing scheme",
     blurb: "Write the plan for a product that already exists — who it is for, where it runs, what it offers, what it costs, how you will know it worked — and Nova scores it against your own figures. A scheme worth testing can then be run for a year in the simulator. Bought once for a project.",
@@ -525,6 +549,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
   seasonSeat: {
     name: "Training season seat",
     blurb: "Per seat, when a company runs the market simulation privately. The first season is free, and the public market always is.",
+  },
+  customSeason: {
+    name: "A market built around your project",
+    blurb: "Nova reads your project and writes the market it is actually in — who buys, where they are, and the four companies who already have them. Yours to play as many times as you like; replaying one costs nothing.",
   },
 };
 
@@ -561,6 +589,7 @@ export const PRICING_ROWS: PricingRow[] = [
   { label: OUTCOME_COPY.document.name, price: formatMoney(OUTCOME_PRICE_CENTS.document), detail: OUTCOME_COPY.document.blurb },
   { label: OUTCOME_COPY.codeAudit.name, price: formatMoney(OUTCOME_PRICE_CENTS.codeAudit), detail: OUTCOME_COPY.codeAudit.blurb },
   { label: OUTCOME_COPY.wwit.name, price: formatMoney(OUTCOME_PRICE_CENTS.wwit), detail: OUTCOME_COPY.wwit.blurb },
+  { label: OUTCOME_COPY.brand.name, price: formatMoney(OUTCOME_PRICE_CENTS.brand), detail: OUTCOME_COPY.brand.blurb },
   { label: "Your first images", price: "Free", detail: "The first set of AI images for a project — and the first for each badge — costs nothing. Badges themselves are always free to earn and to keep." },
   { label: OUTCOME_COPY.imagePass.name, price: formatMoney(OUTCOME_PRICE_CENTS.imagePass), detail: OUTCOME_COPY.imagePass.blurb },
   { label: OUTCOME_COPY.business.name, price: formatMoney(OUTCOME_PRICE_CENTS.business), detail: OUTCOME_COPY.business.blurb },

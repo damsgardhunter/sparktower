@@ -217,7 +217,7 @@ describe("paying for a simulation", () => {
     // Two seats, priced apart, each with its own balance and its own shortfall.
     const by = Object.fromEntries(seats.body.seats.map((t: any) => [t.kind, t]));
     expect(by.play.pricePerSeat, "one of our markets").toBe(3);
-    expect(by.nova.pricePerSeat, "one Nova builds from their project").toBe(5);
+    expect(by.nova.pricePerSeat, "a person at a table in a market Nova wrote").toBe(6);
     for (const kind of ["play", "nova"]) {
       expect(by[kind].paid).toBe(0);
       expect(by[kind].shortBy).toBe(3);
@@ -239,8 +239,8 @@ describe("paying for a simulation", () => {
     const refused = await owner.agent.post(`/api/companies/${companyId}/seasons/nova`).send({});
     expect(refused.status).toBe(402);
     expect(refused.body.code).toBe("seats_required");
-    expect(refused.body.pricePerSeat).toBe(5);
-    expect(refused.body.message).toContain("$5");
+    expect(refused.body.pricePerSeat).toBe(6);
+    expect(refused.body.message).toContain("$6");
   }, 120_000);
 
   it("keeps the seats and the price to the people who run the company", async () => {
@@ -268,10 +268,10 @@ describe("paying for a simulation", () => {
       .send({ seats: 4, kind: "nova" });
     expect(bought.status, JSON.stringify(bought.body)).toBe(200);
     expect(bought.body.seats).toBe(4);
-    // Four Nova seats at $5.
-    expect(bought.body.spentCents).toBe(2_000);
+    // Four Nova seats at $6.
+    expect(bought.body.spentCents).toBe(2_400);
     expect(bought.body.held).toBe(4);
-    expect(bought.body.wallet.balanceCents, "$50 less $20").toBe(3_000);
+    expect(bought.body.wallet.balanceCents, "$50 less $24").toBe(2_600);
 
     const [after] = await db.select().from(companies).where(eq(companies.id, companyId));
     expect(after.simNovaSeatsPaid).toBe(4);
@@ -629,7 +629,7 @@ describe("what a season costs", () => {
     const refused = await owner.agent.post(start).send({});
     expect(refused.status, "twenty play seats buy no Nova season").toBe(402);
     expect(refused.body.seatKind).toBe("nova");
-    expect(refused.body.pricePerSeat).toBe(5);
+    expect(refused.body.pricePerSeat).toBe(6);
     expect(refused.body.paid).toBe(0);
 
     await giveSeats(companyId, 5, "nova");
@@ -698,7 +698,13 @@ describe("running a season in quarters or months", () => {
     const refused = await owner.agent.post(start).send({});
     expect(refused.status).toBe(402);
     expect(refused.body.seatKind).toBe("monthly");
-    expect(refused.body.pricePerSeat).toBe(10);
+    /*
+     * Six, not ten. Every seat at somebody's own table is the same price now —
+     * the cadence no longer surcharges the person. What this still holds is
+     * the claim it was written for: play seats do not buy a monthly season,
+     * however many of them there are.
+     */
+    expect(refused.body.pricePerSeat).toBe(6);
 
     await giveSeats(companyId, 5, "monthly");
     expect((await owner.agent.post(start).send({})).status).toBe(200);

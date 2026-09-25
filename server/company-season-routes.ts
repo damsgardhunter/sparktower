@@ -108,7 +108,7 @@ export const BOT_TEAMS_MAX = 50;
  * entitle you to have Nova build anything. A quarterly seat is the whole of a
  * play seat and the cadence, so somebody holding one needs nothing else.
  */
-export const SEAT_PRICE_CENTS = { play: 300, nova: 500, quarterly: 600, monthly: 1000 } as const;
+export const SEAT_PRICE_CENTS = { play: 300, nova: 600, quarterly: 600, monthly: 600 } as const;
 export type SeatKind = keyof typeof SEAT_PRICE_CENTS;
 
 /** What each seat is called when somebody is told they need one. */
@@ -207,7 +207,8 @@ export const seatsRequired = (
 });
 
 /** The most seats one checkout can carry, so a typo is not a four-figure charge. */
-export const SEATS_PER_PURCHASE_MAX = 250;
+/* The same fifty as SEASON_SEATS_MAX below, written out because it is declared after this. */
+export const SEATS_PER_PURCHASE_MAX = 50;
 
 /**
  * Seats a company buys for a private season: five to a table, and nobody has
@@ -215,7 +216,16 @@ export const SEATS_PER_PURCHASE_MAX = 250;
  * table itself — a season with three seats is a season nobody can play.
  */
 export const SEASON_SEATS_MIN = 5;
-export const SEASON_SEATS_MAX = 500;
+
+/**
+ * The most people one season can seat.
+ *
+ * Five hundred was a workshop's number, from when this was a thing a company
+ * ran for its staff. A market built from somebody's own project is a different
+ * shape: a founder and the people they actually want at the table. Fifty is
+ * more than anybody has asked for and still a number a person could fill.
+ */
+export const SEASON_SEATS_MAX = 50;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
@@ -371,11 +381,20 @@ export function registerCompanySeasonRoutes(app: Express): void {
         seats = body.seats == null || body.seats === "" ? SEASON_SEATS_MIN : Number(body.seats);
         if (!Number.isInteger(seats) || seats < SEASON_SEATS_MIN || seats > SEASON_SEATS_MAX) {
           return res.status(400).json({
-            message: `A season is bought ${SEASON_SEATS_MIN} to ${SEASON_SEATS_MAX} seats at a time, at ${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)} a seat.`,
+            message: `A season is bought ${SEASON_SEATS_MIN} to ${SEASON_SEATS_MAX} seats at a time, at ${formatMoney(SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)])} a seat.`,
             code: "invalid_input", field: "seats",
           });
         }
-        cents = seats * OUTCOME_PRICE_CENTS.seasonSeat;
+        /*
+         * Priced as the seat that is granted, not as a flat one.
+         *
+         * This charged `seasonSeat` — the cheapest seat there is — and then
+         * credited `seatKindFor("catalogue", cadence)` below, which for a
+         * quarterly or monthly season is a dearer seat. So one field in the
+         * request body bought the expensive seats at the cheap price. The
+         * cadence is read from the same body, so it was not even a guess.
+         */
+        cents = seats * SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)];
       }
 
       let paid: Awaited<ReturnType<typeof spend>> = null;
@@ -411,7 +430,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
           const wallet = await walletOf(req.user.id);
           return res.status(402).json(paymentRequired({
             message:
-              `${seats} seats is ${formatMoney(cents)} at ${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)} a seat, ` +
+              `${seats} seats is ${formatMoney(cents)} at ${formatMoney(SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)])} a seat, ` +
               `and your balance is ${wallet.balanceDisplay}. Your company's first season was free; this one isn't. ` +
               `The public market stays free for everyone.`,
             label: OUTCOME_COPY.seasonSeat.name, outcome: "seasonSeat", cents, wallet,
@@ -712,7 +731,10 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * house rule for every route that spends a model call. The seats pay for
        * the simulation; the credit pays for Nova's thinking about it.
        */
-      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "Nova building your simulation", { action: "simulationBuild" });
+      /* Priced like the project's own build — see the note there. */
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "a market built around your project", {
+        action: "simulationBuild", outcome: "customSeason",
+      });
       if (!ent) return;
 
       const project = found.company.projectId

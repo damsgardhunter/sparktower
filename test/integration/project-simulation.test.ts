@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companies, companyMembers, projects, simSeasons, simVentures } from "@shared/schema";
+import { companies, companyMembers, projects, simSeasons, simVentures, users } from "@shared/schema";
 import { startReadySeasons } from "../../server/simulation-tick";
 import { advanceVenture } from "../../server/simulation-routes";
 
@@ -333,4 +333,43 @@ describe("playing a market again, and filling the table", () => {
     const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
     expect(built.botFill, "these seats were bought for people who are on their way").toBe(false);
   }, 60_000);
+});
+
+/**
+ * A market built from a project is a priced outcome, and was not one.
+ *
+ * The route named an `action` and no `outcome`, and `requireCredits` only
+ * takes money when there is an outcome — so the largest single piece of
+ * writing Nova does came off the month's free allowance of small actions, the
+ * same allowance a chat turn uses. The hold is settled only when a market was
+ * actually written: a build that fell back to one of the seven, or replayed a
+ * market this project already owns, calls no model and is not charged.
+ */
+describe("what a custom market costs", () => {
+  it("asks for ten dollars, and says so when the balance is short", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const project = await aProject(owner.id);
+    await db.update(users).set({ balanceCents: 0, devUnlimited: false }).where(eq(users.id, owner.id));
+
+    const res = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({});
+    /*
+     * 503 when this machine has no model configured — the route refuses before
+     * it charges, which is correct and is tested above. Everywhere else it is
+     * the price.
+     */
+    if (res.status === 503) {
+      expect(res.body.code).toBe("nova_unavailable");
+      return;
+    }
+    expect(res.status, JSON.stringify(res.body)).toBe(402);
+    expect(res.body.price?.cents, "ten dollars").toBe(1_000);
+    expect(res.body.outcome).toBe("customSeason");
+  }, 60_000);
+
+  /*
+   * Replaying is covered where the replay lives — "replays the same market
+   * without asking Nova or charging for it" — which already asserts that no
+   * model is called and nothing is taken.
+   */
 });

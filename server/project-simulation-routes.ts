@@ -156,7 +156,23 @@ export function registerProjectSimulationRoutes(app: Express): void {
         return res.status(503).json({ code: "nova_unavailable", message: "Nova can't reach the model right now. You can still play the public market." });
       }
 
-      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "building your simulation", { projectId: project.id, action: "simulationBuild" });
+      /*
+       * Priced, which it was not.
+       *
+       * This named an `action` and no `outcome`, and `requireCredits` only
+       * takes money when there is an outcome — so writing a whole market with
+       * a model call came off the month's free allowance of small actions,
+       * the same allowance a chat turn uses. The most expensive thing Nova
+       * does here was the one thing nobody paid for.
+       *
+       * The hold is placed here and settled below, once it is known whether a
+       * market was actually written: a build that fell back to one of the
+       * seven, or replayed a market this project already owns, calls no model
+       * and is not charged.
+       */
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "a market built around your project", {
+        projectId: project.id, action: "simulationBuild", outcome: "customSeason",
+      });
       if (!ent) return;
 
       const progress = await progressOf(project.id);

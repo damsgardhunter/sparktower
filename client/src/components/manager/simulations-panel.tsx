@@ -523,6 +523,9 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
  * because the four balances do not substitute for each other and picking the
  * wrong one buys a seat that cannot be spent.
  */
+/** The ceiling the server enforces (SEASON_SEATS_MAX): a table of fifty. */
+const MAX_SEATS = 50;
+
 function BuySeats({ companyId, projectId, held, prices, seasons }: {
   companyId: string;
   projectId: string;
@@ -570,8 +573,8 @@ function BuySeats({ companyId, projectId, held, prices, seasons }: {
             <span className="w-12 text-center text-sm font-medium tabular-nums" data-testid="text-seats">{seats}</span>
             <Button
               size="sm" variant="outline" aria-label="One more seat"
-              disabled={seats >= 250 || buy.isPending}
-              onClick={() => setSeats((n) => Math.min(250, n + 1))}
+              disabled={seats >= MAX_SEATS || buy.isPending}
+              onClick={() => setSeats((n) => Math.min(MAX_SEATS, n + 1))}
               data-testid="button-seats-more"
             >+</Button>
           </div>

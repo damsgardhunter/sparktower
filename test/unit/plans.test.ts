@@ -201,6 +201,14 @@ describe("the price list", () => {
       codeAudit: 500,
       business: 1499,
       seasonSeat: 300,
+      // A market Nova writes from somebody's own project: who buys, where they
+      // are, and the four companies who already have them. Ten dollars because
+      // it is the largest single piece of writing Nova does — a whole world,
+      // validated, and then playable as many times as the owner likes. It used
+      // to cost nothing at all: the route named an action and no outcome, so
+      // the most expensive thing on the desk came off the month's free
+      // allowance of small actions.
+      customSeason: 1000,
       // "What would it take?", priced with the roadmap and the document
       // because it is the same kind of thing: one commissioned piece of work
       // with an answer at the end.
@@ -222,6 +230,12 @@ describe("the price list", () => {
       // fortnight.
       challenge: 499,
       marketing: 600,
+      // A placeholder logo and the cover drawn from it. A dollar, which is the
+      // lowest price on this list: it is two pictures and explicitly a stand-in
+      // for a designer, so pricing it like commissioned work would be selling
+      // it as one. Recorded here because this test exists to make a price
+      // change something somebody has to acknowledge on purpose.
+      brand: 100,
       // A day of pictures. Its own price rather than a small action, because
       // an image is the most expensive thing here per press.
       imagePass: 500,

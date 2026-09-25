@@ -527,6 +527,28 @@ export function registerBackingRoutes(app: Express) {
       if (!project) return res.status(404).json({ message: "Project not found" });
 
       const campaign = await ensureCampaign(projectId);
+
+      /*
+       * Metered, which it was not.
+       *
+       * `renderBadgeImage` reaches `openai.images.edit` on every press, and
+       * this route had no gate in front of it — no image pass, no allowance,
+       * nothing but the shared AI burst limit. `CHARGE_FOR` has said for a
+       * long time that generating a picture is the image pass's business; the
+       * badge preview was the one picture nobody paid for.
+       *
+       * The same permit every other image route takes: the first run on a
+       * project is free, and after that it is the pass. Scoped to the project
+       * because that is what a badge belongs to.
+       */
+      // metering: requireImages both checks and takes — the first preview on a
+      // project is free and every one after it comes off the image pass — so
+      // there is nothing left for this body to deduct.
+      const permit = await requireImages(res, req.user.id, {
+        scope: "project", scopeId: projectId, wanted: 1, label: "A badge preview",
+      });
+      if (!permit) return;
+
       // Same resolution the real badge uses, so a preview can't disagree.
       const logo = await projectLogoBuffer(badgeLogoUrl(project.logoUrl, campaign.merchConfig));
 
@@ -547,7 +569,13 @@ export function registerBackingRoutes(app: Express) {
       res.json({ level, imageUrl: objectPath, usedLogo: !!logo });
     } catch (error: any) {
       console.error("Badge preview error:", error);
-      res.status(502).json({ message: error?.message || "Couldn't make that preview" });
+      /*
+       * Answered the way every other model route answers, so an unreadable
+       * reply is `model_unreadable` rather than a generic failure — the
+       * difference between "the picture model had a bad day" and "this feature
+       * is broken", which is the difference between retrying and giving up.
+       */
+      return respondToAiError(res, error, "that preview");
     }
   });
 
