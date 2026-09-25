@@ -1,4 +1,5 @@
 import { areaLabel, capabilityCounts, CAPABILITY_STATUS_LABEL, type CapabilityEntry } from "@shared/capabilities";
+import { EDITOR_BRIDGE_READY, COMING_SOON } from "@shared/not-ready";
 import { describeProvenance, type AuditProvenance } from "@shared/audit-provenance";
 import type { AuditDelta } from "@shared/audit-delta";
 import { DataSourceCard } from "@/components/data-source-card";
@@ -1016,12 +1017,19 @@ function EditorRow({ count }: { count: number }) {
       <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
       <span className="font-medium">Editor bridge</span>
       <span className="text-xs text-muted-foreground truncate hidden sm:inline">VS Code · Claude Code · Cursor</span>
+      {/*
+        * Not ready (shared/not-ready.ts). Anyone who already linked an editor
+        * still gets the way in to manage — and revoke — what they linked; what
+        * goes is the invitation to link a new one.
+        */}
       {count > 0 ? (
         <a href="/profile#editor" className="ml-auto text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1.5" data-testid="link-editor-manage">
           <LiveDot />{count} linked · Manage
         </a>
-      ) : (
+      ) : EDITOR_BRIDGE_READY ? (
         <a href="/profile#editor" className="ml-auto text-xs font-medium text-primary hover:underline" data-testid="link-editor-connect">Connect</a>
+      ) : (
+        <span className="ml-auto text-xs text-muted-foreground" data-testid="editor-row-soon">{COMING_SOON}</span>
       )}
     </li>
   );
