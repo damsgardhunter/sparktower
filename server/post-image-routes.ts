@@ -13,6 +13,7 @@
  */
 import type { Express } from "express";
 import { openai } from "./replit_integrations/image/client";
+import { rateLimit } from "./moderation";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
@@ -56,7 +57,7 @@ export function postImagePrompt(opts: {
 }
 
 export function registerPostImageRoutes(app: Express) {
-  app.post("/api/feed/image", isAuthenticated, async (req: any, res) => {
+  app.post("/api/feed/image", isAuthenticated, rateLimit("render"), async (req: any, res) => {
     const userId = req.user.id as string;
     try {
       const content = String(req.body?.content ?? "").trim();

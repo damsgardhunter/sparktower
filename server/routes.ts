@@ -12,6 +12,7 @@ import { db } from "./db";
 import { notTakenDown } from "./visibility";
 import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { apiRateLimit, FLOOR_MOUNTS } from "./api-rate-limit";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
 import { registerWebHandoffRoutes } from "./web-handoff";
@@ -375,6 +376,35 @@ export async function registerRoutes(
   // /api/auth/user stays cookie-only and 401s for a perfectly valid token.
   // No-op when there's no Bearer header, so cookie sessions are unaffected.
   app.use(attachBearerUser);
+  /*
+   * The floor under everything, mounted here because this is the first point
+   * at which `req.user` is populated for both a cookie session and a bearer
+   * token — and the allowance depends on which caller this is. Above it, every
+   * signed-in request would be counted as anonymous and given the tighter
+   * ceiling meant for callers with no account behind them.
+   *
+   * See server/api-rate-limit.ts for why this exists alongside the per-action
+   * limits in server/moderation.ts rather than instead of them.
+   */
+  /*
+   * Scoped to /api, not mounted bare.
+   *
+   * `app.use(floor)` counts every request the server handles, and this process
+   * also serves the client: every JS module, stylesheet and image, plus Vite's
+   * dev requests. One page load is hundreds of those, so a browser burned a
+   * minute's allowance opening a single screen, and the e2e capital-path
+   * journey hung for five minutes waiting on data that was being refused.
+   * Static bytes are not what this is protecting.
+   */
+  /*
+   * One set of limiters, mounted on each public prefix that does real work —
+   * see FLOOR_MOUNTS for what is on the list and what is deliberately not.
+   * The same instances across all of them on purpose: a caller has one
+   * allowance, not one per prefix they happen to hit.
+   */
+  for (const floor of apiRateLimit()) {
+    for (const mount of FLOOR_MOUNTS) app.use(mount, floor);
+  }
   /*
    * A suspended account can read but not write, anywhere. Mounted globally
    * because a suspension that only covers the routes someone remembered to
