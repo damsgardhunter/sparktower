@@ -1079,8 +1079,17 @@ export function validateDraft(
      * left alone, and only the chief executive's focus is a question the year
      * cannot run without.
      */
+    /*
+     * Compared as text, exactly as validateDecision() does — see the note
+     * there. `terms` is offered as "0"/"30"/"60"/"90" because a select deals
+     * in strings and stored as the number the engine wants, so the value on a
+     * draft is 30 where the option says "30". Strict equality reads that as an
+     * answer nobody offered and refuses the whole filing.
+     */
+    const offered = (v: unknown) => field.options!.some((o) => String(o.value) === String(v));
+
     if (field.kind === "choice" && field.id === "focus") {
-      if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      if (!offered(value)) errors[field.id] = "Pick one.";
       continue;
     }
 
@@ -1090,7 +1099,7 @@ export function validateDraft(
       // an error under an empty control would be the form blaming somebody for
       // not answering a question it never asked.
       if ((field.options?.length ?? 0) === 0) continue;
-      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+      if (value !== undefined && value !== null && value !== "" && !offered(value)) {
         errors[field.id] = "Pick one.";
       }
       continue;

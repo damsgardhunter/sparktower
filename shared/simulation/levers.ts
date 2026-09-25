@@ -401,8 +401,26 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   for (const field of LEVER_FIELDS[role]) {
     const value = payload[field.id];
 
+    /*
+     * Compared as text, because the same answer arrives as both types.
+     *
+     * `terms` offers "0", "30", "60", "90" as strings — a `<select>` deals in
+     * strings — and `cleanDecision` stores it back as the number the engine
+     * wants. So the value a filing returns is 0 where the option is "0", and
+     * strict equality reads that as an answer nobody offered: "Payment terms:
+     * Pick one", on a payment term the person had already picked and never
+     * touched since.
+     *
+     * It bit a solo founder first and hardest, because their filing carries
+     * all five desks and is validated against all five, so one stale number on
+     * the finance desk refused every decision they made — the price, the
+     * capacity, all of it. The finance seat at a full table had the same bug
+     * waiting for the first person to file without touching payment terms.
+     */
+    const offered = (v: unknown) => field.options!.some((o) => String(o.value) === String(v));
+
     if (field.kind === "choice" && field.id === "focus") {
-      if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      if (!offered(value)) errors[field.id] = "Pick one.";
       continue;
     }
 
@@ -410,7 +428,7 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
       // A choice with no options is one the season has nothing to offer for —
       // an empty seat list, say — and is skipped rather than refused.
       if ((field.options?.length ?? 0) === 0) continue;
-      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+      if (value !== undefined && value !== null && value !== "" && !offered(value)) {
         errors[field.id] = "Pick one.";
       }
       continue;

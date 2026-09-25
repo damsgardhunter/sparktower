@@ -875,3 +875,62 @@ describe("what a solo founder is asked to decide", () => {
     expect(ids, "five people do have a budget to split").toContain("budget");
   }, 120_000);
 });
+
+/**
+ * Filing twice without touching anything has to work.
+ *
+ * `terms` offers "0", "30", "60", "90" as strings, because a select deals in
+ * strings, and `cleanDecision` stores it back as the number the engine wants.
+ * So the second filing sent 0 where the option said "0", strict equality read
+ * it as an answer nobody had offered, and the whole decision was refused:
+ * "Payment terms: Pick one" — on a payment term the person had picked once
+ * and never touched again.
+ *
+ * It bit a solo founder hardest because their filing is validated against all
+ * five desks at once, so one stale number on the finance desk refused
+ * everything: the price, the capacity, all of it. Which is exactly what was
+ * reported — "none of my decisions are being saved".
+ */
+describe("filing a second time", () => {
+  it("accepts a draft handed straight back from the desk", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    /*
+     * Far enough in that payment terms have arrived (UNLOCKS: cfo/terms, year
+     * 5), and nothing filed for this period — so the draft is built by
+     * `defaultDraft`, which fills `terms` from `company.terms`: the number the
+     * engine keeps. The option list offers strings, because a select does.
+     */
+    await db.update(simSeasons).set({ seatCount: 1, year: 6 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    const desk = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.solo).toBe(true);
+    expect(typeof desk.body.draft.terms, "a number, where the option is a string").toBe("number");
+
+    /* Exactly what the screen sends: the desk's own draft, changed in one place. */
+    const filed = await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { ...desk.body.draft, capacityTarget: 9_000 } });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    const after = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(after.body.draft.capacityTarget, "the change took").toBe(9_000);
+  }, 120_000);
+
+  /* The finance seat at a full table had the same bug waiting. */
+  it("accepts a finance seat that never touched payment terms", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ year: 6 }).where(eq(simSeasons.id, seasonId));
+    const cfo = seat("cfo");
+
+    await cfo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 } })
+      .expect(200);
+
+    const desk = await cfo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const again = await cfo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { ...desk.body.draft, cashBuffer: 1_000 } });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+  }, 120_000);
+});
