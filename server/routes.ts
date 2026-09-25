@@ -12,6 +12,7 @@ import { db } from "./db";
 import { notTakenDown } from "./visibility";
 import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { apiRateLimit, FLOOR_MOUNTS } from "./api-rate-limit";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
 import { registerWebHandoffRoutes } from "./web-handoff";
@@ -86,6 +87,8 @@ import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { earningsFor, setPayoutTarget } from "./earnings";
+import { platformRevenue } from "./platform-revenue";
 import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
 import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
 import {
@@ -114,7 +117,7 @@ import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
 import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
-import { isOwner as isPlatformOwner } from "./platform-roles";
+import { isOwner as isPlatformOwner, requireOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, unmarkMilestones, PATH_MARK_LIMIT, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
@@ -141,6 +144,7 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
 import { notifyWatchersOfNewProject } from "./scouting-alerts";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -375,6 +379,35 @@ export async function registerRoutes(
   // /api/auth/user stays cookie-only and 401s for a perfectly valid token.
   // No-op when there's no Bearer header, so cookie sessions are unaffected.
   app.use(attachBearerUser);
+  /*
+   * The floor under everything, mounted here because this is the first point
+   * at which `req.user` is populated for both a cookie session and a bearer
+   * token — and the allowance depends on which caller this is. Above it, every
+   * signed-in request would be counted as anonymous and given the tighter
+   * ceiling meant for callers with no account behind them.
+   *
+   * See server/api-rate-limit.ts for why this exists alongside the per-action
+   * limits in server/moderation.ts rather than instead of them.
+   */
+  /*
+   * Scoped to /api, not mounted bare.
+   *
+   * `app.use(floor)` counts every request the server handles, and this process
+   * also serves the client: every JS module, stylesheet and image, plus Vite's
+   * dev requests. One page load is hundreds of those, so a browser burned a
+   * minute's allowance opening a single screen, and the e2e capital-path
+   * journey hung for five minutes waiting on data that was being refused.
+   * Static bytes are not what this is protecting.
+   */
+  /*
+   * One set of limiters, mounted on each public prefix that does real work —
+   * see FLOOR_MOUNTS for what is on the list and what is deliberately not.
+   * The same instances across all of them on purpose: a caller has one
+   * allowance, not one per prefix they happen to hit.
+   */
+  for (const floor of apiRateLimit()) {
+    for (const mount of FLOOR_MOUNTS) app.use(mount, floor);
+  }
   /*
    * A suspended account can read but not write, anywhere. Mounted globally
    * because a suspension that only covers the routes someone remembered to
@@ -797,8 +830,22 @@ When asked to set the project up, do it: put the values in the block and say pla
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
       void notifyWatchersOfNewProject(project.id);
-      // The founder badge: a profile says "I built this" the moment the project exists.
-      void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
+      /*
+       * The founder badge: a profile says "I built this" the moment the
+       * project exists.
+       *
+       * Awaited, because that promise is not kept by an insert the response
+       * can outrun. Fired and forgotten, the badge landed some milliseconds
+       * after the 200 — so anything reading straight back, a test or a client
+       * that navigates to the new project, saw no badge and there was nothing
+       * to wait for. It failed intermittently and looked like flakiness.
+       *
+       * Cheap enough to wait for: two selects and an insert per missing
+       * project, and explicitly no model call — the artwork is drawn later,
+       * when the creator asks for it. Still caught rather than thrown, because
+       * a decoration must never fail the creation it decorates.
+       */
+      await ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
         authorId: ownerId,
         projectId: project.id,
@@ -905,7 +952,7 @@ When asked to set the project up, do it: put the values in the block and say pla
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
-      const { resumeUrl, answers, message } = req.body;
+      const { resumeUrl, answers, message, role } = req.body;
       const project = await storage.getProject(projectId);
       // A private project isn't there to anyone off its team — the same 404 as one that doesn't exist.
       if (!project || project.isPrivate) return res.status(404).json({ message: "Project not found" });
@@ -914,7 +961,19 @@ When asked to set the project up, do it: put the values in the block and say pla
       if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
       const existing = await storage.getUserApplications(userId);
       if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
-      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      /*
+       * The role is checked against what the project actually lists rather
+       * than stored as sent. It arrives from a click on a role card, but it
+       * is still a string in a request body, and "which role did they apply
+       * for" is read back to the owner as fact — an unchecked one would let
+       * anybody write their own job title into someone else's inbox. Anything
+       * that doesn't match a listed role is dropped, leaving a general
+       * application, which is what a project with no roles listed gets anyway.
+       */
+      const listedRole = typeof role === "string"
+        ? (project.rolesNeeded || []).find((r) => r.toLowerCase() === role.trim().toLowerCase()) ?? null
+        : null;
+      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message, role: listedRole });
       /*
        * The owner hears about it. An application used to land in a table that
        * only the manage page's Team tab read, and nothing pointed there — so
@@ -2896,7 +2955,7 @@ ${projectContext}`;
     const response = await openai.chat.completions.create({
       model: "gpt-5.2",
       messages: [
-        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.` },
+        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.\n${PROSE_STYLE_RULE}` },
         ...history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }))
       ],
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
@@ -2906,7 +2965,9 @@ ${projectContext}`;
     // charged. It used to be stored as "I'm sorry, I couldn't…" and charged.
     const aiContent = response.choices[0].message.content?.trim();
     if (!aiContent) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
-    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
+    // Tidied before it is stored: the chat log is read back as plain text, so
+    // storing the hashes would make every later read of this reply carry them.
+    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", tidyProse(aiContent));
     
     await storage.deductCredits(userId, CREDIT_COSTS.novaChat);
     res.json(aiMessage);
@@ -6764,8 +6825,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const stripe = await getUncachableStripeClient();
       const link = await stripe.accountLinks.create({
         account: user.stripeConnectAccountId,
-        refresh_url: `${req.protocol}://${req.get("host")}/profile`,
-        return_url: `${req.protocol}://${req.get("host")}/profile?connect=success`,
+        /*
+         * Back to the earnings page, which is where they were and where the
+         * answer is. It used to return to /profile, from the days when the
+         * only way in was a project's backing setup — leaving somebody who
+         * had just finished Stripe's form on a page that said nothing about
+         * whether it had worked.
+         */
+        refresh_url: `${req.protocol}://${req.get("host")}/earnings`,
+        return_url: `${req.protocol}://${req.get("host")}/earnings?connected=1`,
         type: "account_onboarding",
       });
 
@@ -6806,6 +6874,56 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Payouts error:", error);
       res.status(500).json({ message: "Failed to get payout info" });
+    }
+  });
+
+  /**
+   * What a person has earned, and whether it can reach them.
+   *
+   * `/api/payouts` above answers only for donations, and nothing in the client
+   * ever called it. This answers across every way money is owed here — backings
+   * held or released on their projects, challenge prizes they have won — and
+   * says which of it is actually theirs to spend.
+   */
+  app.get("/api/earnings", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Earnings error:", error);
+      res.status(500).json({ message: "Failed to read earnings" });
+    }
+  });
+
+  /**
+   * Where this person's future earnings should land: their balance here, or
+   * their bank. Refused for "bank" without an account Stripe will actually
+   * pay — see setPayoutTarget, which says why.
+   */
+  app.patch("/api/earnings/target", isAuthenticated, async (req: any, res) => {
+    try {
+      const target = req.body?.target;
+      if (target !== "balance" && target !== "bank") {
+        return res.status(400).json({ message: "Pick either your balance or your bank." });
+      }
+      const done = await setPayoutTarget((req.user as any).id, target);
+      if (!done.ok) return res.status(422).json({ message: done.reason });
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Payout target error:", error);
+      res.status(500).json({ message: "Failed to change where your earnings go" });
+    }
+  });
+
+  /**
+   * SparkTower's own cash position. Owner only, and 404 to everybody else —
+   * the same gate the analytics console uses, for the same reason.
+   */
+  app.get("/api/admin/revenue", isAuthenticated, requireOwner, async (_req, res) => {
+    try {
+      res.json(await platformRevenue());
+    } catch (error) {
+      console.error("Platform revenue error:", error);
+      res.status(500).json({ message: "Failed to read revenue" });
     }
   });
 

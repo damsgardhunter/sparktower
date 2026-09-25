@@ -185,6 +185,7 @@ query fails with `ECONNREFUSED`. This is not hypothetical — it is what the fir
 deploy of this service did, and it is why `/_ready` exists.
 
 Backups and restores: [backups.md](backups.md).
+Growing it as users arrive: [scaling.md](scaling.md).
 
 ## When `db:migrate` says success and does nothing
 

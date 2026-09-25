@@ -18,3 +18,20 @@
 # the full history. History is not rewritten for it — force pushes to main are
 # disabled, and rewriting shared history over a dummy is the larger risk.
 dde000c8f784c7c6b6cff89ab1def551e0ec8674:test/unit/error-reporting.test.ts:stripe-access-token:58
+
+# The same dummy key, in the same kind of test, written again on a branch: the
+# redaction test for /api/client-errors needs something `sk_live_`-shaped to
+# prove the drain never sees one, and this one is the alphabet and the digits
+# in order. It reaches no network and signs nothing.
+#
+# Two lines, because the test sends the value and then asserts it is absent.
+# `gitleaks detect` reads the whole history and every branch fetched beside it,
+# so a literal on an unmerged branch fails the scan on every other branch too
+# — which is how this arrived: a green PR of my own went red for a commit it
+# does not contain.
+#
+# The cure is test/helpers/fake-secrets.ts, which assembles key-shaped values
+# from parts so the prefix never sits next to a body in a committed file. When
+# that branch uses it, these two lines can go.
+c7080005856fb7ab429b12e3946a62bc1b5dfa71:test/integration/client-errors.test.ts:stripe-access-token:53
+c7080005856fb7ab429b12e3946a62bc1b5dfa71:test/integration/client-errors.test.ts:stripe-access-token:59

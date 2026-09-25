@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Megaphone, ShieldAlert, LifeBuoy } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,7 @@ import { formatMoney } from "@shared/plans";
 import { useWallet } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
-const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, Gamepad2, MessageSquare, Trophy, Medal, CreditCard };
+const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, Gamepad2, MessageSquare, Trophy, Medal, CreditCard, Banknote };
 const MORE_OPEN_KEY = "st_nav_more_open";
 
 /**
@@ -89,6 +89,17 @@ export function AppSidebar() {
   const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
   // Featured tools is the one admin page reviewers can't use — /api/admin/promotions is admins only.
   const isAdmin = !!user && (user as any).platformRole === "admin";
+  /*
+   * Owner, which is not a platform role but an allowlisted email — so it has
+   * to be asked for rather than read off the user. Fetched once and left
+   * alone: the app's default staleTime is Infinity and this answer does not
+   * change inside a session.
+   */
+  const { data: ownerAccess } = useQuery<{ owner: boolean }>({
+    queryKey: ["/api/admin/analytics/access"],
+    enabled: !!user,
+  });
+  const isOwner = !!ownerAccess?.owner;
   const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
     queryKey: ["/api/admin/safety/status"],
     enabled: isReviewer,
@@ -236,6 +247,21 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* What the platform has taken and what of it is actually ours. */}
+                {isOwner && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/revenue"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      <Link href="/admin/revenue" data-testid="link-admin-revenue">
+                        <WalletIcon className="h-4 w-4" />
+                        <span className="flex-1">Revenue</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {isAdmin && (
                   <SidebarMenuItem>
                     <SidebarMenuButton

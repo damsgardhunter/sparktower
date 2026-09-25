@@ -13,6 +13,8 @@
  */
 import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
+/* Relative, not "@shared/…": Playwright compiles these specs itself and does not read the root tsconfig's paths. */
+import { EDITOR_BRIDGE_READY } from "../shared/not-ready";
 
 /*
  * A per-spec address, so registrations here don't share the sign-in budget.
@@ -49,7 +51,46 @@ async function projectFor(page: Page): Promise<string> {
   return (await created.json()).id;
 }
 
+/*
+ * While the bridge is held back, the thing worth testing is the holding back:
+ * that no screen still invites somebody into a feature that is not ready, and
+ * that the invitation was replaced rather than simply deleted.
+ *
+ * Both tests are guarded on the flag rather than one of them being commented
+ * out, so flipping EDITOR_BRIDGE_READY in shared/not-ready.ts swaps which one
+ * runs and neither has to be remembered.
+ */
+test("says coming soon instead of offering a connection, while it is held back", async ({ page }) => {
+  test.skip(EDITOR_BRIDGE_READY, "The bridge is open — the connect flow below covers it instead.");
+  const projectId = await projectFor(page);
+
+  await page.goto(`/projects/${projectId}/manage`);
+  await page.getByTestId("btn-skip-onboarding").click({ timeout: 10_000 }).catch(() => {});
+
+  /*
+   * Where the invitation used to be. It sits inside the Codebase block, which
+   * is `defaultOpen={false}` (client/src/components/path-panel.tsx), so it has
+   * to be opened before anything inside it is rendered at all.
+   */
+  await page.getByTestId("block-codebase").click();
+  await expect(page.getByTestId("editor-bridge-soon")).toBeVisible();
+  await expect(page.getByTestId("editor-bridge-soon")).toContainText("Coming soon");
+  await expect(page.getByTestId("card-connect-editor")).toHaveCount(0);
+  await expect(page.getByTestId("button-connect-editor")).toHaveCount(0);
+
+  /*
+   * And no way in from the profile either — but the panel itself stays, because
+   * anyone who connected an editor while this was open needs somewhere to
+   * revoke what they connected.
+   */
+  await page.goto("/profile#editor");
+  await expect(page.getByTestId("card-editor-access")).toBeVisible();
+  await expect(page.getByTestId("editor-access-soon")).toContainText("Coming soon");
+  await expect(page.getByTestId("button-create-token")).toHaveCount(0);
+});
+
 test("the dashboard offers an editor connection, and shows the token once", async ({ page }) => {
+  test.skip(!EDITOR_BRIDGE_READY, "Held back in shared/not-ready.ts; the test above covers what is shown instead.");
   const projectId = await projectFor(page);
 
   await page.goto(`/projects/${projectId}/manage`);

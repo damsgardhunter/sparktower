@@ -49,14 +49,41 @@ const STUB_SENTENCE = "Stubbed by AI_STUB — no model was called.";
  * which is how every prompt here writes it. Returns null when the prompt wants
  * prose, so the caller can answer with a sentence instead.
  */
+/**
+ * The first balanced JSON value in a string, ignoring braces inside quotes.
+ *
+ * A shape is not always alone on its line. "Return ONLY valid JSON (no
+ * markdown): {"reasons": …}. Each user gets 2-3 short reasons." carries its
+ * shape mid-sentence with prose either side, and `JSON.parse` on the rest of
+ * the line fails on the full stop. Scanning to the matching brace is what
+ * separates the shape from the sentence around it.
+ */
+function firstJson(text: string): string | null {
+  const open = text.search(/[{[]/);
+  if (open === -1) return null;
+  let depth = 0, inString = false, escaped = false;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === "\\") { escaped = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === "{" || c === "[") depth += 1;
+    else if (c === "}" || c === "]") {
+      depth -= 1;
+      if (depth === 0) return text.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
 function askedShape(system: string): unknown | null {
   const lines = system.split("\n");
   const asked = lines.findIndex((l) => /respond only with|return only|valid json of exactly this shape/i.test(l));
   if (asked === -1) return null;
 
   for (let i = asked; i < lines.length; i++) {
-    const start = lines[i].trim();
-    if (!start.startsWith("{") && !start.startsWith("[")) continue;
+    if (!/[{[]/.test(lines[i])) continue;
     /*
      * Shapes are usually one line and sometimes several — the ten-year
      * valuation writes its five scores, its three numbers and its notes across
@@ -64,10 +91,17 @@ function askedShape(system: string): unknown | null {
      * answered with a generic object, and left the route to report the model
      * as unreadable. So: keep adding lines until it parses, and give up at the
      * point a shape could not plausibly still be open.
+     *
+     * The balanced scan first, for the shapes that sit inside a sentence
+     * rather than on a line of their own — the match reasons on Discover are
+     * written that way, and every Nova-assisted browser test logged "Nova
+     * returned an unreadable match reasons" because of it.
      */
     let text = "";
     for (let j = i; j < Math.min(lines.length, i + 40); j++) {
       text += (j === i ? "" : "\n") + lines[j];
+      const found = firstJson(text);
+      if (found) { try { return JSON.parse(found); } catch { /* not closed yet */ } }
       try { return JSON.parse(text); } catch { /* not closed yet */ }
     }
   }

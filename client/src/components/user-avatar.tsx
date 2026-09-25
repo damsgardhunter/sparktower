@@ -1,4 +1,5 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { sized } from "@shared/image-size";
 
 interface UserAvatarProps {
   src?: string | null;
@@ -16,7 +17,12 @@ interface UserAvatarProps {
 
 export function UserAvatar({ src, name, className, user, size = "default" }: UserAvatarProps) {
   const resolvedName = name || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.email || undefined;
-  const resolvedSrc = src || user?.avatarUrl || user?.profileImageUrl;
+  /*
+   * At 96 pixels, which is the largest this is ever drawn (48pt on a retina
+   * screen). Without it every avatar on a page is the full photograph somebody
+   * uploaded — a few megabytes each, in a circle the size of a thumbnail.
+   */
+  const resolvedSrc = sized(src || user?.avatarUrl || user?.profileImageUrl, 96);
   const initials = resolvedName
     ? resolvedName!
         .split(" ")

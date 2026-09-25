@@ -455,16 +455,34 @@ describe("a private season's clock", () => {
     const statuses = [a.status, b.status].sort();
     expect(statuses[0], "at least one press resolves a year").toBe(200);
     const [twice] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
-    expect(twice.year, "one year resolved, not two").toBe(3);
-    /*
-     * …and year two was written once. One report per company in the market,
-     * so the number to compare against is year one's — a year resolved twice
-     * would have doubled it.
-     */
     const all = await db.select().from(simReports).where(eq(simReports.seasonId, seasonId));
     const perYear = (y: number) => all.filter((r) => r.year === y).length;
+
+    /*
+     * What is true however the race fell out: no year was resolved twice.
+     *
+     * Two presses that genuinely overlap give a 200 and a 409, and one year
+     * moves. Two that do not overlap — a quiet machine runs them back to
+     * back — give two 200s and two years, and that is not the bug: it is two
+     * separate requests to resolve the current year, which is what the button
+     * is for. Demanding one year either way made this a measure of how busy
+     * the runner was, and it failed on a loaded one for years and on a quiet
+     * one after a merge, both times saying nothing true about the code.
+     *
+     * The corruption the guard exists to stop is a year resolved twice, and
+     * that is asserted unconditionally: one report per company per year, so a
+     * year written twice has double year one's count.
+     */
     expect(perYear(2), "a year resolved twice writes its reports twice").toBe(perYear(1));
-    expect(perYear(3), "and the year nobody asked for was never resolved").toBe(0);
+    if (statuses[1] === 409) {
+      /* They overlapped: exactly one year moved, and the loser was refused. */
+      expect(twice.year, "the loser resolved nothing").toBe(3);
+      expect(perYear(3), "and the year nobody asked for was never resolved").toBe(0);
+    } else {
+      /* They did not: two legitimate presses, two years, still one write each. */
+      expect(twice.year, "two presses that did not overlap resolve two years").toBe(4);
+      expect(perYear(3), "the second year written once, like the first").toBe(perYear(1));
+    }
 
     /*
      * The mechanism, tested directly, because the double-click above only

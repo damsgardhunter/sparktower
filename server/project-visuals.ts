@@ -163,7 +163,7 @@ export function registerProjectVisualRoutes(app: Express) {
    * hover menu). Charged after at least one image came back — a run where the
    * model refused everything costs nothing.
    */
-  app.post("/api/projects/:id/visuals", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/visuals", isAuthenticated, rateLimit("render"), async (req: any, res) => {
     const userId = req.user.id;
     try {
       const only = req.body?.slot;

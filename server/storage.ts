@@ -425,7 +425,7 @@ export interface IStorage {
   getUserProjects(userId: string): Promise<Project[]>;
 
   // Project Applications
-  createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string }): Promise<ProjectApplication>;
+  createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string; role?: string | null }): Promise<ProjectApplication>;
   getProjectApplications(projectId: string): Promise<(ProjectApplication & { user: User; profile?: UserProfile })[]>;
   getUserApplications(userId: string): Promise<(ProjectApplication & { project: Omit<Project, TeamOnlyProjectField> })[]>;
   getApplication(id: string): Promise<ProjectApplication | undefined>;
@@ -2738,7 +2738,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // --- Project Applications ---
-  async createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string }): Promise<ProjectApplication> {
+  async createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string; role?: string | null }): Promise<ProjectApplication> {
     const [app] = await db.insert(projectApplications).values({
       projectId: data.projectId,
       userId: data.userId,
@@ -2746,6 +2746,7 @@ export class DatabaseStorage implements IStorage {
       resumeUrl: data.resumeUrl || null,
       answers: data.answers || [],
       message: data.message || null,
+      role: data.role || null,
     }).returning();
     return app;
   }

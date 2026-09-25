@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { errorText } from "@/lib/api-error";
 import {
-  formatMoney, priceOf, OUTCOME_COPY, PAY_ENDPOINTS,
+  formatMoney, priceOf, OUTCOME_COPY, outcomeCopy, PAY_ENDPOINTS,
   type ActionPrice, type NovaActionId, type PaymentRequiredBody, type PricedOutcomeId, type Wallet,
 } from "@shared/plans";
 import { cn } from "@/lib/utils";
@@ -74,10 +74,27 @@ export function openPayment(detail: PaymentEventDetail) {
  * wallet, because getting that wrong is silent: every balance on screen simply
  * renders empty.
  */
+/**
+ * What is on the account, read fresh every time it is asked for.
+ *
+ * The app's default is `staleTime: Infinity` — right for almost everything
+ * here, and wrong for money. A balance cached for the life of a tab is a
+ * balance that is wrong the moment it changes anywhere else: in another tab,
+ * on a phone, from a top-up that completed while this page sat open. It showed
+ * up as a confirmation dialog telling somebody with a hundred dollars on their
+ * account that $14.99 was "more than your balance", because the number it was
+ * comparing against had been fetched before they added any.
+ *
+ * `refetchOnMount: "always"` as well as `staleTime: 0`, because the dialog
+ * mounts its copy of this the moment it opens, which is exactly the moment the
+ * figure has to be true.
+ */
 export function useWallet(enabled = true) {
   return useQuery({
     queryKey: [PAY_ENDPOINTS.wallet],
     enabled,
+    staleTime: 0,
+    refetchOnMount: "always",
     select: (d: { wallet: Wallet }) => d.wallet,
   });
 }
@@ -96,6 +113,11 @@ export function useBuildPasses() {
   return useQuery({
     queryKey: [PAY_ENDPOINTS.wallet],
     enabled: !!user,
+    /* Same reason as `useWallet`: what has been paid for decides whether a
+       dialog opens at all, and a stale answer either charges twice or offers
+       something already owned. */
+    staleTime: 0,
+    refetchOnMount: "always",
     select: (d: { buildPasses?: string[] }) => d.buildPasses ?? [],
   });
 }
@@ -299,7 +321,7 @@ export function PaymentDialog() {
                 */}
               {busy
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</>
-                : `Get ${(body.outcome ? OUTCOME_COPY[body.outcome].name : body.label).toLowerCase()} — ${body.price?.display ?? ""}`.trim()}
+                : `Get ${(outcomeCopy(body.outcome)?.name ?? body.label).toLowerCase()} — ${body.price?.display ?? ""}`.trim()}
             </Button>
           )}
 
@@ -365,7 +387,12 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
        */
       if (opts?.projectId && buildPasses?.includes(opts.projectId)) return Promise.resolve(true);
       return new Promise<boolean>((resolve) => {
-        setPending({ price, title: opts?.title ?? OUTCOME_COPY[price.kind as PricedOutcomeId].name, detail: opts?.detail, resolve });
+        /*
+         * `price.kind` is not always a priced outcome — `priceOf` returns
+         * "free" and "small" too — so this used to cast it and crash on the
+         * miss. The action's own name is the honest fallback.
+         */
+        setPending({ price, title: opts?.title ?? outcomeCopy(price.kind)?.name ?? price.action, detail: opts?.detail, resolve });
       });
     },
     [buildPasses],
@@ -398,7 +425,7 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
             <DialogHeader>
               <DialogTitle>{pending.title}</DialogTitle>
               <DialogDescription>
-                {pending.detail ?? OUTCOME_COPY[pending.price.kind as PricedOutcomeId].blurb}
+                {pending.detail ?? outcomeCopy(pending.price.kind)?.blurb}
               </DialogDescription>
             </DialogHeader>
 

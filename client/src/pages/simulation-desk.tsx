@@ -42,6 +42,7 @@ import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
+import { leverOutcome, optionOutcome, type Outcome } from "@shared/simulation/lever-outcomes";
 import { saturate } from "@shared/simulation/market";
 import type { Role } from "@shared/simulation/types";
 import { CompanyProfile } from "@/components/sim/company-profile";
@@ -56,6 +57,7 @@ import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
   Crosshair,
+  ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
 
 import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
@@ -659,6 +661,7 @@ export default function SimulationDeskPage() {
                     <Field
                       key={field.id}
                       field={field}
+                      role={desk.yourRole}
                       value={draft[field.id]}
                       error={errors[field.id]}
                       onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
@@ -1421,8 +1424,44 @@ function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"
  * is miserable and error-prone in a way that matters here — a stray zero is
  * a decision nobody meant to make.
  */
-function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
-  field: LeverField; value: any; error?: string; onChange: (v: any) => void;
+/**
+ * What a decision gives you, and what it takes.
+ *
+ * The marketplace in this same game already reads `+6 brand`, `+231,600
+ * capacity`, `12% off every unit`, and you can compare two listings in a
+ * second. The decision desk had a paragraph per lever instead, and people
+ * could not answer the one question they were actually asking: if I do this,
+ * what happens? So the consequences get the marketplace's treatment — short
+ * lines, scannable, two columns of meaning.
+ *
+ * The difference from the marketplace is that both halves are always drawn.
+ * A shop sells you upside; a seat at this table is a trade every time, and
+ * hiding the cost under the fold would make this a worse screen than the
+ * paragraph it replaced. `shared/simulation/lever-outcomes.ts` holds the
+ * copy, and a test there refuses a lever that claims to cost nothing.
+ */
+function Trade({ outcome, tight }: { outcome: Outcome | null; tight?: boolean }) {
+  if (!outcome) return null;
+  return (
+    <div className={tight ? "mt-1.5 space-y-0.5" : "mt-2 mb-2 space-y-0.5"} data-testid="lever-trade">
+      {outcome.up.map((line) => (
+        <p key={line} className={`flex items-start gap-1.5 ${tight ? "text-[11px]" : "text-xs"} text-emerald-700 dark:text-emerald-400`}>
+          <ArrowUpRight className="h-3 w-3 mt-[3px] shrink-0" />
+          <span>{line}</span>
+        </p>
+      ))}
+      {outcome.down.map((line) => (
+        <p key={line} className={`flex items-start gap-1.5 ${tight ? "text-[11px]" : "text-xs"} text-amber-700 dark:text-amber-500`}>
+          <ArrowDownRight className="h-3 w-3 mt-[3px] shrink-0" />
+          <span>{line}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function Field({ field, role, value, error, onChange, cities, isNew, listPrice }: {
+  field: LeverField; role: Role | null; value: any; error?: string; onChange: (v: any) => void;
   cities?: Desk["cities"];
   /** Arrived this year (see UNLOCKS in shared/simulation/responsibilities.ts). */
   isNew?: boolean;
@@ -1449,7 +1488,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}{badge}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-2">
           {(field.options ?? []).map((o) => (
             <div key={o.value} className="rounded-lg border p-2.5">
@@ -1457,6 +1497,7 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{o.label}</p>
                   <p className="text-[11px] text-muted-foreground">{o.help}</p>
+                  <Trade outcome={optionOutcome(role, field.id, o.value)} tight />
                 </div>
                 <div className="flex gap-1" role="radiogroup" aria-label={`${field.label}: ${o.label}`}>
                   {(field.choices ?? []).map((c) => {
@@ -1506,7 +1547,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
             </span>
           )}
         </div>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-2">
           {(field.options ?? []).map((o) => {
             const has = map[o.value] !== undefined && map[o.value] !== "";
@@ -1552,7 +1594,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-1.5">
           {(cities ?? []).map((city) => {
             const selected = open.has(city.id);
@@ -1591,7 +1634,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}{badge}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         {(field.options?.length ?? 0) === 0 && (
           /*
            * Why there is nothing to choose, in this lever's own words. Every
@@ -1621,6 +1665,7 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
             >
               <p className="text-sm font-medium">{o.label}</p>
               <p className="text-[11px] text-muted-foreground mt-0.5">{o.help}</p>
+              <Trade outcome={optionOutcome(role, field.id, o.value)} tight />
             </button>
           ))}
         </div>
@@ -1641,7 +1686,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
           ? <span className="text-xs text-muted-foreground tabular-nums">{n}%</span>
           : field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
       </div>
-      <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+      <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
       <div className="flex gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(-step)} data-testid={`button-${field.id}-down`}>−</Button>
         <Input

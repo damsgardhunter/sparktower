@@ -86,6 +86,16 @@ async function standing(ventureId: string, userId: string) {
   return { venture, seat, season, niche, world: season.world as World };
 }
 
+/**
+ * The order seats are read in, so every roster reads the same way.
+ *
+ * The chief executive first because that is who the table answers to; the rest
+ * in the order the desk lists them. A seat nobody has claimed sorts last,
+ * which is also where it belongs in a reader's attention.
+ */
+const SEAT_ORDER: Record<string, number> = { ceo: 0, cmo: 1, cfo: 2, cto: 3, coo: 4 };
+const seatOrder = (role: string | null) => (role ? SEAT_ORDER[role] ?? 98 : 99);
+
 const headcount = (c: Company) => Object.values(c.customers).reduce((sum, n) => sum + n, 0);
 
 /** What the owners hold — the figure the standings order by, so the same one here. */
@@ -152,6 +162,7 @@ export function registerSimulationProfileRoutes(app: Express): void {
   /**
    * Anybody in the market, opened from anywhere their name appears.
    */
+
   app.get("/api/sim/ventures/:id/companies/:companyId", isAuthenticated, async (req: any, res) => {
     const found = await standing(req.params.id, req.user.id);
     if (!found) return res.status(404).json({ message: "No such company." });
@@ -189,12 +200,54 @@ export function registerSimulationProfileRoutes(app: Express): void {
       ? await db.select({ product: simVentures.product }).from(simVentures).where(eq(simVentures.id, them.id))
       : [];
 
+    /*
+     * Who is actually at the other table.
+     *
+     * A rival team was a name and a market share — which is all the engine
+     * knows, and none of what the game is for. Five people are sitting behind
+     * that share, and until now there was no way to find out who, let alone to
+     * follow one of them afterwards. Names carry their user id so the client
+     * can link each one at its own profile, which is where connecting happens.
+     *
+     * Incumbents have no roster: nobody is behind them.
+     */
+    const roster = isTeam
+      ? await db
+        .select({
+          userId: simSeats.userId, role: simSeats.role,
+          firstName: users.firstName, lastName: users.lastName, isBot: users.isBot,
+          displayName: userProfiles.displayName, headline: userProfiles.headline, avatarUrl: userProfiles.avatarUrl,
+        })
+        .from(simSeats)
+        .leftJoin(users, eq(users.id, simSeats.userId))
+        .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
+        .where(eq(simSeats.ventureId, them.id))
+      : [];
+
     res.json({
       id: them.id,
       name: them.name,
       kind: them.kind,
       isYou,
       product: theirVenture?.product ?? null,
+      /*
+       * Ordered by seat rather than by who joined, so the chief executive is
+       * first and the table reads the same on every company.
+       */
+      roster: roster
+        .map((r) => ({
+          userId: r.userId,
+          name: r.isBot
+            ? [r.firstName, r.lastName].filter(Boolean).join(" ") || "Someone"
+            : (r.displayName || r.firstName || "Someone"),
+          headline: r.headline ?? null,
+          avatarUrl: r.avatarUrl ?? null,
+          isBot: Boolean(r.isBot),
+          isYou: r.userId === req.user.id,
+          role: r.role ?? null,
+          title: r.role ? ROLE_TITLES[r.role as Role] ?? null : null,
+        }))
+        .sort((a, b) => seatOrder(a.role) - seatOrder(b.role)),
       /** Only incumbents have one. A player team's character is whatever they do. */
       persona: seed?.persona ?? null,
       posture: them.posture ?? null,

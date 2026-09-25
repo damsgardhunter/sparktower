@@ -25,7 +25,7 @@ export function ProjectLogo({ title, uri, size = 48, bordered = true, style }: {
   if (src) {
     return (
       <View style={[s.logo, frame, bordered && s.logoBorder, style]}>
-        <Image source={{ uri: assetUri(src)! }} style={{ width: size * 0.86, height: size * 0.86 }} resizeMode="contain" />
+        <Image source={{ uri: assetUri(src, 96)! }} style={{ width: size * 0.86, height: size * 0.86 }} resizeMode="contain" />
       </View>
     );
   }
@@ -99,7 +99,7 @@ export function ProjectVisualImage({ uri, square }: { uri: string | null; square
   if (!src) return null;
   return (
     <Image
-      source={{ uri: assetUri(src)! }}
+      source={{ uri: assetUri(src, 640)! }}
       style={{ width: "100%", aspectRatio: square ? 1 : 3 / 2, borderRadius: radius.md, backgroundColor: colors.surfaceRaised }}
       resizeMode="cover"
     />

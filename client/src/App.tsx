@@ -24,6 +24,7 @@ import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import ContestDetail from "@/pages/contest-detail";
 import Pricing from "@/pages/pricing";
+import Earnings from "@/pages/earnings";
 import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
 import InviteAcceptPage from "@/pages/invite-accept";
@@ -63,6 +64,7 @@ import AdminConsole from "@/pages/admin-console";
 import { ErrorBoundary } from "@/components/error-boundary";
 import AdminAnalytics from "@/pages/admin-analytics";
 import AdminAiSpend from "@/pages/admin-ai-spend";
+import AdminRevenue from "@/pages/admin-revenue";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
@@ -304,6 +306,8 @@ function Router() {
               */}
             <Route path="/projects/:id/manage">{(params) => <ProjectManager key={params.id} />}</Route>
             <Route path="/projects/:id">{(params) => <ProjectDashboard key={params.id} />}</Route>
+            {/* What you've earned and how to get it to a bank account. */}
+            <Route path="/earnings" component={Earnings} />
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
@@ -356,7 +360,10 @@ function Router() {
             {/* The customer console. Its own API answers 404 to anyone who shouldn't know it exists, and the page draws that as a 404 too. */}
             <Route path="/admin/console" component={AdminConsole} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
+            {/* What the models cost us. Owner only. */}
             <Route path="/admin/ai-spend" component={AdminAiSpend} />
+            {/* What the platform has collected and what of it is actually ours. Owner only. */}
+            <Route path="/admin/revenue" component={AdminRevenue} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />

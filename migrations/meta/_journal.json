@@ -561,6 +561,34 @@
       "when": 1790291132589,
       "tag": "0067_apple_id",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790252467789,
+      "tag": "0062_application_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1790263914374,
+      "tag": "0063_earnings_to_balance",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1790282025640,
+      "tag": "0064_snapshots_catch_up",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1790282085640,
+      "tag": "0065_path_sync_debounce",
+      "breakpoints": true
     }
   ]
 }

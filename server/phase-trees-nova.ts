@@ -11,6 +11,16 @@ import { sanitizePlan } from "@shared/phase-trees";
 import { flattenRunGroups, groupRunSteps, sanitizeRunGroups, isLoopType, LOOP_TYPE_INFO, LOOP_ORDER, MAX_PRODUCT_LOOPS, LOOP_CAP, type LoopType } from "@shared/phase-trees";
 import { parseModelJson } from "./ai-json";
 import { clampWritten, lengthRule, WRITTEN_LIMIT, TEMPLATE_LIMIT } from "./written-limits";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
+
+/**
+ * A prose field, tidied then cut — in that order.
+ *
+ * Tidying first because the filter removes characters, so a body cut to the
+ * limit and then stripped of its hashes comes back under budget and with the
+ * cut in a different place than the reader was told.
+ */
+const prose = (raw: unknown, limit: number) => clampWritten(tidyProse(raw), limit).slice(0, limit);
 export { clampWritten, WRITTEN_LIMIT } from "./written-limits";
 
 // Built on first use, never at import: server/openai-client.ts.
@@ -81,7 +91,7 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>",
   const ids = new Set(backbone.map((m) => m.id));
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))
-    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? clampWritten(d.answer) : undefined }));
+    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? prose(d.answer, WRITTEN_LIMIT) : undefined }));
   const loops = (Array.isArray(parsed.loops) ? parsed.loops : [])
     .map((l: any) => ({ type: (isLoopType(l.type) ? l.type : "product") as LoopType, title: String(l.title ?? "").trim().slice(0, 80), steps: String(l.steps ?? "").trim().slice(0, 1000), state: (["built", "partly", "planned"].includes(l.state) ? l.state : "planned") as "built" | "partly" | "planned", evidence: String(l.evidence ?? "").slice(0, 300) }))
     .filter((l: any) => l.title)
@@ -232,6 +242,7 @@ How to build it:
 - Where securities law, tax or contracts are involved, say so in one line and keep going.
 - Actions are what the founder does next, each with when, and what it moves ("credit 590 → 640", "+$6k equity", "application-ready").
 
+${PROSE_STYLE_RULE}
 Respond ONLY with valid JSON of exactly this shape (no markdown fences):
 {"summary":"3–5 sentences: the answer to this step, with the key numbers","figures":[{"label":"","value":"","note":"optional, one line"}],"tables":[{"title":"","columns":[""],"rows":[[""]]}],"sections":[{"heading":"","body":"the reasoning and detail, with the arithmetic"}],"assumptions":["each thing assumed, with the number"],"gaps":["each weakness this step found, plainly"],"actions":[{"title":"","detail":"exactly what to do","when":"e.g. this week, week 2, month 3, Q2 year 1","moves":"what it changes"}],"verifyWith":"one line: who should check this before they rely on it"}
 4–8 figures. 1–3 tables (sources and uses, a month-by-month cash flow, a checklist with met/not yet/unknown, a timeline — whatever this step needs). 3–12 actions.`;
@@ -272,6 +283,7 @@ ${context.loops?.length ? `THE PRODUCT'S LOOPS, as recorded on the path (these A
 A business runs on five kinds of loop — product, growth, retention, revenue, referral — and each must close: its last step has to restart its first. When writing or building any loop, name what closes it.` : ""}
 ${context.rejectedLoops?.length ? `NOT loops, by the builder's decision — never build an option, a step or a plan around these: ${context.rejectedLoops.join("; ")}.` : ""}
 ${lengthRule(WRITTEN_LIMIT)}
+${PROSE_STYLE_RULE}
 Respond ONLY with valid JSON of exactly this shape (no markdown fences):
 ${shape}`;
   const user = `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}`;
@@ -279,10 +291,10 @@ ${shape}`;
   const parsed = parseModelJson(text);
   if (kind === "options") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).slice(0, 3)
-      .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: clampWritten(o.body), why: o.why ? String(o.why).slice(0, 300) : undefined }))
+      .map((o: any) => ({ title: tidyProse(o.title).slice(0, 120), body: prose(o.body, WRITTEN_LIMIT), why: o.why ? prose(o.why, 300) : undefined }))
       .filter((o: any) => o.body);
     if (!options.length) throw Object.assign(new Error("Nova didn't come back with usable options. Try again."), { status: 502 });
-    return { kind: "options", existing: String(parsed.existing ?? "").slice(0, 400) || undefined, intro: String(parsed.intro ?? "").slice(0, 400), options };
+    return { kind: "options", existing: prose(parsed.existing, 400) || undefined, intro: prose(parsed.intro, 400), options };
   }
   if (kind === "build") {
     const files = (Array.isArray(parsed.files) ? parsed.files : []).slice(0, 8)
@@ -295,9 +307,10 @@ ${shape}`;
     const runGroups = asked.length ? asked : groupRunSteps(legacy);
     const runSteps = asked.length ? flattenRunGroups(asked) : legacy;
     if (!files.length && !runSteps.length) throw Object.assign(new Error("Nova didn't produce a build. Try again."), { status: 502 });
-    return { kind: "build", model, existing: String(parsed.existing ?? "").slice(0, 400) || undefined, summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, runGroups, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
+    // `files` and `runGroups` are code and commands, and are left exactly as sent.
+    return { kind: "build", model, existing: prose(parsed.existing, 400) || undefined, summary: prose(parsed.summary, 1200), files, runSteps, runGroups, verify: prose(parsed.verify, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map((a: unknown) => prose(a, 300)).slice(0, 6) };
   }
   const template = String(parsed.template ?? "");
   if (!template) throw Object.assign(new Error("Nova didn't produce a template. Try again."), { status: 502 });
-  return { kind: "template", intro: String(parsed.intro ?? "").slice(0, 400), template: clampWritten(template, TEMPLATE_LIMIT), whatNovaDid: String(parsed.whatNovaDid ?? "").slice(0, 300), whatIsLeft: String(parsed.whatIsLeft ?? "").slice(0, 300) };
+  return { kind: "template", intro: prose(parsed.intro, 400), template: prose(template, TEMPLATE_LIMIT), whatNovaDid: prose(parsed.whatNovaDid, 300), whatIsLeft: prose(parsed.whatIsLeft, 300) };
 }

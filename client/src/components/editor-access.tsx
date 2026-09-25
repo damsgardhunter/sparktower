@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Copy, Loader2, Plus, Terminal, Trash2, Check } from "lucide-react";
 import type { Project } from "@shared/schema";
+import { EDITOR_BRIDGE_READY, COMING_SOON, EDITOR_BRIDGE_SOON } from "@shared/not-ready";
 
 interface TokenRow {
   id: string;
@@ -248,7 +249,42 @@ function TokenDialog({
  * and this one has to still be findable in six months when they get a new
  * laptop.
  */
-export function ConnectEditorBar({ projectId }: { projectId: string }) {
+/**
+ * Not ready (shared/not-ready.ts), said quietly.
+ *
+ * This used to be the loudest card on the section — a primary-bordered
+ * invitation with a Connect button. A coming-soon notice carrying that weight
+ * would be a promise nobody asked for, so it is a dashed line and a badge.
+ */
+function EditorBridgeSoon() {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground"
+      data-testid="editor-bridge-soon"
+    >
+      <Terminal className="h-3.5 w-3.5 shrink-0" />
+      <span className="font-medium text-foreground">Editor bridge</span>
+      <span className="hidden sm:inline">— {EDITOR_BRIDGE_SOON}</span>
+      <Badge variant="outline" className="ml-auto text-[10px]">{COMING_SOON}</Badge>
+    </div>
+  );
+}
+
+/**
+ * A wrapper rather than an early return inside the component below.
+ *
+ * The guard has to sit where no hook is behind it: returning early after
+ * `useState` but before `useQuery` means the hooks run in different orders in
+ * the two branches, which React forbids and eslint caught. The flag is a
+ * module constant so it would never actually change mid-session — but a rule
+ * that holds by accident is one the next edit breaks.
+ */
+export function ConnectEditorBar(props: { projectId: string }) {
+  if (!EDITOR_BRIDGE_READY) return <EditorBridgeSoon />;
+  return <ConnectEditorBarLive {...props} />;
+}
+
+function ConnectEditorBarLive({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useQuery<{ tokens: TokenRow[] }>({ queryKey: ["/api/mcp-tokens"] });
 
@@ -332,16 +368,42 @@ export function EditorAccess() {
           what counts as done — and your editor does the reading and the writing. A token connects them.
         </p>
 
-        <Button onClick={() => setOpen(true)} data-testid="button-create-token">
-          <Plus className="w-4 h-4 mr-2" /> New token
-        </Button>
+        {/*
+          * Not ready (shared/not-ready.ts): no way to make a new one.
+          *
+          * The list below stays regardless, and that is deliberate. Somebody
+          * who connected an editor while this was open holds live credentials
+          * to their own account, and hiding the only screen that lists them
+          * would leave them able to see no way to withdraw access they already
+          * granted. Taking the feature back is not a reason to take away the
+          * revoke button.
+          */}
+        {EDITOR_BRIDGE_READY ? (
+          <Button onClick={() => setOpen(true)} data-testid="button-create-token">
+            <Plus className="w-4 h-4 mr-2" /> New token
+          </Button>
+        ) : (
+          <div className="flex items-start gap-2 rounded-md border border-dashed border-border p-3" data-testid="editor-access-soon">
+            <Terminal className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium flex items-center gap-2">
+                {COMING_SOON}
+                <Badge variant="outline" className="text-[10px] font-normal">not open yet</Badge>
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">{EDITOR_BRIDGE_SOON}</p>
+            </div>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="text-sm text-muted-foreground flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" /> Loading…
           </div>
         ) : tokens.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No tokens yet.</p>
+          EDITOR_BRIDGE_READY
+            ? <p className="text-sm text-muted-foreground">No tokens yet.</p>
+            /* "No tokens yet" implies you could make one. You can't, for now. */
+            : null
         ) : (
           <div className="space-y-2" data-testid="list-tokens">
             {tokens.map((t) => (

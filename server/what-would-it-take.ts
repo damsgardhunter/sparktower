@@ -52,6 +52,7 @@ import {
   type Gap, type MarginRead, type RevenueRead, type UnitRead, type WwitGrounding, type WwitRoadmapBody, type WwitStage,
   type WwitStep, type WwitTarget, type WwitTargetId,
 } from "@shared/what-would-it-take";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
 type Project = typeof projects.$inferSelect;
 
@@ -154,7 +155,11 @@ function notReadyReason(ground: Ground): string | null {
   return null;
 }
 
-const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/*
+ * Tidied before it is cut: these strings reach a `<p>`, not a Markdown
+ * renderer, so a heading's hashes are read as punctuation. server/prose-style.ts.
+ */
+const str = (v: unknown, max: number): string => (typeof v === "string" ? tidyProse(v).slice(0, max) : "");
 const strList = (v: unknown, max: number, count: number): string[] =>
   Array.isArray(v) ? v.map((x) => str(x, max)).filter(Boolean).slice(0, count) : [];
 
@@ -218,6 +223,7 @@ Revenue is not money kept, and you must not treat them as the same. ${margin ? `
 
 Plain English throughout. No jargon, no consulting words ("leverage", "synergies", "10x"), no exclamation marks. Short sentences. Talk about staff, sites, machines, stock, vans, cash and margin — the things this owner actually deals with.
 
+${PROSE_STYLE_RULE}
 Respond ONLY with valid JSON, no markdown fences:
 {
   "headline": "one sentence an owner would say out loud about this gap",

@@ -15,7 +15,7 @@ import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
+import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks, pathSyncState } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
@@ -34,6 +34,7 @@ import {
 import { MONEY_POSITION_MILESTONE } from "@shared/phase-trees/systemize";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
+import { tidyProse } from "./prose-style";
 
 /** Tags let the actor and tier ride on the existing task row. */
 export const tagsFor = (m: ResolvedMilestone) => [
@@ -213,7 +214,8 @@ export async function startTrack(projectId: string, goal: ProjectGoal, subcatego
     restored++;
   }
   const built = restored ? { created: false, phases: 0, milestones: 0 } : await instantiatePathTree(projectId, goal, subcategory, { keepRoadmap: true });
-  if (restored) await syncPathTree(projectId, goal, subcategory, null);
+  // Forced: the restore just changed what the board should hold.
+  if (restored) await syncPathTree(projectId, goal, subcategory, null, { force: true });
   await refreshPace(projectId, undefined, goal);
   return { started: true, goal, subcategory, restored, ...built };
 }
@@ -297,18 +299,108 @@ const loopSourcesOf = (phases: { optional?: boolean; milestones: ResolvedMilesto
  *
  * A project with no path yet is left for adoption.
  */
-export async function syncPathTree(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
+/** How long a reconcile stays good for. A GET inside this window does nothing. */
+export const PATH_SYNC_DEBOUNCE_MS = Number(process.env.PATH_SYNC_DEBOUNCE_MS ?? 60_000);
+
+/**
+ * Everything the reconcile's result depends on.
+ *
+ * Stored beside the timestamp so a change to any of it re-runs the work
+ * without anyone having to remember to ask. The route is the one that moves in
+ * practice: answering a route question rewrites which phases the path shows.
+ */
+export const pathSyncKey = (goal: ProjectGoal, subcategory: string, route?: string | null) =>
+  `${goal}|${subcategory}|${route ?? ""}`;
+
+/** Whether a recorded reconcile still stands for these inputs. */
+export function pathSyncIsFresh(
+  row: { syncedAt: Date | null; syncedKey: string | null } | undefined,
+  key: string,
+  now = Date.now(),
+): boolean {
+  if (!row?.syncedAt || row.syncedKey !== key) return false;
+  const age = now - row.syncedAt.getTime();
+  // A clock that went backwards reads as stale rather than as fresh forever.
+  return age >= 0 && age < PATH_SYNC_DEBOUNCE_MS;
+}
+
+const NOTHING_TO_DO = { added: [] as string[], archived: [] as string[], restored: [] as string[] };
+
+/**
+ * Brings a section's board into line with its tree, at most once a minute.
+ *
+ * ## Why it is serialized
+ *
+ * Everything in the body is read-modify-write across a set of rows — read the
+ * tasks, work out which milestones have none, insert them — and it runs from
+ * plain GETs (the dashboard, the home screen's card). Two requests in flight
+ * at once both read the same "missing" set and both insert it, and from then
+ * on a lookup by backbone id picks one of the twins at random: finishing the
+ * milestone leaves a phantom copy open on the board. With the lock, the second
+ * caller re-reads after the first commits and finds nothing missing.
+ *
+ * ## Why it is debounced
+ *
+ * Because that lock was being taken by a poll. `/api/projects/:id/path` is
+ * read every fifteen seconds by every open dashboard, and it called this every
+ * time — so a write-locked reconcile ran thirteen times a second at two
+ * hundred concurrent users, and everyone looking at the same project queued
+ * behind each other rather than reading concurrently. It found nothing to do
+ * almost every time: the tree only changes when its definition changes, or
+ * when the project's goal, subcategory or route does.
+ *
+ * So a reconcile is recorded, and a later call with the same inputs inside the
+ * window returns without taking the lock or touching a task. What a reader
+ * sees is unaffected — the milestones it lists are read after this, from the
+ * board as it stands. This only governs how often the board is *healed*.
+ *
+ * `force` is for the callers that know something changed and cannot wait for
+ * the window: restoring a section, and answering a route question.
+ */
+export async function syncPathTree(
+  projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null,
+  opts: { force?: boolean } = {},
+) {
+  const key = pathSyncKey(goal, subcategory, route);
+  if (!opts.force) {
+    /*
+     * Fails open. This read is bookkeeping about the reconcile, not part of
+     * it, and it must never be the reason a dashboard cannot load: an e2e
+     * database missing the table turned every path read into a 500 the first
+     * time this shipped. If it cannot be answered, the reconcile simply runs,
+     * which is what happened before there was a window at all.
+     */
+    const [row] = await db.select({ syncedAt: pathSyncState.syncedAt, syncedKey: pathSyncState.syncedKey })
+      .from(pathSyncState)
+      .where(and(eq(pathSyncState.projectId, projectId), eq(pathSyncState.goal, goal)))
+      .catch((err) => {
+        console.error("[path-sync] couldn't read the last reconcile, doing it anyway:", (err as any)?.cause?.message ?? err);
+        return [];
+      });
+    if (pathSyncIsFresh(row, key)) return NOTHING_TO_DO;
+  }
+
+  const result = await withProjectLock("path-sync", projectId, () => syncPathTreeInner(projectId, goal, subcategory, route));
+
   /*
-   * Serialized per project. Everything below is read-modify-write across a set
-   * of rows — read the tasks, work out which milestones have none, insert them
-   * — and it runs from plain GETs (the dashboard, the home screen's card). Two
-   * requests in flight at once both read the same "missing" set and both
-   * insert it, and from then on a lookup by backbone id picks one of the twins
-   * at random: finishing the milestone leaves a phantom copy open on the board.
-   * With the lock, the second caller re-reads after the first commits and
-   * finds nothing missing.
+   * Recorded even when the body found nothing — especially then, since that is
+   * the case worth not repeating. A project whose tasks do not exist yet is
+   * not a risk here: they are created by `instantiatePathTree`, which builds
+   * the milestones itself rather than leaving them for this to find.
    */
-  return withProjectLock("path-sync", projectId, () => syncPathTreeInner(projectId, goal, subcategory, route));
+  await db.insert(pathSyncState)
+    .values({ projectId, goal, syncedAt: new Date(), syncedKey: key })
+    .onConflictDoUpdate({
+      target: [pathSyncState.projectId, pathSyncState.goal],
+      set: { syncedAt: new Date(), syncedKey: key },
+    })
+    .catch((err) => {
+      // The cause, not the wrapper: Drizzle's message is the statement, and
+      // the reason it was refused is one level down.
+      console.error("[path-sync] couldn't record the reconcile:", (err as any)?.cause?.message ?? err);
+    });
+
+  return result;
 }
 
 async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
@@ -391,7 +483,8 @@ export async function saveIntake(projectId: string, taskId: string, raw: unknown
   if (ctx.milestone?.routeQuestion) {
     route = checked.answers[ctx.milestone.routeQuestion]?.[0] ?? null;
     await setTrackFields(projectId, ctx.project.goal as ProjectGoal, { capitalRoute: route });
-    await syncPathTree(projectId, ctx.project.goal as ProjectGoal, ctx.project.subcategory, route);
+    // Forced: a route answer rewrites which phases the path shows.
+    await syncPathTree(projectId, ctx.project.goal as ProjectGoal, ctx.project.subcategory, route, { force: true });
   }
   const wasDone = ctx.task.status === "done";
   const updated = await storage.updateKanbanTask(ctx.task.id, {
@@ -1040,11 +1133,57 @@ export async function pathTaskContext(projectId: string, taskId: string) {
   return { task, project, milestone, actor, tier };
 }
 
+/**
+ * Markdown decoration off a stored packet, on the way out.
+ *
+ * Packets written from now on are tidied before they are saved
+ * (server/prose-style.ts), but a path built before that is full of "## " and
+ * "**Evidence:**", and those are the packets somebody is reading today. This
+ * is derived on read like the run groups above it — the row is never
+ * rewritten, so nothing is lost if the rule changes.
+ *
+ * Code is not prose: a build's files and its run commands are passed straight
+ * through, and `tidyProse` masks backtick spans in what is left.
+ */
+function tidyWorkProse(payload: WorkPayload): WorkPayload {
+  const p = (v: unknown) => tidyProse(v);
+  switch (payload.kind) {
+    case "options":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        intro: p(payload.intro),
+        options: payload.options.map((o) => ({ ...o, title: p(o.title), body: p(o.body), why: o.why ? p(o.why) : o.why })),
+      };
+    case "build":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        summary: p(payload.summary),
+        verify: p(payload.verify),
+        assumptions: payload.assumptions.map(p),
+      };
+    case "template":
+      return { ...payload, intro: p(payload.intro), template: p(payload.template), whatNovaDid: p(payload.whatNovaDid), whatIsLeft: p(payload.whatIsLeft) };
+    case "plan":
+      return {
+        ...payload,
+        summary: p(payload.summary),
+        sections: payload.sections.map((x) => ({ heading: p(x.heading), body: p(x.body) })),
+        assumptions: payload.assumptions.map(p),
+        gaps: payload.gaps.map(p),
+        actions: payload.actions.map((a) => ({ ...a, title: p(a.title), detail: p(a.detail) })),
+      };
+    default:
+      return payload;
+  }
+}
+
 export async function latestWork(taskId: string) {
   const [row] = await db.select().from(pathWork).where(and(eq(pathWork.taskId, taskId), ne(pathWork.kind, "loop-audit"))).orderBy(desc(pathWork.createdAt)).limit(1);
   // Every screen reads packets through here or saveWork, so this is where an
   // older packet gets its run steps as blocks — derived on read, never rewritten.
-  return row ? { ...row, payload: withRunGroups(row.payload as WorkPayload) } : null;
+  return row ? { ...row, payload: tidyWorkProse(withRunGroups(row.payload as WorkPayload)) } : null;
 }
 
 /** Nova's latest competitive read of the loops, kept on the core-loop task. */

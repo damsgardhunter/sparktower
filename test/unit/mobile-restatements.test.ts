@@ -66,10 +66,17 @@ describe("where the app gets a picture from", () => {
       return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [{ path: p, text: readFileSync(p, "utf8") }] : [];
     });
 
-  it("never asks the document picker for an image", () => {
+  it("never asks the document picker for an image, outside the fallback", () => {
+    /*
+     * photos.ts is the exception and the reason the rule exists: when the
+     * build has no photo library in it, Files filtered to images is better
+     * than a button that throws. Everywhere else, asking Files for a picture
+     * is the bug this guards.
+     */
     const offenders = sources(mobileSrc)
       .filter((f) => /getDocumentAsync\([^)]*image\//s.test(f.text))
-      .map((f) => f.path.slice(join(__dirname, "..", "..").length + 1));
+      .map((f) => f.path.slice(join(__dirname, "..", "..").length + 1))
+      .filter((p) => p !== "mobile/src/photos.ts");
     expect(offenders, "these ask Files for a photo; mobile/src/photos.ts is what opens Photos").toEqual([]);
   });
 
@@ -127,6 +134,25 @@ describe("pictures on the phone", () => {
       }
     }
     expect(offenders, "these render nothing on a phone — wrap the value in assetUri()").toEqual([]);
+  });
+});
+
+describe("the sizes a picture is asked for", () => {
+  it("is the same list on the phone, in the web's shared module, and on the server", async () => {
+    /*
+     * Three copies by necessity — Metro can't resolve @shared, and the server
+     * builds what the clients ask for. A width nobody builds is not an error
+     * anywhere: the server quietly serves the original, so the only sign is
+     * the bill and a slow phone.
+     */
+    const { IMAGE_WIDTHS } = await import("@shared/image-size");
+    const { ALLOWED_WIDTHS } = await import("../../server/image-derivatives");
+    expect([...ALLOWED_WIDTHS]).toEqual([...IMAGE_WIDTHS]);
+
+    const phone = readFileSync(join(__dirname, "..", "..", "mobile", "src", "assetUri.ts"), "utf8");
+    const restated = /export const IMAGE_WIDTHS = \[([^\]]*)\]/.exec(phone);
+    expect(restated, "the phone should restate the widths").toBeTruthy();
+    expect(restated![1].match(/\d+/g)!.map(Number)).toEqual([...IMAGE_WIDTHS]);
   });
 });
 

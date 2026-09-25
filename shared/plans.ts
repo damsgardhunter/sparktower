@@ -452,6 +452,34 @@ export function priceOf(action: NovaActionId): ActionPrice {
   return { action, kind, cents, display: formatMoney(cents) };
 }
 
+/**
+ * The name and blurb for something priced, safely.
+ *
+ * `OUTCOME_COPY` is keyed by `PricedOutcomeId`, and three places in the payment
+ * dialog reached into it with something wider: `priceOf` returns a `kind` that
+ * may be "free" or "small", and the 402's `outcome` is whatever the server put
+ * there. Two of those sites cast with `as PricedOutcomeId`, which silences the
+ * compiler without making the value one — and `OUTCOME_COPY[kind].name` on a
+ * miss throws "Cannot read properties of undefined", which took out the whole
+ * dialog. A payment dialog that white-screens is worse than one with a
+ * less specific label on the button.
+ *
+ * So: look it up, and when there is nothing there, say so in a way that still
+ * reads like a sentence. The console line is deliberate — a fallback that is
+ * invisible is a bug that stays.
+ */
+export function outcomeCopy(
+  id: string | null | undefined,
+): { name: string; blurb: string } | null {
+  if (!id) return null;
+  const found = (OUTCOME_COPY as Record<string, { name: string; blurb: string }>)[id];
+  if (found) return found;
+  if (typeof console !== "undefined") {
+    console.warn(`[plans] no copy for priced outcome "${id}" — falling back. Add it to OUTCOME_COPY.`);
+  }
+  return null;
+}
+
 /** What the pricing page and the top-up dialog list, in the order they read best. */
 export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string }> = {
   actionPack: {
