@@ -813,3 +813,65 @@ describe("what a new period opens with", () => {
     expect(next.body.draft.borrow).toBe(0);
   }, 120_000);
 });
+
+/**
+ * A founder is not asked to manage colleagues they do not have.
+ *
+ * Holding all five desks is right — every decision the company makes is
+ * theirs. Several of those levers are not decisions about the business
+ * though; they are decisions about *people*: splitting the budget between
+ * three seats, setting each seat's target, a bonus pot shared by the seats
+ * that hit theirs, overruling one, replacing one. Asked of one person they
+ * are absurd, and asking tells somebody rehearsing their own business that
+ * they have got something wrong by not having staff.
+ */
+describe("what a solo founder is asked to decide", () => {
+  const forColleagues = ["budget", "targets", "bonusPool", "overrule", "replaceSeat", "holdBackSeat", "rehire"];
+
+  it("does not ask one person to split a budget between themselves", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.status).toBe(200);
+    expect(desk.body.solo).toBe(true);
+
+    const ids = desk.body.fields.map((f: any) => f.id);
+    for (const id of forColleagues) expect(ids, `${id} is a decision about colleagues`).not.toContain(id);
+
+    /*
+     * And it still has the levers that run a business. Only the ones a first
+     * period actually has: responsibilities arrive over a season (see UNLOCKS),
+     * so engineer pay and the rest are absent here for a reason of their own.
+     */
+    for (const id of ["price", "capacityTarget", "featureSpend", "borrow", "focus", "headcount"]) {
+      expect(ids, `${id} is a decision about the business`).toContain(id);
+    }
+  }, 120_000);
+
+  it("does not promise them as arriving later either", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const coming: string[] = desk.body.arrivingNextYear ?? [];
+    for (const label of ["Split the budget", "Set each seat's target", "Bonus pot"]) {
+      expect(coming, `${label} is never arriving for a table of one`).not.toContain(label);
+    }
+  }, 120_000);
+
+  /* A five-person table keeps every one of them: that is what they are for. */
+  it("still asks a real table to split its budget", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    /* Far enough in that the chief executive's people levers have unlocked. */
+    await db.update(simSeasons).set({ year: 6 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.solo).toBe(false);
+    const ids = desk.body.fields.map((f: any) => f.id);
+    expect(ids, "five people do have a budget to split").toContain("budget");
+  }, 120_000);
+});

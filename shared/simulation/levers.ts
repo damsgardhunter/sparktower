@@ -311,6 +311,34 @@ function standing(role: Role, company: Company, draft: Record<string, any>): Rec
   return draft;
 }
 
+/**
+ * The levers that only mean anything when other people hold the other desks.
+ *
+ * A solo founder is handed all five desks, which is right — every decision the
+ * company makes is theirs. But several of those levers are not decisions about
+ * the business at all. They are decisions about *colleagues*: splitting the
+ * budget between three seats, setting each seat's target, a bonus pot shared
+ * by the seats that hit theirs, overruling a seat, replacing one, and which
+ * seat finance holds money back from.
+ *
+ * Asked of one person they are absurd — a founder splitting a budget four ways
+ * between themselves and setting their own targets — and asking is worse than
+ * absurd, because it tells somebody rehearsing their own business that they
+ * have got something wrong by not having staff.
+ *
+ * `rehire` goes for a different reason: a seat dissolved in a solo company
+ * saves no salary (`officers` is one however many chairs there are), so there
+ * is never anything to bring back.
+ *
+ * Deliberately not the whole "people" half of the chief executive's desk.
+ * Engineer pay stays — a solo founder still pays whoever writes the code — and
+ * so does headcount, which is staff beyond the table rather than the table
+ * itself.
+ */
+export const LEVERS_FOR_A_TABLE: ReadonlySet<string> = new Set([
+  "budget", "targets", "bonusPool", "overrule", "replaceSeat", "holdBackSeat", "rehire",
+]);
+
 export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
   if (previous) {
     // What they did last year, minus the moves that should never repeat by default.

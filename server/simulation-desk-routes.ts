@@ -33,7 +33,7 @@ import { canEnter, continentOf, regionById } from "@shared/simulation/geography"
 import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
+import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
 import { debtDrag, IDLE_RATE, marketPriceOf, officersOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
@@ -403,6 +403,12 @@ export function registerSimulationDeskRoutes(app: Express): void {
       fields: seat.role ? dedupeById((solo ? [...ROLES] : [seat.role as Role]).flatMap((r) => LEVER_FIELDS[r]
         // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
         .filter((base) => isUnlocked(r, base.id, year, periods))
+        /*
+         * And not the ones that are only decisions about colleagues. A founder
+         * holding every desk has no budget to split between themselves and no
+         * targets to set for themselves. See LEVERS_FOR_A_TABLE.
+         */
+        .filter((base) => !solo || !LEVERS_FOR_A_TABLE.has(base.id))
         // Which desk it came from, kept so the unlock year below is asked of
         // the right one — solo puts five desks' levers in a single list.
         .map((base) => ({ base, desk: r }))))
@@ -437,7 +443,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
             options: [
               { value: "statement", label: "Make a statement", help: `Costs ${statementCost(niche).toLocaleString()} to do well, and wins back about half of the ${Math.round(company.shock.reputation)} points of reputation it cost.` },
               { value: "silence", label: "Say nothing", help: "Cheap, and it reads as evasive: a little more reputation goes." },
-              ...overrulable(company.seats).map((r) => ({
+              /*
+               * Blaming a colleague, where there is one. A founder holding
+               * every desk blaming "the chief technology officer" in public is
+               * blaming themselves, which is not a strategy the game should
+               * offer with a straight face.
+               */
+              ...(solo ? [] : overrulable(company.seats)).map((r) => ({
                 value: `blame_${r}`,
                 label: `Blame the ${ROLE_TITLES[r].toLowerCase()}`,
                 help: `Wins back about 70% of it, and costs that seat 25 points of loyalty. They are at ${Math.round(personOf(company, r).loyalty)}.`,
@@ -622,7 +634,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
       },
       /** The levers this seat gets next year, by label, so nobody is surprised by them. */
       arrivingNextYear: seat.role
-        ? arrivingIn(seat.role as Role, year + 1, periods).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
+        ? arrivingIn(seat.role as Role, year + 1, periods)
+          /* Nothing is arriving that this table will never be shown. */
+          .filter((id) => !solo || !LEVERS_FOR_A_TABLE.has(id))
+          .map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
         : [],
       /**
        * What to show in the form: what they filed already, else last period's,
