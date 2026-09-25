@@ -981,6 +981,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
     const world = { ...(season.world as World), niche, year };
+    /** One chair: the form on this desk carries all five desks' levers. */
+    const soloSeason = (season.seatCount ?? 5) <= 1;
 
     const { decisions: filed } = await draftFor(venture.id, year);
     const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
@@ -992,11 +994,26 @@ export function registerSimulationDeskRoutes(app: Express): void {
      * what an overspend would do — an emergency loan, a worse rating — is
      * exactly what the projection is for.
      */
-    let draft: { role: Role; decision: any } | undefined;
+    let draft: { role: Role; decision: any; roles?: Role[]; byRole?: Partial<Record<Role, any>> } | undefined;
     if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
       try {
         const raw = JSON.parse(req.query.draft);
-        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) }) };
+        const opts = { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) };
+        const cityIds = niche.cities.map((c) => c.id);
+        /*
+         * Split per desk, exactly as a filing is.
+         *
+         * One seat at a five-person table owns one desk's levers and this was
+         * always `cleanDecision(seat.role, ...)`. A solo founder owns all five,
+         * and their form carries all five — so cleaning it as the chief
+         * executive's threw away the price, the capacity and every spend, and
+         * the projection came back with the same number however the form was
+         * changed. From the keyboard that reads as a screen that has stopped
+         * listening, which is what was reported.
+         */
+        const desks: Role[] = soloSeason ? [...ROLES] : [seat.role as Role];
+        const byRole = Object.fromEntries(desks.map((r) => [r, cleanDecision(r, raw, cityIds, opts)])) as Partial<Record<Role, any>>;
+        draft = { role: seat.role as Role, decision: byRole[seat.role as Role], roles: desks, byRole };
       } catch {
         return res.status(400).json({ message: "That draft couldn't be read." });
       }

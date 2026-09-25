@@ -27,11 +27,16 @@ list stays readable against what was reported.
    ten, a little over the reserve, so an auction can be lost.
 5. The price has to be entered again every period; it should carry forward
    from what was last filed.
-6. The unit cost Nova writes is dearer than the founder's real product. Wants
-   grounding in the project rather than a guess.
-7. The forecast still does not move when a decision changes. Reported again
-   after the `holds(role)` fix, so either that fix did not reach it or there
-   is a second cause. Unverified.
+6. ~~The unit cost Nova writes is dearer than the founder's real product.~~
+   **Done.** It was unbounded against the prices in the same answer: 18, with
+   segments paying 12 and 7, so two of four could never be sold to. Capped at
+   70% of the cheapest segment's price, and the prompt now says what the number
+   means. Existing seasons repair on read (18 → 5, 14 → 4).
+7. ~~The forecast does not move when a decision changes.~~ **Done.** The
+   projection endpoint cleaned the draft as `seat.role`, so a solo founder's
+   price and capacity were parsed as the chief executive's and dropped. It
+   splits per desk now, as filing does, and this period's demand comes back
+   with the draft applied so the forecast card moves as somebody types.
 
 
 ### A sealed bid is invisible to the commitment meter

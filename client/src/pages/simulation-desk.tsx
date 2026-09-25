@@ -53,6 +53,7 @@ import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
 import { capacityBuild } from "@shared/simulation/lag";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
 import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock";
+import { useProjection } from "@/components/sim/projection-panel";
 import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
@@ -235,6 +236,12 @@ export default function SimulationDeskPage() {
    * format a dollar company in pounds, or call a quarter a year.
    */
   const { money, compact } = useMoney(desk?.currency);
+  /*
+   * The demand curve as it stands with the draft, from the same endpoint the
+   * projection dock already asks. Null until it answers, and the desk's own
+   * forecast stands in meanwhile.
+   */
+
   const period = usePeriod(desk?.period);
   /*
    * Which desks this person is filing for.
@@ -251,6 +258,15 @@ export default function SimulationDeskPage() {
 
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  /*
+   * The demand curve as it stands with the draft, from the same endpoint the
+   * projection dock already asks — one query, shared by both through the
+   * cache. Null until it answers, and the desk's own forecast stands in
+   * meanwhile.
+   */
+  const draftProjection = useProjection(id!, draft, JSON.stringify(desk?.filed ?? {}));
+  const liveDemand = draftProjection.data?.demand ?? null;
 
   /*
    * The server's draft seeds the form once, and then stops touching it. A poll
@@ -858,9 +874,16 @@ export default function SimulationDeskPage() {
           filedStamp={JSON.stringify(desk.filed ?? {})}
         />
 
-        {desk.forecast && (
+        {(liveDemand ?? desk.forecast) && (
           <ForecastCard
-            forecast={desk.forecast}
+            /*
+             * The live one when there is a draft in flight, the desk's
+             * otherwise. The desk's is worked out from filings and refreshed on
+             * an eight-second poll, so the curve under "at $0 per seat" sat
+             * still while somebody changed the price — the decision it is most
+             * obviously about.
+             */
+            forecast={(liveDemand ?? desk.forecast)!}
             voice={v}
             price={Number(holds("cmo") && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
             /*

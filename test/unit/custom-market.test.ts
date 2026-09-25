@@ -391,3 +391,52 @@ describe("what a written market calls the things it sells", () => {
     expect(cheapest(startup)).toBeLessThan(cheapest(big));
   });
 });
+
+/**
+ * A market you can actually sell in.
+ *
+ * `baseUnitCost` was taken as written, bounded only by 1 and 50,000, with no
+ * relationship to the prices the same answer invented. One market came back
+ * with a unit cost of 18 and segments paying 12, 7, 29 and 119: two of the
+ * four could never be sold to at any volume, at any price they would accept,
+ * in any year of the season. The desk said so on every screen — "every unit
+ * sold at 17 costs 18 to make" — and it was right, and there was nothing to
+ * be done about it.
+ */
+describe("what it costs to serve one customer", () => {
+  const priced = (prices: number[], baseUnitCost: number) => buildCustomMarket({
+    ...sane,
+    baseUnitCost,
+    segments: prices.map((referencePrice, i) => ({
+      id: `s${i}`, name: `S${i}`, description: "x", size: 10_000, growth: 0.05,
+      priceSensitivity: 0.5, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.5,
+      loyalty: 0.5, referencePrice,
+    })),
+  }, "f")!;
+
+  it("leaves a sensible answer alone", () => {
+    expect(priced([50, 200], 12).baseUnitCost).toBe(12);
+  });
+
+  /* The exact shape that was reported. */
+  it("caps a cost the cheapest customer could never cover", () => {
+    const m = priced([12, 7, 29, 119], 18);
+    const cheapest = Math.min(...m.segments.map((s) => s.referencePrice));
+    expect(m.baseUnitCost).toBeLessThan(cheapest);
+  });
+
+  it("leaves every segment worth serving at a price it would pay", () => {
+    for (const prices of [[12, 7, 29, 119], [5, 5, 5], [900, 30]]) {
+      const m = priced(prices, 10_000);
+      for (const s of m.segments) {
+        expect(m.baseUnitCost, `${s.referencePrice} must cover ${m.baseUnitCost}`).toBeLessThan(s.referencePrice);
+      }
+    }
+  });
+
+  /* Not a floor on margin: a thin segment is a real thing to discover. */
+  it("still allows a market where the margin is thin", () => {
+    const m = priced([10, 100], 7);
+    expect(m.baseUnitCost).toBe(7);
+  });
+});

@@ -341,6 +341,36 @@ function cleanAssets(raw: unknown): { kind: string; name: string; blurb: string 
 }
 
 /**
+ * What it costs to serve one customer, capped so somebody can be served.
+ *
+ * The model is asked for a unit cost and given no relationship to hold it
+ * against, so it answers with a plausible-sounding number and nothing checks
+ * it against the prices it also invented. One market came back with a unit
+ * cost of 18 and segments paying 12, 7, 29 and 119 — two of the four could
+ * never be sold to at any volume, at any price the segment would accept, in
+ * any year of the season. The desk said so, plainly and repeatedly: "every
+ * unit sold at 17 costs 18 to make". It was right, and there was nothing the
+ * player could do about it.
+ *
+ * Capped at 70% of the cheapest segment's reference price, so the thinnest
+ * customer in the market is still worth having at a price they would pay. Not
+ * a floor on margin — a market can be brutal, and a cheap segment that is
+ * barely worth serving is a real thing to discover. What it rules out is the
+ * market that is arithmetically unplayable before anybody sits down.
+ *
+ * Deliberately not scaled to the dearest segment: a market with one premium
+ * tier and three cheap ones would let a unit cost through that only the
+ * premium tier could ever cover, which is the same bug wearing a hat.
+ */
+const MAX_UNIT_COST_OF_CHEAPEST_PRICE = 0.7;
+
+function affordableUnitCost(asked: number, segments: Segment[]): number {
+  const cheapest = Math.min(...segments.map((s) => s.referencePrice));
+  if (!Number.isFinite(cheapest) || cheapest <= 0) return Math.round(asked);
+  return Math.max(1, Math.round(Math.min(asked, cheapest * MAX_UNIT_COST_OF_CHEAPEST_PRICE)));
+}
+
+/**
  * A market from whatever the model said, or null if there is not one in there.
  *
  * Null is a real answer and the caller must have somewhere to go with it: the
@@ -365,7 +395,7 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
     segments,
     incumbents,
     cities,
-    baseUnitCost: Math.round(num(m.baseUnitCost, 1, 50_000, 20)),
+    baseUnitCost: affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments),
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
     workforce: cleanWorkforce(m.workforce),

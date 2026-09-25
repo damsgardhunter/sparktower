@@ -692,3 +692,59 @@ describe("a solo founder's filing", () => {
     expect(cfo.body.draft.price, "the finance seat does not file a price").toBeUndefined();
   }, 120_000);
 });
+
+/**
+ * A solo founder's draft has to reach the projection.
+ *
+ * The projection endpoint cleaned the incoming draft as `seat.role` — right
+ * for one seat at a five-person table, and wrong for a founder holding all
+ * five, whose single form carries every desk's levers. Their price, capacity
+ * and spend were parsed as the chief executive's, found to be none of the
+ * chief executive's business, and dropped. So the projection answered the same
+ * number however the form was changed, which from the keyboard reads as a
+ * screen that has stopped listening.
+ */
+describe("a solo founder's unfiled draft", () => {
+  it("changes the projection, not just the chief executive's half of it", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    const ask = async (draft: Record<string, unknown>) => {
+      const res = await ceo.agent.get(`/api/sim/ventures/${ventureId}/projection`)
+        .query({ draft: JSON.stringify(draft) });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      return res.body;
+    };
+
+    /* A marketing lever, which the chief executive's desk does not own. */
+    const cheap = await ask({ price: 8, brandSpend: 0 });
+    const dear = await ask({ price: 90, brandSpend: 0 });
+
+    /*
+     * Asserted on demand rather than on revenue, and that is not a weaker
+     * claim — it is the only one available in period one. A company that has
+     * not built any room sells nothing at either price, so revenue is zero
+     * whatever the draft says. Demand is what the forecast card draws and what
+     * the price visibly moves.
+     */
+    expect(cheap.demand, "this period's demand comes back with the draft on it").toBeTruthy();
+    expect(cheap.demand.likely, "cheap brings more people in than dear")
+      .toBeGreaterThan(dear.demand.likely);
+  }, 120_000);
+
+  /* A five-person table still only files for its own desk. */
+  it("does not let one seat project another's levers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+    const cfo = seat("cfo");
+
+    const ask = async (draft: Record<string, unknown>) =>
+      (await cfo.agent.get(`/api/sim/ventures/${ventureId}/projection`).query({ draft: JSON.stringify(draft) })).body;
+
+    const a = await ask({ price: 8 });
+    const b = await ask({ price: 90 });
+    expect(a.demand.likely, "the finance seat does not set a price").toBe(b.demand.likely);
+  }, 120_000);
+});

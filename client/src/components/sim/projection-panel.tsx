@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Table2, BarChart3, ShieldAlert } from "lucide-react";
+import type { Forecast } from "@shared/simulation/forecast";
 
 interface Projection {
   year: number;
@@ -51,6 +52,8 @@ export interface ProjectionResponse {
   filed: Projection;
   drafted: Projection;
   absent: string[];
+  /** This period's demand with the draft applied — see `demand` on ProjectionPair. */
+  demand: Forecast | null;
 }
 
 const TITLES: Record<string, string> = {
