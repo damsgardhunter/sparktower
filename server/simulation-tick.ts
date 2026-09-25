@@ -1457,7 +1457,22 @@ async function settleMarket(input: {
       }
       if (listing.sellerId) {
         if (payee) add(payee, "sold", `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
-        writes.listings.push({ id: listing.id, set: { status: "sold", buyerId: award.winnerId, soldFor: award.price } });
+        /*
+         * `buyer_id` points at a room, and an incumbent does not have one.
+         *
+         * Now that the rivals bid, they can win a lot a team put up for sale —
+         * including a fire sale, which is exactly when somebody's things are
+         * most worth having. Writing their company id into a column that is a
+         * foreign key to `sim_ventures` fails the whole tick, taking the year
+         * down with it. Null is the honest value: the listing sold, and it did
+         * not sell to a team in this season. Who bought it is in the auction
+         * record either way.
+         */
+        const toATeam = world.companies.some((c) => c.id === award.winnerId && c.kind === "player");
+        writes.listings.push({
+          id: listing.id,
+          set: { status: "sold", buyerId: toATeam ? award.winnerId : null, soldFor: award.price },
+        });
       }
     }
 

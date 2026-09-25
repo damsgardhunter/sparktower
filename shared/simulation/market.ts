@@ -508,7 +508,26 @@ export function allocate(
       // Every rate here is an annual one — a third of a segment a year is the
       // outer limit — so a quarter moves a quarter of it. Without this a
       // quarterly season churned its market four times as fast as a yearly one.
-      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged) * (1 - locked) * per;
+      /*
+       * And a price that went up on the people already paying it.
+       *
+       * Everything above judges the price a company is *at*: it lowers appeal,
+       * and appeal decides who chooses them. None of it notices the company
+       * putting its price up on the customers it already has, which is the
+       * event those customers actually experience. A founder took theirs from
+       * 19 to 91 and lost nobody — arithmetically defensible while every seat
+       * they had was full, and still a company nobody walked out of.
+       *
+       * Scaled by how much it went up rather than by where it landed, so this
+       * does not double-count the level. Loyalty is what it is for: a devoted
+       * segment forgives a rise a flighty one leaves over. Capped well below
+       * the ordinary churn ceiling because a rise is a reason to shop around,
+       * not an eviction.
+       */
+      const was = Math.max(1, c.priceWas ?? priceFor(c, segment.id));
+      const rise = Math.max(0, priceFor(c, segment.id) / was - 1);
+      const resented = Math.min(0.2, rise * (1.3 - segment.loyalty) * 0.5);
+      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged, resented) * (1 - locked) * per;
       /*
        * And last year's deal-chasers: customers a promotion won, who leave
        * faster than the rest once the deal is over.
@@ -610,8 +629,28 @@ export function allocate(
 
     for (const { id, weight } of weights) {
       const share = weight / totalWeight;
-      const won = Math.round(upForGrabs * share);
-      held[id][segment.id] = (held[id][segment.id] ?? 0) + won;
+      /*
+       * Reach is a ceiling, not only a handicap.
+       *
+       * It already multiplied appeal, which makes a company in one region less
+       * attractive than the same company everywhere — but a weight is relative,
+       * and appeal is squared, so a good enough company still won customers in
+       * regions it had never opened. A founder selling in one city worth 9% of
+       * the market held 16.8% of it, which is not a hard market to enter; it is
+       * a market where the regions are decoration.
+       *
+       * The lever says the true thing already: "only builders in a city cluster
+       * you have opened can choose you, however good you are." This is that
+       * sentence, enforced. What a company cannot reach it does not win, and
+       * the customers stay where they were rather than being handed to the
+       * next-best company — nobody else reached them either.
+       */
+      const company = companies.find((c) => c.id === id)!;
+      const within = segment.size * regionalReach(company, niche) * regionalFit(company, niche, segment.id);
+      const already = held[id][segment.id] ?? 0;
+      const room = Math.max(0, Math.round(within) - already);
+      const won = Math.min(Math.round(upForGrabs * share), room);
+      held[id][segment.id] = already + won;
 
       /*
        * Who these people were, for the year's report. The pool is one pool, so
@@ -703,7 +742,20 @@ export function allocate(
       for (const t of takers) {
         const willing = theirs > 0 ? Math.min(1, (appeal[t.id] ?? 0) / theirs) : 1;
         const wanted = Math.round(count * (t.weight / total) * willing);
-        const taken = Math.min(wanted, room[t.id]);
+        /*
+         * And the same ceiling the allocation above uses.
+         *
+         * Somebody turned away by a rival is still a person living somewhere.
+         * Without this they went to whoever had the most empty room regardless
+         * of whether that company sells where they live — which is how a
+         * founder open in one region worth 9% of the market ended a period
+         * holding 21% of it: the allocation refused to hand them customers
+         * they could not reach, and the overflow handed them over anyway.
+         */
+        const taker = companies.find((c) => c.id === t.id)!;
+        const within = Math.round(segment.size * regionalReach(taker, niche) * regionalFit(taker, niche, segment.id));
+        const reachRoom = Math.max(0, within - (held[t.id][segment.id] ?? 0));
+        const taken = Math.min(wanted, room[t.id], reachRoom);
         if (taken <= 0) continue;
         room[t.id] -= taken;
         held[t.id][segment.id] = (held[t.id][segment.id] ?? 0) + taken;

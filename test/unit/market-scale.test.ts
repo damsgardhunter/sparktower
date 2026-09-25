@@ -27,6 +27,8 @@ import { ROLES, type Niche } from "@shared/simulation/types";
 import { distressOf } from "@shared/simulation/recovery";
 import { yearOfCostsFor } from "@shared/simulation/decisions";
 import { TRULY_OPEN_SHARE, seedFragmentedTail, seedIncumbents } from "@shared/simulation/incumbents";
+import { resolveYear } from "@shared/simulation/resolve";
+import { ROLES } from "@shared/simulation/types";
 
 const ECONOMY = { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" as const };
 const open = (niche: Niche) => startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] });
@@ -269,5 +271,110 @@ describe("who holds a market nobody named", () => {
     for (const rival of seedIncumbents(fragmented)) {
       expect(tail.brand, "weaker than anyone worth naming").toBeLessThan(rival.brand);
     }
+  });
+});
+
+/**
+ * Where you sell is a ceiling, not a handicap.
+ *
+ * `regionalReach` already multiplied appeal, which makes a company in one
+ * region less attractive than the same company everywhere. But a weight is
+ * relative and appeal is squared, so a good enough company still won customers
+ * in regions it had never opened — and a founder selling in one region worth
+ * 9% of the market ended a period holding 21% of it. That is not a hard market
+ * to enter; it is a market where the regions are decoration.
+ *
+ * The lever already said the true thing: "only builders in a city cluster you
+ * have opened can choose you, however good you are."
+ */
+describe("what selling in one region can win", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const home = niche.cities[niche.cities.length - 1];
+  const everywhere = niche.cities.map((c) => c.id);
+  const market = niche.segments.reduce((s, x) => s + x.size, 0);
+
+  const play = (cities: string[], customers: Record<string, number> = {}) => ({
+    ...startingCompany({ id: "p", name: "P", niche, seats: [...ROLES] }),
+    cities, customers, capacity: market, cash: 50_000_000,
+    /* Far better than anybody, so only the ceiling can hold it back. */
+    quality: 99, brand: 99, service: 99, price: 1,
+  });
+
+  const after = (company: any) => {
+    const world = { seasonId: "reach", niche, year: 3, economy: { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" as const }, companies: [...seedIncumbents(niche), company] };
+    const out = resolveYear(world as any, [{ companyId: "p" }], world.economy, { withoutEvent: true });
+    const me = out.world.companies.find((c) => c.id === "p")!;
+    return Object.values(me.customers).reduce((a, b) => a + b, 0);
+  };
+
+  it("cannot take more of the market than it sells to", () => {
+    const held = after(play([home.id]));
+    expect(held / market, "one region, however good the company is")
+      .toBeLessThanOrEqual(home.weight + 0.02);
+  });
+
+  it("lets the same company take far more when it sells everywhere", () => {
+    expect(after(play(everywhere))).toBeGreaterThan(after(play([home.id])));
+  });
+
+  /* The overflow route too: customers a rival turned away still live somewhere. */
+  it("does not hand it customers a rival turned away in a region it never opened", () => {
+    const narrow = after(play([home.id], {}));
+    expect(narrow / market, "spill cannot carry it past its own reach either")
+      .toBeLessThanOrEqual(home.weight + 0.02);
+  });
+});
+
+/**
+ * A price that goes up is an event the people already paying it notice.
+ *
+ * Everything else judges the price a company is *at*: it lowers appeal, and
+ * appeal decides who chooses them. Nothing noticed a company putting its price
+ * up on the customers it already had. A founder took theirs from 19 to 91 and
+ * lost nobody — defensible while every seat they had was full, and still a
+ * company nobody walked out of.
+ */
+describe("putting the price up", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const market = niche.segments.reduce((s, x) => s + x.size, 0);
+
+  /*
+   * `was` is what the company is charging when the period opens and `price` is
+   * what the decision sets — which is how a rise actually happens. Setting
+   * `priceWas` on the company directly does nothing: resolve derives it from
+   * the price the company walked in with, so the fixture has to walk in with
+   * it.
+   */
+  const held = (price: number, was?: number) => {
+    const company: any = {
+      ...startingCompany({ id: "p", name: "P", niche, seats: [...ROLES] }),
+      cities: niche.cities.map((c) => c.id),
+      customers: Object.fromEntries(niche.segments.map((s) => [s.id, Math.round(s.size * 0.05)])),
+      capacity: market, cash: 50_000_000, price: was ?? price,
+    };
+    const world = { seasonId: "price", niche, year: 3, economy: { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" as const }, companies: [...seedIncumbents(niche), company] };
+    const out = resolveYear(world as any, [{ companyId: "p", cmo: { price } as any }], world.economy, { withoutEvent: true });
+    const me = out.world.companies.find((c) => c.id === "p")!;
+    return Object.values(me.customers).reduce((a, b) => a + b, 0);
+  };
+
+  it("costs customers that holding the same price does not", () => {
+    const steady = held(40, 40);
+    const doubled = held(40, 20);
+    expect(doubled, "a rise from 20 to 40 is worse than having always been 40").toBeLessThan(steady);
+  });
+
+  it("costs more the bigger the rise", () => {
+    expect(held(40, 20)).toBeLessThan(held(40, 32));
+  });
+
+  /* A world written before this existed reads as no change, not as a rise. */
+  it("treats no change as no change at all", () => {
+    expect(held(40)).toBe(held(40, 40));
+  });
+
+  /* And cutting the price is never punished as though it were a rise. */
+  it("never punishes a price cut", () => {
+    expect(held(20, 40)).toBeGreaterThanOrEqual(held(20, 20));
   });
 });

@@ -407,6 +407,16 @@ export interface Company {
   covenant?: { since: number; spendCap: number; met: number; rateRelief: number };
   /** Assets that can be sold, pledged, or bought by a rival. */
   assets: CompanyAsset[];
+  /**
+   * What this company charged before this period's decision.
+   *
+   * A high price and a rising price are different events. The first is judged
+   * by appeal — it decides who chooses you. The second is the one your own
+   * customers notice, and nothing modelled it: a company could double its
+   * price and lose nobody it already had. Absent on a world written before
+   * this existed, which reads as "no change" and is the safe answer.
+   */
+  priceWas?: number;
   /** Seats currently filled. A team that fires its CMO pays one fewer salary and loses the lever. */
   seats: Role[];
   /**

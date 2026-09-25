@@ -832,6 +832,19 @@ export function resolveYear(
      */
     const capacity = build.now + leased + shift.units + stockHeld;
     const price = Math.max(1, d.cmo?.price ?? company.price);
+    /*
+     * What they were charging before it, kept so the market can tell a rise
+     * from a level.
+     *
+     * A price that is simply high is already judged: it lowers appeal, and
+     * appeal decides who chooses you. What nothing captured was somebody
+     * putting their price up on the people they already have, which is a
+     * different event and the one customers actually notice. A founder
+     * doubled their price and watched revenue double with it — correct while
+     * they were capacity-bound and selling every seat they had, and still a
+     * company nobody walked out of.
+     */
+    const priceWas = company.price;
 
     /*
      * A year passes over what the company owns: licences run down, and the
@@ -1052,6 +1065,8 @@ export function resolveYear(
       ].filter(Boolean))) as Company["seats"],
       cash: company.cash - entryCost,
       price,
+      /** Read by the market to tell a price rise from a high price. */
+      priceWas,
       capacity,
       brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand) * hBrand - decay.brand),
       /*

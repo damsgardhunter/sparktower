@@ -53,6 +53,19 @@ Needs a decision before it needs code: should a live bid reserve its money on
 the meter (honest, but leaks the bid's existence to every seat), or should the
 meter simply name the exposure without the amount?
 
+### From the same founder, a second sitting
+
+8. ~~Growth still too fast: 22% of the market while open in one region worth
+   9% of it.~~ **Done.** Reach was a weight, not a ceiling — appeal squared
+   could win customers in regions never opened, by the allocation *and* by the
+   overflow path. Both capped now.
+9. ~~Raising the price loses nobody.~~ **Done.** A price *level* was judged;
+   a price *rise* was not. `priceWas` carries last period's, and a rise churns
+   a little, scaled by how big it is and forgiven by loyal segments.
+10. Capacity "maxed at 8,000" was the quarterly build lag, not a cap: asking
+    20,000 from 5,064 opens 8,798. Explained on the lever and marked on the
+    forecast bar already; nothing further owed.
+
 ### Market share reads as nothing on a world map
 A company that opens in Leeds holds about 0.2% of the world market, and the
 standings say so. That is true and it is useless: a team winning its own
