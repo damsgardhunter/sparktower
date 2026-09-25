@@ -18,7 +18,8 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } fro
 import { db, pool } from "./db";
 import {
   companies, companyMembers, projectCheckins, projectMembers, projects, quarterGoals, recurringJobRuns, recurringJobs,
-  rhythmSettings, insertProjectSchema, simSeasons } from "@shared/schema";
+  rhythmSettings, insertProjectSchema, simSeasons, simSeats, simVentures } from "@shared/schema";
+import { SEAT_PRICE_CENTS, joinPathFor, seatKindFor, seatsHeld } from "./company-season-routes";
 import { users } from "@shared/models/auth";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -243,10 +244,57 @@ export function registerCompanyRhythmRoutes(app: Express): void {
     }
     const replayable = [...byMarket.values()].slice(0, 8);
 
+    /*
+     * The seasons themselves, and the seats behind them.
+     *
+     * The panel used to ask only "does this project have a company?" and, on
+     * hearing yes, hand over to the company's own training screen — a screen
+     * written for an HR administrator running an away day, which is not what
+     * somebody standing on their own project came for. What they want is the
+     * season they built and a way back into it, so this answers that instead.
+     */
+    const live = await db
+      .select({
+        id: simSeasons.id, name: simSeasons.name, status: simSeasons.status,
+        cadence: simSeasons.cadence, inviteCode: simSeasons.inviteCode,
+        seatCount: simSeasons.seatCount, origin: simSeasons.origin,
+        createdAt: simSeasons.createdAt, year: simSeasons.year, totalYears: simSeasons.totalYears,
+      })
+      .from(simSeasons)
+      .where(eq(simSeasons.companyId, company.id))
+      .orderBy(desc(simSeasons.createdAt))
+      .limit(12);
+
+    /* Which of them this person already has a chair in, so the button can say "open" rather than "join". */
+    const mine = live.length === 0 ? [] : await db
+      .select({ seasonId: simVentures.seasonId, ventureId: simVentures.id })
+      .from(simSeats)
+      .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+      .where(and(eq(simSeats.userId, req.user.id), inArray(simVentures.seasonId, live.map((x) => x.id))));
+    const ventureBySeason = new Map(mine.map((m) => [m.seasonId, m.ventureId]));
+
     res.json({
       company,
       role: membership?.role ?? null,
       powers: membership ? powersOf(membership) : [],
+      /** What this company holds of each kind of seat, so the panel can offer more. */
+      seats: seatsHeld(company as any),
+      seatPrices: SEAT_PRICE_CENTS,
+      seasons: live.map((sn) => ({
+        id: sn.id,
+        name: sn.name,
+        status: sn.status,
+        cadence: sn.cadence ?? "yearly",
+        year: sn.year,
+        totalYears: sn.totalYears,
+        /** One chair means a founder holding every desk. */
+        solo: (sn.seatCount ?? 5) <= 1,
+        seatCount: sn.seatCount ?? 5,
+        seatKind: seatKindFor(sn.origin, sn.cadence),
+        joinUrl: sn.inviteCode ? joinPathFor(sn.inviteCode) : null,
+        /** Set once this person is seated: the desk to walk back into. */
+        ventureId: ventureBySeason.get(sn.id) ?? null,
+      })),
       replayable: replayable.map((r) => ({
         seasonId: r.seasonId,
         name: r.name,

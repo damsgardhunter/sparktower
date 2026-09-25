@@ -42,13 +42,23 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { businessMoney } from "@shared/currency";
-import { TrainingTab } from "@/components/company/training-tab";
 import { SIM_GAMES } from "@/pages/project-sim";
+import { PERIOD_NAME } from "@shared/simulation/cadence";
 
 interface ProjectCompany {
   company: { id: string; name: string } | null;
   role?: string | null;
   powers?: string[];
+  /** What the project's company holds of each kind of seat. */
+  seats?: Record<string, number>;
+  seatPrices?: Record<string, number>;
+  /** The seasons this project has, newest first. */
+  seasons?: {
+    id: string; name: string; status: string; cadence: string;
+    year: number; totalYears: number;
+    solo: boolean; seatCount: number; seatKind: string;
+    joinUrl: string | null; ventureId: string | null;
+  }[];
   /** Markets this project already had written, each replayable for nothing. */
   replayable?: {
     seasonId: string; name: string; cadence: string; status: string;
@@ -158,35 +168,71 @@ function MarketSeason({ projectId }: { projectId: string }) {
   if (built) return <SeasonBuilt built={built} onDismiss={() => setBuilt(null)} />;
   if (!company) return <FromThisProject projectId={projectId} onBuilt={setBuilt} replayable={data?.replayable ?? []} />;
 
+  /*
+   * The project's own seasons, in the project's own tab.
+   *
+   * Building a season creates a company to hold it, which is an implementation
+   * detail of how seats and markets are stored — and it used to take over the
+   * screen. The moment a market was built, this panel switched to the
+   * company's training page: "a season for X's people", a link out to the
+   * company, and a list written for an HR administrator running an away day.
+   * Somebody who pressed "have Nova customise my season" for their own
+   * business was shown a staff training programme and a door out of their
+   * project.
+   *
+   * So the seasons are listed here instead, and the company is not mentioned.
+   * Nothing moved in the database: the same rows, read by the project that
+   * owns them.
+   */
   return (
     <div className="space-y-4" data-testid="simulations-panel">
-      <div className="flex items-center gap-2 rounded-xl nova-ring px-3 py-2 text-sm text-muted-foreground">
-        <Users className="h-4 w-4 text-primary shrink-0" />
-        <span className="flex-1">
-          {canRun
-            ? <>A season for {company.name}'s people — the same team as this project. Everyone here can join with the code.</>
-            : <>{company.name} runs these. You can join a season that's open; starting one needs the "run training seasons" power.</>}
-        </span>
-        <Link href={`/companies/${company.id}?tab=team`}>
-          <Button size="sm" variant="outline" data-testid="button-company-team">The team</Button>
-        </Link>
-      </div>
-      {/*
-        * Still offered once the company exists.
-        *
-        * Building a market creates the company, so this branch is where
-        * somebody lands the moment they have one — and it used to be the point
-        * at which the door back to "a market of my own" disappeared. Replaying
-        * what they already paid for lives here, which is where they will be
-        * standing when they want it.
-        */}
+      {(data?.seasons ?? []).length > 0 && (
+        <Card className="nova-ring">
+          <CardContent className="p-5 space-y-3">
+            <p className="text-sm font-medium">This project's seasons</p>
+            {(data?.seasons ?? []).map((sn) => (
+              <div key={sn.id} className="flex items-center gap-3 rounded-xl border p-3" data-testid={`season-${sn.id}`}>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-medium truncate">{sn.name}</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    {sn.solo ? "You, on your own — every desk" : `${sn.seatCount} seats`}
+                    {" · "}
+                    {sn.status === "running"
+                      ? `${(PERIOD_NAME as Record<string, { one: string }>)[sn.cadence]?.one ?? "Year"} ${sn.year} of ${sn.totalYears}`
+                      : sn.status === "forming" ? "Not started yet" : sn.status}
+                  </span>
+                </span>
+                {sn.ventureId
+                  ? <Link href={`/sim/${sn.ventureId}`}>
+                      <Button size="sm" data-testid={`button-open-${sn.id}`}>Open the desk <ArrowRight className="h-4 w-4 ml-1" /></Button>
+                    </Link>
+                  : sn.joinUrl
+                    ? <Link href={sn.joinUrl}>
+                        <Button size="sm" variant="outline" data-testid={`button-take-seat-${sn.id}`}>Take your seat</Button>
+                      </Link>
+                    : null}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {canRun && <FromThisProject projectId={projectId} onBuilt={setBuilt} replayable={data?.replayable ?? []} />}
+
       {/*
-        * The company page's own panel, not a copy of it. A second
-        * implementation of "start a season" is a second set of rules about who
-        * may, and they drift.
+        * More chairs, for the people this founder actually wants at the table.
+        * Only where somebody can act on it — being shown a price you have no
+        * power to pay is worse than not being shown one.
         */}
-      <TrainingTab companyId={company.id} canManage={canRun} />
+      {canRun && company && (
+        <BuySeats
+          companyId={company.id}
+          projectId={projectId}
+          held={data?.seats ?? {}}
+          prices={data?.seatPrices ?? {}}
+          seasons={data?.seasons ?? []}
+        />
+      )}
     </div>
   );
 }
@@ -462,6 +508,87 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
           The public market is five strangers taking one company's seats, with any empty seat filled a minute
           later. It costs nothing and starts now.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * More seats, several at a time, out of the balance.
+ *
+ * Seats were the one priced thing in the product that could only be bought
+ * with a card: a project with money on its account still had to go through
+ * Stripe to put a second person at its own table. The kind is not a choice
+ * offered here — it is whatever the seasons this project has actually need,
+ * because the four balances do not substitute for each other and picking the
+ * wrong one buys a seat that cannot be spent.
+ */
+function BuySeats({ companyId, projectId, held, prices, seasons }: {
+  companyId: string;
+  projectId: string;
+  held: Record<string, number>;
+  prices: Record<string, number>;
+  seasons: NonNullable<ProjectCompany["seasons"]>;
+}) {
+  /* The kind this project's newest season is played on, so the money lands where it is spent. */
+  const kind = seasons[0]?.seatKind ?? "nova";
+  const [seats, setSeats] = useState(1);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const price = prices[kind] ?? 0;
+
+  const buy = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/simulation-seats/buy`, { seats, kind }),
+    onSuccess: async (res: any) => {
+      const body = await res.json();
+      setError(null);
+      setDone(`${body.seats} more ${body.seats === 1 ? "seat" : "seats"} — the table now holds ${body.held}.`);
+      queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/company`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/nova/wallet"] });
+    },
+    onError: (e: unknown) => { setDone(null); setError(errorText(e, "Couldn't buy those seats.")); },
+  });
+
+  return (
+    <Card className="nova-ring" data-testid="buy-seats">
+      <CardContent className="p-5 space-y-3">
+        <div>
+          <p className="text-sm font-medium">Bring someone else to the table</p>
+          <p className="text-sm text-muted-foreground">
+            A seat is one person for the life of a season, and it stays with this project for every season
+            after it. You hold {held[kind] ?? 0}.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm" variant="outline" aria-label="One fewer seat"
+              disabled={seats <= 1 || buy.isPending}
+              onClick={() => setSeats((n) => Math.max(1, n - 1))}
+              data-testid="button-seats-fewer"
+            >–</Button>
+            <span className="w-12 text-center text-sm font-medium tabular-nums" data-testid="text-seats">{seats}</span>
+            <Button
+              size="sm" variant="outline" aria-label="One more seat"
+              disabled={seats >= 250 || buy.isPending}
+              onClick={() => setSeats((n) => Math.min(250, n + 1))}
+              data-testid="button-seats-more"
+            >+</Button>
+          </div>
+          <Button
+            size="sm" className="nova-hover-glow"
+            disabled={buy.isPending}
+            onClick={() => buy.mutate()}
+            data-testid="button-buy-seats"
+          >
+            {buy.isPending
+              ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Buying…</>
+              : <>Buy {seats} {seats === 1 ? "seat" : "seats"} — ${((seats * price) / 100).toFixed(2)}</>}
+          </Button>
+          <span className="text-xs text-muted-foreground">Comes off your balance.</span>
+        </div>
+        {done && <p className="text-sm text-primary" data-testid="text-seats-bought">{done}</p>}
+        {error && <p className="text-sm text-destructive" data-testid="text-seats-error">{error}</p>}
       </CardContent>
     </Card>
   );

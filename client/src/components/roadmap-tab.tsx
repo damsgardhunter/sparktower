@@ -28,7 +28,7 @@ import {
   Loader2, Map, Sparkles, RefreshCw, Flag, CheckCircle2, Circle,
   CircleDot, Clock, Users2, Target, Compass, Hammer, X, Pencil, ChevronDown, ChevronUp,
 } from "lucide-react";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import type { ProjectRoadmap, RoadmapPhase } from "@shared/schema";
 
 interface RoadmapResponse {
@@ -296,7 +296,21 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
   }
 
   const roadmap = data?.roadmap;
-  const notEnoughCredits = !isUnlimited && creditsRemaining < CREDIT_COSTS.roadmapGeneration;
+  /*
+   * Building a roadmap is a priced outcome, not a credit spend.
+   *
+   * `CHARGE_FOR.roadmapGeneration` is "roadmap": three dollars off the
+   * balance, taken by `requireCredits` at the route, and it never touches the
+   * month's free Nova actions. Comparing those free actions against
+   * `CREDIT_COSTS.roadmapGeneration` from the retired subscription pricing
+   * disabled this button for anybody who had spent them on something else,
+   * with money sitting on the account — the same fault as the codebase audit,
+   * which is how this one was found.
+   *
+   * Left ungated: a 402 opens the payment dialog with the price, the balance
+   * and a way to pay. A dead button explains nothing and offers nothing.
+   */
+  const roadmapPrice = formatMoney(OUTCOME_PRICE_CENTS.roadmap);
 
   if (!roadmap) {
     return (
@@ -356,20 +370,16 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
               <p className="text-xs text-muted-foreground">{ROADMAP_DEPTHS[depth].hint}</p>
             </div>
 
-            {notEnoughCredits && (
-              <p className="text-xs text-destructive">
-                Roadmap generation costs {CREDIT_COSTS.roadmapGeneration} credits and you have {creditsRemaining}.
-              </p>
-            )}
-
             <Button
               className="w-full gap-2"
-              disabled={!goal.trim() || generateMutation.isPending || notEnoughCredits || !isOwner}
+              disabled={!goal.trim() || generateMutation.isPending || !isOwner}
               onClick={() => generateMutation.mutate()}
               data-testid="button-generate-roadmap"
             >
               {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {generateMutation.isPending ? "Nova is planning..." : "Build my roadmap"}
+              {/* What it costs, in the money it is actually charged in. */}
+              {!generateMutation.isPending && <span className="text-[11px] opacity-80">· {roadmapPrice}</span>}
             </Button>
             {!isOwner && <p className="text-xs text-muted-foreground text-center">Only the project owner can build the roadmap.</p>}
           </CardContent>

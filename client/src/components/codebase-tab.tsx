@@ -18,7 +18,7 @@ import {
   Route as RouteIcon, Database, FlaskConical, Check, Terminal, ArrowRight, History,
   HelpCircle,
 } from "lucide-react";
-import { CREDIT_COSTS } from "@shared/plans";
+import { OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
 import { AuditCatchUp, PathChanges, refreshAfterCatchUp } from "@/components/audit-catchup";
 import { SecurityReportPanel } from "@/components/security-report";
@@ -213,7 +213,7 @@ const change = (before: number | null | undefined, after: number | null | undefi
 export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId: string; repoUrl?: string | null; isOwner?: boolean }) {
   const { toast } = useToast();
   const confirmPurchase = useConfirmPurchase();
-  const { can, creditsRemaining, isUnlimited } = useEntitlements();
+  const { can } = useEntitlements();
   const { uploadFile, isUploading } = useUpload();
 
   const [url, setUrl] = useState(repoUrl || "");
@@ -232,7 +232,24 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const repoInput = useRef<HTMLInputElement>(null);
 
   const isBuilder = can("aiMilestones");
-  const notEnoughCredits = !isUnlimited && creditsRemaining < CREDIT_COSTS.codeAudit;
+  /*
+   * An audit is not paid for in credits, and never was in this pricing.
+   *
+   * `CHARGE_FOR.codeAudit` is a priced outcome: five dollars off the balance,
+   * taken by `requireCredits` at the route. It does not touch the month's free
+   * Nova actions at all. This gate compared those free actions against
+   * `CREDIT_COSTS.codeAudit` (8) from the retired subscription model, so the
+   * button went dead once somebody had spent eighteen of their twenty-five
+   * free actions on anything — a different budget entirely — however much
+   * money was on the account. Reported as "I have credits and funds and cannot
+   * audit", which is exactly what it did.
+   *
+   * Nothing replaces it. A priced outcome that cannot be afforded answers 402
+   * and the payment dialog opens on it, with the price, the balance and a way
+   * to pay in one tap. Disabling the button instead tells somebody they cannot
+   * do it, does not say why, and offers no way to fix it.
+   */
+  const auditPrice = formatMoney(OUTCOME_PRICE_CENTS.codeAudit);
 
   const describeError = (err: any, fallback: string) => {
     const raw = err?.message || "";
@@ -439,16 +456,16 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     );
   } else if (url.trim()) {
     primary = (
-      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={runRepo} data-testid="button-primary-audit">
+      <Button className="w-full sm:w-auto gap-2" onClick={runRepo} data-testid="button-primary-audit">
         <ScanSearch className="h-4 w-4" />{newest ? "Read the code again" : "Run an audit"}
-        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+        <span className="text-[11px] opacity-80">· {auditPrice}</span>
       </Button>
     );
   } else {
     primary = (
-      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-primary-zip">
+      <Button className="w-full sm:w-auto gap-2" onClick={() => zipInput.current?.click()} data-testid="button-primary-zip">
         <Upload className="h-4 w-4" />Upload a new zip
-        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+        <span className="text-[11px] opacity-80">· {auditPrice}</span>
       </Button>
     );
   }
@@ -527,7 +544,6 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
           <div className="sm:pl-5 flex flex-col justify-center gap-1">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:hidden">Do now</p>
             {primary}
-            {notEnoughCredits && !running && <p className="text-[11px] text-destructive">Needs {CREDIT_COSTS.codeAudit} credits · you have {creditsRemaining}</p>}
           </div>
         </div>
 
@@ -593,9 +609,9 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 <Button variant="outline" className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || checkMutation.isPending} onClick={() => checkMutation.mutate()} data-testid="button-check-repo">
                   {checkMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Check
                 </Button>
-                <Button className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || running || notEnoughCredits} onClick={runRepo} data-testid="button-audit-repo">
+                <Button className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || running} onClick={runRepo} data-testid="button-audit-repo">
                   {auditMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
-                  Audit <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+                  Audit <span className="text-[11px] opacity-80">· {auditPrice}</span>
                 </Button>
               </div>
             </div>
@@ -613,7 +629,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
               <button type="button" className="text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2" onClick={() => setTokenOpen((o) => !o)} data-testid="button-toggle-token">
                 {tokenOpen ? "Hide token" : "Private repo?"}
               </button>
-              <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" disabled={running || notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-upload-zip">
+              <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" disabled={running} onClick={() => zipInput.current?.click()} data-testid="button-upload-zip">
                 {isUploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}Upload a .zip instead
               </button>
             </div>
