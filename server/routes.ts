@@ -820,8 +820,22 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
       void notifyWatchersOfNewProject(project.id);
-      // The founder badge: a profile says "I built this" the moment the project exists.
-      void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
+      /*
+       * The founder badge: a profile says "I built this" the moment the
+       * project exists.
+       *
+       * Awaited, because that promise is not kept by an insert the response
+       * can outrun. Fired and forgotten, the badge landed some milliseconds
+       * after the 200 — so anything reading straight back, a test or a client
+       * that navigates to the new project, saw no badge and there was nothing
+       * to wait for. It failed intermittently and looked like flakiness.
+       *
+       * Cheap enough to wait for: two selects and an insert per missing
+       * project, and explicitly no model call — the artwork is drawn later,
+       * when the creator asks for it. Still caught rather than thrown, because
+       * a decoration must never fail the creation it decorates.
+       */
+      await ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
         authorId: ownerId,
         projectId: project.id,
