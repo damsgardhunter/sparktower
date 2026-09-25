@@ -92,12 +92,45 @@ const FRAGILE = {
   grossMargin: 0.3, ownerHours: 60, daysToGetPaid: 60, taxRate: 0.2,
 };
 
+/**
+ * A web app with sixty thousand behind it, and the same business if it sold
+ * something physical.
+ *
+ * Identical money in, money out and cash — the only difference is what a sale
+ * costs to deliver. Software keeps most of it; a business carrying stock or
+ * property keeps a quarter. That is the shape the engine has to respect for
+ * this to be worth anything to somebody building software on a small runway,
+ * and the two are deliberately the same in every other respect so nothing else
+ * can explain a difference between them.
+ */
+const SOFTWARE = {
+  monthlyRevenue: 12_000, monthlyCosts: 9_000, cash: 60_000,
+  debt: 0, interestRate: 0, debtRepayment: 0, growth: 0.02,
+  grossMargin: 0.85, ownerHours: 40, daysToGetPaid: 7, taxRate: 0.2,
+};
+const CARRIES_STOCK = { ...SOFTWARE, grossMargin: 0.25 };
+
+/** One hire who also brings work in — the commonest question either would ask. */
+const HIRE = {
+  kind: "hire", label: "An engineer who also sells", people: 1,
+  monthlyCostEach: 4_500, monthlyRevenueEach: 6_000, rampMonths: 3, startMonth: 1,
+};
+
 const setBaseline = async (api: any, projectId: string, numbers: Record<string, number>) => {
   const res = await api.put(`/api/projects/${projectId}/decision-sim/baseline`, {
     data: { numbers, overridden: Object.keys(numbers) },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
 };
+
+/** Put the same decision to the engine again with levers we choose, not the model's. */
+async function rerunWith(api: any, projectId: string, scenarioId: string, levers: unknown[]) {
+  const res = await api.post(`/api/projects/${projectId}/decision-sim/scenarios/${scenarioId}/rerun`, {
+    data: { levers, months: 24 },
+  });
+  expect(res.ok(), await res.text()).toBeTruthy();
+  return (await res.json()).scenario;
+}
 
 /** The most recent scenario on a project, as the client reads it. */
 async function latestScenario(api: any, projectId: string) {
@@ -234,4 +267,73 @@ test("answers from the owner's own numbers, and keeps them", async ({ browser })
   expect(read.baseline.monthlyRevenue).toBe(COMFORTABLE.monthlyRevenue);
   expect(read.baseline.monthlyCosts).toBe(COMFORTABLE.monthlyCosts);
   expect(read.notReady, "a saved baseline means it is ready to answer").toBeFalsy();
+});
+
+test("a web app's low unit cost reaches the forecast, and a heavier one's does not", async ({ browser }) => {
+  test.setTimeout(300_000);
+  const app = await ownerIn(browser, "203.0.113.84", "Rae");
+  const shop = await ownerIn(browser, "203.0.113.85", "Sid");
+
+  const appProject = await projectFor(app.api, `Web App ${stamp()}`);
+  const shopProject = await projectFor(shop.api, `Carries Stock ${stamp()}`);
+  await setBaseline(app.api, appProject, SOFTWARE);
+  await setBaseline(shop.api, shopProject, CARRIES_STOCK);
+
+  const question = "Should I hire an engineer who can also bring work in?";
+  await askOnThePage(await app.context.newPage(), appProject, question);
+  await askOnThePage(await shop.context.newPage(), shopProject, question);
+
+  /*
+   * Re-run both on one identical hire, so the levers are not the model's guess
+   * at the question but the same decision put to two different businesses.
+   */
+  const appRun = await rerunWith(app.api, appProject, (await latestScenario(app.api, appProject)).id, [HIRE]);
+  const shopRun = await rerunWith(shop.api, shopProject, (await latestScenario(shop.api, shopProject)).id, [HIRE]);
+
+  /*
+   * Doing nothing is identical, because margin only applies to revenue a
+   * decision brings in — there is none in doing nothing. That is the control:
+   * if these two ever differ, something other than the decision is moving.
+   */
+  expect(Math.round(appRun.result.without.endCash))
+    .toBe(Math.round(shopRun.result.without.endCash));
+
+  /*
+   * And the same hire is worth materially more to the business that keeps 85p
+   * of every extra pound than to the one that keeps 25p. A forecast that
+   * ignored unit cost would hand both the same number, and a founder on a
+   * sixty-thousand runway would be planning off a figure built for a
+   * different kind of business.
+   */
+  expect(
+    appRun.result.with.likely.endCash,
+    "the software business should be left better off by the same hire",
+  ).toBeGreaterThan(shopRun.result.with.likely.endCash);
+});
+
+test("changing a decision moves the forecast, and leaves the rest of it alone", async ({ browser }) => {
+  test.setTimeout(300_000);
+  const owner = await ownerIn(browser, "203.0.113.86", "Tess");
+  const projectId = await projectFor(owner.api, `Changed Mind ${stamp()}`);
+  await setBaseline(owner.api, projectId, SOFTWARE);
+
+  await askOnThePage(await owner.context.newPage(), projectId, "Should I hire an engineer who can also bring work in?");
+  const scenarioId = (await latestScenario(owner.api, projectId)).id;
+
+  const cheaper = await rerunWith(owner.api, projectId, scenarioId, [HIRE]);
+  const dearer = await rerunWith(owner.api, projectId, scenarioId, [
+    { ...HIRE, monthlyCostEach: HIRE.monthlyCostEach * 2 },
+  ]);
+
+  /*
+   * The decision got dearer, so the decision's own outcome got worse. Nothing
+   * else about the business changed, so the do-nothing run must not have
+   * moved a penny — that is what "the correct part of the forecast" means, and
+   * a forecast that shifted its baseline when a lever changed would be
+   * answering a different question each time it was asked.
+   */
+  expect(dearer.result.with.likely.endCash,
+    "paying twice as much for the same hire should leave less").toBeLessThan(cheaper.result.with.likely.endCash);
+  expect(Math.round(dearer.result.without.endCash),
+    "the business you already had did not change").toBe(Math.round(cheaper.result.without.endCash));
 });
