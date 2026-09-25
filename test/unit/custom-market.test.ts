@@ -355,9 +355,32 @@ describe("what a written market calls the things it sells", () => {
     for (const t of templatesFor(m)) expect(t.name).not.toBe("Nonsense");
   });
 
-  it("falls back to the generic slots when the model said nothing usable", () => {
-    expect(templatesFor(named([])).map((t) => t.name))
-      .toEqual(templatesFor(buildCustomMarket(sane, "f")!).map((t) => t.name));
+  /*
+   * A season already under way cannot be re-written — the market is the thing
+   * somebody is playing — so a market built before Nova named anything still
+   * has to stop offering software a retail shelf. Derived from the voice every
+   * market already carries, which costs nothing and asks nobody.
+   */
+  it("says the slots in its own words when nobody named them", () => {
+    const m = buildCustomMarket({ ...sane, voice: { ...sane.voice, capacity: "consulting rooms", customers: "clinics" } }, "f")!;
+    const names = templatesFor(m).map((t) => t.name);
+    expect(names, "retail's words are gone").not.toContain("Retail shelf agreement");
+    expect(names).toContain("More consulting rooms");
+    expect(names.some((n) => n.includes("clinics")), "and it knows who the customers are").toBe(true);
+  });
+
+  /* A patent is a patent in every trade; assembling one out of tokens is worse English. */
+  it("leaves the slots that were never wrong alone", () => {
+    const names = templatesFor(buildCustomMarket(sane, "f")!).map((t) => t.name);
+    expect(names).toContain("Core process patent");
+    expect(names).toContain("Three-year ambassador");
+  });
+
+  it("prefers what Nova wrote over what it would have derived", () => {
+    const m = named([{ kind: "facility", name: "Another cloud region", blurb: "Room to serve more." }]);
+    const names = templatesFor(m).map((t) => t.name);
+    expect(names).toContain("Another cloud region");
+    expect(names.filter((n) => n.startsWith("More ")), "the derived one gave way").toHaveLength(0);
   });
 
   /* Priced at the size of the market, not at a corporation's. */

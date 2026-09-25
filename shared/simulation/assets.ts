@@ -193,6 +193,46 @@ const SLOTS: AssetTemplate[] = [
 const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 /**
+ * The nine slots said in this market's own words, without asking a model.
+ *
+ * The generic names above are retail's — shelves, carriers, fulfilment lines —
+ * and they were shown to every market that had no catalogue entry, which is
+ * every market Nova has ever written. A founder rehearsing software was
+ * offered a retail shelf agreement for a product with no shelves.
+ *
+ * Nova names these at build time now, but that only helps markets built after
+ * it, and a season already under way cannot be re-written without throwing
+ * away the market somebody is playing. Every market already carries the words
+ * for this — `voice` exists precisely so a screen can say "builders" rather
+ * than "customers" — so the fallback is derived rather than generic. Free,
+ * deterministic, and it improves the catalogue markets that have no entry too.
+ *
+ * Only the names that were actually wrong. A patent is a patent in every
+ * trade, and an ambassador is an ambassador; replacing those with something
+ * assembled out of tokens would be worse English for no gain.
+ */
+function inThisMarketsWords(slot: AssetTemplate, i: number, v: Niche["voice"]): AssetTemplate {
+  const cap = v.capacity || "capacity";
+  const many = v.customers || "customers";
+  const places = v.places || "regions";
+  switch (i) {
+    case 0: return { ...slot, name: `Somebody else's route to ${many}`,
+      blurb: `Their way in, not yours. More ${many} can reach you without you building anything.` };
+    case 1: return { ...slot, name: `Bundled in where ${many} already are`,
+      blurb: "You arrive already there. Expensive, short, and very hard to argue with while it lasts." };
+    case 5: return { ...slot, name: `More ${cap}`,
+      blurb: `Room to serve more ${many}, and somewhere to answer them from.` };
+    case 6: return { ...slot, name: `Automating how ${many} are served`,
+      blurb: `Cuts what every ${v.unit || "sale"} costs, for as long as you keep it running.` };
+    case 7: return { ...slot, name: `An endorsement ${many} already trust`,
+      blurb: "Borrowed credibility with the people who care most about it." };
+    case 8: return { ...slot, name: `A name known across the ${places}`,
+      blurb: "Quieter than a celebrity, and it does not have opinions in public." };
+    default: return slot;
+  }
+}
+
+/**
  * This market's things for sale: the slots' numbers under this market's words.
  *
  * Falls back to a slot's own wording when a market has no catalogue, or when
@@ -212,7 +252,7 @@ export function templatesFor(niche: Niche): AssetTemplate[] {
    */
   const catalogue = CATALOGUES[niche.id];
   const written = niche.assets;
-  if (!catalogue && !written) return SLOTS;
+  if (!catalogue && !written) return SLOTS.map((slot, i) => inThisMarketsWords(slot, i, niche.voice));
 
   /*
    * A written market's entries are taken by kind, in order, rather than by
@@ -234,7 +274,8 @@ export function templatesFor(niche: Niche): AssetTemplate[] {
     const mine = queue.get(slot.kind)?.shift();
     if (mine) return { ...slot, name: mine.name, blurb: mine.blurb || slot.blurb };
     const entry = catalogue?.[i];
-    return entry && entry.kind === slot.kind ? { ...slot, name: entry.name, blurb: entry.blurb } : slot;
+    if (entry && entry.kind === slot.kind) return { ...slot, name: entry.name, blurb: entry.blurb };
+    return inThisMarketsWords(slot, i, niche.voice);
   });
 }
 
