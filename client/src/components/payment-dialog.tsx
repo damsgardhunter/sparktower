@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { errorText } from "@/lib/api-error";
 import {
-  formatMoney, priceOf, OUTCOME_COPY, PAY_ENDPOINTS,
+  formatMoney, priceOf, OUTCOME_COPY, outcomeCopy, PAY_ENDPOINTS,
   type ActionPrice, type NovaActionId, type PaymentRequiredBody, type PricedOutcomeId, type Wallet,
 } from "@shared/plans";
 import { cn } from "@/lib/utils";
@@ -321,7 +321,7 @@ export function PaymentDialog() {
                 */}
               {busy
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</>
-                : `Get ${(body.outcome ? OUTCOME_COPY[body.outcome].name : body.label).toLowerCase()} — ${body.price?.display ?? ""}`.trim()}
+                : `Get ${(outcomeCopy(body.outcome)?.name ?? body.label).toLowerCase()} — ${body.price?.display ?? ""}`.trim()}
             </Button>
           )}
 
@@ -387,7 +387,12 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
        */
       if (opts?.projectId && buildPasses?.includes(opts.projectId)) return Promise.resolve(true);
       return new Promise<boolean>((resolve) => {
-        setPending({ price, title: opts?.title ?? OUTCOME_COPY[price.kind as PricedOutcomeId].name, detail: opts?.detail, resolve });
+        /*
+         * `price.kind` is not always a priced outcome — `priceOf` returns
+         * "free" and "small" too — so this used to cast it and crash on the
+         * miss. The action's own name is the honest fallback.
+         */
+        setPending({ price, title: opts?.title ?? outcomeCopy(price.kind)?.name ?? price.action, detail: opts?.detail, resolve });
       });
     },
     [buildPasses],
@@ -408,7 +413,7 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
             <DialogHeader>
               <DialogTitle>{pending.title}</DialogTitle>
               <DialogDescription>
-                {pending.detail ?? OUTCOME_COPY[pending.price.kind as PricedOutcomeId].blurb}
+                {pending.detail ?? outcomeCopy(pending.price.kind)?.blurb}
               </DialogDescription>
             </DialogHeader>
 
