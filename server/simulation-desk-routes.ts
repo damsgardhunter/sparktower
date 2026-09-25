@@ -738,6 +738,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
          * hundredth of the catalogue's, so a projection without it overstates
          * every fixed cost on the screen by that factor.
          */
+        /* The build in flight, so the desk's projected room is the engine's. */
+        buildFrom: company.buildFrom,
+        buildTo: company.buildTo,
         officers: officersOf(company),
         scale: company.scale ?? 1,
       },

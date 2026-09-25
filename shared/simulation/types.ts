@@ -416,6 +416,16 @@ export interface Company {
    * price and lose nobody it already had. Absent on a world written before
    * this existed, which reads as "no change" and is the safe answer.
    */
+  /**
+   * A capacity build in flight: where it started, and what it is for.
+   *
+   * Kept so each period adds the same slice of the original gap. Without it
+   * the build closed a quarter of whatever was left each quarter and
+   * approached its target without ever arriving — a year of asking for 1,000
+   * from 168 reached 737. See `capacityBuild`.
+   */
+  buildFrom?: number;
+  buildTo?: number;
   priceWas?: number;
   /** Seats currently filled. A team that fires its CMO pays one fewer salary and loses the lever. */
   seats: Role[];

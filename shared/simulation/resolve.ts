@@ -1067,6 +1067,9 @@ export function resolveYear(
       price,
       /** Read by the market to tell a price rise from a high price. */
       priceWas,
+      /* The build in flight, so next period adds the same slice. See `capacityBuild`. */
+      buildFrom: build.buildFrom,
+      buildTo: build.buildTo,
       capacity,
       brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand) * hBrand - decay.brand),
       /*

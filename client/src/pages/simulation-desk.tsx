@@ -118,6 +118,9 @@ interface Desk {
     pipelineLater?: number; brandPipeline?: number; staff?: number;
     /** The seats the company still has; a dissolved one is gone from here. */
     seats?: Role[];
+    /** A capacity build in flight, so the projected room matches the engine's. */
+    buildFrom?: number;
+    buildTo?: number;
     /** How many of those chairs are actually paid for. One, for a solo founder holding all five. */
     officers?: number;
     /** The size of this company's market, which every fixed cost is charged at. */
@@ -902,7 +905,7 @@ export default function SimulationDeskPage() {
              * asking for ten thousand seats looked like it did nothing.
              */
             capacityNext={capacityBuild(
-              { capacity: c.capacity },
+              { capacity: c.capacity, buildFrom: c.buildFrom, buildTo: c.buildTo },
               Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity),
               1 / (period.perYear ?? 1),
             ).next + (c.assetCapacity ?? 0)}

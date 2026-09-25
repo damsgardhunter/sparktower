@@ -27,6 +27,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { capacityBuild } from "@shared/simulation/lag";
 import { totalPeriods } from "@shared/simulation/cadence";
 import { seasonOver } from "@shared/simulation/season";
+import { capacityBuild } from "@shared/simulation/lag";
 
 describe("how often a table decides", () => {
   it("is a year, a quarter or a month, and nothing else", () => {
@@ -413,5 +414,67 @@ describe("how long a season is", () => {
     expect(year, "period five of sixteen is not past the end").toBeLessThanOrEqual(total);
     expect(seasonOver(year, total)).toBe(false);
     expect(seasonOver(total + 1, total), "and the end is still the end").toBe(true);
+  });
+});
+
+/**
+ * "Building takes a year" has to mean a year.
+ *
+ * `capacityBuild` was `current + (wanted - current) * per`, recomputed each
+ * period against a capacity that had already moved — so every quarter closed a
+ * quarter of what was *left* of the gap and the build approached its target
+ * without ever arriving. Asking for 1,000 from 168 gave 376, then 532, 649,
+ * 737: after a full year, 74% of what was asked for, and 98% only in the third
+ * year. The lever's own sentence said a year and meant it; the arithmetic was
+ * Zeno's, and a founder reported it as capacity they could not raise.
+ */
+describe("how long building room actually takes", () => {
+  const run = (from: number, target: number, periods: number, howMany: number) => {
+    let co: { capacity: number; buildFrom?: number; buildTo?: number } = { capacity: from };
+    const seen: number[] = [];
+    for (let i = 0; i < howMany; i += 1) {
+      const b = capacityBuild(co, target, 1 / periods);
+      co = { capacity: b.next, buildFrom: b.buildFrom, buildTo: b.buildTo };
+      seen.push(co.capacity);
+    }
+    return seen;
+  };
+
+  it("arrives in four quarters, in equal steps", () => {
+    expect(run(168, 1_000, 4, 4)).toEqual([376, 584, 792, 1_000]);
+  });
+
+  it("arrives in twelve months, and in one year", () => {
+    expect(run(0, 1_200, 12, 12).at(-1)).toBe(1_200);
+    expect(run(168, 1_000, 1, 1)).toEqual([1_000]);
+  });
+
+  it("does not overshoot once it has arrived", () => {
+    expect(run(168, 1_000, 4, 6).slice(4)).toEqual([1_000, 1_000]);
+  });
+
+  /* Changing your mind starts a new build from wherever you have got to. */
+  it("starts again when the target changes", () => {
+    let co: { capacity: number; buildFrom?: number; buildTo?: number } = { capacity: 0 };
+    for (let i = 0; i < 2; i += 1) {
+      const b = capacityBuild(co, 1_000, 1 / 4);
+      co = { capacity: b.next, buildFrom: b.buildFrom, buildTo: b.buildTo };
+    }
+    expect(co.capacity, "halfway to the first target").toBe(500);
+    const next = capacityBuild(co, 2_000, 1 / 4);
+    expect(next.next, "a quarter of the new gap, from here").toBe(500 + Math.round((2_000 - 500) / 4));
+  });
+
+  /* And a cut is still immediate, and abandons what was being built. */
+  it("cuts at once and drops the build", () => {
+    const cut = capacityBuild({ capacity: 800, buildFrom: 168, buildTo: 1_000 }, 300, 1 / 4);
+    expect(cut.next).toBe(300);
+    expect(cut.now).toBe(300);
+    expect(cut.buildTo).toBeUndefined();
+  });
+
+  /* None of it lands in the period it is asked for. */
+  it("opens nothing in the period you ask", () => {
+    expect(capacityBuild({ capacity: 168 }, 1_000, 1 / 4).now).toBe(168);
   });
 });

@@ -134,17 +134,60 @@ export interface CapacityBuild {
   next: number;
   /** Room ordered this year that is not open yet. */
   building: number;
+  /**
+   * The build in flight: what it started from and what it is for.
+   *
+   * Carried on the company so each period adds the same slice of the original
+   * gap rather than a slice of what is left. Undefined once the build has
+   * arrived, or when there is nothing being built.
+   */
+  buildFrom?: number;
+  buildTo?: number;
 }
 
-export function capacityBuild(company: Pick<Company, "capacity">, target: number, per = 1): CapacityBuild {
+export function capacityBuild(
+  company: Pick<Company, "capacity"> & { buildFrom?: number; buildTo?: number },
+  target: number,
+  per = 1,
+): CapacityBuild {
   const current = Math.max(0, Math.round(company.capacity));
   const wanted = Math.max(0, Math.round(target));
+
+  // A cut is immediate, and it abandons whatever was being built.
+  if (wanted <= current) {
+    return { now: wanted, next: wanted, building: 0, buildFrom: undefined, buildTo: undefined };
+  }
+
+  /*
+   * A quarter of the *original* gap each quarter, not a quarter of what is
+   * left of it.
+   *
+   * It used to be `current + (wanted - current) * per`, recomputed every
+   * period against a capacity that had already moved — so each quarter closed
+   * a quarter of the remaining gap and the build approached its target
+   * without ever arriving. Asking for 1,000 from 168 gave 376, then 532, then
+   * 649, then 737: after a full year, 74% of what was asked for, and 98% only
+   * in the third year. The lever said "building takes a year" and meant it;
+   * the arithmetic was Zeno's.
+   *
+   * So the build remembers where it started. While the target is unchanged the
+   * step stays the same size, and four quarters of a quarter is the whole
+   * thing. Changing the target starts a new build from wherever the company
+   * has got to, which is what somebody changing their mind means.
+   */
+  const continuing = company.buildTo === wanted && company.buildFrom !== undefined;
+  const from = continuing ? Math.max(0, Math.round(company.buildFrom!)) : current;
+  const step = Math.max(1, Math.round((wanted - from) * per));
+  const next = Math.min(wanted, current + step);
+
   return {
-    // A cut is immediate; growth waits a year — a quarter opens a quarter of it.
-    now: Math.min(current, wanted),
-    // Whole units of room, for the same reason — and because capacity feeds
-    // the spill pass, where a fractional seat became a fractional customer.
-    next: wanted > current ? Math.round(current + (wanted - current) * per) : wanted,
+    now: current,
+    // Whole units of room, because capacity feeds the spill pass, where a
+    // fractional seat became a fractional customer.
+    next,
     building: Math.max(0, wanted - current),
+    // Carried while the build is still running, so the step keeps its size.
+    buildFrom: next < wanted ? from : undefined,
+    buildTo: next < wanted ? wanted : undefined,
   };
 }
