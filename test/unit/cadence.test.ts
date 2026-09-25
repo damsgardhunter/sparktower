@@ -24,6 +24,7 @@ import { ROLES, type Company, type World } from "@shared/simulation/types";
 import { PERIOD_NAME } from "@shared/simulation/cadence";
 import { LEVER_FIELDS, speak } from "@shared/simulation/levers";
 import { nicheById } from "@shared/simulation/niches";
+import { capacityBuild } from "@shared/simulation/lag";
 
 describe("how often a table decides", () => {
   it("is a year, a quarter or a month, and nothing else", () => {
@@ -341,5 +342,46 @@ describe("what a season calls one decision", () => {
     for (const o of [...(q.options ?? []), ...(q.choices ?? [])]) {
       expect(`${o.label} ${o.help ?? ""}`).not.toMatch(/\byear\b/);
     }
+  });
+});
+
+/**
+ * The one sentence on the desk that needs both words at once.
+ *
+ * Building capacity takes a *year* however often the table decides, and what
+ * opens each *quarter* is a quarter of it. `capacityBuild` caps what you can
+ * serve now at what you already had and adds only (wanted − current)/periods
+ * for next time, so asking for ten thousand seats in a quarterly season opens
+ * about a quarter of the increase a quarter later and none of it immediately.
+ * The lever never said so, which made correct arithmetic read as a broken
+ * number: ask for 10,000, see 1,500, conclude the game is lying.
+ */
+describe("what the capacity lever admits about the wait", () => {
+  const niche = nicheById("dating_apps")!;
+  const cap = LEVER_FIELDS.coo.find((f) => f.id === "capacityTarget")!;
+  const help = (cadence: "yearly" | "quarterly" | "monthly", perYear: number) =>
+    speak(cap, niche.voice, { ...PERIOD_NAME[cadence], perYear }).help ?? "";
+
+  it("says building takes a year, whatever the cadence is", () => {
+    for (const [c, p] of [["yearly", 1], ["quarterly", 4], ["monthly", 12]] as const) {
+      expect(help(c, p), c).toContain("Building takes a year");
+    }
+  });
+
+  it("says how much of it arrives each period", () => {
+    expect(help("quarterly", 4)).toContain("a quarter of any increase opens each quarter");
+    expect(help("monthly", 12)).toContain("a twelfth of any increase opens each month");
+  });
+
+  /* And the arithmetic it describes is the arithmetic that runs. */
+  it("matches what capacityBuild actually does", () => {
+    const built = capacityBuild({ capacity: 157 }, 10_000, 1 / 4);
+    expect(built.now, "none of it in the period you ask").toBe(157);
+    expect(built.next).toBe(Math.round(157 + (10_000 - 157) / 4));
+  });
+
+  /* Only this lever, and only its own sentence — the swap must not eat it. */
+  it("is not itself turned into 'takes a quarter' by the period swap", () => {
+    expect(help("quarterly", 4)).not.toContain("Building takes a quarter");
   });
 });

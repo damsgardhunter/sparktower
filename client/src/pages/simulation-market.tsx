@@ -38,6 +38,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText, isYearClosing } from "@/lib/api-error";
 import { Loader2, Store, Gavel, Package, Info } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
+import { DeskCurrency, DeskPeriod, lastsFor, useMoney, usePeriod } from "@/components/sim/desk-currency";
 
 interface Effect { brand?: number; quality?: number; service?: number; capacity?: number; unitCost?: number }
 interface Listing {
@@ -50,6 +51,10 @@ interface Holding {
 }
 interface Market {
   year: number;
+  /** What one decision is called here, and how many make a year. */
+  period?: { one: string; many: string; of: string };
+  periods?: number;
+  currency?: string;
   yourRole: string;
   funds: number;
   listings: Listing[];
@@ -57,8 +62,7 @@ interface Market {
   selling: { id: string; name: string; reserve: number; status: string }[];
 }
 
-const compact = (n: number) =>
-  n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+
 
 /** What an asset does, in the words a player would use rather than as a field dump. */
 function describe(effect: Effect): string[] {
@@ -95,12 +99,18 @@ export default function SimulationMarketPage() {
   }
 
   const isCeo = market.yourRole === "ceo";
+  /* Read off the payload: this component renders the providers below it. */
+  const period = usePeriod(market.period ? { ...market.period, perYear: market.periods } : undefined);
+  const { compact } = useMoney(market.currency as any);
+  const Period = period.one.charAt(0).toUpperCase() + period.one.slice(1);
 
   return (
+    <DeskCurrency.Provider value={(market.currency as any) ?? "USD"}>
+    <DeskPeriod.Provider value={period}>
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
       <SimHeader icon={Store} title="The market" onBack={() => navigate(`/simulation/${id}`)}>
         <p className="text-sm text-muted-foreground mt-1">
-          Year {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the year resolves.
+          {Period} {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the {period.one} resolves.
           The highest offer over the reserve takes it and pays what they bid.
         </p>
         {!isCeo && (
@@ -151,10 +161,14 @@ export default function SimulationMarketPage() {
         </CardContent>
       </Card>
     </div>
+    </DeskPeriod.Provider>
+    </DeskCurrency.Provider>
   );
 }
 
 function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; ventureId: string; funds: number; isCeo: boolean }) {
+  const { compact } = useMoney();
+  const period = usePeriod();
   const { toast } = useToast();
   const [amount, setAmount] = useState<string>(String(listing.yourBid ?? listing.reserve));
 
@@ -207,7 +221,7 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
             <span key={part} className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5">{part}</span>
           ))}
           <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5">
-            {listing.expiresIn ? `${listing.expiresIn} years` : "never expires"}
+            {listing.expiresIn ? lastsFor(listing.expiresIn, period) : "never expires"}
           </span>
         </div>
 
@@ -276,6 +290,8 @@ function refusal(err: unknown, title: string, toast: (o: any) => void, refetch: 
 function HoldingRow({ holding, ventureId, listed }: {
   holding: Holding; ventureId: string; listed: { id: string; name: string; status: string }[];
 }) {
+  const { compact } = useMoney();
+  const period = usePeriod();
   const { toast } = useToast();
   const [reserve, setReserve] = useState(String(holding.willingSale));
   const [selling, setSelling] = useState(false);
@@ -319,7 +335,7 @@ function HoldingRow({ holding, ventureId, listed }: {
             ))}
           </div>
           <p className="text-[11px] text-muted-foreground mt-1">
-            {holding.expiresIn ? `${holding.expiresIn} years left` : "Yours permanently"} · cost {compact(holding.bookValue)}
+            {holding.expiresIn ? `${lastsFor(holding.expiresIn, period)} left` : "Yours permanently"} · cost {compact(holding.bookValue)}
           </p>
         </div>
         <div className="text-right shrink-0">

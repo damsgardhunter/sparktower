@@ -931,16 +931,48 @@ function inPeriods(text: string | undefined, period: { one: string; many: string
     .replace(/\byear\b/g, period.one);
 }
 
-export function speak(field: LeverField, voice: NicheVoice, period?: { one: string; many: string }): LeverField {
+export function speak(
+  field: LeverField, voice: NicheVoice,
+  period?: { one: string; many: string; perYear?: number },
+): LeverField {
   const said = speakIn(field, voice);
-  if (!period || period.one === "year") return said;
-  return {
+  if (!period || period.one === "year") return withBuildLag(said, period);
+  const swapped = {
     ...said,
     label: inPeriods(said.label, period) ?? said.label,
     help: inPeriods(said.help, period) ?? said.help,
     options: said.options?.map((o) => ({ ...o, label: inPeriods(o.label, period) ?? o.label, help: inPeriods(o.help, period) ?? o.help })),
     choices: said.choices?.map((c) => ({ ...c, label: inPeriods(c.label, period) ?? c.label, help: inPeriods(c.help, period) ?? c.help })),
   };
+  /* After the swap, never before: this sentence needs both words to survive. */
+  return withBuildLag(swapped, period);
+}
+
+/**
+ * Room takes time to open, and the lever never said so.
+ *
+ * `capacityBuild` caps what you can serve now at what you already had, and
+ * adds only `(wanted - current) / periods` for next time — so asking for ten
+ * thousand seats in a quarterly season opens about a quarter of the increase a
+ * quarter later, and none of it this one. That is deliberate: building is slow
+ * and cutting is immediate, which is the trade the lever exists to offer. But
+ * it was invisible, so the screen read as broken arithmetic — somebody asks
+ * for ten thousand, sees fifteen hundred, and concludes the number is a lie.
+ *
+ * Written after the "year"/"quarter" substitution rather than before it,
+ * because this sentence is the one place on the desk where both words appear
+ * meaning different things: building takes a *year* however often the table
+ * decides, and what opens each *quarter* is a quarter of it. Substituting into
+ * it would turn "takes a year" into "takes a quarter", which is exactly the
+ * thing it is here to correct.
+ */
+function withBuildLag(field: LeverField, period?: { one: string; many: string; perYear?: number }): LeverField {
+  if (field.id !== "capacityTarget") return field;
+  const per = period?.perYear ?? 1;
+  const lag = per > 1
+    ? ` Building takes a year: about a ${per === 4 ? "quarter" : per === 12 ? "twelfth" : `1/${per}`} of any increase opens each ${period!.one}, and none of it in the one you ask. Cutting is immediate.`
+    : " Building takes a year: what you add opens next year, not this one. Cutting is immediate.";
+  return { ...field, help: `${field.help ?? ""}${lag}` };
 }
 
 function speakIn(field: LeverField, voice: NicheVoice): LeverField {

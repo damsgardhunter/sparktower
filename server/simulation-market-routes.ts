@@ -23,7 +23,8 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { marketOf } from "./simulation-scope";
-import { periodsPerYear, type Cadence } from "@shared/simulation/cadence";
+import { PERIOD_NAME, periodsPerYear, type Cadence } from "@shared/simulation/cadence";
+import { currencyForSeason } from "./simulation-desk-routes";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
 import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
@@ -167,6 +168,19 @@ export function registerSimulationMarketRoutes(app: Express): void {
        * facts it cannot act without.
        */
       yourRole: ctx.seat.role,
+      /**
+       * What one decision is called here, and how many of them make a year.
+       *
+       * The auction has always settled once a tick, so a quarterly season's
+       * bids were already decided every quarter — only the words said "year".
+       * `periods` is sent alongside because an asset's life is counted in
+       * periods too: a three-year licence in a quarterly season is twelve of
+       * them, and the screen was printing that as "12 years".
+       */
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
+      periods: periodsPerYear(season.cadence as Cadence),
+      /* What this company counts money in. The page had £ hardcoded in its own formatter. */
+      currency: await currencyForSeason(season.companyId),
       resolvesAt: season.nextTickAt,
       /** Cash plus what is still borrowable — what a bid can actually be backed by. */
       funds: biddableFunds(company),

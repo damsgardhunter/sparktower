@@ -86,7 +86,7 @@ function nudgeSeasons(): void {
  * project. A company somebody set up directly has no project and gets the
  * default, which is the honest answer — nobody told us otherwise.
  */
-async function currencyForSeason(companyId: string | null | undefined): Promise<CurrencyCode> {
+export async function currencyForSeason(companyId: string | null | undefined): Promise<CurrencyCode> {
   if (!companyId) return DEFAULT_CURRENCY;
   const [row] = await db
     .select({ currency: projects.currency })
@@ -359,7 +359,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * is deciding this week. Those stay years on purpose.
        */
       cadence: season.cadence ?? "yearly",
-      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
+      period: { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods },
       /** Null when the season has finished; otherwise when this period resolves. */
       resolvesAt: season.nextTickAt,
       /**
@@ -399,7 +399,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
         const unlocksIn = unlockYear(desk, base.id);
-        const field = { ...speak(base, niche.voice, PERIOD_NAME[(season.cadence ?? "yearly") as Cadence]), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        const field = { ...speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         if (field.id === "tiers") {
           return {
             ...field,

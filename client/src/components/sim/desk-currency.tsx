@@ -52,7 +52,25 @@ export function useMoney(code?: CurrencyCode) {
  * "year" is the default because it is what every season was until cadence
  * existed, so a screen that has not been told anything is not wrong.
  */
-export interface PeriodWords { one: string; many: string; of: string }
+export interface PeriodWords {
+  one: string; many: string; of: string;
+  /**
+   * How many of these make a year, so a life counted in periods can be said
+   * back in years. An asset's `expiresIn` is decremented once a tick, so a
+   * three-year agreement in a quarterly season is twelve — which is what got
+   * printed as "12 years".
+   */
+  perYear?: number;
+}
+
+/** A life counted in periods, said in years where it divides evenly. */
+export function lastsFor(n: number, period: PeriodWords): string {
+  const plural = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
+  const per = period.perYear ?? 1;
+  if (per <= 1) return plural(n, "year", "years");
+  const years = n / per;
+  return Number.isInteger(years) ? plural(years, "year", "years") : plural(n, period.one, period.many);
+}
 
 export const DeskPeriod = createContext<PeriodWords>({ one: "year", many: "years", of: "this year" });
 
