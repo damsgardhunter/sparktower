@@ -10,7 +10,7 @@ import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
 import { notTakenDown } from "./visibility";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites, projectBackings } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { apiRateLimit, FLOOR_MOUNTS } from "./api-rate-limit";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
@@ -2420,6 +2420,68 @@ ${PLAIN_LANGUAGE_RULES}`;
     } catch (error) {
       console.error("Application questions error:", error);
       res.status(500).json({ message: "Failed to update application questions" });
+    }
+  });
+
+  /**
+   * Delete a project, for good.
+   *
+   * ## Why this refuses rather than cascades
+   *
+   * Almost everything a project owns is a foreign key with ON DELETE CASCADE,
+   * which is right for tasks, files, documents, seasons and the rest: they are
+   * parts of the project and mean nothing without it. `project_backings`
+   * cascades too, and that one is different. Those rows are money — somebody
+   * else's, sometimes still in escrow and refundable — and deleting a project
+   * would take the record of it with them. No refund, no reconciliation
+   * against Stripe, and nothing left to say the pledge ever happened.
+   *
+   * So a project that has taken money cannot be deleted. Not soft-deleted, not
+   * deleted-with-a-warning: refused, with what is holding it and what to do
+   * about it. The owner can refund or release those pledges and then delete.
+   *
+   * "Has taken money" is any backing that is not `failed` — `pending` included,
+   * because a checkout somebody is midway through is about to become a charge.
+   *
+   * ## Everything else really goes
+   *
+   * There is no archive here. An owner asking to delete their own project has
+   * asked for it to be gone, and a product that quietly keeps it is lying.
+   */
+  app.delete("/api/projects/:id", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== (req.user as any).id) {
+        return res.status(403).json({ code: "not_yours", message: "Only the person who owns this project can delete it." });
+      }
+
+      const money = await db
+        .select({ status: projectBackings.status, amountCents: projectBackings.amountCents })
+        .from(projectBackings)
+        .where(and(
+          eq(projectBackings.projectId, project.id),
+          sql`${projectBackings.status} <> 'failed'`,
+        ));
+
+      if (money.length > 0) {
+        const refundable = money.filter((b) => b.status === "held").length;
+        return res.status(409).json({
+          code: "has_backing",
+          message: refundable > 0
+            ? `This project has ${money.length} ${money.length === 1 ? "pledge" : "pledges"}, ${refundable} of which ${refundable === 1 ? "is" : "are"} still refundable. It can't be deleted while it holds money that isn't yours — refund or release ${refundable === 1 ? "it" : "them"} first.`
+            : `This project has ${money.length} ${money.length === 1 ? "pledge" : "pledges"} against it. Deleting it would delete the record of money people actually paid, so it can't be deleted.`,
+          pledges: money.length,
+          refundable,
+        });
+      }
+
+      await db.delete(projects).where(eq(projects.id, project.id));
+      console.log(`[projects] ${req.user.id} deleted project ${project.id}`);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("Project delete error:", error);
+      res.status(500).json({ message: "Couldn't delete that project." });
     }
   });
 

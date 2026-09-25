@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackInbox, useNewFeedbackCount } from "@/components/feedback-inbox";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/user-avatar";
@@ -1288,7 +1288,103 @@ function PublicPageTab({ project, isOwner, onUpdateProject, onViewPublicPage, on
           </CardContent>
         </Card>
       ))}
+
+      {/*
+        * Last, and only for the person who owns it. A delete button somebody
+        * cannot use is a button that only ever says no.
+        */}
+      {isOwner && <DeleteProjectCard project={project} />}
     </div>
+  );
+}
+
+/**
+ * Deleting a project, which is the one thing on this screen that cannot be undone.
+ *
+ * Two guards, and they do different jobs. The name has to be typed, because a
+ * misplaced click should not be able to destroy a year of somebody's work.
+ * And the server refuses outright when the project has taken money — those
+ * pledges cascade with it, and deleting the record of somebody else's payment
+ * is not a thing an owner gets to do by being sure. That refusal is shown here
+ * as what it is rather than as a failure.
+ */
+function DeleteProjectCard({ project }: { project: Project }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [refused, setRefused] = useState<string | null>(null);
+
+  const title = project.title ?? "";
+  const confirmed = typed.trim() === title.trim() && title.trim().length > 0;
+
+  const remove = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/projects/${project.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({ title: "Project deleted", description: `"${title}" and everything in it is gone.` });
+      navigate("/dashboard");
+    },
+    onError: async (err: any) => {
+      /*
+       * A 409 is the money guard, and it is the useful answer rather than an
+       * error: it says what is holding the project and what to do about it.
+       */
+      const body = err?.body ?? {};
+      if (body?.code === "has_backing") { setRefused(body.message); setOpen(false); return; }
+      toast({ title: "Couldn't delete that", description: errorText(err, "Try again in a moment."), variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle className="text-base text-destructive">Delete this project</CardTitle>
+        <CardDescription>
+          The project, its tasks, files, documents, roadmap and any simulations built from it, gone for good.
+          There is no undo and no archive.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {refused && (
+          <p className="text-sm rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2" data-testid="text-delete-refused">
+            {refused}
+          </p>
+        )}
+        {!open ? (
+          <Button variant="destructive" onClick={() => { setOpen(true); setRefused(null); }} data-testid="button-delete-project">
+            <Trash2 className="h-4 w-4 mr-1.5" /> Delete this project
+          </Button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Type <span className="font-medium text-foreground">{title}</span> to confirm.
+            </p>
+            <Input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={title}
+              aria-label="Type the project's name to confirm deletion"
+              data-testid="input-delete-confirm"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                disabled={!confirmed || remove.isPending}
+                onClick={() => remove.mutate()}
+                data-testid="button-delete-confirm"
+              >
+                {remove.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1.5" />}
+                Delete permanently
+              </Button>
+              <Button variant="ghost" onClick={() => { setOpen(false); setTyped(""); }} data-testid="button-delete-cancel">
+                Keep it
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

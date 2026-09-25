@@ -5,7 +5,7 @@
  */
 import {
   Sparkles, Map, ListChecks, FolderOpen, BarChart3, Eye, Flag, Activity, Target,
-  Beaker, Crosshair, HandCoins, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare, Gamepad2,
+  Beaker, Crosshair, HandCoins, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare, Gamepad2, Settings,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,7 +27,15 @@ export const SECTION_TABS: TabDef[] = [
 ];
 
 export const MORE_TABS: TabDef[] = [
-  { id: "public", label: "Public Page", icon: Eye },
+  /*
+   * "Settings", not "Public Page".
+   *
+   * The id stays `public` because it is in saved links and in `?tab=`, and
+   * renaming it would break somebody's bookmark for the sake of tidiness. What
+   * the tab holds outgrew its name: it is where the owner decides what the
+   * world sees of this project, and now where they can delete it.
+   */
+  { id: "public", label: "Settings", icon: Settings },
   { id: "milestones", label: "Milestones", icon: Flag },
   { id: "activity", label: "Activity", icon: Activity },
   { id: "personas", label: "Personas", icon: Target, surface: "personas" },
