@@ -31,6 +31,7 @@
  */
 import type { Company, CompanyAsset } from "./types";
 import { resaleValue } from "./assets";
+import { EXECUTIVE, officersOf } from "./decisions";
 
 export type Distress = "healthy" | "strained" | "distressed" | "insolvent";
 
@@ -139,13 +140,23 @@ export function recoveryOptions(company: Company, year: number): RecoveryOption[
     });
   }
 
-  if (company.seats.length > 2) {
+  /*
+   * Only where there is a salary to stop.
+   *
+   * Counted in people, not chairs. A solo founder holds all five desks and
+   * employs one person, so folding a desk into the others frees nothing at
+   * all — and costs them every lever on it. Offering it was offering the
+   * worst trade on the page as "the cheapest money here", which is exactly
+   * backwards for the one person it would hurt most.
+   */
+  if (officersOf(company) > 2) {
     options.push({
       kind: "dissolve_seat",
       title: "Dissolve a seat",
       body: "Fold one of the five jobs into the others. The salary stops immediately.",
       cost: "That seat's decisions stop being made by anybody. It is the cheapest money here and the only one you cannot undo.",
-      raises: 140_000,
+      /* At the size of this market — a startup's executive does not cost a corporation's. */
+      raises: Math.round(EXECUTIVE * (company.scale ?? 1)),
       from: ["distressed", "insolvent"],
     });
   }

@@ -118,3 +118,45 @@ describe("atScale", () => {
     expect(atScale(220_000, -5)).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A founder on their own pays one salary, and the screen says so.
+ *
+ * Two separate things decide the executive half of a company's fixed costs,
+ * and the browser recomputes the whole figure live as somebody types — so the
+ * desk sends what the arithmetic needs. It sent `seats` and, for a while,
+ * nothing else, which was right only while "one salary per chair" was true.
+ * A solo founder holds all five desks and employs one person, so the screen
+ * read five chairs and told a startup with £46,000 in the bank that it had
+ * committed £700,000 a year to a board of itself. The market's own scale was
+ * missing from the same payload, which multiplied the error by another
+ * hundred.
+ */
+describe("what a table has committed to salaries", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const solo = { ...startingCompany({ id: "s", name: "S", niche, seats: ["ceo", "cmo", "cfo", "cto", "coo"], officers: 1 }), scale: 0.01 };
+  const econ = { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as const;
+
+  it("charges one executive for one founder, not one per desk", () => {
+    const five = fixedCosts({ ...solo, officers: 5 }, 0, econ as any, 1, niche);
+    const one = fixedCosts(solo, 0, econ as any, 1, niche);
+    expect(one).toBeLessThan(five);
+    expect(five / one, "five chairs cost five times one person").toBeCloseTo(5, 1);
+  });
+
+  /*
+   * The exact failure, reproduced: a company object stripped of the two fields
+   * the desk had not been sending is what the browser was computing with.
+   */
+  it("is five hundred times wrong when officers and scale go missing", () => {
+    const honest = fixedCosts(solo, 0, econ as any, 1, niche);
+    const asClientSawIt = fixedCosts({ ...solo, officers: undefined, scale: undefined }, 0, econ as any, 1, niche);
+    expect(asClientSawIt / honest).toBeGreaterThan(100);
+  });
+
+  it("keeps every lever's salary at the size of the market it is in", () => {
+    const big = fixedCosts({ ...solo, scale: 1 }, 0, econ as any, 1, niche);
+    const small = fixedCosts({ ...solo, scale: 0.01 }, 0, econ as any, 1, niche);
+    expect(small / big).toBeCloseTo(0.01, 4);
+  });
+});

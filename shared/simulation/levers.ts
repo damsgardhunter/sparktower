@@ -774,6 +774,13 @@ export function commitment(
     decisions.coo?.headcount ?? 0,
     { costIndex: economy.costIndex } as any,
     niche ? reachOf(company, niche) : 1,
+    /*
+     * The market, so ordinary salaries are this market's salaries. Without it
+     * `fixedCosts` falls back to the generic SALARY, and the preview differs
+     * from the year it is previewing by whatever `salaryIn` would have said —
+     * which on a Nova-written startup market is most of it.
+     */
+    niche ?? undefined,
   );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   /*

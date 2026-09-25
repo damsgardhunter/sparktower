@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { DeskCurrency, useMoney } from "@/components/sim/desk-currency";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -104,6 +105,10 @@ interface Desk {
     pipelineLater?: number; brandPipeline?: number; staff?: number;
     /** The seats the company still has; a dissolved one is gone from here. */
     seats?: Role[];
+    /** How many of those chairs are actually paid for. One, for a solo founder holding all five. */
+    officers?: number;
+    /** The size of this company's market, which every fixed cost is charged at. */
+    scale?: number;
     techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
   segments: {
@@ -195,19 +200,6 @@ const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
  * figures are drawn by six components and threading a prop through all of
  * them would be six chances to miss one.
  */
-const DeskCurrency = createContext<CurrencyCode>(DEFAULT_CURRENCY);
-
-function useMoney() {
-  const code = useContext(DeskCurrency);
-  const sym = symbolOf(code);
-  return {
-    money: (n: number) => `${sym}${Math.round(n).toLocaleString()}`,
-    compact: (n: number) =>
-      n >= 1_000_000 ? `${sym}${(n / 1_000_000).toFixed(1)}m`
-      : n >= 1_000 ? `${sym}${Math.round(n / 1_000)}k`
-      : `${sym}${Math.round(n)}`,
-  };
-}
 
 export default function SimulationDeskPage() {
   const { money, compact } = useMoney();

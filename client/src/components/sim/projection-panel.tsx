@@ -58,6 +58,15 @@ const TITLES: Record<string, string> = {
 };
 
 /** Money the way a person reads it at a glance. */
+/**
+ * Deprecated: money in this company's currency comes from `useMoney`.
+ *
+ * This hardcoded pounds and was used throughout the projection dock, so a
+ * company trading in dollars had its revenue shown in one currency and its
+ * committed salaries, in the same panel, in another. Kept as a thin alias
+ * only so nothing that still imports it prints a bare number; every call
+ * site worth fixing now takes `compact` from the context instead.
+ */
 export function gbp(n: number): string {
   const sign = n < 0 ? "−" : "";
   const a = Math.abs(n);

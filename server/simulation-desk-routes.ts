@@ -35,7 +35,7 @@ import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, t
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
-import { debtDrag, IDLE_RATE, marketPriceOf } from "@shared/simulation/decisions";
+import { debtDrag, IDLE_RATE, marketPriceOf, officersOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
 import { forecastDemand } from "@shared/simulation/forecast";
 import { projectYear } from "@shared/simulation/projection";
@@ -662,6 +662,21 @@ export function registerSimulationDeskRoutes(app: Express): void {
          * dissolved.
          */
         seats: company.seats,
+        /*
+         * And the two other things that arithmetic needs, for exactly the same
+         * reason. Leaving either out does not fail — it quietly computes a
+         * different number than the engine will.
+         *
+         * `officers` is how many salaries are actually paid, which stopped
+         * being "one per seat" when a solo founder started holding all five
+         * desks: the browser read five chairs and showed a startup committing
+         * £700,000 a year to a board of one person. `scale` is the size of the
+         * market this company is in — a Nova-written startup market runs at a
+         * hundredth of the catalogue's, so a projection without it overstates
+         * every fixed cost on the screen by that factor.
+         */
+        officers: officersOf(company),
+        scale: company.scale ?? 1,
       },
       /*
        * Where the market exists, and where this company sells. The marketing
