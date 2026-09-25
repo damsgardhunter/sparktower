@@ -116,6 +116,17 @@ export const LEVER_OUTCOMES: Record<string, Outcome> = {
     up: ["A price that fits each segment instead of one for all"],
     down: ["Every paying tier leaks towards the cheapest", "The wider the gap, the more who work out how to pay less"],
   },
+  "cmo.openNiche": {
+    up: [
+      "They pay a little more than the segment they came from",
+      "Harder to shift once they have chosen you",
+      "For a while nobody else is even describing them as a group",
+    ],
+    down: [
+      "A year of marketing spent finding them instead of selling",
+      "Yours only while you are the only one who fits",
+    ],
+  },
 
   // ---- Chief Technology Officer ------------------------------------------
   "cto.featureSpend": {
@@ -415,6 +426,15 @@ export function outcomeFor(
 export const LEVERS_WITHOUT_TRADES: ReadonlySet<string> = new Set([
   "cmo.dealVotes", "cto.dealVotes", "coo.dealVotes", "cfo.dealVotes",
   "cfo.holdBackSeat",
+  /*
+   * Opening a region is years of rent and a first year reaching almost
+   * nobody, and every one of those costs lands on the company that opens it —
+   * not on the seat that voted. Same reasoning as the deal votes above: the
+   * trade belongs to the proposal, which is operations', and printing it
+   * under four separate votes would tell four people they were each paying
+   * for it.
+   */
+  "ceo.expandVote", "cmo.expandVote", "cfo.expandVote", "cto.expandVote",
 ]);
 
 /**
