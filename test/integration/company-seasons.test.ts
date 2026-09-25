@@ -145,8 +145,8 @@ describe("a season a company shapes for itself", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { scope: "north_america" });
-    const ventureId = await fillTable(people, inviteCode);
     await giveSeats(companyId, 5);
+    const ventureId = await fillTable(people, inviteCode);
     expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
 
     const desk = await people[0].agent.get(`/api/sim/ventures/${ventureId}/desk`);
@@ -167,9 +167,9 @@ describe("a season a company shapes for itself", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { botTeams: 3 });
+    await giveSeats(companyId, 5);
     const ventureId = await fillTable(people, inviteCode);
 
-    await giveSeats(companyId, 5);
     const started = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     expect(started.body.teams, "the table plus the three it asked for").toBe(4);
@@ -252,6 +252,54 @@ describe("paying for a simulation", () => {
     expect((await member.agent.post(`/api/companies/${companyId}/simulation-seats/checkout`).send({ seats: 5 })).status).toBe(403);
   }, 120_000);
 
+  /*
+   * Buying several at once, out of the balance.
+   *
+   * Seats used to be the one priced thing in the product that could only be
+   * bought with a card: a company with money on its account still had to go
+   * to Stripe to put a second person at its own table.
+   */
+  it("buys several seats at once out of the balance", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 0);
+    await db.update(users).set({ balanceCents: 5_000 }).where(eq(users.id, owner.id));
+
+    const bought = await owner.agent.post(`/api/companies/${companyId}/simulation-seats/buy`)
+      .send({ seats: 4, kind: "nova" });
+    expect(bought.status, JSON.stringify(bought.body)).toBe(200);
+    expect(bought.body.seats).toBe(4);
+    // Four Nova seats at $5.
+    expect(bought.body.spentCents).toBe(2_000);
+    expect(bought.body.held).toBe(4);
+    expect(bought.body.wallet.balanceCents, "$50 less $20").toBe(3_000);
+
+    const [after] = await db.select().from(companies).where(eq(companies.id, companyId));
+    expect(after.simNovaSeatsPaid).toBe(4);
+    expect(after.simPlaySeatsPaid, "the other balance is untouched").toBe(0);
+
+    // A second purchase adds to the first rather than replacing it.
+    const again = await owner.agent.post(`/api/companies/${companyId}/simulation-seats/buy`)
+      .send({ seats: 2, kind: "nova" });
+    expect(again.status).toBe(200);
+    expect(again.body.held).toBe(6);
+  }, 120_000);
+
+  it("refuses seats the balance cannot cover, and takes nothing", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 0);
+    await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, owner.id));
+
+    const refused = await owner.agent.post(`/api/companies/${companyId}/simulation-seats/buy`)
+      .send({ seats: 10, kind: "play" });
+    expect(refused.status).toBe(402);
+    expect(refused.body.code).toBe("payment_required");
+
+    const [after] = await db.select().from(companies).where(eq(companies.id, companyId));
+    expect(after.simPlaySeatsPaid, "refused, so no seats").toBe(0);
+    const [who] = await db.select().from(users).where(eq(users.id, owner.id));
+    expect(who.balanceCents, "and the money is still there").toBe(500);
+  }, 120_000);
+
   it("refuses a purchase that isn't a number of seats", async () => {
     const app = await getTestApp();
     const { owner, companyId } = await companyWithStaff(app, 1);
@@ -268,6 +316,7 @@ describe("who can reach a private season", () => {
     const app = await getTestApp();
     const { owner, companyId } = await companyWithStaff(app, 0);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    await giveSeats(companyId, 5);
 
     // The owner joins their own season first, so it has an open room with space in it.
     const inside = await owner.agent.post("/api/sim/join-code").send({ code: inviteCode.toLowerCase() });
@@ -325,6 +374,8 @@ describe("who can reach a private season", () => {
     const { owner, companyId, people } = await companyWithStaff(app, 2);
     const stranger = await player(app);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    // A seat to offer: an invitation is a promise there is a place for them.
+    await giveSeats(companyId, 5);
     const sent = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/invite`)
       .send({ userIds: [people[1].id, stranger.id] });
     expect(sent.status).toBe(200);
@@ -349,6 +400,7 @@ describe("a private season's clock", () => {
     expect(empty.body.code).toBe("no_tables");
 
     // Five of the six; the sixth sits this one out and shows up as not playing.
+    await giveSeats(companyId, 5);
     const ventureId = await fillTable(people.slice(1), inviteCode);
 
     /*
@@ -533,7 +585,11 @@ describe("what a season costs", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    // Sitting down needs a seat; spent back to nothing so the start gate is
+    // still being asked the question this test is about.
+    await giveSeats(companyId, 5);
     await fillTable(people, inviteCode);
+    await giveSeats(companyId, 0);
 
     const start = `/api/companies/${companyId}/seasons/${seasonId}/start`;
     const refused = await owner.agent.post(start).send({});
@@ -556,7 +612,10 @@ describe("what a season costs", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    // They sit down while it is still one of ours, on play seats.
+    await giveSeats(companyId, 5);
     await fillTable(people, inviteCode);
+    await giveSeats(companyId, 0);
 
     /*
      * The season is marked as Nova's directly: building one for real needs a
@@ -581,6 +640,7 @@ describe("what a season costs", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { botTeams: 3 });
+    await giveSeats(companyId, 5);
     await fillTable(people, inviteCode);
 
     // Five people and three tables of bots: the bill is five.
@@ -627,7 +687,9 @@ describe("running a season in quarters or months", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { cadence: "monthly", totalYears: 1 });
+    await giveSeats(companyId, 5, "monthly");
     await fillTable(people, inviteCode);
+    await giveSeats(companyId, 0, "monthly");
 
     const start = `/api/companies/${companyId}/seasons/${seasonId}/start`;
 
@@ -646,7 +708,9 @@ describe("running a season in quarters or months", () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { cadence: "quarterly", totalYears: 4 });
+    await giveSeats(companyId, 5, "quarterly");
     await fillTable(people, inviteCode);
+    await giveSeats(companyId, 0, "quarterly");
 
     const refused = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
     expect(refused.status).toBe(402);
@@ -677,8 +741,8 @@ describe("running a season in quarters or months", () => {
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, {
       cadence: "quarterly", totalYears: 1, periodMinutes: 10,
     });
-    await fillTable(people, inviteCode);
     await giveSeats(companyId, 5, "quarterly");
+    await fillTable(people, inviteCode);
     expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
 
     const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));

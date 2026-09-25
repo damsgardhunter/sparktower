@@ -19,7 +19,7 @@
  */
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simBids, simDecisions, simSeats, simVentures, users } from "@shared/schema";
+import { simBids, simDecisions, simSeasons, simSeats, simVentures, users } from "@shared/schema";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { pick } from "@shared/simulation/random";
 import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded, type BotSkill } from "@shared/simulation/bots";
@@ -43,6 +43,21 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
   // player would change the game under the people already arguing about roles.
   if (!venture || venture.phase !== "filling") return 0;
 
+  /*
+   * What kind of table this is, which the venture does not know and the season
+   * does. Two seasons now decline the fill entirely: a solo founder's, whose
+   * table is one chair, and any season whose seats were bought for named
+   * people, who are on their way. Seating Nova in front of them a minute
+   * before they arrive is the failure this guard exists to prevent — and it
+   * is worse than a slow lobby, because the person who does turn up is put in
+   * a room of their own instead.
+   */
+  const [season] = await db
+    .select({ seatCount: simSeasons.seatCount, botFill: simSeasons.botFill })
+    .from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+  const lobbySize = season?.seatCount ?? LOBBY_SIZE;
+  if (season && (!season.botFill || lobbySize <= 1)) return 0;
+
   const seats = await db
     .select({ userId: simSeats.userId, joinedAt: simSeats.joinedAt, isBot: users.isBot })
     .from(simSeats)
@@ -51,7 +66,7 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
 
   const humans = seats.filter((s) => !s.isBot);
   const already = seats.filter((s) => s.isBot);
-  const needed = botsNeeded({ humans: humans.length, lobbySize: LOBBY_SIZE }) - already.length;
+  const needed = botsNeeded({ humans: humans.length, lobbySize }) - already.length;
   if (needed <= 0) return 0;
 
   /*
@@ -96,7 +111,7 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
    * an earlier run already holds the first of them, and asking for `needed`
    * would return those same names again and seat nobody.
    */
-  const cast = botsForVenture(ventureId, LOBBY_SIZE);
+  const cast = botsForVenture(ventureId, lobbySize);
   const taken = new Set(already.map((s) => s.userId));
 
   let seated = 0;
@@ -115,7 +130,7 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
       .select({ count: sql<number>`count(*)::int` })
       .from(simSeats)
       .where(eq(simSeats.ventureId, ventureId));
-    if (count >= LOBBY_SIZE) break;
+    if (count >= lobbySize) break;
 
     const userId = await ensureBotUser(bot);
     if (!userId || taken.has(userId)) continue;

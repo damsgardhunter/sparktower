@@ -31,7 +31,7 @@ import { LEVER_FIELDS, defaultDraft, validateDecision } from "./levers";
 import type { City, Company, Niche } from "./types";
 import { assetEffects } from "./assets";
 import { isUnlocked, buildCostPerUnit } from "./responsibilities";
-import { EXECUTIVE } from "./decisions";
+import { EXECUTIVE, officersOf } from "./decisions";
 import { researchCost } from "./world";
 import { bestPrice, bestSegment, regionsWorthKeeping } from "./bot-play";
 import { automationCost, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "./factory";
@@ -968,9 +968,8 @@ function investable(company: Company, year: number): boolean {
 }
 
 function runwayShortfall(company: Company): number {
-  const seats = Math.max(1, (company.seats ?? []).length);
   const scale = Number(company.scale) || 1;
-  const yearOfSalaries = seats * EXECUTIVE * scale;
+  const yearOfSalaries = officersOf(company) * EXECUTIVE * scale;
   const cash = Math.max(0, Number(company.cash) || 0);
   return Math.max(0, yearOfSalaries - cash);
 }

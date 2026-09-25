@@ -25,6 +25,7 @@ interface PlatformRevenue {
   collected: { topUpsCents: number; pledgesCents: number; totalCents: number };
   sentOutCents: number;
   owed: { escrowCents: number; balancesCents: number; totalCents: number };
+  mintedCents: number;
   oursCents: number;
   peopleWithBalance: number;
 }
@@ -84,6 +85,16 @@ export default function AdminRevenue() {
         <Row label={`Balances held by ${data.peopleWithBalance} ${data.peopleWithBalance === 1 ? "person" : "people"}`}
           cents={data.owed.balancesCents} testId="balances" />
       </Section>
+
+      {/*
+        * Only when there is some. On a real installation this is zero, and a
+        * permanent "$0.00 given away" row would be a line of noise on the one
+        * page that has to be read carefully.
+        */}
+      {data.mintedCents > 0 && (
+        <Section title="Credit given away, unspent" total={data.mintedCents} testId="minted"
+          blurb="Balance handed out without a card behind it — the development bypass, and support putting money on an account by hand. It isn't collected and it isn't owed, because there's nothing to give back. It's here so it isn't mistaken for either." />
+      )}
 
       <p className="text-sm text-muted-foreground" data-testid="revenue-payout-note">
         Paying SparkTower's own money out to your bank is set up in your Stripe dashboard, under

@@ -29,6 +29,8 @@ import {
   LOBBY_SIZE, PHASE_SECONDS, assignRemaining, canClaim, nextPhase, openRoles, placeholderName,
   type Phase, type SeatView,
 } from "@shared/simulation/lobby";
+import { freeSeatsOn, seatCensus, seatsRequired } from "./company-season-routes";
+import { devUnlimited } from "./wallet";
 
 const secondsLeft = (endsAt: Date | null): number =>
   endsAt ? Math.round((endsAt.getTime() - Date.now()) / 1000) : Number.POSITIVE_INFINITY;
@@ -90,11 +92,16 @@ export async function advanceVenture(ventureId: string): Promise<void> {
   const rows = await seatsOf(ventureId);
   const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
 
+  /* How many chairs this season's tables have. One means a founder on their own. */
+  const [seasonRow] = await db.select({ seatCount: simSeasons.seatCount })
+    .from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+
   const move = nextPhase({
     phase: venture.phase as Phase,
     seats,
     secondsLeft: secondsLeft(venture.phaseEndsAt),
     named: !!venture.name,
+    seatCount: seasonRow?.seatCount ?? LOBBY_SIZE,
   });
   if (!move) return;
 
@@ -508,10 +515,45 @@ function pgErrorCode(err: unknown): string | undefined {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`season:${season.id}`}, 0))`);
         const [fresh] = await tx.select({ status: simSeasons.status }).from(simSeasons).where(eq(simSeasons.id, season.id));
         if (fresh?.status !== "forming") return { closed: true as const };
+
+        /*
+         * A seat somebody has paid for, or none.
+         *
+         * Checked inside the same advisory lock that serialises joiners, so
+         * two people holding the last seat's worth of credit cannot both pass
+         * the count and both sit down. Outside the lock this would be a race
+         * that hands out a free seat under load, which is the only condition
+         * anybody would be trying it under.
+         *
+         * Whoever is already seated keeps their place — the early return
+         * above means a rejoin never reaches here.
+         */
+        const [company] = await tx.select().from(companies).where(eq(companies.id, season.companyId!));
+        if (company) {
+          const { kind, seated, paid } = await seatCensus(season, company);
+          const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
+          if (devFreeSeat && seated >= paid) {
+            console.warn(`[sim] development seats — seating ${req.user.id} in season ${season.id} with ${seated} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
+          } else if (seated >= paid) {
+            return { unpaid: { kind, seated, paid } as const };
+          }
+        }
         return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id) };
       });
       if ("closed" in outcome) {
         return res.status(409).json({ message: "This season has already started, so its tables are full. Ask for a place in the next one.", code: "season_started" });
+      }
+      if ("unpaid" in outcome) {
+        /*
+         * Addressed to the person holding the link, not to the person who
+         * owns the balance. They cannot fix this and should not be shown a
+         * price they are not being asked to pay.
+         */
+        const { kind, seated, paid } = outcome.unpaid!;
+        return res.status(402).json({
+          ...seatsRequired(kind, seated + 1, paid, "There isn't a seat for you in this season yet — whoever set it up needs to add one. They'll know."),
+          code: "seats_required",
+        });
       }
       await advanceVenture(outcome.ventureId);
       res.json({ ventureId: outcome.ventureId });

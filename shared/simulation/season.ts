@@ -33,7 +33,7 @@
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
 import { defaultDraft } from "./levers";
-import { EXECUTIVE } from "./decisions";
+import { EXECUTIVE, officersOf } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedIncumbents } from "./incumbents";
@@ -211,12 +211,14 @@ export function startingCompany(input: {
   name: string;
   niche: Niche;
   seats: Role[];
+  /** How many people hold those seats. One, for a founder on their own. */
+  officers?: number;
   /** Whether the chief executive's chair is held by a bot. See `openingRegion`. */
   botRun?: boolean;
   /** The season, so no two of them hand out the same opening. */
   seasonId?: string;
 }): Company {
-  const { id, name, niche, seats, botRun, seasonId = "" } = input;
+  const { id, name, niche, seats, officers, botRun, seasonId = "" } = input;
   /*
    * What the money was like the year this company started.
    *
@@ -354,7 +356,8 @@ export function startingCompany(input: {
         Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
       );
       const contribution = Math.max(1, opening.referencePrice - niche.baseUnitCost);
-      const payroll = seats.length * EXECUTIVE * marketScale(niche);
+      /* People, not chairs — a solo founder opens against one salary, not five. */
+      const payroll = Math.max(1, officers ?? seats.length) * EXECUTIVE * marketScale(niche);
       const breakEven = Math.round((payroll * SAFETY_FLOOR) / contribution);
       // Still bounded by what the region could ever hold.
       return Math.round(Math.min(Math.max(ceiling, breakEven), Math.round(market * home.weight * 0.45)));
@@ -364,6 +367,7 @@ export function startingCompany(input: {
     customers: {},
     assets: [],
     seats,
+    officers,
     /*
      * One region to begin with: the cheapest that is still somewhere.
      *
@@ -387,7 +391,7 @@ export function startingCompany(input: {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[]; botRun?: boolean }[];
+  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean }[];
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
 }): World {
@@ -399,7 +403,7 @@ export function buildWorld(input: {
     year: 1,
     companies: [
       ...seedIncumbents(niche, seasonId),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, botRun: t.botRun, seasonId })),
+      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId })),
     ],
     economy: economyFor(seasonId, 1, periods),
     // Left off entirely for a yearly season, so a world built before any of
@@ -449,7 +453,7 @@ export function openingDecisions(company: Company, niche: Niche): TeamDecisions 
       capacityTarget: company.capacity,
       supportSpend: Math.round(modest * 0.5),
       efficiencySpend: 0,
-      headcount: Math.max(1, company.seats.length),
+      headcount: Math.max(1, officersOf(company)),
     },
     cfo: { borrow: 0, repay: 0, cashBuffer: Math.round(company.cash * 0.2) },
     ceo: { focus: niche.innovationPace > 1 ? "growth" : "quality" },

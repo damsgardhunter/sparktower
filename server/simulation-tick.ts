@@ -31,7 +31,7 @@ import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/c
 import { nicheById } from "@shared/simulation/niches";
 import { nicheForScope, type Scope } from "@shared/simulation/geography";
 import { resolveYear } from "@shared/simulation/resolve";
-import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
+import { ROLE_TITLES, ROLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import {
   buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver, DAY_MS,
@@ -86,6 +86,18 @@ const LOCK_SIM_TICK = 918_2711;
  * closes the app first.
  */
 const FIRST_YEAR_DELAY_MS = 2 * 60_000;
+
+/**
+ * The same pause for a founder playing on their own: none worth speaking of.
+ *
+ * The two minutes above buy five people time to stop arguing and read the
+ * market together. One person has nobody to wait for, and what the delay
+ * actually bought them was a screen that said the season had started followed
+ * by two minutes in which nothing happened — the single loudest complaint
+ * about the whole flow. Ten seconds so the desk's next poll lands on a world
+ * that already exists rather than racing it.
+ */
+const SOLO_FIRST_YEAR_DELAY_MS = 10_000;
 
 async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null> {
   const client = await pool.connect();
@@ -346,15 +358,31 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       seasonId: season.id,
       niche,
       cadence: season.cadence as Cadence,
-      teams: playing.map((v) => ({
-        id: v.id,
-        name: v.name ?? "Unnamed",
-        seats: seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role),
-        botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
-      })),
+      teams: playing.map((v) => {
+        const held = seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role);
+        /*
+         * A solo founder holds every desk and is one person.
+         *
+         * Both halves matter. All five seats, so every lever works and the
+         * absence penalty — "those parts of the year ran on last year's plan
+         * at about 60%" — never fires against somebody who is present and
+         * deciding. One officer, so the company pays one executive salary
+         * rather than the $700,000 of chairs it does not employ.
+         */
+        const soloSeat = (season.seatCount ?? 5) <= 1;
+        return {
+          id: v.id,
+          name: v.name ?? "Unnamed",
+          seats: soloSeat ? [...ROLES] : held,
+          officers: soloSeat ? 1 : undefined,
+          botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
+        };
+      }),
     });
 
-    const startsAt = new Date(Date.now() + FIRST_YEAR_DELAY_MS);
+    const startsAt = new Date(Date.now() + (
+      (season.seatCount ?? 5) <= 1 ? SOLO_FIRST_YEAR_DELAY_MS : FIRST_YEAR_DELAY_MS
+    ));
     const nextTickAt = tickDueAt(startsAt, 1, periodMsOf(season));
     // Conditional on the status still being the one that was read, so two
     // processes starting the same season at the same moment cannot both seed a

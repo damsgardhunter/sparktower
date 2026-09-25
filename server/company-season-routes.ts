@@ -32,7 +32,7 @@ import type { Express } from "express";
 import crypto from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simVentures, simSeats, simDecisions, simChallenges, simReports, users, companies } from "@shared/schema";
+import { simSeasons, simVentures, simSeats, simDecisions, simChallenges, simReports, simSeatPurchases, users, companies } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
@@ -162,6 +162,49 @@ export const seatsHeld = (company: {
   quarterly: company.simQuarterlySeatsPaid ?? 0,
   monthly: company.simMonthlySeatsPaid ?? 0,
 });
+/**
+ * How many people are sitting in this season, and how many it has been paid for.
+ *
+ * One function because the answer is now asked in three places — inviting
+ * somebody, sitting down, and pressing start — and three implementations of
+ * "has this been paid for" is three different paywalls. It used to be asked
+ * only at the start, which meant a workshop could invite forty people, watch
+ * all forty join and go through the lobby, and discover the bill only when
+ * the organiser pressed the button with everyone already seated. The charge
+ * is unchanged; what changes is that it is now knowable before anybody has
+ * wasted their time.
+ *
+ * Bots are not people and are not counted, which is why `users.isBot` is
+ * joined rather than trusted from the seat row.
+ */
+export async function seatCensus(
+  season: { id: string; origin?: string | null; cadence?: string | null },
+  company: Parameters<typeof seatsHeld>[0],
+): Promise<{ kind: SeatKind; seated: number; paid: number; free: number }> {
+  const kind = seatKindFor(season.origin, season.cadence);
+  const seated = await db
+    .selectDistinct({ userId: simSeats.userId })
+    .from(simSeats)
+    .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+    .innerJoin(users, eq(users.id, simSeats.userId))
+    .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
+  const paid = seatsHeld(company)[kind];
+  return { kind, seated: seated.length, paid, free: Math.max(0, paid - seated.length) };
+}
+
+/** The 402 body for a season short of seats, worded for whoever hit it. */
+export const seatsRequired = (
+  kind: SeatKind, seated: number, paid: number, message: string,
+) => ({
+  code: "seats_required" as const,
+  message,
+  seatKind: kind,
+  pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
+  people: seated,
+  paid,
+  shortBy: Math.max(1, seated - paid),
+});
+
 /** The most seats one checkout can carry, so a typo is not a four-figure charge. */
 export const SEATS_PER_PURCHASE_MAX = 250;
 
@@ -463,6 +506,84 @@ export function registerCompanySeasonRoutes(app: Express): void {
    * the note on the webhook. A checkout that is abandoned leaves nothing
    * behind, which is the whole reason for doing it in that order.
    */
+  /**
+   * Buy seats out of the balance, several at a time.
+   *
+   * The Stripe checkout below has always sold up to 250 at once, and it is
+   * the only way seats could be bought — which meant a card, a redirect and a
+   * webhook for something the account may already have the money for. Every
+   * other priced outcome in the product comes off the balance; seats were the
+   * exception, and the effect was that a project with $40 on it could not put
+   * a second person at its own table without going to Stripe.
+   *
+   * Credited in the same transaction that takes the money, and written to
+   * `sim_seat_purchases` with no session id, so the two ways of buying a seat
+   * reconcile in one place. A `spend` that comes back null took nothing.
+   */
+  app.post("/api/companies/:id/simulation-seats/buy", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const seats = Math.round(Number(req.body?.seats));
+      if (!Number.isInteger(seats) || seats < 1 || seats > SEATS_PER_PURCHASE_MAX) {
+        return res.status(400).json({ message: `Buy between 1 and ${SEATS_PER_PURCHASE_MAX} seats at a time.`, code: "invalid_input", field: "seats" });
+      }
+      const kind = req.body?.kind ?? "play";
+      if (!isSeatKind(kind)) {
+        return res.status(400).json({ message: "That isn't a kind of seat.", code: "invalid_input", field: "kind" });
+      }
+
+      const cents = seats * SEAT_PRICE_CENTS[kind];
+      const paid = await spend(req.user.id, cents, {
+        outcome: "seasonSeat",
+        note: `${seats} ${SEAT_LABEL[kind]} ${seats === 1 ? "seat" : "seats"}`,
+      });
+      if (!paid) {
+        const wallet = await walletOf(req.user.id);
+        return res.status(402).json({
+          code: "payment_required",
+          message: `${seats} ${seats === 1 ? "seat is" : "seats are"} $${(cents / 100).toFixed(2)}, and your balance is ${wallet.balanceDisplay}.`,
+          price: { cents, display: `$${(cents / 100).toFixed(2)}` },
+          wallet,
+          remedy: "top_up",
+        });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.insert(simSeatPurchases).values({
+          companyId: found.company.id, seats, kind, amount: cents,
+          /*
+           * Not a Stripe session, and the column says so.
+           *
+           * It is NOT NULL and unique — it is the "this event credited this
+           * company once" key — so a balance purchase brings its own, taken
+           * from the ledger line that paid for it. Namespaced for the same
+           * reason `apple:` is namespaced in the wallet: two ways of paying
+           * must never collide on the key that decides whether somebody's
+           * money bought anything, and whoever reconciles this table against
+           * Stripe can see at a glance which rows are not Stripe's.
+           */
+          stripeSessionId: `balance:${paid.id || crypto.randomUUID()}`,
+          boughtBy: req.user.id,
+        } as any);
+        await tx.update(companies)
+          .set({ [SEAT_COLUMN[kind]]: sql`${companies[SEAT_COLUMN[kind]]} + ${seats}` })
+          .where(eq(companies.id, found.company.id));
+      });
+
+      const [after] = await db.select().from(companies).where(eq(companies.id, found.company.id));
+      res.json({
+        seats, kind, spentCents: cents,
+        held: seatsHeld(after)[kind],
+        wallet: await walletOf(req.user.id),
+      });
+    } catch (error) {
+      console.error("Simulation seat purchase error:", error);
+      res.status(500).json({ message: "Couldn't buy those seats." });
+    }
+  });
+
   app.post("/api/companies/:id/simulation-seats/checkout", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
@@ -715,6 +836,31 @@ export function registerCompanySeasonRoutes(app: Express): void {
       // No list means everyone: the common case is "tell the whole team".
       const recipients = (asked.length ? asked.map(String) : [...memberIds])
         .filter((id) => memberIds.has(id) && id !== req.user.id);
+
+      /*
+       * Seats before invitations.
+       *
+       * Inviting somebody is a promise that there is a place for them, and
+       * until now it was a promise nothing checked: the only seat gate was on
+       * the start button, so a season could invite the whole company, watch
+       * everyone join and sit through the lobby, and produce a bill at the
+       * one moment when the cost of refusing it is everybody's time. The
+       * check belongs here too, where it is still free to say no.
+       *
+       * Counted against the seats left rather than the seats held, because
+       * whoever is already sitting down has a place and is not being offered
+       * one. The inviter's own seat is theirs and is already in `seated`.
+       */
+      const { kind, seated, paid, free } = await seatCensus(season, found.company);
+      const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
+      if (!devFreeSeat && recipients.length > free) {
+        return res.status(402).json(seatsRequired(kind, seated + recipients.length, paid,
+          free === 0
+            ? `Every seat this company holds is taken, so there is nowhere to put ${recipients.length === 1 ? "them" : "them"} yet. `
+              + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`
+            : `You're offering ${recipients.length} places and the company has ${free} ${free === 1 ? "seat" : "seats"} left. `
+              + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`));
+      }
       await notify({
         recipients, actorId: req.user.id, kind: "season_invite",
         targetId: `${season.id}:${season.inviteCode}`,
@@ -756,14 +902,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * one Nova built from the company's own project is the dearer one, and
        * the two balances do not substitute for each other.
        */
-      const kind = seatKindFor(season.origin, season.cadence);
-      const seated = await db
-        .selectDistinct({ userId: simSeats.userId })
-        .from(simSeats)
-        .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
-        .innerJoin(users, eq(users.id, simSeats.userId))
-        .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
-      const paid = seatsHeld(found.company)[kind];
+      const { kind, seated, paid } = await seatCensus(season, found.company);
       /*
        * A developer building or demonstrating a season should not have to buy
        * their way past their own paywall. Mirrors `devAdvanceOn`: local
@@ -781,19 +920,12 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * production, and it says so in the log.
        */
       const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
-      if (devFreeSeat && seated.length > paid) {
-        console.warn(`[sim] development seats — starting season ${season.id} with ${seated.length} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
-      } else if (seated.length > paid) {
-        return res.status(402).json({
-          code: "seats_required",
-          message: `${seated.length} ${seated.length === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${SEAT_LABEL[kind]} ${paid === 1 ? "seat" : "seats"}. `
-            + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`,
-          seatKind: kind,
-          pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
-          people: seated.length,
-          paid,
-          shortBy: seated.length - paid,
-        });
+      if (devFreeSeat && seated > paid) {
+        console.warn(`[sim] development seats — starting season ${season.id} with ${seated} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
+      } else if (seated > paid) {
+        return res.status(402).json(seatsRequired(kind, seated, paid,
+          `${seated} ${seated === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${SEAT_LABEL[kind]} ${paid === 1 ? "seat" : "seats"}. `
+          + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`));
       }
 
       /*

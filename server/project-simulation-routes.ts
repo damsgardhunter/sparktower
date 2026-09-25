@@ -33,6 +33,7 @@ import { respondToAiError } from "./ai-json";
 import { nicheById, NICHES } from "@shared/simulation/niches";
 import type { Niche } from "@shared/simulation/types";
 import { marketShares, RIVALS_IN_A_CUSTOM_SEASON } from "@shared/simulation/custom-market";
+import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { marketScale } from "@shared/simulation/world";
 import { STARTING_CASH } from "@shared/simulation/season";
 import { marketNameOf } from "./simulation-scope";
@@ -298,6 +299,24 @@ export function registerProjectSimulationRoutes(app: Express): void {
            * promised four. The incumbents Nova wrote *are* the competition.
            */
           botTeams: 0,
+          /*
+           * The table this project actually has.
+           *
+           * A solo project is one chair: the founder holds all five desks and
+           * the company pays one executive salary instead of five. That is not
+           * a convenience — at $140,000 a chair, a startup rehearsing its own
+           * business was carrying $700,000 a year of officers it does not
+           * employ, which made every season it played a story about a payroll
+           * it would never have.
+           *
+           * Everyone else keeps the five-person table, and nobody's chairs get
+           * filled by Nova: the seats in a project's season are bought for
+           * named people who are on their way, and seating a bot in front of
+           * somebody a minute before they arrive is how a team of four turns
+           * up to find three of them already being played.
+           */
+          seatCount: project.soloMode ? 1 : LOBBY_SIZE,
+          botFill: false,
           /*
            * Competent teammates, not filler.
            *

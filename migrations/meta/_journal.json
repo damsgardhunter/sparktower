@@ -589,6 +589,13 @@
       "when": 1790291136589,
       "tag": "0065_path_sync_debounce",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1790291137589,
+      "tag": "0068_solo_seasons",
+      "breakpoints": true
     }
   ]
 }

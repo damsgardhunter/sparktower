@@ -56,11 +56,36 @@ async function projectFor(ownerId: string) {
   return id;
 }
 
+/*
+ * A pledge as the webhook writes one — payment intent and all. That field is
+ * not decoration: it is the only evidence a card was ever charged, and
+ * `platformRevenue` will not count a pledge without it.
+ */
 const backing = (projectId: string, backerId: string, amountCents: number, status: string, transfer: string | null = null) =>
   db.insert(projectBackings).values({
     id: randomUUID(), projectId, backerId, amountCents, status,
+    stripePaymentIntentId: `pi_${randomUUID()}`,
     stripeTransferId: transfer, releasedAt: status === "released" ? new Date() : null,
     createdAt: new Date(),
+  } as any);
+
+/** The same pledge with no card behind it — a fixture, or a hand-written row. */
+const uncharged = (projectId: string, backerId: string, amountCents: number, status: string) =>
+  db.insert(projectBackings).values({
+    id: randomUUID(), projectId, backerId, amountCents, status,
+    releasedAt: status === "released" ? new Date() : null, createdAt: new Date(),
+  } as any);
+
+/** What the DEV +$50 button writes: balance, no payment. */
+const devCredit = (userId: string, cents: number) =>
+  db.insert(novaLedger).values({
+    userId, kind: "topup", amountCents: cents, balanceAfter: cents,
+    stripeSessionId: `dev-${randomUUID()}`, note: "Development credit (no payment taken)",
+  } as any);
+
+const spend = (userId: string, cents: number, balanceAfter: number) =>
+  db.insert(novaLedger).values({
+    userId, kind: "spend", amountCents: -cents, balanceAfter, note: "Nova did a job",
   } as any);
 
 const topUp = (userId: string, cents: number) =>
@@ -194,6 +219,88 @@ describe("the platform's cash position", () => {
     }
     const r = await platformRevenue();
     expect(r.collected.pledgesCents).toBe(0);
+    expect(holds(r)).toBe(true);
+  });
+
+  /*
+   * This one was live. Six rows an integration test had left in the
+   * development database were summed into "collected" as $330 of backing, and
+   * two of them into $180 "already sent out", because the queries trusted
+   * `status` and never asked whether a card had been charged.
+   */
+  it("ignores a held or released pledge with no payment behind it", async () => {
+    const app = await getTestApp();
+    const me = await person(app);
+    const them = await person(app);
+    const p = await projectFor(me.id);
+    await uncharged(p, them.id, 10_000, "released");
+    await uncharged(p, them.id, 4_000, "released");
+    await uncharged(p, them.id, 2_500, "held");
+
+    const r = await platformRevenue();
+    expect(r.collected.pledgesCents).toBe(0);
+    expect(r.owed.escrowCents).toBe(0);
+    expect(r.sentOutCents).toBe(0);
+    expect(r.oursCents).toBe(0);
+    expect(holds(r)).toBe(true);
+  });
+
+  /*
+   * The other half of the same report: pressing the development bypass twice
+   * read as $100 of revenue. Minted credit is not collected, and — the part
+   * that is easy to miss — what is left of it is not owed either, or the page
+   * would swing from inventing revenue to inventing a debt.
+   */
+  it("does not count development credit as money anybody paid", async () => {
+    const app = await getTestApp();
+    const me = await person(app);
+    await devCredit(me.id, 5_000);
+    await devCredit(me.id, 5_000);
+    await db.update(users).set({ balanceCents: 10_000 }).where(eq(users.id, me.id));
+
+    const r = await platformRevenue();
+    expect(r.collected.topUpsCents).toBe(0);
+    expect(r.mintedCents).toBe(10_000);
+    expect(r.owed.balancesCents).toBe(0);
+    expect(r.oursCents).toBe(0);
+    expect(holds(r)).toBe(true);
+  });
+
+  /* Spending minted credit earns nothing: there was never any money to keep. */
+  it("earns nothing when minted credit is spent", async () => {
+    const app = await getTestApp();
+    const me = await person(app);
+    await devCredit(me.id, 10_000);
+    await spend(me.id, 1_999, 8_001);
+    await db.update(users).set({ balanceCents: 8_001 }).where(eq(users.id, me.id));
+
+    const r = await platformRevenue();
+    expect(r.collected.totalCents).toBe(0);
+    expect(r.mintedCents).toBe(8_001);
+    expect(r.owed.balancesCents).toBe(0);
+    expect(r.oursCents).toBe(0);
+    expect(holds(r)).toBe(true);
+  });
+
+  /*
+   * Someone with both. Spending is charged against the minted credit first, so
+   * the money they actually paid stays a liability until the free credit is
+   * gone — the order that cannot overstate what is ours.
+   */
+  it("spends minted credit before the money somebody paid for", async () => {
+    const app = await getTestApp();
+    const me = await person(app);
+    await topUp(me.id, 5_000);
+    await devCredit(me.id, 5_000);
+    await spend(me.id, 3_000, 7_000);
+    await db.update(users).set({ balanceCents: 7_000 }).where(eq(users.id, me.id));
+
+    const r = await platformRevenue();
+    expect(r.collected.topUpsCents).toBe(5_000);
+    // $50 minted less the $30 spent: $20 of the balance was never paid for.
+    expect(r.mintedCents).toBe(2_000);
+    expect(r.owed.balancesCents).toBe(5_000);
+    expect(r.oursCents).toBe(0);
     expect(holds(r)).toBe(true);
   });
 });

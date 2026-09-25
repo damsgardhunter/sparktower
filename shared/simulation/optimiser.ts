@@ -95,7 +95,7 @@ import { forecastDemand } from "./forecast";
 import { resolveYear } from "./resolve";
 import { isUnlocked } from "./responsibilities";
 import { atScale } from "./market";
-import { EXECUTIVE } from "./decisions";
+import { EXECUTIVE, officersOf } from "./decisions";
 import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
 
 /** One lever the optimiser can put money into, and where it lives. */
@@ -335,10 +335,10 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   const levers = SPEND_LEVERS.filter((l) => isUnlocked(l.role, l.field, year, periods));
 
   /** Staff enough to serve, and no more: every head is a salary whether it is busy or not. */
-  const headcount = Math.max(1, Math.round((company.seats?.length ?? 5) + (company.capacity / 40_000)));
+  const headcount = Math.max(1, Math.round(officersOf(company) + (company.capacity / 40_000)));
 
   /** What the company costs to run before it does anything: the floor the plan has to clear. */
-  const fixedPerYear = (company.seats?.length ?? 5) * EXECUTIVE * (company.scale ?? 1);
+  const fixedPerYear = officersOf(company) * EXECUTIVE * (company.scale ?? 1);
 
   const spend: Record<string, number> = {};
   for (const l of levers) spend[l.field] = 0;

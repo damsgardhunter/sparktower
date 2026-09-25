@@ -394,6 +394,21 @@ export interface Company {
   /** Seats currently filled. A team that fires its CMO pays one fewer salary and loses the lever. */
   seats: Role[];
   /**
+   * How many executive salaries this company actually pays.
+   *
+   * Normally one per filled seat, and left undefined to say so. A solo
+   * founder's company is the exception it exists for: one person holds all
+   * five desks, so every lever is theirs to pull and the absence penalty never
+   * applies — but there is one of them, and charging a startup $700,000 a year
+   * for four officers it does not employ is the difference between a hard
+   * simulation and a dishonest one.
+   *
+   * Deliberately not "seats.length minus the empty ones": an empty seat is a
+   * lever nobody pulls, which is a real and different cost, and conflating
+   * the two is how a solo season would quietly start losing decisions.
+   */
+  officers?: number;
+  /**
    * Cities the company sells in. Incumbents are in all of them.
    *
    * Reach is the fraction of the market that can even consider you: a company

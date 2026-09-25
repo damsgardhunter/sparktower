@@ -245,4 +245,54 @@ describe("playing a market again, and filling the table", () => {
     const [again] = await db.select().from(companies).where(eq(companies.id, company.id));
     expect(again.simQuarterlySeatsPaid, "the table is what is sold, not the market").toBe(1);
   }, 60_000);
+
+  /*
+   * A solo project is one chair.
+   *
+   * `soloMode` existed and meant the opposite of this: it only changed the
+   * wording on the panel, promising that "the seats fill themselves" — which
+   * is to say that a founder rehearsing their own business was given four
+   * executives they had not hired, at $140,000 each. A startup cannot carry
+   * $700,000 of officers, so every season a solo founder played was a story
+   * about a payroll they would never have.
+   */
+  it("gives a solo project one chair, and everyone else five", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const solo = await aProject(owner.id, { soloMode: true });
+    const { season } = await seasonWithMarket(owner.id, solo.id);
+
+    const made = await owner.agent.post(`/api/projects/${solo.id}/simulation`).send({ fromSeasonId: season.id });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.seatCount, "one founder, one chair").toBe(1);
+
+    const team = await person(app, "Team");
+    const shared = await aProject(team.id);
+    const pair = await seasonWithMarket(team.id, shared.id);
+    const five = await team.agent.post(`/api/projects/${shared.id}/simulation`).send({ fromSeasonId: pair.season.id });
+    expect(five.status, JSON.stringify(five.body)).toBe(201);
+    const [table] = await db.select().from(simSeasons).where(eq(simSeasons.id, five.body.seasonId));
+    expect(table.seatCount, "a project with a team keeps the five desks").toBe(5);
+  }, 60_000);
+
+  /*
+   * Nobody's chair is filled by Nova before they get there.
+   *
+   * The public market tops a room up to five a minute after the last person
+   * arrives, which is right when somebody pressed play and is owed a game.
+   * It is wrong for a season whose seats were bought for named people: a team
+   * of four turns up to find three of them already being played.
+   */
+  it("never fills a project's season with bots", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const project = await aProject(owner.id);
+    const { season } = await seasonWithMarket(owner.id, project.id);
+
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.botFill, "these seats were bought for people who are on their way").toBe(false);
+  }, 60_000);
 });

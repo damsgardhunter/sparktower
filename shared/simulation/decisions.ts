@@ -582,6 +582,17 @@ export const FOCUS_NOTES: Record<Focus, string> = {
  * nothing for its copy to be checked against — two bare literals in a function
  * body cannot be imported by the test that proves the two sides agree.
  */
+/**
+ * How many executive salaries a company pays.
+ *
+ * The count of filled seats, unless the company says otherwise. A solo
+ * founder's company holds all five desks so that every lever works and no
+ * decision goes unmade, and pays for one person, because that is how many
+ * there are. Anything charging for chairs rather than for people reads this.
+ */
+export const officersOf = (company: { seats?: Role[]; officers?: number }): number =>
+  Math.max(1, company.officers ?? (company.seats ?? []).length);
+
 export const SALARY = 85_000;
 export const EXECUTIVE = 140_000;
 
@@ -722,7 +733,9 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
   const salaries = headcount * perHead * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
-  const executives = company.seats.length * EXECUTIVE;
+  // `officersOf` rather than `seats.length`, because one founder holding five
+  // desks is five levers and one salary. See Company.officers.
+  const executives = officersOf(company) * EXECUTIVE;
   /*
    * At the scale of the market this company is in.
    *

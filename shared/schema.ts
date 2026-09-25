@@ -3949,6 +3949,27 @@ export const simSeasons = pgTable("sim_seasons", {
    */
   seatsPaid: integer("seats_paid").default(0).notNull(),
   paidCents: integer("paid_cents").default(0).notNull(),
+  /**
+   * How many people sit at one table in this season.
+   *
+   * Five everywhere it has ever been, because five is the number of desks.
+   * One is a solo founder: a season where the whole company is one person who
+   * holds every lever and draws one executive salary rather than five. That is
+   * not a smaller version of the same game — a startup cannot carry $700,000
+   * of officers — so it is the season's own shape rather than a preference
+   * applied afterwards.
+   */
+  /* 5 is LOBBY_SIZE in @shared/simulation/lobby, written out rather than imported: the schema is the root of the import graph and must not depend on the engine. */
+  seatCount: integer("seat_count").default(5).notNull(),
+  /**
+   * Whether empty seats get filled by Nova after a minute.
+   *
+   * True for the public market, where somebody who pressed play is owed a
+   * game rather than a waiting room. False for a season whose seats were
+   * bought for named people: filling their chairs a minute before they arrive
+   * is how a team of four turns up to find Nova already playing three of them.
+   */
+  botFill: boolean("bot_fill").default(true).notNull(),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
   byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),

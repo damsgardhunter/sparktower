@@ -31,7 +31,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { marketOf } from "./simulation-scope";
 import { canEnter, continentOf, regionById } from "@shared/simulation/geography";
 import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
-import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
+import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
@@ -204,6 +204,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
+    /** One chair at this table: a founder holding every desk, on one salary. */
+    const solo = (season.seatCount ?? 5) <= 1;
     const { decisions, filedBy } = await draftFor(venture.id, year);
     /*
      * And what the table filed last year, which is the only record of it
@@ -351,20 +353,33 @@ export function registerSimulationDeskRoutes(app: Express): void {
       canAdvance: season.status === "running" ? await advanceAuthority(req.user.id, season) : null,
 
       yourRole: seat.role,
-      yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
-      yourLevers: seat.role ? ROLE_LEVERS[seat.role as Role] : [],
+      yourTitle: solo ? "Founder" : (seat.role ? ROLE_TITLES[seat.role as Role] : null),
+      yourLevers: solo
+        ? ROLES.flatMap((r) => ROLE_LEVERS[r])
+        : (seat.role ? ROLE_LEVERS[seat.role as Role] : []),
+      /** Every desk is yours, so the screen says so rather than calling you a chief executive. */
+      solo,
       /*
        * The seat's levers, with the ones whose choices depend on this company
        * filled in: which seats could be rehired, and which segments this market
        * actually has. A static list cannot know either.
+       *
+       * A solo founder gets all five desks' levers in one list. Deduplicated
+       * by id, because four of the five chairs carry the same `expandVote` and
+       * a founder voting with themselves four times is not a decision — the
+       * first occurrence wins, which is the chief executive's, in the fixed
+       * order the seats are dealt in.
        */
-      fields: seat.role ? LEVER_FIELDS[seat.role as Role]
+      fields: seat.role ? dedupeById((solo ? [...ROLES] : [seat.role as Role]).flatMap((r) => LEVER_FIELDS[r]
         // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
-        .filter((base) => isUnlocked(seat.role as Role, base.id, year, periods))
-        .map((base) => {
+        .filter((base) => isUnlocked(r, base.id, year, periods))
+        // Which desk it came from, kept so the unlock year below is asked of
+        // the right one — solo puts five desks' levers in a single list.
+        .map((base) => ({ base, desk: r }))))
+        .map(({ base, desk }) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
-        const unlocksIn = unlockYear(seat.role as Role, base.id);
+        const unlocksIn = unlockYear(desk, base.id);
         const field = { ...speak(base, niche.voice), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         if (field.id === "tiers") {
           return {
@@ -977,6 +992,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!company) return res.status(404).json({ message: "No such company." });
 
     const role = seat.role as Role;
+    /** One chair at this table means one founder holding all five desks. */
+    const soloSeason = (season.seatCount ?? 5) <= 1;
     /*
      * The investors' board has removed the chief executive and is running that
      * chair itself (see `finance.ts`). Refused, not accepted and ignored: a
@@ -990,19 +1007,43 @@ export function registerSimulationDeskRoutes(app: Express): void {
       });
     }
     const payload = req.body?.decision;
-    const check = validateDecision(role, payload, company);
-    if (!check.ok) return res.status(400).json({ message: "Some of that doesn't add up.", errors: check.errors });
 
-    // Only the fields this seat owns, taken from the lever list rather than
+    /*
+     * Which desks this filing is for.
+     *
+     * One, normally — a seat files for its own chair and the validator takes
+     * only the fields that chair owns. A solo founder holds all five, so one
+     * press of Submit has to become five rows, because the engine reads
+     * decisions per role and a role with no row for the year is treated as
+     * absent: "that part of the year ran on last year's plan at about 60%".
+     * Writing only the CEO's row would have penalised a founder for the four
+     * meetings they did not hold with themselves.
+     *
+     * Each desk is validated and cleaned against its own lever list, so the
+     * fields are split exactly as they would be if five people had filed them.
+     */
+    const desks: Role[] = soloSeason ? [...ROLES] : [role];
+
+    for (const desk of desks) {
+      const check = validateDecision(desk, payload, company);
+      if (!check.ok) return res.status(400).json({ message: "Some of that doesn't add up.", errors: check.errors });
+    }
+
+    // Only the fields each seat owns, taken from the lever list rather than
     // from the request — the same cleaning a bot's decision goes through.
-    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) });
+    const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) });
+    const clean = cleanFor(role);
 
-    await db.insert(simDecisions)
-      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean, submittedAt: new Date() })
-      .onConflictDoUpdate({
-        target: [simDecisions.ventureId, simDecisions.role, simDecisions.year],
-        set: { payload: clean, userId: req.user.id, submittedAt: new Date() },
-      });
+    await db.transaction(async (tx) => {
+      for (const desk of desks) {
+        await tx.insert(simDecisions)
+          .values({ ventureId: venture.id, userId: req.user.id, role: desk, year: season.year, payload: cleanFor(desk), submittedAt: new Date() })
+          .onConflictDoUpdate({
+            target: [simDecisions.ventureId, simDecisions.role, simDecisions.year],
+            set: { payload: cleanFor(desk), userId: req.user.id, submittedAt: new Date() },
+          });
+      }
+    });
 
     // Hand back the table's new position, so the screen updates without a second request.
     const { decisions } = await draftFor(venture.id, season.year);
@@ -1013,6 +1054,19 @@ export function registerSimulationDeskRoutes(app: Express): void {
       preview: draftPreview({ company, niche, decisions, economy: economyFor(season.id, season.year) }),
     });
   });
+}
+
+/**
+ * First lever of each id wins.
+ *
+ * Only ever does anything for a solo founder, whose one list is five desks
+ * concatenated: `expandVote` sits on four of the five chairs, and the same
+ * lever offered four times is a form, not a decision. Order is the order the
+ * desks are listed in, so the chief executive's copy is the one kept.
+ */
+function dedupeById<T extends { base: { id: string } }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter(({ base }) => !seen.has(base.id) && (seen.add(base.id), true));
 }
 
 /** What the coming year's weather means for someone who has not played before. */
