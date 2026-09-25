@@ -103,6 +103,14 @@ test("an owner invites a collaborator by link; a stranger opens it signed out, s
 
   // Inviting reaches another person, so it needs a confirmed address — the same gate the owner passed.
   await verifyEmail(stranger.request, inviteeEmail);
+  /*
+   * The browser has to be told. `verifyEmail` confirms the address through a
+   * separate request context, so this page is still holding the `/api/auth/user`
+   * it fetched on load — with `emailVerifiedAt: null`. The publish button is
+   * disabled while that is null, so the click below waited for a button that
+   * was never going to enable, and the test spent its whole budget doing it.
+   */
+  await guest.reload();
 
   // Publishing it offers the invite, wired to the same dialog the owner used.
   await guest.getByTestId("button-publish-finished-step").click();

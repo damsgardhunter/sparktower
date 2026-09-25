@@ -31,6 +31,14 @@ async function finishFirstStep(api: any, title: string, answer: string) {
 }
 
 test("a published step brings a stranger in, and they publish their own", async ({ browser }) => {
+  /*
+   * Two people, two projects, a published page and a signed-out reader: this
+   * is one of the longest journeys in the suite and it had no budget of its
+   * own, so it ran on the 60s default. It only fit inside that while it was
+   * failing early on `path-last-done`; running to the end needs what the other
+   * full-journey specs take.
+   */
+  test.setTimeout(240_000);
   const author = await personIn(browser, "203.0.113.91", "Author");
   const { project } = await finishFirstStep(author.api, `Growth Loop ${stamp()}`, "Plan a week of dinners from what's already in your fridge.");
 
@@ -176,7 +184,17 @@ test("a published step brings a stranger in, and they publish their own", async 
   await stranger.getByTestId("button-next-write").click();
   await stranger.getByTestId("input-next-answer").fill("Weekend trips students can afford, planned around their exams.");
   await stranger.getByTestId("button-next-save-done").click();
-  await expect(stranger.getByTestId("path-last-done")).toContainText("Product statement");
+  /*
+   * Longer than the 5s default, on purpose.
+   *
+   * Saving invalidates the path query (refreshPath) rather than waiting for
+   * the 15s poll, so this is not a stale-cache wait — it is how long
+   * `/api/projects/:id/path` takes to answer again, which the scaling notes
+   * already list among the heavier reads. The failure screenshot showed
+   * "Finished · Product statement" present, captured after the assertion had
+   * already given up.
+   */
+  await expect(stranger.getByTestId("path-last-done")).toContainText("Product statement", { timeout: 20_000 });
 
   await stranger.getByTestId("button-publish-finished-step").click();
   const theirs = stranger.getByTestId("publish-artifact-dialog");
