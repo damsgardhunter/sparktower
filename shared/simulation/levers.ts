@@ -906,7 +906,44 @@ export const filedRoles = (decisions: TeamDecisions): Role[] =>
  * read. The ones here are the ones whose engine word is genuinely the wrong
  * word on the ground.
  */
-export function speak(field: LeverField, voice: NicheVoice): LeverField {
+/**
+ * "year" on a desk that decides four times a year.
+ *
+ * Every word of lever copy was written when a season was fourteen years and
+ * one decision was one of them. The engine has counted periods for a long time
+ * and a season can now be run monthly or quarterly, but the copy never moved:
+ * somebody deciding quarterly was told to plan "this year", four times a year.
+ *
+ * Substituted rather than rewritten per cadence because in lever copy "year"
+ * means the decision, and it means it consistently — the engine charges
+ * salaries, interest and fixed costs per period (`* per` in resolve.ts), so a
+ * salary really is paid every quarter in a quarterly season. Where a word
+ * genuinely means a calendar year it does not live here: asset lives, the
+ * credit rating's horizon and the segments' compound growth are all written
+ * elsewhere and left alone.
+ */
+function inPeriods(text: string | undefined, period: { one: string; many: string } | undefined): string | undefined {
+  if (!text || !period || period.one === "year") return text;
+  return text
+    .replace(/\bYears\b/g, period.many.charAt(0).toUpperCase() + period.many.slice(1))
+    .replace(/\byears\b/g, period.many)
+    .replace(/\bYear\b/g, period.one.charAt(0).toUpperCase() + period.one.slice(1))
+    .replace(/\byear\b/g, period.one);
+}
+
+export function speak(field: LeverField, voice: NicheVoice, period?: { one: string; many: string }): LeverField {
+  const said = speakIn(field, voice);
+  if (!period || period.one === "year") return said;
+  return {
+    ...said,
+    label: inPeriods(said.label, period) ?? said.label,
+    help: inPeriods(said.help, period) ?? said.help,
+    options: said.options?.map((o) => ({ ...o, label: inPeriods(o.label, period) ?? o.label, help: inPeriods(o.help, period) ?? o.help })),
+    choices: said.choices?.map((c) => ({ ...c, label: inPeriods(c.label, period) ?? c.label, help: inPeriods(c.help, period) ?? c.help })),
+  };
+}
+
+function speakIn(field: LeverField, voice: NicheVoice): LeverField {
   const many = voice.customers;
   const one = voice.customer;
   const cap = voice.capacityShort;

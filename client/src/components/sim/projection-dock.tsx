@@ -20,7 +20,7 @@ import { LiveDot } from "@/components/nova";
 import { cn } from "@/lib/utils";
 import { ArrowDown, ArrowUp, ChevronUp, ShieldAlert, AlertTriangle, Banknote } from "lucide-react";
 import { useProjection } from "./projection-panel";
-import { useMoney } from "./desk-currency";
+import { useMoney, usePeriod } from "./desk-currency";
 
 export interface Commitment {
   spend: number;
@@ -62,6 +62,7 @@ function Figure({ label, value, delta, testId }: { label: string; value: number;
 
 function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings }: DockProps) {
   const { compact } = useMoney();
+  const period = usePeriod();
   const { data, isFetching } = useProjection(ventureId, draft, filedStamp);
   const committed = live ? live.spend + live.fixed : 0;
   const over = live ? committed > live.available : false;
@@ -70,7 +71,7 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-bold">{data ? `Year ${data.year}, if it ended today` : "This year, if it ended today"}</p>
+          <p className="text-sm font-bold">{data ? `${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${data.year}, if it ended today` : `${period.of.charAt(0).toUpperCase() + period.of.slice(1)}, if it ended today`}</p>
           <p className="text-[11px] text-muted-foreground">Updates as you change your plan</p>
         </div>
         {/* Live: pulses while the next answer is being worked out. */}

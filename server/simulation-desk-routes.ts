@@ -20,7 +20,7 @@
  * argument between them rather than an ambush by the engine.
  */
 import type { Express } from "express";
-import { periodsPerYear, type Cadence } from "@shared/simulation/cadence";
+import { PERIOD_NAME, periodsPerYear, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles, companies, projects } from "@shared/schema";
@@ -343,7 +343,24 @@ export function registerSimulationDeskRoutes(app: Express): void {
       niche: { id: niche.id, name: niche.name, premise: niche.premise, voice: niche.voice },
       year,
       totalYears: season.totalYears,
-      /** Null when the season has finished; otherwise when this year resolves. */
+      /**
+       * What one decision is called here.
+       *
+       * The engine has counted periods rather than years for a long time and a
+       * season can be run monthly, quarterly or yearly — but every word on the
+       * desk said "year", so somebody deciding four times a simulated year was
+       * told each of those four was a year, and that the season was fourteen
+       * of them. Sent rather than derived on the client so the two cannot come
+       * to different conclusions about what a quarter is called.
+       *
+       * Note what this is *not* for: the parts of the game that are genuinely
+       * annual. A salary is paid every year, interest accrues every year, and
+       * a licence with four years left has four years left whatever the table
+       * is deciding this week. Those stay years on purpose.
+       */
+      cadence: season.cadence ?? "yearly",
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
+      /** Null when the season has finished; otherwise when this period resolves. */
       resolvesAt: season.nextTickAt,
       /**
        * Whether this person may end the year now, and as what — a developer,
@@ -382,7 +399,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
         const unlocksIn = unlockYear(desk, base.id);
-        const field = { ...speak(base, niche.voice), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        const field = { ...speak(base, niche.voice, PERIOD_NAME[(season.cadence ?? "yearly") as Cadence]), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         if (field.id === "tiers") {
           return {
             ...field,

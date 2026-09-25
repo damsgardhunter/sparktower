@@ -21,6 +21,9 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { nicheById } from "@shared/simulation/niches";
 import { eventsDue, grainDueAt, periodsOfGrain, nextWeather } from "@shared/simulation/events";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
+import { PERIOD_NAME } from "@shared/simulation/cadence";
+import { LEVER_FIELDS, speak } from "@shared/simulation/levers";
+import { nicheById } from "@shared/simulation/niches";
 
 describe("how often a table decides", () => {
   it("is a year, a quarter or a month, and nothing else", () => {
@@ -294,5 +297,49 @@ describe("the economic cycle", () => {
     expect(quarterly.demand).toBeCloseTo(yearly.demand, 6);
     expect(monthly.demand).toBeCloseTo(yearly.demand, 6);
     expect(quarterly.interestRate).toBeCloseTo(yearly.interestRate, 6);
+  });
+});
+
+/**
+ * A quarterly season does not call its quarters years.
+ *
+ * The engine has counted periods rather than years for a long time and a
+ * season can be run monthly, quarterly or yearly — but every word on the desk
+ * still said "year", so somebody deciding four times a simulated year was told
+ * that each of those four was a year and that the season was fourteen of them.
+ *
+ * In lever copy "year" means the decision, consistently: `resolve` charges
+ * salaries, interest and fixed costs per period, so a salary really is paid
+ * every quarter in a quarterly season. Where a word means a calendar year it
+ * lives somewhere else — asset lives, compound segment growth — and is not
+ * touched by this.
+ */
+describe("what a season calls one decision", () => {
+  const niche = nicheById("dating_apps")!;
+  const focus = LEVER_FIELDS.ceo.find((f) => f.id === "focus")!;
+
+  it("leaves a yearly season exactly as it was", () => {
+    expect(speak(focus, niche.voice, PERIOD_NAME.yearly)).toEqual(speak(focus, niche.voice));
+  });
+
+  it("says quarter on a quarterly season, in the label and the help", () => {
+    const q = speak(focus, niche.voice, PERIOD_NAME.quarterly);
+    expect(q.label).toBe("Where the quarter goes");
+    expect(q.help).toContain("what the company is for this quarter".replace("what", "What"));
+    expect(q.help).not.toMatch(/\byear\b/);
+  });
+
+  it("says month on a monthly season", () => {
+    expect(speak(focus, niche.voice, PERIOD_NAME.monthly).label).toBe("Where the month goes");
+  });
+
+  /* The options and choices carry copy too, and were missed the first time. */
+  it("follows the cadence into the options a lever offers", () => {
+    const headcount = LEVER_FIELDS.coo.find((f) => f.id === "headcount")!;
+    const q = speak(headcount, niche.voice, PERIOD_NAME.quarterly);
+    expect(q.help).toContain("every quarter");
+    for (const o of [...(q.options ?? []), ...(q.choices ?? [])]) {
+      expect(`${o.label} ${o.help ?? ""}`).not.toMatch(/\byear\b/);
+    }
   });
 });

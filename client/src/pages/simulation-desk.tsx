@@ -37,7 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { DeskCurrency, useMoney } from "@/components/sim/desk-currency";
+import { DeskCurrency, DeskPeriod, useMoney, usePeriod } from "@/components/sim/desk-currency";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -70,6 +70,15 @@ interface Desk {
   name: string | null;
   product: string | null;
   niche: { id: string; name: string; premise: string; voice: Record<string, string> };
+  /**
+   * What one decision is called in this season: a year, a quarter or a month.
+   *
+   * Sent by the server so the desk and the engine cannot disagree about what a
+   * quarter is called. Optional because a desk from before this existed has no
+   * opinion, and "year" is what it always meant.
+   */
+  period?: { one: string; many: string; of: string };
+  cadence?: string;
   /** What this company counts its money in — the project's currency, or the default. */
   currency?: CurrencyCode;
   year: number;
@@ -202,7 +211,6 @@ const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
  */
 
 export default function SimulationDeskPage() {
-  const { money, compact } = useMoney();
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -219,6 +227,14 @@ export default function SimulationDeskPage() {
     // is a teammate filing rather than a seat being taken out from under you.
     refetchInterval: 8000,
   });
+
+  /*
+   * Read off the payload rather than the context, because this component
+   * renders the providers: a hook called here would read the fallback and
+   * format a dollar company in pounds, or call a quarter a year.
+   */
+  const { money, compact } = useMoney(desk?.currency);
+  const period = usePeriod(desk?.period);
 
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -405,6 +421,7 @@ export default function SimulationDeskPage() {
 
   return (
     <DeskCurrency.Provider value={desk.currency ?? DEFAULT_CURRENCY}>
+    <DeskPeriod.Provider value={desk.period ?? { one: "year", many: "years", of: "this year" }}>
     <Shell
       title={desk.name ?? "Your company"}
       subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
@@ -708,7 +725,7 @@ export default function SimulationDeskPage() {
                   data-testid="button-file-decision"
                 >
                   {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {desk.submitted ? "Update this year's decision" : "File this year's decision"}
+                  {desk.submitted ? `Update ${period.of}'s decision` : `File ${period.of}'s decision`}
                 </Button>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
                   Changeable until the year resolves. Nothing is locked in before then.
@@ -736,7 +753,7 @@ export default function SimulationDeskPage() {
           >
             <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Store className="h-4 w-4" /></span>
             <h3 className="mt-3 text-sm font-bold">The market</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Three things a year, and everyone bids blind.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Five things a {period.one}, and everyone bids blind.</p>
             <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
           </button>
           {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
@@ -888,6 +905,7 @@ export default function SimulationDeskPage() {
       <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
       <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
     </Shell>
+    </DeskPeriod.Provider>
     </DeskCurrency.Provider>
   );
 }
@@ -901,13 +919,14 @@ export default function SimulationDeskPage() {
  * tells them whether *they* played well.
  */
 function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
+  const period = usePeriod();
   const { money, compact } = useMoney();
   return (
     <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
         <div className="flex items-center gap-2">
           <Target className="h-4 w-4 text-primary" />
-          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours this year</p>
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours {period.of}</p>
         </div>
         <h2 className="font-semibold text-lg mt-1.5" data-testid="text-challenge-title">{challenge.title}</h2>
         <p className="text-sm text-muted-foreground mt-1">{challenge.brief}</p>
