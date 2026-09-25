@@ -220,9 +220,15 @@ export function normalizeSeasonCode(raw: unknown): string | null {
  * for whatever the caller is choosing between (see /api/sim/join), and is
  * shared by public matchmaking and a company's invite code so both fill rooms
  * by exactly the same rules.
+ *
+ * `seats` is how many chairs this season's tables have, and it must be the
+ * season's own number rather than five. A season played one company each has
+ * tables of one, and filling them five-at-a-time puts the second founder in
+ * the first founder's company — the opposite of the thing they joined to do.
+ * Public matchmaking has no such seasons, so it keeps the default.
  */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promise<string> {
+async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string, seats = LOBBY_SIZE): Promise<string> {
   /*
    * A room with space, locked while we look at it. Without the lock two
    * people both see four seats, both take the fifth, and the room ends up
@@ -248,7 +254,7 @@ async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promi
     from ${simVentures} v
     where v.season_id = ${seasonId}
       and v.phase = 'filling'
-      and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${LOBBY_SIZE}
+      and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${seats}
     order by (select count(*) from ${simSeats} s where s.venture_id = v.id) desc
     limit 1
     for update
@@ -278,7 +284,7 @@ async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promi
       .select({ taken: sql<number>`count(*)::int` })
       .from(simSeats)
       .where(eq(simSeats.ventureId, targetId));
-    if (taken >= LOBBY_SIZE) targetId = undefined;
+    if (taken >= seats) targetId = undefined;
   }
 
   // `createdAt` passed rather than left to the column's default, for the reason given at `joinedAt` below.
@@ -580,7 +586,7 @@ function pgErrorCode(err: unknown): string | undefined {
             return { unpaid: { kind, seated, paid } as const };
           }
         }
-        return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id) };
+        return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id, season.seatCount ?? LOBBY_SIZE) };
       });
       if ("closed" in outcome) {
         return res.status(409).json({ message: "This season has already started, so its tables are full. Ask for a place in the next one.", code: "season_started" });

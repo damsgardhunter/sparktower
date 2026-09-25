@@ -158,6 +158,91 @@ describe("inviting a room to a company's season", () => {
   }, 300_000);
 });
 
+/**
+ * A season played one company each.
+ *
+ * The same room, the other exercise. Five to a table teaches people to run a
+ * company with four colleagues who disagree; a company each teaches them to
+ * run all of it against colleagues who are trying to win. A workshop should be
+ * able to ask for either, and the difference is one number — how many chairs a
+ * table has — which is why it went unoffered for so long.
+ */
+describe("a season played one company each", () => {
+  /** Three people, three companies, one market. */
+  it("gives every joiner their own company holding all five desks", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 2);
+    await giveSeats(companyId, 3);
+    const { seasonId } = await privateSeason(owner, companyId, { name: "Founder's day", mode: "solo" });
+
+    const [opened] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(opened.seatCount, "a table of one").toBe(1);
+
+    /*
+     * Everybody joins the same code, as in team mode. Nobody claims a chair,
+     * because there is nothing to claim: the lobby deals the one seat out and
+     * moves on rather than holding a founder through clocks that exist to give
+     * other people time to arrive.
+     */
+    const mine = new Map<string, string>();
+    for (const p of people) {
+      const join = await p.agent.post("/api/sim/join-code").send({ code: opened.inviteCode! });
+      expect(join.status, JSON.stringify(join.body)).toBe(200);
+      mine.set(p.id, join.body.ventureId);
+      /* Polling the room is what moves its clock on, exactly as the screen does. */
+      for (let i = 0; i < 3; i++) await p.agent.get(`/api/sim/ventures/${join.body.ventureId}`);
+    }
+
+    expect(new Set(mine.values()).size, "three founders, three companies — nobody shares a table").toBe(3);
+
+    const ventures = await db.select().from(simVentures).where(eq(simVentures.seasonId, seasonId));
+    expect(ventures.length).toBe(3);
+    for (const venture of ventures) {
+      const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, venture.id));
+      expect(seats.length, "one chair, not five with four bots in them").toBe(1);
+      expect(venture.phase, "nothing left to wait for").toBe("running");
+      expect(venture.name, "named after the company it was run from").toBeTruthy();
+    }
+
+    /*
+     * And it starts itself. A team season waits for the person running it,
+     * who knows when the room is full; a table of one has nobody to wait for.
+     */
+    await startReadySeasons();
+    const [running] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(running.status).toBe("running");
+
+    /* The desk each of them opens holds every lever, under one title. */
+    const desk = await people[1].agent.get(`/api/sim/ventures/${mine.get(people[1].id)}/desk`);
+    expect(desk.status, JSON.stringify(desk.body)).toBe(200);
+    expect(desk.body.solo).toBe(true);
+    expect(desk.body.yourTitle).toBe("Founder");
+    expect(desk.body.yourLevers.length, "five desks' levers in one list").toBeGreaterThan(5);
+  }, 300_000);
+
+  /* Five or one. Anything else is a team with chairs played by stand-ins. */
+  it("refuses a way of playing that is neither", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 0);
+    await giveSeats(companyId, 5);
+
+    const tried = await owner.agent.post(`/api/companies/${companyId}/seasons`)
+      .send({ nicheId: NICHE, name: "Tables of three", periodMinutes: 30, totalYears: 6, mode: "trio" });
+    expect(tried.status, JSON.stringify(tried.body)).toBe(400);
+    expect(tried.body.field).toBe("mode");
+  }, 180_000);
+
+  /* Left out is team mode, so nothing that already worked has to be re-saved. */
+  it("still seats five to a table when nobody says", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 0);
+    await giveSeats(companyId, 5);
+    const { seasonId } = await privateSeason(owner, companyId, { name: "As before" });
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(season.seatCount ?? 5).toBe(5);
+  }, 180_000);
+});
+
 describe("seats a company has bought", () => {
   /*
    * Seats belong to the company, not to the season they were first spent on.

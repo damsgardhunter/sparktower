@@ -45,6 +45,7 @@ import { SEASON_CODE_ALPHABET } from "./simulation-routes";
 import { startSeason, tickSeason, periodMsOf } from "./simulation-tick";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
+import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import type { CompanyReport } from "@shared/simulation/resolve";
 import { isContinent } from "@shared/simulation/geography";
 import { CADENCES, DEFAULT_YEARS, PERIOD_NAME, periodsPerYear, totalPeriods, yearsMax, yearsMin, type Cadence } from "@shared/simulation/cadence";
@@ -272,6 +273,30 @@ export function registerCompanySeasonRoutes(app: Express): void {
         return res.status(400).json({ message: "A season runs in years, quarters or months.", code: "invalid_input", field: "cadence" });
       }
 
+      /*
+       * One table of five, or a table each.
+       *
+       * The engine has always been able to run a company of one — a project's
+       * own season is built that way (`server/project-simulation-routes.ts`) —
+       * and a company running a workshop could not ask for it, so ten people
+       * were always two teams of five and never ten rivals. They are different
+       * exercises: five people sharing a company argue about the same decision
+       * from five chairs, while ten running their own compete on the same
+       * market and are answerable for all of it.
+       *
+       * "team" and "solo" rather than a seat count, because five and one are
+       * the only two that mean anything: a table of three is a team with two
+       * chairs played by stand-ins, which is a worse version of both.
+       */
+      const mode = body.mode === undefined || body.mode === "" ? "team" : String(body.mode);
+      if (mode !== "team" && mode !== "solo") {
+        return res.status(400).json({
+          message: "A season is played in teams of five or one company each.",
+          code: "invalid_input", field: "mode",
+        });
+      }
+      const seatCount = mode === "solo" ? 1 : LOBBY_SIZE;
+
       const name = String(body.name ?? "").trim() || `${found.company.name} — ${niche.name}`;
       if (name.length < 2 || name.length > 80) return res.status(400).json({ message: "A season name is 2 to 80 characters.", code: "invalid_input", field: "name" });
 
@@ -402,16 +427,16 @@ export function registerCompanySeasonRoutes(app: Express): void {
           const [season] = await db.insert(simSeasons).values({
             nicheId: niche.id, name, status: "forming", totalYears, periodMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
-            seatsPaid: seats, paidCents: cents,
+            seatsPaid: seats, paidCents: cents, seatCount,
             scope, botTeams, origin: "catalogue", cadence,
           }).returning();
           await logCompany(found.company.id, req.user.id, "season_created", null, {
-            seasonId: season.id, name, nicheId: niche.id, seats, paidCents: cents, scope, botTeams, cadence,
+            seasonId: season.id, name, nicheId: niche.id, seats, paidCents: cents, scope, botTeams, cadence, mode,
           });
           return res.status(201).json({
             seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode),
             seats, paidCents: cents, firstSeasonFree: isFirst,
-            scope, botTeams, cadence,
+            scope, botTeams, cadence, mode, seatCount,
           });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;

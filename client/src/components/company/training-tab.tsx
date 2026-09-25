@@ -280,12 +280,13 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
    */
   const [scope, setScope] = useState<string>("home");
   const [botTeams, setBotTeams] = useState("0");
+  const [mode, setMode] = useState<"team" | "solo">("team");
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
     mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons`, {
       nicheId, name, totalYears: Number(years), periodMinutes: period === "day" ? null : Number(period),
-      cadence, scope, botTeams: Number(botTeams),
+      cadence, scope, botTeams: Number(botTeams), mode,
     }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
@@ -316,6 +317,31 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
             <Label htmlFor="season-name">Name</Label>
             <Input id="season-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="e.g. Leadership away day, March" data-testid="input-season-name" />
           </div>
+          <div>
+            {/*
+              * The two exercises this runs, which are not the same one.
+              *
+              * Five people sharing a company argue about the same decision
+              * from five chairs; ten people running their own compete on one
+              * market and answer for all of it. Only five and one are offered,
+              * because a table of three is a team with two chairs played by
+              * stand-ins — a worse version of both.
+              */}
+            <Label>How they play</Label>
+            <Select value={mode} onValueChange={(v) => setMode(v as "team" | "solo")}>
+              <SelectTrigger data-testid="select-season-mode"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="team">In teams of five</SelectItem>
+                <SelectItem value="solo">A company each</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1" data-testid="text-mode-blurb">
+              {mode === "team"
+                ? "Five to a table, a chair each — the marketing, the money, the product, the operations and the chief executive. They have to agree."
+                : "Everybody runs their own company and holds all five chairs. They compete in the same market, so what one does reaches the others."}
+            </p>
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label>The table decides</Label>
