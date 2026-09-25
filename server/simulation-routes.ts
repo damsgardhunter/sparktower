@@ -74,8 +74,30 @@ async function seatsOf(ventureId: string) {
  * not there is anyone there to see it.
  */
 export async function advanceVenture(ventureId: string): Promise<void> {
+  /*
+   * Until it stops moving, not one step per request.
+   *
+   * Each call used to apply a single transition, which is invisible when every
+   * phase has a clock on it — the room sits in `claiming` for three minutes
+   * anyway, so the next poll is in plenty of time. It stops being invisible
+   * the moment a phase can resolve immediately: a solo founder's room has
+   * nothing to claim and nothing to name, so all three transitions are ready
+   * at once, and doing one per poll turned an instant start into a sequence
+   * of waiting screens that each said the last one was finished.
+   *
+   * Bounded rather than `while (true)`: the phases are a short chain and a
+   * loop that trusts its own exit condition to be reachable is a loop that
+   * hangs a request when it isn't.
+   */
+  for (let step = 0; step < 4; step += 1) {
+    if (!(await advanceOnce(ventureId))) return;
+  }
+}
+
+/** One transition. True if something moved and it is worth looking again. */
+async function advanceOnce(ventureId: string): Promise<boolean> {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
-  if (!venture || venture.phase === "running" || venture.phase === "retired") return;
+  if (!venture || venture.phase === "running" || venture.phase === "retired") return false;
 
   /*
    * Topping the room up happens here rather than only on the minute, so the
@@ -93,7 +115,7 @@ export async function advanceVenture(ventureId: string): Promise<void> {
   const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
 
   /* How many chairs this season's tables have. One means a founder on their own. */
-  const [seasonRow] = await db.select({ seatCount: simSeasons.seatCount })
+  const [seasonRow] = await db.select({ seatCount: simSeasons.seatCount, companyId: simSeasons.companyId })
     .from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
 
   const move = nextPhase({
@@ -103,7 +125,7 @@ export async function advanceVenture(ventureId: string): Promise<void> {
     named: !!venture.name,
     seatCount: seasonRow?.seatCount ?? LOBBY_SIZE,
   });
-  if (!move) return;
+  if (!move) return false;
 
   /*
    * Dealing out unclaimed seats is several writes that must land together: a
@@ -123,13 +145,33 @@ export async function advanceVenture(ventureId: string): Promise<void> {
         .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), ...readySince(move.phase) })
         .where(eq(simVentures.id, ventureId));
     });
-    return;
+    return true;
   }
 
-  const name = move.phase === "running" && !venture.name ? placeholderName(ventureId) : venture.name;
+  /*
+   * The name a company starts with.
+   *
+   * `placeholderName` is a random pair of words — "Tessera Union" — for a
+   * table of five that never got round to naming itself. A solo founder is
+   * not that: they built this season from a project that already has a name,
+   * and being handed an invented one is the product renaming their business
+   * for them. Their own is the only sensible default, and they can still
+   * change it in year one like anybody else.
+   */
+  let name = venture.name;
+  if (move.phase === "running" && !name) {
+    const solo = (seasonRow?.seatCount ?? LOBBY_SIZE) <= 1;
+    const [owner] = solo && venture.seasonId
+      ? await db.select({ name: companies.name }).from(companies)
+        .innerJoin(simSeasons, eq(simSeasons.companyId, companies.id))
+        .where(eq(simSeasons.id, venture.seasonId)).limit(1)
+      : [];
+    name = owner?.name?.slice(0, 80) || placeholderName(ventureId);
+  }
   await db.update(simVentures)
     .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), name, ...readySince(move.phase) })
     .where(eq(simVentures.id, ventureId));
+  return true;
 }
 
 /**

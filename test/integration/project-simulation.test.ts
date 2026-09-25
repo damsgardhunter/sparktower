@@ -17,7 +17,9 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companies, companyMembers, projects, simSeasons } from "@shared/schema";
+import { companies, companyMembers, projects, simSeasons, simVentures } from "@shared/schema";
+import { startReadySeasons } from "../../server/simulation-tick";
+import { advanceVenture } from "../../server/simulation-routes";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -274,6 +276,42 @@ describe("playing a market again, and filling the table", () => {
     expect(five.status, JSON.stringify(five.body)).toBe(201);
     const [table] = await db.select().from(simSeasons).where(eq(simSeasons.id, five.body.seasonId));
     expect(table.seatCount, "a project with a team keeps the five desks").toBe(5);
+  }, 60_000);
+
+  /*
+   * A solo season starts itself.
+   *
+   * `startReadySeasons` only ever looked at seasons with no company, because
+   * a company's season is started by its organiser — who knows when the room
+   * is full, which the clock does not. Every project season has a company, so
+   * nothing in the product would start one: the founder took their chair,
+   * watched the lobby say it was ready, opened the desk and sat on "Waiting
+   * for year one" indefinitely. There is nobody for a table of one to wait
+   * for, which is the whole of why it is safe to start it.
+   */
+  it("starts a solo season by itself, with the founder's own company name", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const solo = await aProject(owner.id, { soloMode: true });
+    const { season, company } = await seasonWithMarket(owner.id, solo.id);
+
+    const made = await owner.agent.post(`/api/projects/${solo.id}/simulation`).send({ fromSeasonId: season.id });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const seasonId = made.body.seasonId as string;
+
+    // The founder takes their chair. One chair is the whole table, so the
+    // room needs nothing else to be ready.
+    const joined = await owner.agent.post("/api/sim/join-code").send({ code: made.body.inviteCode });
+    expect(joined.status, JSON.stringify(joined.body)).toBe(200);
+    await advanceVenture(joined.body.ventureId);
+
+    const [room] = await db.select().from(simVentures).where(eq(simVentures.id, joined.body.ventureId));
+    expect(room.phase, "one chair, nothing to claim and nothing to name").toBe("running");
+    expect(room.name, "their own company, not an invented one").toBe(company.name);
+
+    expect(await startReadySeasons(), "nobody is coming, so nothing is waited for").toContain(seasonId);
+    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(started.status).toBe("running");
   }, 60_000);
 
   /*

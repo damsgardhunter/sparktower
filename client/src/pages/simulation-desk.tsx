@@ -81,6 +81,8 @@ interface Desk {
   yourTitle: string | null;
   /** Only before year one: how many rooms in this market are still in a lobby. */
   roomsStillChoosing?: number;
+  /** One chair at this table: every desk is yours, and nobody else is arriving. */
+  solo?: boolean;
   yourRoomReady?: boolean;
   yourLevers: string[];
   fields: LeverField[];
@@ -370,15 +372,28 @@ export default function SimulationDeskPage() {
       <Shell title={desk.name ?? "Your company"} subtitle="Waiting for year one">
         <Card><CardContent className="p-6 space-y-2" data-testid="card-not-started">
           <p className="text-sm">
-            {waiting === 0
-              ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
-              : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
+            {desk.solo
+              ? "Your company is set up. Year one starts in a few seconds — this page will move on by itself."
+              : waiting === 0
+                ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
+                : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
           </p>
           <p className="text-sm text-muted-foreground">
-            {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
-            You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
-            product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
-            this; the season will be here when it starts.
+            {/*
+              * Two different promises, because two different things are true.
+              * The public market fills a waiting room with players the product
+              * runs. A season built from a project does not — its seats were
+              * bought for named people — and a solo founder has no empty seats
+              * at all, so saying either to them is a lie about their own table.
+              */}
+            {desk.solo
+              ? "Every desk is yours: nobody else is coming, and nobody else is being paid. Nothing is lost by closing this; the season will be here when it starts."
+              : <>
+                  {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
+                  You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
+                  product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
+                  this; the season will be here when it starts.
+                </>}
           </p>
         </CardContent></Card>
       </Shell>

@@ -20,7 +20,7 @@
  * advances on a conditional update that names the year it expects to find. Run
  * the same tick twice and the second one does nothing.
  */
-import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import { surfaceEnabled } from "./surfaces";
 import {
@@ -225,7 +225,21 @@ export async function startReadySeasons(): Promise<string[]> {
   const candidates = await db
     .select({ id: simSeasons.id })
     .from(simSeasons)
-    .where(and(inArray(simSeasons.status, ["forming", "abandoned"]), isNull(simSeasons.companyId)))
+    /*
+     * Public seasons, and any table of one.
+     *
+     * A company's season waits for its organiser because the organiser knows
+     * when the room is full and the clock does not. A solo founder has nobody
+     * to wait for, and waiting for them was this exact bug: the season had a
+     * companyId — every project season does, because a company is how seats
+     * and markets are stored — so nothing in the product would ever start it,
+     * and it sat on "Waiting for year one" indefinitely. Which is the failure
+     * the comment above already describes, arrived at from the other side.
+     */
+    .where(and(
+      inArray(simSeasons.status, ["forming", "abandoned"]),
+      or(isNull(simSeasons.companyId), lte(simSeasons.seatCount, 1)),
+    ))
     .limit(50);
 
   const started: string[] = [];

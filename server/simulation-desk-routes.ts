@@ -194,6 +194,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         /** What the season is actually waiting on, so the wait has a shape. */
         roomsStillChoosing: rooms.filter((r) => r.phase !== "running" && r.phase !== "retired").length,
         yourRoomReady: venture.phase === "running",
+        /** One chair: nobody else is coming, so the screen must not promise anyone. */
+        solo: (season.seatCount ?? 5) <= 1,
       });
     }
 
