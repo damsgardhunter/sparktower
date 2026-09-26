@@ -1,6 +1,6 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
+import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents, simSeatPurchases, companies, gamePlayPurchases } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
 import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
@@ -205,11 +205,142 @@ export class WebhookHandlers {
     // session id itself, and records only a session that's actually paid.
     // Errors propagate: a lost pledge is worth a retry.
     if (session.metadata?.type === 'backing') { await recordBacking(session); return; }
-    if (settledLater) return;
+    /*
+     * A top-up: money onto the account's balance, which is the only thing
+     * Checkout sells now (/api/nova/top-up).
+     *
+     * Credited through the ledger's unique session id rather than by adding to
+     * the column directly, so the same session arriving twice adds nothing —
+     * and Stripe really does send one session as two events when a delayed
+     * payment method is used (completed, then async_payment_succeeded). The
+     * event ledger upstream stops the same *event* twice; this stops the same
+     * *session* twice, which is a different thing.
+     *
+     * The amount comes from what Stripe says was paid, never from the metadata
+     * the client's request produced — metadata is a note to ourselves, not a
+     * receipt. It only falls back to the metadata when Stripe sends no total,
+     * which it does not do for a paid session.
+     */
+    if (session.metadata?.type === 'topup') {
+      if (!settledLater && session.payment_status && session.payment_status !== 'paid') {
+        console.log(`[stripe] top-up session ${session.id} completed unpaid (${session.payment_status}); waiting for it to settle`);
+        return;
+      }
+      const userId: string | undefined = session.metadata?.userId;
+      if (!userId) return;
+      const paid = Number(session.amount_total ?? session.metadata?.amountCents);
+      if (!Number.isFinite(paid) || paid <= 0) return;
+      const { creditTopUp } = await import('./wallet');
+      const { credited, balanceCents } = await creditTopUp(userId, Math.round(paid), String(session.id));
+      console.log(`[stripe] top-up ${session.id} for user ${userId}: ${credited ? `+${paid}c, balance ${balanceCents}c` : 'already credited'}`);
+      return;
+    }
+
+    /*
+     * Everything below here handles a delayed payment too.
+     *
+     * There used to be an `if (settledLater) return;` on this line, and it
+     * meant that a checkout paid by a method that settles later — which is
+     * most of them outside cards — completed unpaid, was skipped, then settled
+     * as `async_payment_succeeded` and was skipped again. The customer paid and
+     * got nothing: no seats, no plays, no donation recorded. The top-up above
+     * already handled both events; the three below did not, and the guard is
+     * why.
+     *
+     * Each of them is safe on either event for the same two reasons: none acts
+     * unless Stripe says `payment_status === 'paid'`, and each is idempotent on
+     * the session id, so the same session arriving twice credits once.
+     */
+
+    /*
+     * Seats on the simulation: a one-off payment, credited to the company that
+     * bought them rather than to the person who clicked. Keyed on the session
+     * so a redelivery inserts nothing and therefore credits nothing — the same
+     * shape as donations below, for the same reason.
+     */
+    if (session.metadata?.kind === 'simulation_seats') {
+      const companyId = session.metadata.companyId;
+      const seats = parseInt(session.metadata.seats ?? '0', 10);
+      if (!companyId || !Number.isInteger(seats) || seats < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      /*
+       * Which balance to credit. Read from the session's own metadata rather
+       * than inferred from what was paid: the price could change, and a seat
+       * credited to the wrong balance is a seat the company paid for and
+       * cannot spend. An old session from before the two tiers carries no
+       * `seatKind`, and every seat sold then was a Nova seat.
+       */
+      const COLUMNS = {
+        play: companies.simPlaySeatsPaid,
+        nova: companies.simNovaSeatsPaid,
+        quarterly: companies.simQuarterlySeatsPaid,
+        monthly: companies.simMonthlySeatsPaid,
+      } as const;
+      const FIELDS = {
+        play: 'simPlaySeatsPaid', nova: 'simNovaSeatsPaid',
+        quarterly: 'simQuarterlySeatsPaid', monthly: 'simMonthlySeatsPaid',
+      } as const;
+      const asked = session.metadata?.seatKind as keyof typeof COLUMNS | undefined;
+      const seatKind = asked && asked in COLUMNS ? asked : 'nova';
+      const column = COLUMNS[seatKind];
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(simSeatPurchases).values({
+          companyId,
+          seats,
+          kind: seatKind,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+          boughtBy: session.metadata?.userId ?? null,
+        }).onConflictDoNothing({ target: simSeatPurchases.stripeSessionId }).returning({ id: simSeatPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(companies)
+          .set({ [FIELDS[seatKind]]: sql`${column} + ${seats}` })
+          .where(eq(companies.id, companyId));
+      });
+      console.log(`Simulation seats credited: ${seats} ${seatKind} to company ${companyId}`);
+      return;
+    }
+
+    /*
+     * Another Ten Years valuation, at a dollar each. Same shape as the seats
+     * above and for the same reason: keyed on the session, so a redelivery
+     * inserts nothing and therefore credits nothing.
+     */
+    if (session.metadata?.kind === 'game_plays') {
+      const userId = session.metadata.userId;
+      const plays = parseInt(session.metadata.plays ?? '0', 10);
+      if (!userId || !Number.isInteger(plays) || plays < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(gamePlayPurchases).values({
+          userId,
+          plays,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+        }).onConflictDoNothing({ target: gamePlayPurchases.stripeSessionId }).returning({ id: gamePlayPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(users)
+          .set({ gamePlaysPaid: sql`${users.gamePlaysPaid} + ${plays}` })
+          .where(eq(users.id, userId));
+      });
+      console.log(`Game plays credited: ${plays} to ${userId}`);
+      return;
+    }
 
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;
       if (!projectId || !donorId || !amount) return;
+      /*
+       * Paid, or nothing happens.
+       *
+       * The seats and the plays have always asked this; donations never did,
+       * and were saved from recording an unpaid one only by the `settledLater`
+       * guard above — which skipped the event that says it *was* paid. So a
+       * delayed donation was either recorded before the money arrived or not
+       * at all, depending on which event turned up. Asked here, both events
+       * behave, and an abandoned checkout records nothing.
+       */
+      if (session.payment_status && session.payment_status !== 'paid') return;
       const amountCents = parseInt(amount);
       // The session id is unique on donations: a redelivery inserts nothing
       // and therefore increments nothing. The two writes are one transaction.

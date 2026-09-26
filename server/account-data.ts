@@ -42,6 +42,15 @@ export const MINE: Owned[] = [
   { table: "contest_participants", column: "user_id" },
   { table: "direct_messages", column: "sender_id" },
   { table: "user_task_stats", column: "user_id" },
+  /*
+   * A game somebody paid to play. Listed as theirs rather than kept, because
+   * that is what the database actually does with it: `user_id` is `not null`
+   * and `on delete cascade`, so the row goes when the account does whatever
+   * this list says. Calling it kept would have been a promise the schema
+   * breaks — so it is exported with the rest of their things first, which is
+   * the half we do control.
+   */
+  { table: "game_play_purchases", column: "user_id" },
   { table: "health_finding_feedback", column: "user_id" },
   { table: "project_storyboards", column: "user_id" },
   { table: "investor_artifacts", column: "user_id" },
@@ -129,6 +138,16 @@ export const MINE: Owned[] = [
    */
   { table: "user_blocks", column: "blocker_id" },
   { table: "user_blocks", column: "blocked_id" },
+  /*
+   * A domain somebody proved they own.
+   *
+   * Theirs, not the company's: the verification is keyed to the person who did
+   * it and is `on delete cascade`, so it goes when they do — the company keeps
+   * its own `verified_domain` and carries on. Listed here rather than left
+   * implicit so it is in the export too: "I proved I own this domain on this
+   * date" is a thing somebody leaving is entitled to a copy of.
+   */
+  { table: "company_verifications", column: "user_id" },
 ];
 
 export const CHOICE: Owned[] = [
@@ -145,9 +164,41 @@ export const CHOICE: Owned[] = [
 export const KEPT: Owned[] = [
   // Money: kept for accounting and refunds, pointing at the tombstone.
   { table: "project_backings", column: "backer_id" },
+  /*
+   * The pay-per-use money, which arrived (migrations 0051–0053) without ever
+   * being listed here — so an export left it out and closing an account left
+   * every dollar movement behind, keyed to a user nobody had accounted for.
+   * All four are records of what was charged: the ledger is the truth behind
+   * the balance column (server/wallet.ts), a build pass is the receipt that
+   * makes a project's later outcomes free, and the image runs are the evidence
+   * behind what an image cost. Kept for the same reason every other payment
+   * record is, and exported so somebody leaving can see what they paid.
+   */
+  { table: "nova_ledger", column: "user_id" },
+  { table: "nova_build_passes", column: "user_id" },
+  { table: "ai_image_runs", column: "user_id" },
+  // A build is a project's work, like an audit run two lines down.
+  { table: "nova_build_runs", column: "started_by_id" },
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },
+  /*
+   * "This screen is broken", and who dealt with it.
+   *
+   * Kept rather than mine, which is what the table itself already says: both
+   * columns are `on delete set null` rather than cascade, so a closing account
+   * takes its name off the report and leaves the report. That is the right way
+   * round for this queue — it takes reports from signed-out visitors, so an
+   * unattributed one is the ordinary case rather than an orphan, and a bug
+   * somebody took the trouble to describe should not stop being a bug because
+   * they left. Exported all the same, because their own words about a product
+   * that failed them are theirs to have a copy of.
+   *
+   * `handled_by_id` is an operator's record of work done, like the moderation
+   * lines above it.
+   */
+  { table: "problem_reports", column: "user_id" },
+  { table: "problem_reports", column: "handled_by_id" },
   /*
    * A company's own records, which it goes on running on after one of its
    * people leaves: who did what in it, the weekly numbers someone filed, and
@@ -177,6 +228,27 @@ export const KEPT: Owned[] = [
   { table: "project_documents", column: "created_by_id" },
   { table: "project_files", column: "uploader_id" },
   { table: "code_audit_runs", column: "started_by_id" },
+  /*
+   * The decision simulator's rows: a project's baseline numbers, the scenarios
+   * run against them and the ten-year outlooks. Each is keyed to the project
+   * and cascades with it; the user column only records who pressed the button,
+   * and is already `on delete set null`. Team work, like the audit above.
+   */
+  { table: "simulation_baselines", column: "updated_by" },
+  { table: "simulation_scenarios", column: "created_by" },
+  { table: "ten_year_outlooks", column: "created_by" },
+  // A marketing scheme is the same shape as the three above: written against
+  // one project, cascading with it, and `author_id` only says who typed it.
+  { table: "marketing_schemes", column: "author_id" },
+  /*
+   * The money behind a challenge, which is held for somebody else until a
+   * winner is picked. `funded_by` and `awarded_to` are `on delete set null`
+   * precisely so the record outlives the account that paid or won, pointing at
+   * a tombstone — money is kept for the same reason every other payment record
+   * here is.
+   */
+  { table: "challenge_prizes", column: "funded_by" },
+  { table: "challenge_prizes", column: "awarded_to" },
   { table: "project_code_audits", column: "created_by_id" },
   { table: "cofounder_sprints", column: "user1_id" },
   { table: "cofounder_sprints", column: "user2_id" },
@@ -205,6 +277,19 @@ export const KEPT: Owned[] = [
   { table: "project_operation_applications", column: "user_id" },
   // Who asked what it would take to reach a target: the roadmap is the company's, the name on it is a record.
   { table: "what_would_it_take_roadmaps", column: "generated_by" },
+  /*
+   * Seats a company bought for a season: a payment record, kept like every
+   * other one here, and `bought_by` is already `on delete set null` — so what
+   * survives the account is the purchase, pointing at the tombstone, not the
+   * person. The company paid for those seats and still holds them.
+   */
+  { table: "sim_seat_purchases", column: "bought_by" },
+  /*
+   * Who last changed the platform's AI economics. An admin action on a
+   * setting that belongs to the platform rather than to them, and the same
+   * `set null` as the other reviewer columns above.
+   */
+  { table: "ai_settings", column: "updated_by" },
 ];
 
 /**

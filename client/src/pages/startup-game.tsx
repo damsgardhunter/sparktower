@@ -19,6 +19,7 @@ import { RoundHeader, Players, SETTLE_COPY, type DeckCard, type GamePlayer } fro
 import { DeckRound, EraPicker, IdeaRound, ProductRound, type GameIdea } from "@/components/game/rounds";
 import { BudgetRound } from "@/components/game/budget";
 import { VerdictScreen, type StandingRow } from "@/components/game/verdict";
+import { YourIdeaStaysYours } from "@/components/game/your-idea";
 import { ROUND_COPY, PLAYABLE_ROUNDS } from "@shared/sprints/game";
 import { customCard, isCustomCard, MAX_CUSTOM_CARDS } from "@shared/sprints/cards";
 import { allocated, type Allocation } from "@shared/sprints/budget";
@@ -164,6 +165,13 @@ export default function StartupGamePage() {
 
         <div className="space-y-4">
           <Chat gameId={id!} players={players} live={round !== "verdict"} />
+          {/*
+            * Beside the chat, where the writing is happening. Small, because it
+            * is reassurance rather than an instruction — but present on the
+            * screen where somebody is actually typing their idea in, not only on
+            * the card they clicked through half an hour ago.
+            */}
+          {round !== "verdict" && <YourIdeaStaysYours compact />}
           {round !== "verdict" && (
             <Button
               variant="ghost" size="sm"

@@ -26,6 +26,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
+import { useOpenSurface } from "@/components/section/live";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,7 +56,7 @@ interface WwitPayload {
   today: string;
   subcategory: string;
   targets: TargetView[];
-  credits: number;
+  price: { cents: number; display: string; unlocked: boolean };
   aiAvailable: boolean;
   grounding: WwitGrounding;
   notReady: string | null;
@@ -74,6 +76,8 @@ const stamp = (iso: string) =>
   new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 export function WhatWouldItTake({ projectId }: { projectId: string }) {
+  // RUN.S4.5's card sends people here rather than offering to write an answer onto the step.
+  const surface = useOpenSurface("wwit");
   const { data, isLoading } = useQuery<WwitPayload>({ queryKey: wwitKey(projectId) });
   const [chosen, setChosen] = useState<WwitTargetId>("m1");
   const [comparing, setComparing] = useState<WwitTargetId | null>(null);
@@ -101,7 +105,7 @@ export function WhatWouldItTake({ projectId }: { projectId: string }) {
   const compareTarget = comparing ? data.targets.find((t) => t.id === comparing) ?? null : null;
 
   return (
-    <Card data-testid="wwit">
+    <Card ref={surface.ref} className={surface.asked ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : undefined} data-testid="wwit">
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
           <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
@@ -192,14 +196,30 @@ function TargetPanel({ projectId, data, target, slot, onCompare, canCompare, com
   onCompare: () => void; canCompare: boolean; comparing: boolean;
 }) {
   const { toast } = useToast();
+  const confirmPurchase = useConfirmPurchase();
   const latest = slot?.latest ?? null;
 
   const build = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/what-would-it-take/${target.id}`, {}).then((r) => r.json()),
-    onSuccess: () => {
+    mutationFn: async () => {
+      /*
+       * Asked before it spends, like every other priced outcome. Only on the
+       * first one for this project: after that the price is zero and
+       * confirmPurchase returns straight away, because re-running it to see
+       * whether the gap moved is the whole point and charging for that would
+       * be charging somebody to check.
+       */
+      if (!data.price.unlocked && !(await confirmPurchase("whatWouldItTake", {
+        title: `What would it take to reach ${target.label}?`,
+        detail: "Built once for this project. Re-running it — for this size or any of the other three — is free from then on.",
+        projectId,
+      }))) return null;
+      return apiRequest("POST", `/api/projects/${projectId}/what-would-it-take/${target.id}`, {}).then((r) => r.json());
+    },
+    onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       queryClient.invalidateQueries({ queryKey: wwitKey(projectId) });
-      // The generation closes a Run path step and spends credits; both are shown elsewhere.
-      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+      // The generation closes a Run path step and takes the money; both are shown elsewhere.
+      queryClient.invalidateQueries({ queryKey: ["/api/nova/wallet"] });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "path"] });
     },
     onError: (e) => toast({ title: "Couldn't build that roadmap", description: errorText(e), variant: "destructive" }),
@@ -229,7 +249,8 @@ function TargetPanel({ projectId, data, target, slot, onCompare, canCompare, com
               {build.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 : latest ? <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
               {latest ? "Run it again" : "Build the roadmap"}
-              <span className="ml-1.5 text-xs opacity-80">{data.credits} credits</span>
+              {/* Free once this project has one: the price is for the first, not for checking again. */}
+              {!data.price.unlocked && <span className="ml-1.5 text-xs opacity-80">{data.price.display}</span>}
             </Button>
           </div>
         </div>

@@ -49,6 +49,18 @@ export default defineConfig({
       SESSION_SECRET: "e2e-session-secret-not-used-anywhere-real",
       AI_INTEGRATIONS_OPENAI_API_KEY: "sk-test-not-a-real-key-e2e-never-calls-openai",
       OPENAI_API_KEY: "sk-test-not-a-real-key-e2e-never-calls-openai",
+      /*
+       * And make the key above true.
+       *
+       * It says "e2e never calls openai" and e2e was calling OpenAI: the CI
+       * log is full of `401 Incorrect API key provided: sk-test-…`, one per
+       * feature that asks Nova for anything. Every one of those is a real
+       * round trip to api.openai.com, on the critical path of a browser test,
+       * failing slowly and falling back to defaults — so the suite's speed
+       * depended on how fast a third party refused us. AI_STUB answers in
+       * process (server/ai-stub.ts) and never opens a socket.
+       */
+      AI_STUB: "1",
       PLATFORM_OWNER_EMAIL: "owner@e2e.local",
       PLATFORM_REVIEWER_EMAILS: "owner@e2e.local",
       LOCAL_OBJECT_ROOT: path.resolve(import.meta.dirname, "e2e", ".objects"),

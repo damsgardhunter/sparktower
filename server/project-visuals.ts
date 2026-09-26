@@ -19,14 +19,15 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { openai } from "./replit_integrations/image/client";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
-import { requireCredits } from "./entitlements";
+import { requireImages } from "./images";
 import { storage } from "./storage";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { rateLimit } from "./moderation";
 import { respondToAiError } from "./ai-json";
 import {
   PROJECT_VISUAL_SLOTS, isProjectVisualSlot,
   type ProjectVisualSlot, type ProjectVisualSlotDef, type ProjectVisuals,
+  takeFor,
 } from "@shared/project-visuals";
 
 /** The formats the image edit endpoint takes, by magic bytes. */
@@ -62,7 +63,8 @@ const BRIEF_LABELS: Record<string, string> = {
   successMetrics: "What success looks like",
 };
 
-function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boolean) {
+/** Exported for the test that redrawing asks for a different picture, like postImagePrompt. */
+export function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boolean, draws: number) {
   const context = def.briefKeys
     .map((k) => {
       const v = String((project as Record<string, unknown>)[k] ?? "").trim();
@@ -82,6 +84,17 @@ function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boo
     context ? `What the project is about:\n${context}` : "",
     `Style: polished, modern, editorial; cohesive with the other images on the same page.`,
     def.shape === "wide" ? `Wide landscape composition.` : `Square composition, centred subject.`,
+    /*
+     * What makes a redraw a different picture. Everything above is fixed by
+     * the project, so without this the second press sends the same prompt and
+     * gets the same image — which is what "redo does nothing" actually was.
+     * The take changes where the camera is and how it is lit, never the
+     * subject or the palette, because those are the builder's choices.
+     */
+    takeFor(draws),
+    draws > 0
+      ? `This is attempt ${draws + 1} at this image. Compose it differently from a straightforward first attempt — a different viewpoint and arrangement, the same subject and the same brand.`
+      : "",
     `No text, lettering, words or numbers anywhere in the image.`,
   ].filter(Boolean).join("\n");
 }
@@ -90,10 +103,11 @@ function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boo
 async function drawSlot(
   project: Project, def: ProjectVisualSlotDef,
   logo: Awaited<ReturnType<typeof readReference>>, cover: Awaited<ReturnType<typeof readReference>>,
+  draws: number,
 ): Promise<string> {
   const response = await openai.images.edit({
     model: IMAGE_MODEL,
-    prompt: visualPrompt(project, def, !!cover),
+    prompt: visualPrompt(project, def, !!cover, draws),
     image: cover ? [logo!, cover] : [logo!],
     size: def.shape === "wide" ? "1536x1024" : "1024x1024",
     quality: IMAGE_QUALITY,
@@ -149,7 +163,7 @@ export function registerProjectVisualRoutes(app: Express) {
    * hover menu). Charged after at least one image came back — a run where the
    * model refused everything costs nothing.
    */
-  app.post("/api/projects/:id/visuals", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/visuals", isAuthenticated, rateLimit("render"), async (req: any, res) => {
     const userId = req.user.id;
     try {
       const only = req.body?.slot;
@@ -168,15 +182,29 @@ export function registerProjectVisualRoutes(app: Express) {
         });
       }
 
-      const cost = only ? CREDIT_COSTS.profileVisualSingle : CREDIT_COSTS.profileVisuals;
-      if (!(await requireCredits(res, userId, cost, only ? "redrawing that image" : "adding visuals to your project page"))) return;
-
       const cover = await readReference(project.coverUrl, "cover");
       const slots = only ? PROJECT_VISUAL_SLOTS.filter((d) => d.slot === only) : PROJECT_VISUAL_SLOTS;
 
+      /*
+       * `wanted` is the real number, which for a full page is five. It used to
+       * be one small action either way, so a dollar day pass drew the whole
+       * page as often as somebody liked; now the hourly ceiling knows what it
+       * is being asked for and the free go covers the first set rather than a
+       * fifth of it.
+       */
+      // metering: priced as pictures, five of them for a whole page — the first
+      // set is free per project, then the image pass. See server/images.ts.
+      const permit = await requireImages(res, userId, {
+        scope: "project", scopeId: project.id, wanted: slots.length,
+        label: only ? "Redrawing that image" : "Adding visuals to your project page",
+      });
+      if (!permit) return;
+
+      // How many times each slot has already been drawn — the take rotates on it.
+      const takes = currentVisuals(project).takes ?? {};
       const results = await Promise.all(slots.map(async (def) => {
         try {
-          return { slot: def.slot, path: await drawSlot(project, def, logo, cover), error: null };
+          return { slot: def.slot, path: await drawSlot(project, def, logo, cover, takes[def.slot] ?? 0), error: null };
         } catch (err: any) {
           return { slot: def.slot, path: null, error: String(err?.message || err) };
         }
@@ -190,14 +218,21 @@ export function registerProjectVisualRoutes(app: Express) {
 
       let visuals = currentVisuals(project);
       for (const r of made) visuals = unhide({ ...visuals, [r.slot]: r.path! }, r.slot);
+      /*
+       * Counted only for the slots that actually produced a picture, so a
+       * failed draw doesn't burn a take and hand the next press the one after
+       * the one it never saw.
+       */
+      visuals = { ...visuals, takes: { ...takes, ...Object.fromEntries(made.map((r) => [r.slot, (takes[r.slot] ?? 0) + 1])) } };
       const saved = await saveVisuals(project.id, visuals);
 
-      await storage.deductCredits(userId, cost);
+      // Recorded with what was actually drawn, so a slot that failed isn't billed against the hour.
+      await permit.record(made.length);
 
       res.json({
         visuals: saved,
         failed: results.filter((r) => !r.path).map((r) => r.slot),
-        creditsCharged: cost,
+        free: permit.free,
       });
     } catch (error: any) {
       console.error("Project visuals error:", error);

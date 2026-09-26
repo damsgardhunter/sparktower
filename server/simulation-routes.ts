@@ -24,10 +24,13 @@ import { botsForVenture } from "@shared/simulation/bots";
 import { ensureBotUser } from "./bot-accounts";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
+import { marketNameOf, marketOf } from "./simulation-scope";
 import {
   LOBBY_SIZE, PHASE_SECONDS, assignRemaining, canClaim, nextPhase, openRoles, placeholderName,
   type Phase, type SeatView,
 } from "@shared/simulation/lobby";
+import { freeSeatsOn, seatCensus, seatsRequired } from "./company-season-routes";
+import { devUnlimited } from "./wallet";
 
 const secondsLeft = (endsAt: Date | null): number =>
   endsAt ? Math.round((endsAt.getTime() - Date.now()) / 1000) : Number.POSITIVE_INFINITY;
@@ -71,8 +74,30 @@ async function seatsOf(ventureId: string) {
  * not there is anyone there to see it.
  */
 export async function advanceVenture(ventureId: string): Promise<void> {
+  /*
+   * Until it stops moving, not one step per request.
+   *
+   * Each call used to apply a single transition, which is invisible when every
+   * phase has a clock on it — the room sits in `claiming` for three minutes
+   * anyway, so the next poll is in plenty of time. It stops being invisible
+   * the moment a phase can resolve immediately: a solo founder's room has
+   * nothing to claim and nothing to name, so all three transitions are ready
+   * at once, and doing one per poll turned an instant start into a sequence
+   * of waiting screens that each said the last one was finished.
+   *
+   * Bounded rather than `while (true)`: the phases are a short chain and a
+   * loop that trusts its own exit condition to be reachable is a loop that
+   * hangs a request when it isn't.
+   */
+  for (let step = 0; step < 4; step += 1) {
+    if (!(await advanceOnce(ventureId))) return;
+  }
+}
+
+/** One transition. True if something moved and it is worth looking again. */
+async function advanceOnce(ventureId: string): Promise<boolean> {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
-  if (!venture || venture.phase === "running" || venture.phase === "retired") return;
+  if (!venture || venture.phase === "running" || venture.phase === "retired") return false;
 
   /*
    * Topping the room up happens here rather than only on the minute, so the
@@ -89,13 +114,18 @@ export async function advanceVenture(ventureId: string): Promise<void> {
   const rows = await seatsOf(ventureId);
   const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
 
+  /* How many chairs this season's tables have. One means a founder on their own. */
+  const [seasonRow] = await db.select({ seatCount: simSeasons.seatCount, companyId: simSeasons.companyId })
+    .from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+
   const move = nextPhase({
     phase: venture.phase as Phase,
     seats,
     secondsLeft: secondsLeft(venture.phaseEndsAt),
     named: !!venture.name,
+    seatCount: seasonRow?.seatCount ?? LOBBY_SIZE,
   });
-  if (!move) return;
+  if (!move) return false;
 
   /*
    * Dealing out unclaimed seats is several writes that must land together: a
@@ -115,13 +145,33 @@ export async function advanceVenture(ventureId: string): Promise<void> {
         .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), ...readySince(move.phase) })
         .where(eq(simVentures.id, ventureId));
     });
-    return;
+    return true;
   }
 
-  const name = move.phase === "running" && !venture.name ? placeholderName(ventureId) : venture.name;
+  /*
+   * The name a company starts with.
+   *
+   * `placeholderName` is a random pair of words — "Tessera Union" — for a
+   * table of five that never got round to naming itself. A solo founder is
+   * not that: they built this season from a project that already has a name,
+   * and being handed an invented one is the product renaming their business
+   * for them. Their own is the only sensible default, and they can still
+   * change it in year one like anybody else.
+   */
+  let name = venture.name;
+  if (move.phase === "running" && !name) {
+    const solo = (seasonRow?.seatCount ?? LOBBY_SIZE) <= 1;
+    const [owner] = solo && venture.seasonId
+      ? await db.select({ name: companies.name }).from(companies)
+        .innerJoin(simSeasons, eq(simSeasons.companyId, companies.id))
+        .where(eq(simSeasons.id, venture.seasonId)).limit(1)
+      : [];
+    name = owner?.name?.slice(0, 80) || placeholderName(ventureId);
+  }
   await db.update(simVentures)
     .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), name, ...readySince(move.phase) })
     .where(eq(simVentures.id, ventureId));
+  return true;
 }
 
 /**
@@ -170,9 +220,15 @@ export function normalizeSeasonCode(raw: unknown): string | null {
  * for whatever the caller is choosing between (see /api/sim/join), and is
  * shared by public matchmaking and a company's invite code so both fill rooms
  * by exactly the same rules.
+ *
+ * `seats` is how many chairs this season's tables have, and it must be the
+ * season's own number rather than five. A season played one company each has
+ * tables of one, and filling them five-at-a-time puts the second founder in
+ * the first founder's company — the opposite of the thing they joined to do.
+ * Public matchmaking has no such seasons, so it keeps the default.
  */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promise<string> {
+async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string, seats = LOBBY_SIZE): Promise<string> {
   /*
    * A room with space, locked while we look at it. Without the lock two
    * people both see four seats, both take the fifth, and the room ends up
@@ -198,7 +254,7 @@ async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promi
     from ${simVentures} v
     where v.season_id = ${seasonId}
       and v.phase = 'filling'
-      and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${LOBBY_SIZE}
+      and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${seats}
     order by (select count(*) from ${simSeats} s where s.venture_id = v.id) desc
     limit 1
     for update
@@ -228,7 +284,7 @@ async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promi
       .select({ taken: sql<number>`count(*)::int` })
       .from(simSeats)
       .where(eq(simSeats.ventureId, targetId));
-    if (taken >= LOBBY_SIZE) targetId = undefined;
+    if (taken >= seats) targetId = undefined;
   }
 
   // `createdAt` passed rather than left to the column's default, for the reason given at `joinedAt` below.
@@ -455,13 +511,14 @@ function pgErrorCode(err: unknown): string | undefined {
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
       .where(and(eq(simSeats.userId, req.user.id), eq(simVentures.seasonId, season.id)))
       .limit(1);
-    const niche = nicheById(season.nicheId);
+    const niche = marketOf(season);
     res.json({
       seasonId: season.id,
       name: season.name,
       status: season.status,
       totalYears: season.totalYears,
-      yearMinutes: season.yearMinutes,
+      periodMinutes: season.periodMinutes,
+      cadence: season.cadence,
       niche: { id: season.nicheId, name: niche?.name ?? season.nicheId, premise: niche?.premise ?? null },
       company: company ? { id: company.id, name: company.name } : null,
       isMember: !!member,
@@ -506,10 +563,45 @@ function pgErrorCode(err: unknown): string | undefined {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`season:${season.id}`}, 0))`);
         const [fresh] = await tx.select({ status: simSeasons.status }).from(simSeasons).where(eq(simSeasons.id, season.id));
         if (fresh?.status !== "forming") return { closed: true as const };
-        return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id) };
+
+        /*
+         * A seat somebody has paid for, or none.
+         *
+         * Checked inside the same advisory lock that serialises joiners, so
+         * two people holding the last seat's worth of credit cannot both pass
+         * the count and both sit down. Outside the lock this would be a race
+         * that hands out a free seat under load, which is the only condition
+         * anybody would be trying it under.
+         *
+         * Whoever is already seated keeps their place — the early return
+         * above means a rejoin never reaches here.
+         */
+        const [company] = await tx.select().from(companies).where(eq(companies.id, season.companyId!));
+        if (company) {
+          const { kind, seated, paid } = await seatCensus(season, company);
+          const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
+          if (devFreeSeat && seated >= paid) {
+            console.warn(`[sim] development seats — seating ${req.user.id} in season ${season.id} with ${seated} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
+          } else if (seated >= paid) {
+            return { unpaid: { kind, seated, paid } as const };
+          }
+        }
+        return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id, season.seatCount ?? LOBBY_SIZE) };
       });
       if ("closed" in outcome) {
         return res.status(409).json({ message: "This season has already started, so its tables are full. Ask for a place in the next one.", code: "season_started" });
+      }
+      if ("unpaid" in outcome) {
+        /*
+         * Addressed to the person holding the link, not to the person who
+         * owns the balance. They cannot fix this and should not be shown a
+         * price they are not being asked to pay.
+         */
+        const { kind, seated, paid } = outcome.unpaid!;
+        return res.status(402).json({
+          ...seatsRequired(kind, seated + 1, paid, "There isn't a seat for you in this season yet — whoever set it up needs to add one. They'll know."),
+          code: "seats_required",
+        });
       }
       await advanceVenture(outcome.ventureId);
       res.json({ ventureId: outcome.ventureId });
@@ -537,6 +629,8 @@ function pgErrorCode(err: unknown): string | undefined {
         nicheId: simSeasons.nicheId,
         role: simSeats.role,
         seasonStatus: simSeasons.status,
+        year: simSeasons.year,
+        totalYears: simSeasons.totalYears,
       })
       .from(simSeats)
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
@@ -557,13 +651,21 @@ function pgErrorCode(err: unknown): string | undefined {
          * on a row whose whole job is being recognised at a glance.
          */
         roleTitle: r.role ? ROLE_TITLES[r.role as Role] ?? null : null,
-        niche: { id: r.nicheId, name: nicheById(r.nicheId)?.name ?? r.nicheId },
+        niche: { id: r.nicheId, name: marketNameOf(r) },
         /**
          * "forming" | "running" | "finished" | "abandoned". A venture stays in
          * phase "running" after its season ends, so this is the only thing
          * that says whether there is still a game to go back to.
          */
         seasonStatus: r.seasonStatus,
+        /*
+         * How far through the fortnight this company is. A list of running
+         * companies with no year on it is a list of identical rows: "year 9 of
+         * 14" is the single thing that says which one is nearly over and which
+         * one you have only just started.
+         */
+        year: r.year,
+        totalYears: r.totalYears,
         secondsLeft: r.phaseEndsAt ? Math.max(0, secondsLeft(r.phaseEndsAt)) : null,
       })),
     });
@@ -620,7 +722,12 @@ function pgErrorCode(err: unknown): string | undefined {
       secondsLeft: venture.phaseEndsAt ? Math.max(0, secondsLeft(venture.phaseEndsAt)) : null,
       name: venture.name,
       product: venture.product,
-      niche: season ? { id: season.nicheId, name: nicheById(season.nicheId)?.name } : null,
+      // `marketNameOf` rather than the catalogue, because a season can be
+      // playing a market Nova wrote for one company and that has no entry.
+      niche: season ? { id: season.nicheId, name: marketNameOf(season) } : null,
+      /** Which year the next tick resolves, and how many there are. Null before the season starts. */
+      year: season?.year ?? null,
+      totalYears: season?.totalYears ?? null,
       lobbySize: LOBBY_SIZE,
       openRoles: openRoles(seats),
       /** Who's here, what they hold, and whether they chose it. */

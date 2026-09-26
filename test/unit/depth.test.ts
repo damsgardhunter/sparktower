@@ -137,7 +137,13 @@ describe("the plant", () => {
     const c = team({ automation: 0 });
     const ordering = resolveYear(world(c), [plain({ coo: { automationTarget: 50 } })]);
     const not = resolveYear(world(c), [plain()]);
-    expect(report(ordering).pnl.capacity).toBeCloseTo(50 * c.capacity * buildCostPerUnit(niche) * AUTOMATION_RATE, 0);
+    /*
+     * On the operations line, not the capacity line: `ops` is what carries
+     * the plant, and the capacity line is room. It used to be counted in
+     * both, which is why the accounts did not add up — see "the accounts".
+     */
+    expect(report(ordering).pnl.operations - report(not).pnl.operations)
+      .toBeCloseTo(50 * c.capacity * buildCostPerUnit(niche) * AUTOMATION_RATE, 0);
     expect(after(ordering).automation).toBe(50);
     expect(after(ordering).unitCost, "not this year").toBeCloseTo(after(not).unitCost, 6);
 
@@ -241,5 +247,60 @@ describe("the balance sheet", () => {
     const bounded = resolveYear(world(thin), [plain({ cfo: { buyback: 50_000_000 } })]);
     expect(after(bounded).cash).toBeGreaterThanOrEqual(0);
     expect(after(bounded).founderShare).toBeLessThanOrEqual(1);
+  });
+});
+
+/**
+ * The accounts have to add up.
+ *
+ * "The accounts" on the report screen is a column of cost lines under the
+ * sales figure and a profit at the bottom. A person reading it will add the
+ * column up — that is what a column of numbers is for — and if the total does
+ * not reach the profit printed underneath it, the report is not a report, it
+ * is a decoration. So the engine's own `pnl` has to be an identity, and every
+ * line of it has to be on the screen.
+ */
+describe("the accounts", () => {
+  const lines = [
+    "costToServe", "salaries", "marketing", "product", "operations",
+    "capacity", "incidents", "partners", "insurance", "idleCapacity", "interest",
+  ] as const;
+
+  it("reconcile: sales, less every cost line, plus planning, is the profit", () => {
+    // A year that touches everything the accounts have a line for.
+    // Debt from the start, because interest is paid from the year after it is drawn.
+    const r = resolveYear(world(team({ automation: 0, debt: 5_000_000 })), [plain({
+      coo: { capacityTarget: 1_100_000, supportSpend: 300_000, efficiencySpend: 120_000, headcount: 20,
+             automationTarget: 20, shiftCapacity: 50_000, stockTarget: 40_000 },
+      cmo: { forecast: 250_000 },
+      cfo: { borrow: 0, repay: 0, cashBuffer: 0, insurance: "breach" },
+    })]);
+    const p = report(r).pnl;
+
+    const costs = lines.reduce((sum, k) => sum + (p[k] ?? 0), 0);
+    expect(p.revenue - costs + p.planning).toBeCloseTo(p.operatingProfit, 2);
+
+    // And every one of them was actually exercised, or the identity proves nothing.
+    for (const k of ["costToServe", "salaries", "marketing", "product", "operations", "capacity", "insurance", "interest"]) {
+      expect(p[k], `${k} should not be zero in a year that bought it`).toBeGreaterThan(0);
+    }
+  });
+
+  it("counts the plant once: it is operations spending, not capacity", () => {
+    /*
+     * `ops` already includes the plant (automation, a second shift, stock), so
+     * putting the plant into the capacity line as well charged the company for
+     * it twice on the screen while the profit below counted it once.
+     */
+    const bare = resolveYear(world(team({ automation: 0 })), [plain()]);
+    const withPlant = resolveYear(world(team({ automation: 0 })), [plain({
+      coo: { capacityTarget: 900_000, supportSpend: 300_000, efficiencySpend: 0, headcount: 20,
+             automationTarget: 30, shiftCapacity: 60_000, stockTarget: 50_000 },
+    })]);
+
+    expect(withPlant && report(withPlant).pnl.operations)
+      .toBeGreaterThan(report(bare).pnl.operations);
+    // Buying a plant does not move the capacity line: that line is room, not machines.
+    expect(report(withPlant).pnl.capacity).toBeCloseTo(report(bare).pnl.capacity, 2);
   });
 });

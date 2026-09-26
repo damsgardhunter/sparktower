@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { Platform } from "react-native";
 import * as Google from "expo-auth-session/providers/google";
+import * as AppleAuthentication from "expo-apple-authentication";
 import * as WebBrowser from "expo-web-browser";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   clearSession, fetchMe, getAccessToken, isMfaChallenge, login as apiLogin, loginWithGoogle,
   logout as apiLogout, register as apiRegister, setSessionExpiredHandler, verifyMfa as apiVerifyMfa,
   type MfaChallenge, type Session,
+  loginWithApple as apiLoginWithApple,
 } from "../api/client";
 import { captureAttribution } from "../api/attribution";
 
@@ -48,6 +50,9 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (input: { email: string; password: string; firstName?: string; lastName?: string }) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  /** Sign in with Apple. Only on iOS — `appleAvailable` says whether to show it. */
+  signInWithApple: () => Promise<void>;
+  appleAvailable: boolean;
   /** True between a right password (or Google) and the code, for an account with 2FA on. */
   mfaPending: boolean;
   /** Finishes that sign-in with an authenticator or recovery code. */
@@ -214,6 +219,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await promptRef.current();
   }, []);
 
+  /**
+   * Sign in with Apple.
+   *
+   * iOS only, and only on a build that has the entitlement — `isAvailableAsync`
+   * answers both, so the button is never shown where pressing it would throw.
+   * A cancelled sheet is not an error: somebody changing their mind should get
+   * the sign-in screen back, not a red banner.
+   */
+  /*
+   * Whether to offer it at all. Apple's own check, not just a platform test:
+   * a build without the entitlement has the module and cannot use it, and a
+   * button that throws when pressed is worse than one that was never there.
+   */
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    AppleAuthentication.isAvailableAsync().then(setAppleAvailable).catch(() => setAppleAvailable(false));
+  }, []);
+
+  const signInWithApple = useCallback(async () => {
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    }).catch((e: any) => {
+      if (e?.code === "ERR_REQUEST_CANCELED") return null;
+      throw e;
+    });
+    if (!credential?.identityToken) return;
+
+    const session = await apiLoginWithApple(credential.identityToken, credential.fullName);
+    if ("mfaRequired" in session && session.mfaRequired) {
+      setChallenge(session.challengeToken);
+      return;
+    }
+    setUser((session as any).user);
+    setProfile((session as any).profile);
+  }, []);
+
   const signOut = useCallback(async () => {
     await apiLogout();
     forgetEverything();
@@ -236,9 +281,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
-        user, profile, loading, signIn, signUp, signInWithGoogle, signOut,
+        user, profile, loading, signIn, signUp, signInWithGoogle, signInWithApple, signOut,
         mfaPending: challenge != null, verifyMfa, cancelMfa,
-        refreshUser, markOnboarded, googleAvailable: GOOGLE_CONFIGURED,
+        refreshUser, markOnboarded, googleAvailable: GOOGLE_CONFIGURED, appleAvailable,
       }}
     >
       {GOOGLE_CONFIGURED && (

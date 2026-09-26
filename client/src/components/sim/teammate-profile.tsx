@@ -25,13 +25,15 @@
  * here is a tap, and anything they have to compose is a thing they close.
  */
 import { useState } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Loader2, CheckCircle2, Circle, Bell, Target, CalendarCheck } from "lucide-react";
+import { errorText } from "@/lib/api-error";
+import { Loader2, CheckCircle2, Circle, Bell, Target, CalendarCheck, UserRound } from "lucide-react";
 
 export interface TeammateProfileData {
   userId: string;
@@ -132,9 +134,14 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/seats/${userId}`] });
     },
     onError: (err: any) => {
-      // The refusals here are all informative — already filed, a stand-in, no
-      // seat — so the message is the point rather than a generic failure.
-      toast({ title: "No need", description: err?.message ?? "Couldn't send that.", variant: "destructive" });
+      /*
+       * The refusals here are all informative — already filed, a stand-in, no
+       * seat — so the message is the point rather than a generic failure.
+       * Which means it has to be the server's sentence: `err.message` on an
+       * ApiError is `409: {"message":…,"code":…}`, so reading it directly put
+       * a line of JSON in front of the person. `errorText` unwraps the body.
+       */
+      toast({ title: "No need", description: errorText(err, "Couldn't send that."), variant: "destructive" });
     },
   });
 
@@ -157,6 +164,27 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
               </div>
               <p className="text-sm text-muted-foreground">{data.title ?? "no seat yet"}</p>
               {data.headline && <p className="text-xs text-muted-foreground">{data.headline}</p>}
+              {/*
+               * Out to the person, rather than the seat.
+               *
+               * Everything else on this card is about the four of them as a
+               * chief marketing officer who has not filed yet. This is the one
+               * way to the human being behind that — their real profile, where
+               * connecting and following already work, rather than a second
+               * and worse version of those built into the game.
+               *
+               * Not offered for a stand-in: a bot's profile is an empty room.
+               */}
+              {!data.isYou && !data.isBot && (
+                <Link
+                  href={`/profile/${data.userId}`}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline w-fit"
+                  data-testid="link-teammate-profile"
+                >
+                  <UserRound className="h-3 w-3" />
+                  See {data.name}'s profile, and connect
+                </Link>
+              )}
             </DialogHeader>
 
             {/* Have they filed. The reason anybody opens this. */}

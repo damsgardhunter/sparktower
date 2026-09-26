@@ -147,10 +147,13 @@ describe("authentication on the write surface", () => {
    */
   const PUBLIC_WRITES: Record<string, string> = {
     "POST /api/auth/login": "signing in; limited per address",
+    "POST /api/problem-reports": "somebody saying a screen is broken — most worth having from the person who cannot sign in to say it; a message and a path, nothing else, twelve per address per thirty minutes",
+    "POST /api/client-errors": "a browser reporting its own render crash, including before anybody could sign in — which is the report most worth having; redacted, stored nowhere, ten per address per ten minutes",
     "POST /api/auth/register": "signing up; limited per address",
     "POST /api/auth/mobile/login": "signing in; limited per address",
     "POST /api/auth/mobile/register": "signing up; limited per address",
     "POST /api/auth/mobile/google": "signing in with a Google ID token the server verifies",
+    "POST /api/auth/mobile/apple": "signing in with an Apple identity token the server verifies against Apple's JWKS; the token is the credential, limited per address",
     "POST /api/auth/mfa/verify": "finishes a sign-in a correct password started in this session, with a one-time code; limited per address and account",
     "POST /api/auth/mobile/mfa/verify": "a signed five-minute challenge from a correct password, plus a one-time code; limited per address and account",
     "POST /api/auth/mobile/refresh": "the refresh token is the credential; single-use (claimed atomically), hashed, reuse ends every mobile session, limited",

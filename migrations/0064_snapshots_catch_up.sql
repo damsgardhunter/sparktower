@@ -1,0 +1,25 @@
+-- Bookkeeping only. This migration deliberately runs nothing.
+--
+-- Drizzle keeps two records of the schema: the migrations themselves, and a
+-- snapshot per migration under `migrations/meta/` that `drizzle-kit generate`
+-- diffs against to work out what changed. On this branch the snapshots stopped
+-- at 0050 while thirteen further migrations were written by hand, so the
+-- snapshot drizzle compared against was a year of work out of date.
+--
+-- The visible symptom was CI. `drizzle-kit generate` diffed schema.ts against
+-- 0050 and produced a migration recreating every table added since — the nova
+-- ledger, build passes, challenge prizes, the simulation scenarios — and the
+-- "migrations match the schema" check failed because generating wrote a file.
+-- It had been failing on this branch since long before the work in this PR.
+--
+-- What could not be committed is that generated SQL: the tables it creates
+-- already exist, made by the hand-written migrations, so applying it to any
+-- database that had run them would fail on the first CREATE TABLE. The part
+-- worth keeping is its snapshot, which describes the schema as it really is
+-- now, so every future `generate` diffs against the truth.
+--
+-- Hence: the snapshot, and no statements. Verified before committing — a
+-- database built from 0000 to 0063 and compared column by column against
+-- shared/schema.ts (script/check-drift.mts) came back with no missing tables,
+-- no missing columns and no nullability mismatches. The hand-written
+-- migrations are complete; only the bookkeeping was behind.

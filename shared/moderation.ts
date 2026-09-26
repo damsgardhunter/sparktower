@@ -235,6 +235,48 @@ export const RATE_LIMITS = {
     max: 20, windowMinutes: 60,
     message: "You've sent a lot of applications this hour. Try again later.",
   },
+  /**
+   * A browser telling us one of its screens threw.
+   *
+   * Low, because a report is a symptom and one broken screen in a render loop
+   * can produce them as fast as the machine can send. The first few are all
+   * anybody needs to find the bug; the next thousand are a denial of service
+   * with our own error handler as the weapon.
+   */
+  clientError: {
+    max: 10, windowMinutes: 10,
+    message: "That's a lot of error reports. The first ones were enough.",
+  },
+  /**
+   * Telling us something is broken.
+   *
+   * Its own budget rather than clientError's, which the error boundary spends:
+   * a screen crashing in a loop must not be the reason somebody cannot report
+   * that it is. Generous, because the failure mode worth avoiding is a person
+   * with a real problem being told to stop talking — a handful of duplicates
+   * costs a moment's reading.
+   */
+  problemReport: {
+    max: 12, windowMinutes: 30,
+    message: "That's a few reports in a short while. We've got them — give us a moment with the first.",
+  },
+  /**
+   * Drawing an image on demand: the merch preview and the print file.
+   *
+   * Both are reads, so the global write floor never sees them, and both are
+   * deliberately open — Printful is not going to sign in. What they cost is
+   * the problem: each one composites with sharp and lays out text with
+   * opentype, and the print file does it at 4500×5400. On one instance that
+   * also runs the background loops, an unauthenticated loop over either is a
+   * cheap way to take the site down.
+   *
+   * Generous enough that a creator dragging a slider in the campaign editor
+   * never sees it, and low enough that a script does.
+   */
+  render: {
+    max: 60, windowMinutes: 10,
+    message: "That's a lot of images to draw at once. Try again in a few minutes.",
+  },
   /** Starting or queueing co-founder sprints, and turning one into a project. */
   sprint: {
     max: 10, windowMinutes: 60,

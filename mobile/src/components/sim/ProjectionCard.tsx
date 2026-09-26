@@ -42,13 +42,25 @@ interface Projection {
   nextYearDemand: { likely: number; low: number; high: number } | null;
 }
 
-function gbp(n: number): string {
+/**
+ * Money, in whatever the company counts in.
+ *
+ * This was `gbp` with a pound sign written into all four branches, so a
+ * business built from a project that counts in dollars was priced in sterling
+ * on every figure of the phone's desk. The desk payload now carries a
+ * `currency`; the symbol is passed down rather than read from a global so a
+ * screen showing two companies could never mix them up.
+ */
+const SYMBOLS: Record<string, string> = { USD: "$", GBP: "£", EUR: "€", CAD: "$", AUD: "$", NZD: "$", JPY: "¥", INR: "₹" };
+const symbolFor = (code: string | null | undefined): string => SYMBOLS[String(code ?? "USD").toUpperCase()] ?? "$";
+
+function amount(n: number, sym: string): string {
   const sign = n < 0 ? "−" : "";
   const a = Math.abs(n);
-  if (a >= 1_000_000_000) return `${sign}£${(a / 1_000_000_000).toFixed(1)}bn`;
-  if (a >= 1_000_000) return `${sign}£${(a / 1_000_000).toFixed(a >= 10_000_000 ? 0 : 1)}m`;
-  if (a >= 1_000) return `${sign}£${Math.round(a / 1_000)}k`;
-  return `${sign}£${Math.round(a)}`;
+  if (a >= 1_000_000_000) return `${sign}${sym}${(a / 1_000_000_000).toFixed(1)}bn`;
+  if (a >= 1_000_000) return `${sign}${sym}${(a / 1_000_000).toFixed(a >= 10_000_000 ? 0 : 1)}m`;
+  if (a >= 1_000) return `${sign}${sym}${Math.round(a / 1_000)}k`;
+  return `${sign}${sym}${Math.round(a)}`;
 }
 const count = (n: number) => Math.round(n).toLocaleString();
 
@@ -68,18 +80,18 @@ const Swatch = ({ colour }: { colour: string }) => (
 const small = { color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular } as const;
 const label = { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular } as const;
 
-function Tile({ title, value, delta, sub }: { title: string; value: number; delta: number; sub: string }) {
+function Tile({ title, value, delta, sub, sym }: { title: string; value: number; delta: number; sub: string; sym: string }) {
   const moved = Math.abs(delta) >= 1;
   const up = delta > 0;
   return (
     <View style={{ flex: 1, minWidth: 96, gap: 2, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.surfaceRaised }}>
       <Text style={label}>{title}</Text>
-      <Text style={{ color: value < 0 ? VIZ.bad : colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>{gbp(value)}</Text>
+      <Text style={{ color: value < 0 ? VIZ.bad : colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>{amount(value, sym)}</Text>
       {moved ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
           <Icon name={up ? "arrow-up" : "arrow-down"} size={11} color={up ? VIZ.good : VIZ.bad} />
           <Text style={{ color: up ? VIZ.good : VIZ.bad, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
-            {up ? "+" : ""}{gbp(delta)}
+            {up ? "+" : ""}{amount(delta, sym)}
           </Text>
           <Text style={label}> yours</Text>
         </View>
@@ -91,7 +103,7 @@ function Tile({ title, value, delta, sub }: { title: string; value: number; delt
 }
 
 /** Where the money goes: a waterfall, one row per movement, value on the side that has room. */
-function Bridge({ p }: { p: Projection }) {
+function Bridge({ p, sym }: { p: Projection; sym: string }) {
   const [asTable, setAsTable] = useState(false);
   let running = p.cashStart;
   const bars = [{ label: "Start of year", from: 0, to: p.cashStart, kind: "total" as const, amount: p.cashStart }];
@@ -104,7 +116,7 @@ function Bridge({ p }: { p: Projection }) {
   const lo = Math.min(0, ...bars.flatMap((b) => [b.from, b.to]));
   const hi = Math.max(1, ...bars.flatMap((b) => [b.from, b.to]));
   const pct = (n: number) => ((n - lo) / (hi - lo || 1)) * 100;
-  const text = (b: typeof bars[number]) => (b.kind === "total" ? gbp(b.amount) : `${b.amount >= 0 ? "+" : ""}${gbp(b.amount)}`);
+  const text = (b: typeof bars[number]) => (b.kind === "total" ? amount(b.amount, sym) : `${b.amount >= 0 ? "+" : ""}${amount(b.amount, sym)}`);
 
   return (
     <View style={{ gap: spacing.sm }}>
@@ -182,12 +194,15 @@ const GRADE: Record<string, { tone: string; word: string }> = {
   B: { tone: STATUS.serious, word: "Weak" }, CCC: { tone: STATUS.serious, word: "Poor" }, D: { tone: STATUS.critical, word: "Distressed" },
 };
 
-export function ProjectionCard({ ventureId, draft, filedStamp }: {
+export function ProjectionCard({ ventureId, draft, filedStamp, currency }: {
   ventureId: string;
   draft: Record<string, any> | null;
   /** Changes when a teammate files, so the projection re-runs exactly then. */
   filedStamp: string;
+  /** What the company counts in, from the desk. Defaults to dollars when absent. */
+  currency?: string | null;
 }) {
+  const sym = symbolFor(currency);
   const debounced = useDebounced(draft, 450);
   const key = debounced && Object.keys(debounced).length ? JSON.stringify(debounced) : "";
 
@@ -229,12 +244,12 @@ export function ProjectionCard({ ventureId, draft, filedStamp }: {
         ) : null}
 
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
-          <Tile title="Revenue" value={p.revenue} delta={p.revenue - f.revenue} sub={`${count(p.customers)} customers`} />
-          <Tile title="Profit" value={p.profit} delta={p.profit - f.profit} sub={p.profit >= 0 ? "in the black" : "a loss"} />
-          <Tile title="Cash at end" value={p.cashEnd} delta={p.cashEnd - f.cashEnd} sub={`from ${gbp(p.cashStart)}`} />
+          <Tile title="Revenue" value={p.revenue} delta={p.revenue - f.revenue} sub={`${count(p.customers)} customers`} sym={sym} />
+          <Tile title="Profit" value={p.profit} delta={p.profit - f.profit} sub={p.profit >= 0 ? "in the black" : "a loss"} sym={sym} />
+          <Tile title="Cash at end" value={p.cashEnd} delta={p.cashEnd - f.cashEnd} sub={`from ${amount(p.cashStart, sym)}`} sym={sym} />
         </View>
 
-        <Bridge p={p} />
+        <Bridge p={p} sym={sym} />
 
         <View style={{ gap: spacing.sm }}>
           <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>Customers and room</Text>
@@ -289,14 +304,14 @@ export function ProjectionCard({ ventureId, draft, filedStamp }: {
           </View>
           {p.credit.emergencyDrawn > 0 ? (
             <Text style={small}>
-              This plan runs out of cash: an emergency loan of {gbp(p.credit.emergencyDrawn)} would cover it, at a punitive rate and a hit to reputation.
+              This plan runs out of cash: an emergency loan of {amount(p.credit.emergencyDrawn, sym)} would cover it, at a punitive rate and a hit to reputation.
             </Text>
           ) : null}
           {t ? (
             <View style={{ gap: 3 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 <Text style={small}>Investors' target</Text>
-                <Text style={{ color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>{gbp(t.projected)} / {gbp(t.amount)}</Text>
+                <Text style={{ color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>{amount(t.projected, sym)} / {amount(t.amount, sym)}</Text>
               </View>
               <View style={{ height: 7, borderRadius: 4, overflow: "hidden", backgroundColor: VIZ.grid }}>
                 <View style={{ width: `${Math.min(100, (t.projected / Math.max(1, t.amount)) * 100)}%`, height: "100%", backgroundColor: t.met ? STATUS.good : STATUS.serious }} />

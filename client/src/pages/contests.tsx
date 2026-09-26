@@ -63,7 +63,7 @@ export default function Contests() {
                 const Icon = ICONS[c.icon] ?? Users;
                 const busy = toggle.isPending && toggle.variables?.id === c.id;
                 return (
-                  <li key={c.id} className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3" data-testid={`community-${c.slug}`}>
+                  <li key={c.id} className="rounded-xl nova-ring-soft p-4 flex flex-col gap-3" data-testid={`community-${c.slug}`}>
                     <div className="flex items-start gap-3">
                       <div className="h-10 w-10 shrink-0 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${c.color}1A`, color: c.color }}>
                         <Icon className="h-5 w-5" />

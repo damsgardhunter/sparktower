@@ -30,31 +30,208 @@
  */
 import type { Express } from "express";
 import crypto from "node:crypto";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simVentures, simSeats, simDecisions, simChallenges, simReports, users } from "@shared/schema";
+import { simSeasons, simVentures, simSeats, simDecisions, simChallenges, simReports, simSeatPurchases, users, companies } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
 import { companyCan, logCompany } from "./company-access";
+import { OUTCOME_PRICE_CENTS, OUTCOME_COPY, formatMoney } from "@shared/plans";
+import { walletOf, spend, refund, devUnlimited } from "./wallet";
+import { paymentRequired } from "./entitlements";
 import { companyMembersOf } from "./company-routes";
 import { SEASON_CODE_ALPHABET } from "./simulation-routes";
-import { startSeason, tickSeason, yearMsOf } from "./simulation-tick";
+import { startSeason, tickSeason, periodMsOf } from "./simulation-tick";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
+import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import type { CompanyReport } from "@shared/simulation/resolve";
+import { isContinent } from "@shared/simulation/geography";
+import { CADENCES, DEFAULT_YEARS, PERIOD_NAME, periodsPerYear, totalPeriods, yearsMax, yearsMin, type Cadence } from "@shared/simulation/cadence";
+import { seatBotCompanies } from "./simulation-bots";
+import { buildSimulationPrompt, parseSimulationBrief } from "./nova-simulation";
+import { getOpenAI, openAiConfigured } from "./openai-client";
+import { requireCredits, modelFor } from "./entitlements";
+import { CREDIT_COSTS } from "@shared/plans";
+import { respondToAiError } from "./ai-json";
+import { storage } from "./storage";
+import { pathStatus } from "./phase-trees";
+import { isStripeConfigured, getUncachableStripeClient } from "./stripeClient";
+import { ensureStripeCustomer } from "./stripe-customer";
+import { marketNameOf } from "./simulation-scope";
 
-/** Shortest and longest year a company can choose, in minutes. Ten is about the least a table can argue a price in; a day is what the public game uses. */
-export const YEAR_MINUTES_MIN = 10;
-export const YEAR_MINUTES_MAX = 1440;
-/** Fewer than four years and nothing a team does has time to come back to them. */
+/**
+ * Shortest and longest *decision* a company can choose, in minutes.
+ *
+ * Ten is about the least a table can argue a price in; a day is what the
+ * public game uses. This is how much real time one decision gets, which is a
+ * separate question from how much simulated time it covers — see
+ * `DEFAULT_YEARS` in cadence.ts for why those two are deliberately unhooked.
+ */
+export const PERIOD_MINUTES_MIN = 10;
+export const PERIOD_MINUTES_MAX = 1440;
+/**
+ * How long a season runs, in simulated years.
+ *
+ * The real rule is counted in decisions, not years — fewer than four and
+ * nothing a team does has time to come back to them — so the bounds depend on
+ * the cadence. See `yearsMin` / `yearsMax`. These two stay for the yearly
+ * season, which is what most callers still mean.
+ */
 export const TRAINING_YEARS_MIN = 4;
 export const TRAINING_YEARS_MAX = 14;
+/**
+ * The most companies of bots a season can be seated with.
+ *
+ * A season with one real table in it is a company with no competition, which
+ * teaches the wrong lesson about every decision taken in it. Fifty is the
+ * ceiling because a year resolves every company in one pass, and because a
+ * market with fifty companies in it is already a crowd.
+ */
+export const BOT_TEAMS_MAX = 50;
+/**
+ * What a seat costs, in cents. A seat is for the life of a season, not a month.
+ *
+ * Two prices, because two different things are being sold. A `play` seat is a
+ * person at a table in one of the markets we wrote, taken as it is. A `nova`
+ * seat is a person at a table in a season Nova built by reading the company's
+ * own project — which costs a model call and is worth more, so it costs more.
+ *
+ * And two more for how often the table decides. A season run in quarters asks
+ * four times as many decisions of the same people and a monthly one twelve —
+ * more of the product, and more of everything behind it — so they are their
+ * own seats at $6 and $10.
+ *
+ * They are separate balances rather than one with a discount: buying ten Nova
+ * seats does not leave you ten play seats, and buying ten play seats does not
+ * entitle you to have Nova build anything. A quarterly seat is the whole of a
+ * play seat and the cadence, so somebody holding one needs nothing else.
+ */
+export const SEAT_PRICE_CENTS = { play: 300, nova: 600, quarterly: 600, monthly: 600 } as const;
+export type SeatKind = keyof typeof SEAT_PRICE_CENTS;
+
+/** What each seat is called when somebody is told they need one. */
+export const SEAT_LABEL: Record<SeatKind, string> = {
+  play: "play", nova: "Nova", quarterly: "quarterly", monthly: "monthly",
+};
+export const SEAT_PITCH: Record<SeatKind, string> = {
+  play: "A season from our markets",
+  nova: "A season Nova builds from your project",
+  quarterly: "A season decided four times a year",
+  monthly: "A season decided every month",
+};
+
+/**
+ * Whether a developer may start a season they have not paid for.
+ *
+ * Local development only, never production — the same rule and the same shape
+ * as `devAdvanceOn` in season-control.ts, for the same reason: a switch that
+ * can be left on in production is a paywall that is not one.
+ */
+export const freeSeatsOn = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.SIM_DEV_FREE_SEATS === "1" && env.NODE_ENV !== "production";
+export const SEAT_KINDS = Object.keys(SEAT_PRICE_CENTS) as SeatKind[];
+const isSeatKind = (v: unknown): v is SeatKind => SEAT_KINDS.includes(v as SeatKind);
+/**
+ * Which balance a season is paid for from.
+ *
+ * How often the table decides outranks where the market came from: a monthly
+ * season is a monthly season whether Nova wrote the market or we did, and it
+ * is the dearer thing. A yearly season falls back to what it has always been.
+ */
+export const seatKindFor = (origin: string | null | undefined, cadence?: string | null): SeatKind => {
+  if (cadence === "monthly") return "monthly";
+  if (cadence === "quarterly") return "quarterly";
+  return origin === "nova" ? "nova" : "play";
+};
+/** The column each kind of seat is banked in, so a purchase and the gate agree on where to look. */
+export const SEAT_COLUMN = {
+  play: "simPlaySeatsPaid",
+  nova: "simNovaSeatsPaid",
+  quarterly: "simQuarterlySeatsPaid",
+  monthly: "simMonthlySeatsPaid",
+} as const satisfies Record<SeatKind, keyof typeof companies.$inferSelect>;
+
+/** What a company holds of each seat. */
+export const seatsHeld = (company: {
+  simPlaySeatsPaid?: number | null; simNovaSeatsPaid?: number | null;
+  simQuarterlySeatsPaid?: number | null; simMonthlySeatsPaid?: number | null;
+}) => ({
+  play: company.simPlaySeatsPaid ?? 0,
+  nova: company.simNovaSeatsPaid ?? 0,
+  quarterly: company.simQuarterlySeatsPaid ?? 0,
+  monthly: company.simMonthlySeatsPaid ?? 0,
+});
+/**
+ * How many people are sitting in this season, and how many it has been paid for.
+ *
+ * One function because the answer is now asked in three places — inviting
+ * somebody, sitting down, and pressing start — and three implementations of
+ * "has this been paid for" is three different paywalls. It used to be asked
+ * only at the start, which meant a workshop could invite forty people, watch
+ * all forty join and go through the lobby, and discover the bill only when
+ * the organiser pressed the button with everyone already seated. The charge
+ * is unchanged; what changes is that it is now knowable before anybody has
+ * wasted their time.
+ *
+ * Bots are not people and are not counted, which is why `users.isBot` is
+ * joined rather than trusted from the seat row.
+ */
+export async function seatCensus(
+  season: { id: string; origin?: string | null; cadence?: string | null },
+  company: Parameters<typeof seatsHeld>[0],
+): Promise<{ kind: SeatKind; seated: number; paid: number; free: number }> {
+  const kind = seatKindFor(season.origin, season.cadence);
+  const seated = await db
+    .selectDistinct({ userId: simSeats.userId })
+    .from(simSeats)
+    .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+    .innerJoin(users, eq(users.id, simSeats.userId))
+    .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
+  const paid = seatsHeld(company)[kind];
+  return { kind, seated: seated.length, paid, free: Math.max(0, paid - seated.length) };
+}
+
+/** The 402 body for a season short of seats, worded for whoever hit it. */
+export const seatsRequired = (
+  kind: SeatKind, seated: number, paid: number, message: string,
+) => ({
+  code: "seats_required" as const,
+  message,
+  seatKind: kind,
+  pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
+  people: seated,
+  paid,
+  shortBy: Math.max(1, seated - paid),
+});
+
+/** The most seats one checkout can carry, so a typo is not a four-figure charge. */
+/* The same five hundred as SEASON_SEATS_MAX below, written out because it is declared after this. */
+export const SEATS_PER_PURCHASE_MAX = 500;
+
+/**
+ * Seats a company buys for a private season: five to a table, and nobody has
+ * ever run a workshop for more than a few hundred. The floor of five is the
+ * table itself — a season with three seats is a season nobody can play.
+ */
+export const SEASON_SEATS_MIN = 5;
+
+/**
+ * The most people one season can seat.
+ *
+ * Five hundred, which is a hundred tables of five, or five hundred founders
+ * each running their own company in the same market. The market grows to meet
+ * them — see `marketFor` in world.ts — so a season with four hundred people in
+ * it is a bigger market rather than four hundred people fighting over one
+ * market's worth of customers.
+ */
+export const SEASON_SEATS_MAX = 500;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
 /** Eight characters of Crockford base32 from the OS's CSPRNG: 40 bits, easy to read off a projector, not worth guessing. */
-function newSeasonCode(): string {
+export function newSeasonCode(): string {
   let code = "";
   for (let i = 0; i < 8; i++) code += SEASON_CODE_ALPHABET[crypto.randomInt(SEASON_CODE_ALPHABET.length)];
   return code;
@@ -97,41 +274,540 @@ export function registerCompanySeasonRoutes(app: Express): void {
       const niche = nicheById(String(body.nicheId ?? ""));
       if (!niche) return res.status(400).json({ message: "Pick one of the markets.", code: "invalid_input", field: "nicheId" });
 
+      /*
+       * How often the table will decide. Refused rather than quietly
+       * downgraded if it is not one of the three: somebody who asked for a
+       * monthly season and got a yearly one has been sold the wrong thing.
+       */
+      const cadence = (body.cadence === undefined || body.cadence === "" ? "yearly" : String(body.cadence)) as Cadence;
+      if (!CADENCES.includes(cadence)) {
+        return res.status(400).json({ message: "A season runs in years, quarters or months.", code: "invalid_input", field: "cadence" });
+      }
+
+      /*
+       * One table of five, or a table each.
+       *
+       * The engine has always been able to run a company of one — a project's
+       * own season is built that way (`server/project-simulation-routes.ts`) —
+       * and a company running a workshop could not ask for it, so ten people
+       * were always two teams of five and never ten rivals. They are different
+       * exercises: five people sharing a company argue about the same decision
+       * from five chairs, while ten running their own compete on the same
+       * market and are answerable for all of it.
+       *
+       * "team" and "solo" rather than a seat count, because five and one are
+       * the only two that mean anything: a table of three is a team with two
+       * chairs played by stand-ins, which is a worse version of both.
+       */
+      const mode = body.mode === undefined || body.mode === "" ? "team" : String(body.mode);
+      if (mode !== "team" && mode !== "solo") {
+        return res.status(400).json({
+          message: "A season is played in teams of five or one company each.",
+          code: "invalid_input", field: "mode",
+        });
+      }
+      const seatCount = mode === "solo" ? 1 : LOBBY_SIZE;
+
       const name = String(body.name ?? "").trim() || `${found.company.name} — ${niche.name}`;
       if (name.length < 2 || name.length > 80) return res.status(400).json({ message: "A season name is 2 to 80 characters.", code: "invalid_input", field: "name" });
 
-      let yearMinutes: number | null = null;
-      if (body.yearMinutes != null && body.yearMinutes !== "") {
-        yearMinutes = Number(body.yearMinutes);
-        if (!Number.isInteger(yearMinutes) || yearMinutes < YEAR_MINUTES_MIN || yearMinutes > YEAR_MINUTES_MAX) {
-          return res.status(400).json({ message: `A year lasts between ${YEAR_MINUTES_MIN} and ${YEAR_MINUTES_MAX} minutes, or leave it as a day.`, code: "invalid_input", field: "yearMinutes" });
+      const period = PERIOD_NAME[cadence].one;
+      let periodMinutes: number | null = null;
+      if (body.periodMinutes != null && body.periodMinutes !== "") {
+        periodMinutes = Number(body.periodMinutes);
+        if (!Number.isInteger(periodMinutes) || periodMinutes < PERIOD_MINUTES_MIN || periodMinutes > PERIOD_MINUTES_MAX) {
+          return res.status(400).json({ message: `A ${period} lasts between ${PERIOD_MINUTES_MIN} and ${PERIOD_MINUTES_MAX} minutes, or leave it as a day.`, code: "invalid_input", field: "periodMinutes" });
         }
         // 1440 minutes is a day; storing null keeps "a day" meaning one thing.
-        if (yearMinutes === YEAR_MINUTES_MAX) yearMinutes = null;
+        if (periodMinutes === PERIOD_MINUTES_MAX) periodMinutes = null;
       }
-      const totalYears = body.totalYears == null || body.totalYears === "" ? TRAINING_YEARS_MAX : Number(body.totalYears);
-      if (!Number.isInteger(totalYears) || totalYears < TRAINING_YEARS_MIN || totalYears > TRAINING_YEARS_MAX) {
-        return res.status(400).json({ message: `A season runs ${TRAINING_YEARS_MIN} to ${TRAINING_YEARS_MAX} years.`, code: "invalid_input", field: "totalYears" });
+      /*
+       * How much of the world, and who else is in it.
+       *
+       * Both default to the game as it has always been — the market's own
+       * regions, and nobody but the people who were invited — because a
+       * company that just wants a season should get one without answering
+       * questions about continents.
+       */
+      const scope = String(body.scope ?? "home");
+      if (scope !== "home" && scope !== "world" && !isContinent(scope)) {
+        return res.status(400).json({ message: "That isn't a place to play.", code: "invalid_input", field: "scope" });
+      }
+      const botTeams = body.botTeams == null || body.botTeams === "" ? 0 : Number(body.botTeams);
+      if (!Number.isInteger(botTeams) || botTeams < 0 || botTeams > BOT_TEAMS_MAX) {
+        return res.status(400).json({ message: `A season can seat up to ${BOT_TEAMS_MAX} companies of bots.`, code: "invalid_input", field: "botTeams" });
+      }
+
+      /*
+       * How much simulated time the season covers, in years, whatever the
+       * cadence. The bounds are really about how many *decisions* that comes
+       * to, so they narrow as the cadence gets finer: fourteen simulated
+       * years of monthly decisions is a hundred and sixty-eight of them.
+       */
+      const yearsLow = yearsMin(cadence);
+      const yearsHigh = yearsMax(cadence);
+      const totalYears = body.totalYears == null || body.totalYears === "" ? DEFAULT_YEARS[cadence] : Number(body.totalYears);
+      if (!Number.isInteger(totalYears) || totalYears < yearsLow || totalYears > yearsHigh) {
+        return res.status(400).json({
+          message: yearsLow === yearsHigh
+            ? `A ${cadence} season runs ${yearsLow} ${yearsLow === 1 ? "year" : "years"}.`
+            : `A ${cadence} season runs ${yearsLow} to ${yearsHigh} years — that is ${totalPeriods(yearsLow, cadence)} to ${totalPeriods(yearsHigh, cadence)} ${PERIOD_NAME[cadence].many} of decisions.`,
+          code: "invalid_input", field: "totalYears",
+        });
+      }
+
+      /*
+       * What a private season costs.
+       *
+       * The public market is free for everyone and always will be — this is
+       * only the private version, run by a company for its own people, and it
+       * is priced per seat. The company's **first** one is free, deliberately:
+       * a workshop nobody has run before is the thing that sells the second
+       * one, and charging for the trial is how a training product never gets
+       * tried. "First" means the first season this company ever created, not
+       * the first this month and not the first that was played — a season
+       * abandoned halfway was still the free one.
+       *
+       * The charge lands on the person pressing the button, from their
+       * balance, because that is where money lives on this platform; the
+       * company audit log records who paid and how much.
+       */
+      const priorSeasons = await db.select({ id: simSeasons.id }).from(simSeasons)
+        .where(eq(simSeasons.companyId, found.company.id)).limit(1);
+      const isFirst = priorSeasons.length === 0;
+
+      let seats = 0;
+      let cents = 0;
+      if (!isFirst) {
+        seats = body.seats == null || body.seats === "" ? SEASON_SEATS_MIN : Number(body.seats);
+        if (!Number.isInteger(seats) || seats < SEASON_SEATS_MIN || seats > SEASON_SEATS_MAX) {
+          return res.status(400).json({
+            message: `A season is bought ${SEASON_SEATS_MIN} to ${SEASON_SEATS_MAX} seats at a time, at ${formatMoney(SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)])} a seat.`,
+            code: "invalid_input", field: "seats",
+          });
+        }
+        /*
+         * Priced as the seat that is granted, not as a flat one.
+         *
+         * This charged `seasonSeat` — the cheapest seat there is — and then
+         * credited `seatKindFor("catalogue", cadence)` below, which for a
+         * quarterly or monthly season is a dearer seat. So one field in the
+         * request body bought the expensive seats at the cheap price. The
+         * cadence is read from the same body, so it was not even a guess.
+         */
+        cents = seats * SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)];
+      }
+
+      let paid: Awaited<ReturnType<typeof spend>> = null;
+      if (cents > 0) {
+        paid = await spend(req.user.id, cents, {
+          outcome: "seasonSeat",
+          note: `${OUTCOME_COPY.seasonSeat.name} — ${seats} seats for ${found.company.name}`,
+        });
+        /*
+         * Credited to the company, because otherwise this is the same seat
+         * sold twice.
+         *
+         * Two branches grew a way of charging for a seat and the merge brought
+         * both: this one, which takes the money when a season is created, and
+         * the gate on starting one, which counts the seats the company holds
+         * and refuses until it holds enough. Each is defensible alone. Together
+         * a company paid $3 a seat here and was then told at the door that it
+         * owned none, and had to buy them again — the second purchase being
+         * the one that actually let anybody play.
+         *
+         * Making this payment grant what the gate asks for settles it without
+         * removing either: one charge, and the sentence the copy has always
+         * ended on ("seats stay with the company for every season after this
+         * one") becomes true rather than aspirational.
+         */
+        if (paid) {
+          const kind = seatKindFor("catalogue", cadence);
+          await db.update(companies)
+            .set({ [SEAT_COLUMN[kind]]: sql`${companies[SEAT_COLUMN[kind]]} + ${seats}` })
+            .where(eq(companies.id, found.company.id));
+        }
+        if (!paid) {
+          const wallet = await walletOf(req.user.id);
+          return res.status(402).json(paymentRequired({
+            message:
+              `${seats} seats is ${formatMoney(cents)} at ${formatMoney(SEAT_PRICE_CENTS[seatKindFor("catalogue", cadence)])} a seat, ` +
+              `and your balance is ${wallet.balanceDisplay}. Your company's first season was free; this one isn't. ` +
+              `The public market stays free for everyone.`,
+            label: OUTCOME_COPY.seasonSeat.name, outcome: "seasonSeat", cents, wallet,
+          }));
+        }
       }
 
       // A code clash is one in a trillion, but the unique index would turn it into a 500; try again instead.
+      try {
       for (let attempt = 0; attempt < 5; attempt++) {
         const inviteCode = newSeasonCode();
         try {
           const [season] = await db.insert(simSeasons).values({
-            nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
+            nicheId: niche.id, name, status: "forming", totalYears, periodMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
+            seatsPaid: seats, paidCents: cents, seatCount,
+            scope, botTeams, origin: "catalogue", cadence,
           }).returning();
-          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id });
-          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode) });
+          await logCompany(found.company.id, req.user.id, "season_created", null, {
+            seasonId: season.id, name, nicheId: niche.id, seats, paidCents: cents, scope, botTeams, cadence, mode,
+          });
+          return res.status(201).json({
+            seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode),
+            seats, paidCents: cents, firstSeasonFree: isFirst,
+            scope, botTeams, cadence, mode, seatCount,
+          });
+        } catch (err) {
+          if (!isUniqueViolation(err)) throw err;
+        }
+      }
+      } catch (err) {
+        // Anything that stops the season existing — a clash five times over, or
+        // the insert itself failing — gives the seats back. Money for a season
+        // that was never created is money taken for nothing.
+        if (paid) await refund(req.user.id, cents, { outcome: "seasonSeat", note: "Refunded — the season couldn't be created" });
+        throw err;
+      }
+      if (paid) await refund(req.user.id, cents, { outcome: "seasonSeat", note: "Refunded — the season couldn't be created" });
+      res.status(500).json({ message: "Couldn't make a join code. Try again." });
+    } catch (error) {
+      console.error("Company season create error:", error);
+      res.status(500).json({ message: "Couldn't create that season." });
+    }
+  });
+
+  /**
+   * Where the project has actually got to, in the words the app already uses.
+   *
+   * Nova is designing a simulation of a business, and a business that has
+   * shipped nothing is not the same business as one with paying customers.
+   * Taken from the path when there is one, and quietly skipped when there
+   * isn't — a company with no project still gets a season, built from what it
+   * says about itself.
+   */
+  async function whereTheyAre(projectId: string): Promise<string | null> {
+    try {
+      const status = await pathStatus(projectId);
+      if (!status?.adopted) return null;
+      const phases = status.phases ?? [];
+      const done = phases.reduce((sum: number, p: any) => sum + (p.done ?? 0), 0);
+      const total = phases.reduce((sum: number, p: any) => sum + (p.total ?? 0), 0);
+      const current = phases.find((p: any) => (p.done ?? 0) < (p.total ?? 0));
+      return [
+        `Path: ${status.goal ?? "unnamed"} — ${done} of ${total} milestones done.`,
+        current ? `Currently: ${current.title}. Next: ${current.milestones?.find((m: any) => !m.done)?.title ?? "—"}` : "Path complete.",
+      ].join("\n");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What a seat costs, and how many this company has.
+   *
+   * A seat is a person at a table for the life of a season rather than a
+   * month: buy ten, run a season for ten people, and they are still there for
+   * the next one. Asked for by the screen before it offers to build anything,
+   * so the price is never a surprise sprung at the end.
+   */
+  app.get("/api/companies/:id/simulation-seats", isAuthenticated, async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+      const members = await companyMembersOf(found.company.id);
+      const held = seatsHeld(found.company);
+      res.json({
+        people: members.length,
+        currency: "usd",
+        /*
+         * Both balances, each with its price and what seating everyone in the
+         * company would still cost. `shortBy` is against the company's people
+         * because that is the most a season could ever need; the gate itself
+         * counts who actually sat down, so nobody pays for a colleague who
+         * never joined.
+         */
+        seats: SEAT_KINDS.map((kind) => ({
+          kind,
+          paid: held[kind],
+          pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
+          shortBy: Math.max(0, members.length - held[kind]),
+        })),
+      });
+    } catch (error) {
+      console.error("Simulation seats read error:", error);
+      res.status(500).json({ message: "Couldn't read your seats." });
+    }
+  });
+
+  /**
+   * Buy seats.
+   *
+   * A one-off payment rather than a subscription: a seat is a person at a
+   * table for the life of a season, and a company that runs one away day a
+   * year should not be paying monthly for the eleven months in between.
+   *
+   * The seats are credited when Stripe says the money arrived, not here — see
+   * the note on the webhook. A checkout that is abandoned leaves nothing
+   * behind, which is the whole reason for doing it in that order.
+   */
+  /**
+   * Buy seats out of the balance, several at a time.
+   *
+   * The Stripe checkout below has always sold up to 250 at once, and it is
+   * the only way seats could be bought — which meant a card, a redirect and a
+   * webhook for something the account may already have the money for. Every
+   * other priced outcome in the product comes off the balance; seats were the
+   * exception, and the effect was that a project with $40 on it could not put
+   * a second person at its own table without going to Stripe.
+   *
+   * Credited in the same transaction that takes the money, and written to
+   * `sim_seat_purchases` with no session id, so the two ways of buying a seat
+   * reconcile in one place. A `spend` that comes back null took nothing.
+   */
+  app.post("/api/companies/:id/simulation-seats/buy", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const seats = Math.round(Number(req.body?.seats));
+      if (!Number.isInteger(seats) || seats < 1 || seats > SEATS_PER_PURCHASE_MAX) {
+        return res.status(400).json({ message: `Buy between 1 and ${SEATS_PER_PURCHASE_MAX} seats at a time.`, code: "invalid_input", field: "seats" });
+      }
+      const kind = req.body?.kind ?? "play";
+      if (!isSeatKind(kind)) {
+        return res.status(400).json({ message: "That isn't a kind of seat.", code: "invalid_input", field: "kind" });
+      }
+
+      const cents = seats * SEAT_PRICE_CENTS[kind];
+      const paid = await spend(req.user.id, cents, {
+        outcome: "seasonSeat",
+        note: `${seats} ${SEAT_LABEL[kind]} ${seats === 1 ? "seat" : "seats"}`,
+      });
+      if (!paid) {
+        const wallet = await walletOf(req.user.id);
+        return res.status(402).json({
+          code: "payment_required",
+          message: `${seats} ${seats === 1 ? "seat is" : "seats are"} $${(cents / 100).toFixed(2)}, and your balance is ${wallet.balanceDisplay}.`,
+          price: { cents, display: `$${(cents / 100).toFixed(2)}` },
+          wallet,
+          remedy: "top_up",
+        });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.insert(simSeatPurchases).values({
+          companyId: found.company.id, seats, kind, amount: cents,
+          /*
+           * Not a Stripe session, and the column says so.
+           *
+           * It is NOT NULL and unique — it is the "this event credited this
+           * company once" key — so a balance purchase brings its own, taken
+           * from the ledger line that paid for it. Namespaced for the same
+           * reason `apple:` is namespaced in the wallet: two ways of paying
+           * must never collide on the key that decides whether somebody's
+           * money bought anything, and whoever reconciles this table against
+           * Stripe can see at a glance which rows are not Stripe's.
+           */
+          stripeSessionId: `balance:${paid.id || crypto.randomUUID()}`,
+          boughtBy: req.user.id,
+        } as any);
+        await tx.update(companies)
+          .set({ [SEAT_COLUMN[kind]]: sql`${companies[SEAT_COLUMN[kind]]} + ${seats}` })
+          .where(eq(companies.id, found.company.id));
+      });
+
+      const [after] = await db.select().from(companies).where(eq(companies.id, found.company.id));
+      res.json({
+        seats, kind, spentCents: cents,
+        held: seatsHeld(after)[kind],
+        wallet: await walletOf(req.user.id),
+      });
+    } catch (error) {
+      console.error("Simulation seat purchase error:", error);
+      res.status(500).json({ message: "Couldn't buy those seats." });
+    }
+  });
+
+  app.post("/api/companies/:id/simulation-seats/checkout", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const seats = Math.round(Number(req.body?.seats));
+      if (!Number.isInteger(seats) || seats < 1 || seats > SEATS_PER_PURCHASE_MAX) {
+        return res.status(400).json({ message: `Buy between 1 and ${SEATS_PER_PURCHASE_MAX} seats at a time.`, code: "invalid_input", field: "seats" });
+      }
+      const kind = req.body?.kind ?? "play";
+      if (!isSeatKind(kind)) {
+        return res.status(400).json({ message: "Buy either a seat to play one of our simulations, or one to have Nova build you a simulation.", code: "invalid_input", field: "kind" });
+      }
+
+      if (!isStripeConfigured()) {
+        return res.status(503).json({ code: "billing_unavailable", message: "Payments aren't configured here." });
+      }
+      const stripe = await getUncachableStripeClient();
+
+      const user = await storage.getUser(req.user.id);
+      const customerId = await ensureStripeCustomer(stripe, { id: req.user.id, email: user?.email, stripeCustomerId: user?.stripeCustomerId });
+
+      const origin = `${req.protocol}://${req.get("host")}`;
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [{
+          quantity: seats,
+          price_data: {
+            currency: "usd",
+            unit_amount: SEAT_PRICE_CENTS[kind],
+            product_data: {
+              name: kind === "nova" ? "Simulation seat — built by Nova" : "Simulation seat",
+              description: kind === "nova"
+                ? "One person at a table in a simulation Nova builds from your own project. For the life of a season, and the seat stays with the company."
+                : "One person at a table in one of our simulations. For the life of a season, and the seat stays with the company.",
+            },
+          },
+        }],
+        success_url: `${origin}/companies/${found.company.slug ?? found.company.id}?seats=bought`,
+        cancel_url: `${origin}/companies/${found.company.slug ?? found.company.id}?seats=cancelled`,
+        /*
+         * What the webhook needs to credit the right company. Read from the
+         * session rather than from anything the browser sends back, because
+         * the browser is not who paid.
+         */
+        metadata: { companyId: found.company.id, seats: String(seats), kind: "simulation_seats", seatKind: kind, userId: req.user.id },
+      });
+
+      res.json({ url: session.url, seats, kind, total: (seats * SEAT_PRICE_CENTS[kind]) / 100 });
+    } catch (error) {
+      console.error("Simulation seat checkout error:", error);
+      res.status(500).json({ message: "Couldn't start that purchase." });
+    }
+  });
+
+  /**
+   * Nova builds the season, from the business the company actually has.
+   *
+   * The questions a first-time company cannot answer — which of seven markets
+   * is shaped like ours, how much of the world, how many rivals, how many
+   * years — answered from the project it is already running here, and answered
+   * *out loud*: the brief says which market, why, and what each thing in the
+   * game stands for in their business. A team that disagrees with the mapping
+   * has learned something about their business, which is the point.
+   *
+   * Behind the seats, because this is the thing worth paying for.
+   */
+  app.post("/api/companies/:id/seasons/nova", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const members = await companyMembersOf(found.company.id);
+      /*
+       * Nova reading the company's project and proposing a market costs a
+       * model call, so it is gated before the call rather than at the start
+       * line: a company with no Nova seats cannot have one built. How many
+       * are needed is settled at start, against the people who actually sat
+       * down — this only asks that the company has bought into the tier.
+       */
+      const seats = seatsHeld(found.company).nova;
+      if (seats < 1) {
+        return res.status(402).json({
+          code: "seats_required",
+          message: `A simulation Nova builds from your own project is $${SEAT_PRICE_CENTS.nova / 100} a seat, against $${SEAT_PRICE_CENTS.play / 100} for one of ours. Buy a seat for everyone who will play, and they keep them for every season after this one.`,
+          seatKind: "nova",
+          pricePerSeat: SEAT_PRICE_CENTS.nova / 100,
+          people: members.length,
+          paid: seats,
+        });
+      }
+
+      if (!openAiConfigured()) {
+        return res.status(503).json({ code: "nova_unavailable", message: "Nova can't reach the model right now. You can still set a season up yourself." });
+      }
+
+      /*
+       * Checked before the model runs, charged after its answer is read — the
+       * house rule for every route that spends a model call. The seats pay for
+       * the simulation; the credit pays for Nova's thinking about it.
+       */
+      /* Priced like the project's own build — see the note there. */
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "a market built around your project", {
+        action: "simulationBuild", outcome: "customSeason",
+      });
+      if (!ent) return;
+
+      const project = found.company.projectId
+        ? await storage.getProject(found.company.projectId).catch(() => null)
+        : null;
+
+      const prompt = buildSimulationPrompt({
+        company: {
+          name: found.company.name,
+          industry: found.company.industry,
+          size: found.company.size,
+          description: found.company.description,
+        },
+        project: project ? { title: project.title, description: project.description, goal: (project as any).goal } : null,
+        progress: project ? await whereTheyAre(project.id) : null,
+        people: members.length,
+      });
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user },
+        ],
+        response_format: { type: "json_object" },
+      });
+
+      const brief = parseSimulationBrief(completion.choices?.[0]?.message?.content ?? "", `${found.company.name} — year one`);
+      if (!brief) {
+        return res.status(502).json({ code: "model_unreadable", message: "Nova answered with something I couldn't use. Try again, or set the season up yourself." });
+      }
+      // Charged once the answer is one we can use, and never in an error path.
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.simulationBuild);
+
+      const niche = nicheById(brief.nicheId);
+      if (!niche) {
+        return res.status(502).json({ code: "nova_unreadable", message: "Nova picked a market that doesn't exist." });
+      }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const inviteCode = newSeasonCode();
+        try {
+          const [season] = await db.insert(simSeasons).values({
+            nicheId: niche.id,
+            name: brief.name,
+            status: "forming",
+            totalYears: brief.totalYears,
+            periodMinutes: null,
+            companyId: found.company.id,
+            inviteCode,
+            createdAt: new Date(),
+            scope: brief.scope,
+            botTeams: brief.botTeams,
+            origin: "nova",
+          }).returning();
+          await logCompany(found.company.id, req.user.id, "season_created", null, {
+            seasonId: season.id, name: brief.name, nicheId: niche.id, scope: brief.scope, botTeams: brief.botTeams, byNova: true,
+          });
+          return res.status(201).json({
+            seasonId: season.id,
+            inviteCode,
+            joinUrl: joinPathFor(inviteCode),
+            brief: { ...brief, marketName: niche.name },
+          });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
       }
       res.status(500).json({ message: "Couldn't make a join code. Try again." });
     } catch (error) {
-      console.error("Company season create error:", error);
-      res.status(500).json({ message: "Couldn't create that season." });
+      console.error("Nova season build error:", error);
+      respondToAiError(res, error, "Couldn't build that simulation");
     }
   });
 
@@ -160,15 +836,22 @@ export function registerCompanySeasonRoutes(app: Express): void {
             id: s.id,
             name: s.name,
             status: s.status,
-            niche: { id: s.nicheId, name: nicheById(s.nicheId)?.name ?? s.nicheId },
+            niche: { id: s.nicheId, name: marketNameOf(s) },
             /** The year being played now; past the last one once it's over. */
             year: s.year,
             totalYears: s.totalYears,
-            yearMinutes: s.yearMinutes,
+            /* What `year` counts — see the note on the desk route. */
+            totalPeriods: totalPeriods(s.totalYears, (s.cadence ?? "yearly") as Cadence),
+            periodMinutes: s.periodMinutes,
+            cadence: s.cadence,
             nextTickAt: s.nextTickAt,
             rooms: rooms.length,
             roomsReady: rooms.filter((r) => r.phase === "running").length,
+            /** The people the start line will charge for. Bots are not people and are not charged for. */
             players: inRooms.filter((x) => !x.isBot).length,
+            origin: s.origin,
+            /** Which seat this season costs, and therefore which balance pays for it. */
+            seatKind: seatKindFor(s.origin),
             bots: inRooms.filter((x) => x.isBot).length,
             inviteCode: s.inviteCode,
             joinUrl: s.inviteCode ? joinPathFor(s.inviteCode) : null,
@@ -203,6 +886,31 @@ export function registerCompanySeasonRoutes(app: Express): void {
       // No list means everyone: the common case is "tell the whole team".
       const recipients = (asked.length ? asked.map(String) : [...memberIds])
         .filter((id) => memberIds.has(id) && id !== req.user.id);
+
+      /*
+       * Seats before invitations.
+       *
+       * Inviting somebody is a promise that there is a place for them, and
+       * until now it was a promise nothing checked: the only seat gate was on
+       * the start button, so a season could invite the whole company, watch
+       * everyone join and sit through the lobby, and produce a bill at the
+       * one moment when the cost of refusing it is everybody's time. The
+       * check belongs here too, where it is still free to say no.
+       *
+       * Counted against the seats left rather than the seats held, because
+       * whoever is already sitting down has a place and is not being offered
+       * one. The inviter's own seat is theirs and is already in `seated`.
+       */
+      const { kind, seated, paid, free } = await seatCensus(season, found.company);
+      const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
+      if (!devFreeSeat && recipients.length > free) {
+        return res.status(402).json(seatsRequired(kind, seated + recipients.length, paid,
+          free === 0
+            ? `Every seat this company holds is taken, so there is nowhere to put ${recipients.length === 1 ? "them" : "them"} yet. `
+              + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`
+            : `You're offering ${recipients.length} places and the company has ${free} ${free === 1 ? "seat" : "seats"} left. `
+              + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`));
+      }
       await notify({
         recipients, actorId: req.user.id, kind: "season_invite",
         targetId: `${season.id}:${season.inviteCode}`,
@@ -230,6 +938,55 @@ export function registerCompanySeasonRoutes(app: Express): void {
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
+
+      /*
+       * The seats, charged where they are actually filled.
+       *
+       * This is the only gate on playing, and it is here rather than on
+       * creating a season because until people have sat down nobody knows how
+       * many seats a season needs. Counting company members instead would
+       * charge a company of forty for a season five of them play.
+       *
+       * Bots are not people and are not charged for. The price depends on
+       * where the season came from: one of our markets is the cheaper seat,
+       * one Nova built from the company's own project is the dearer one, and
+       * the two balances do not substitute for each other.
+       */
+      const { kind, seated, paid } = await seatCensus(season, found.company);
+      /*
+       * A developer building or demonstrating a season should not have to buy
+       * their way past their own paywall. Mirrors `devAdvanceOn`: local
+       * development only, never production, and it says so in the log so a
+       * season started this way is never mistaken for one somebody paid for.
+       */
+      /*
+       * The same escape, reached the other way.
+       *
+       * `SIM_DEV_FREE_SEATS` is a server-wide env var, which is the right
+       * shape for a workshop machine and the wrong one for somebody clicking
+       * the "Everything free" switch in the sidebar: that turns off every
+       * other charge in the product, and a season was the one thing it could
+       * not get past. Same two guards as everywhere else — never in
+       * production, and it says so in the log.
+       */
+      const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
+      if (devFreeSeat && seated > paid) {
+        console.warn(`[sim] development seats — starting season ${season.id} with ${seated} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
+      } else if (seated > paid) {
+        return res.status(402).json(seatsRequired(kind, seated, paid,
+          `${seated} ${seated === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${SEAT_LABEL[kind]} ${paid === 1 ? "seat" : "seats"}. `
+          + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`));
+      }
+
+      /*
+       * The rivals the company asked for, seated before the world is built —
+       * a bot-run company that arrived afterwards would be a company that did
+       * not exist in year one, which the engine has no way to express.
+       */
+      if ((season.botTeams ?? 0) > 0) {
+        await seatBotCompanies(season.id, season.botTeams).catch((err) =>
+          console.error(`[sim] seating bot companies for season ${season.id} failed:`, err));
+      }
 
       const result = await startSeason(season.id);
       switch (result.outcome) {
@@ -282,9 +1039,9 @@ export function registerCompanySeasonRoutes(app: Express): void {
         });
       }
       const now = new Date();
-      const yearMs = yearMsOf(season);
+      const periodMs = periodMsOf(season);
       const moved = await db.update(simSeasons)
-        .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * yearMs) })
+        .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * periodMs) })
         // Conditional on the year it read, so a tick landing in between isn't rewound.
         .where(and(eq(simSeasons.id, season.id), eq(simSeasons.year, season.year), eq(simSeasons.status, "running")))
         .returning({ id: simSeasons.id });
@@ -292,18 +1049,16 @@ export function registerCompanySeasonRoutes(app: Express): void {
 
       /*
        * Resolved here rather than on the next minute's pass, so the room sees
-       * results while it's still in the room. `tickSeason` holds the season's
-       * own lock, so a double-click or the minute's pass arriving at the same
-       * moment waits for this one and then finds nothing to do — reported as
-       * the 409 below rather than as a second year resolved.
-       */
-      /*
-       * The year this request was about, and no other. The conditional update
-       * above reads like a compare-and-swap and is not one — it tests `year`
-       * and does not change it — so two presses both get through it. The lock
-       * inside tickSeason then serialises them, and without this the loser
-       * would find the season due (the winner set the clock) on the next year
-       * and resolve that one as well: one double-click, two years gone.
+       * results while it's still in the room.
+       *
+       * `onlyYear` is what makes the double-click safe, and the update above
+       * is not: it tests `year` and doesn't change it, so a second request
+       * matches the same row just as happily and both arrive here. The lock
+       * inside tickSeason serialises them, but serialising is not enough on
+       * its own — by the time the second one has the lock, next_tick_at is in
+       * the past and the season is on the following year, so it would resolve
+       * that one and answer 200. Naming the year turns the loser into the 409
+       * it should always have been.
        */
       const resolved = await tickSeason(season.id, now, { onlyYear: season.year });
       if (resolved == null) return res.status(409).json({ message: "That year has just been resolved.", code: "already_resolved" });
@@ -313,6 +1068,121 @@ export function registerCompanySeasonRoutes(app: Express): void {
     } catch (error) {
       console.error("Company season resolve error:", error);
       res.status(500).json({ message: "Couldn't resolve the year." });
+    }
+  });
+
+  /**
+   * The room, while it is still playing: every table, and who has committed.
+   *
+   * The report above answers "how did that go" once a season is over. This
+   * answers the question somebody running the session asks every few minutes
+   * with a room in front of them: **are we waiting on anybody?** Without it the
+   * only way to know was to ask out loud, and the only way to find out a table
+   * was stuck was for them to say so.
+   *
+   * ## What it shows, and what it deliberately does not
+   *
+   * Every table, every chair, and whether that chair has filed this year — the
+   * facilitator's whole job is knowing whether to wait or to resolve the year,
+   * and that is answered by counts rather than contents.
+   *
+   * Whether the *contents* come too depends on where the viewer is sitting.
+   * Somebody running a season they are not playing in can read what each table
+   * filed: it is a training exercise, they are about to debrief it, and the
+   * final report shows it anyway. Somebody running a season they *are* seated
+   * in cannot, because that is every rival's plan handed to a player before
+   * the year resolves — an advantage nobody else at the table can have, handed
+   * over by an accident of who owns the company. They keep the counts, which
+   * is what the job needs, and lose the detail, which is what the game cannot
+   * survive them having.
+   */
+  app.get("/api/companies/:id/seasons/:seasonId/watch", isAuthenticated, async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+      const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
+      if (!season) return;
+
+      const ventures = await db.select().from(simVentures).where(eq(simVentures.seasonId, season.id));
+      const ventureIds = ventures.map((v) => v.id);
+
+      const seats = ventureIds.length
+        ? await db.select({
+            ventureId: simSeats.ventureId, userId: simSeats.userId, role: simSeats.role,
+            firstName: users.firstName, lastName: users.lastName, isBot: users.isBot,
+          })
+          .from(simSeats)
+          .leftJoin(users, eq(users.id, simSeats.userId))
+          .where(inArray(simSeats.ventureId, ventureIds))
+        : [];
+
+      const filed = ventureIds.length
+        ? await db.select({
+            ventureId: simDecisions.ventureId, role: simDecisions.role,
+            userId: simDecisions.userId, payload: simDecisions.payload,
+          })
+          .from(simDecisions)
+          .where(and(inArray(simDecisions.ventureId, ventureIds), eq(simDecisions.year, season.year)))
+        : [];
+
+      /*
+       * Is the person reading this also playing? Asked of the season rather
+       * than of one table: a seat anywhere in it is enough to make every other
+       * table's plan an unfair advantage.
+       */
+      const playing = seats.some((s) => s.userId === req.user.id);
+
+      const filedFor = new Map(filed.map((d) => [`${d.ventureId}:${d.role}`, d]));
+
+      res.json({
+        season: {
+          id: season.id,
+          name: season.name,
+          status: season.status,
+          year: season.year,
+          totalYears: season.totalYears,
+          nextTickAt: season.nextTickAt,
+          seatCount: season.seatCount,
+        },
+        /** True when the reader is seated in this season, and so is shown counts only. */
+        playing,
+        tables: ventures
+          .filter((v) => v.phase !== "retired")
+          .map((venture) => {
+            const here = seats.filter((s) => s.ventureId === venture.id);
+            const chairs = here.map((seat) => {
+              const decision = seat.role ? filedFor.get(`${venture.id}:${seat.role}`) : undefined;
+              return {
+                userId: seat.userId,
+                name: seat.isBot
+                  ? [seat.firstName, seat.lastName].filter(Boolean).join(" ") || "A stand-in"
+                  : seat.firstName || "Someone",
+                isBot: Boolean(seat.isBot),
+                role: seat.role,
+                roleTitle: seat.role ? ROLE_TITLES[seat.role as Role] ?? seat.role : null,
+                /** The thing the facilitator is actually looking for. */
+                filed: Boolean(decision),
+                /* Withheld from a reader who is playing — see the note above. */
+                decision: !playing && decision ? decision.payload : null,
+              };
+            });
+            return {
+              ventureId: venture.id,
+              name: venture.name,
+              product: venture.product,
+              phase: venture.phase,
+              /** Chairs nobody has taken yet: a table that cannot start. */
+              empty: Math.max(0, (season.seatCount ?? 5) - here.length),
+              filed: chairs.filter((c) => c.filed).length,
+              of: chairs.length,
+              waitingOn: chairs.filter((c) => !c.filed && !c.isBot).map((c) => c.name),
+              chairs,
+            };
+          }),
+      });
+    } catch (error) {
+      console.error("Season watch error:", error);
+      res.status(500).json({ message: "Failed to read the season" });
     }
   });
 
@@ -444,7 +1314,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
       res.json({
         season: {
           id: season.id, name: season.name, status: season.status, year: season.year,
-          totalYears: season.totalYears, yearsResolved: played, niche: { id: season.nicheId, name: nicheById(season.nicheId)?.name ?? season.nicheId },
+          totalYears: season.totalYears, yearsResolved: played, niche: { id: season.nicheId, name: marketNameOf(season) },
         },
         players: players.sort((a, b) => (a.teamName ?? "").localeCompare(b.teamName ?? "") || a.name.localeCompare(b.name)),
         notPlaying: members.filter((m) => !seated.has(m.userId)).map((m) => ({ userId: m.userId, name: m.name })),

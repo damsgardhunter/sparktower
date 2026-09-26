@@ -145,6 +145,99 @@ describe("the boards", () => {
   }, 180_000);
 });
 
+/**
+ * The promise on the screen, checked against the routes.
+ *
+ * The game's entry card and its play screen both carry a line saying that what
+ * you write is seen by you and your partner and nobody else, that it is never
+ * published or shown to other players, and that the boards carry only a name, a
+ * valuation and who played (client/src/components/game/your-idea.tsx). That is a
+ * promise made to somebody about to type their business idea into a box, and the
+ * only thing that keeps it true is the routes below.
+ *
+ * So it is asserted rather than trusted, and asserted from the outside — over
+ * HTTP, as a stranger, the way it would actually be broken. `gameState` refusing
+ * a non-player is already covered a function call at a time in startup-game.test.ts;
+ * what this adds is that no *route* hands the contents out, including the one
+ * surface that is deliberately public.
+ */
+describe("what a stranger can learn about somebody else's game", () => {
+  it("is nothing from the game itself — not the rounds, the chat or the standings", async () => {
+    const app = await getTestApp();
+    const a = await player(app);
+    const b = await player(app);
+    const stranger = await player(app);
+
+    const gameId = await scoredGame({ a, b }, "Kettle & Fern", {
+      growth: 500, capital: 500, product: 500, acquisition: 500, risk: 500, overall: 500,
+    });
+    /* Something worth protecting, in the round payloads and in the chat. */
+    await db.update(startupGames)
+      .set({ idea: { name: "Kettle & Fern", pitch: "Bookings for tea rooms, no website needed." } as any })
+      .where(eq(startupGames.id, gameId));
+
+    for (const path of [
+      `/api/games/${gameId}`,
+      `/api/games/${gameId}/standings`,
+      `/api/games/${gameId}/messages`,
+      `/api/games/${gameId}/deck/idea`,
+    ]) {
+      const res = await stranger.agent.get(path);
+      expect(res.status, `${path} answered ${res.status}`).toBe(404);
+      /*
+       * And the refusal says nothing either: "no such game" is the same answer a
+       * game that does not exist gets, so holding an id tells you nothing about
+       * whether it is real.
+       */
+      expect(JSON.stringify(res.body)).not.toContain("Kettle");
+      expect(JSON.stringify(res.body)).not.toContain("tea rooms");
+    }
+
+    /* Nor by submitting into it, which is how you would find out what round it is on. */
+    const pushed = await stranger.agent.post(`/api/games/${gameId}/submit`).send({ name: "Mine Now" });
+    expect([403, 404, 409], `submit answered ${pushed.status}`).toContain(pushed.status);
+
+    /* And their own history is their own: somebody else's finished game is not in it. */
+    const history = await stranger.agent.get("/api/games/history");
+    expect(history.status).toBe(200);
+    expect(JSON.stringify(history.body)).not.toContain("Kettle");
+  }, 180_000);
+
+  /*
+   * The leaderboard is the one place another player's game is visible at all, so
+   * it is the one place a round's contents could leak by accident — a `select *`
+   * on the games table would do it, and the row already joins that table for the
+   * name. Named fields only, and this is what says so.
+   */
+  it("is a name, a valuation and who played, from the boards — and nothing from the rounds", async () => {
+    const app = await getTestApp();
+    const a = await player(app);
+    const b = await player(app);
+    const stranger = await player(app);
+
+    const gameId = await scoredGame({ a, b }, "Kettle & Fern", {
+      growth: 640, capital: 640, product: 640, acquisition: 640, risk: 360, overall: 640,
+    });
+    await db.update(startupGames)
+      .set({ idea: { name: "Kettle & Fern", pitch: "Bookings for tea rooms, no website needed." } as any })
+      .where(eq(startupGames.id, gameId));
+
+    const board = await stranger.agent.get("/api/games/leaderboard?limit=50");
+    expect(board.status).toBe(200);
+    const row = (board.body.standings as any[]).find((r) => r.name === "Kettle & Fern");
+    expect(row, "a scored game is on the board").toBeTruthy();
+
+    /* The name is on it, on purpose. The pitch is not, and neither is the id. */
+    expect(JSON.stringify(board.body)).not.toContain("tea rooms");
+    expect(JSON.stringify(board.body)).not.toContain(gameId);
+    expect(Object.keys(row).sort()).toEqual(
+      ["band", "isYours", "name", "of", "peak", "players", "rank", "score", "tenYear"],
+    );
+    /* Whose game it was, by name only — no account ids to look anybody up by. */
+    for (const p of row.players) expect(Object.keys(p).sort()).toEqual(["isBot", "name"]);
+  }, 180_000);
+});
+
 describe("starting a game", () => {
   it("cannot put one player in two games, however fast the button is pressed", async () => {
     const app = await getTestApp();

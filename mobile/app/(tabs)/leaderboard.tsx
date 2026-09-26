@@ -48,7 +48,8 @@ export default function Leaderboard() {
   const list = active.data ?? [];
 
   return (
-    <Screen canvas onRefresh={() => active.refetch()} refreshing={active.isRefetching} contentStyle={{ paddingHorizontal: 0, paddingTop: 0 }}>
+    <Screen canvas onRefresh={() => active.refetch()} refreshing={active.isRefetching} /* No paddingTop: Screen leaves room for the floating header, and setting it here overrode that. */
+      contentStyle={{ paddingHorizontal: 0 }}>
       <View style={{ backgroundColor: colors.surface, borderBottomWidth: 1, borderColor: colors.border }}>
         <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: 2 }}>
           <Text style={{ color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold }}>Leaderboard</Text>

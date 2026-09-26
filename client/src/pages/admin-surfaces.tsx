@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loading } from "@/components/nova";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -6,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
-import { Loader2, ToggleLeft, Users, AlertTriangle } from "lucide-react";
+import { ToggleLeft, Users, AlertTriangle } from "lucide-react";
 import { DeploymentCard } from "@/components/admin/deployment-card";
 import {
   SURFACE_CLASS_LABEL, SURFACE_SEQUENCE_LABEL, WEDGE_PROOF, type SurfaceClass, type SurfaceDef, type SurfaceSequence,
@@ -60,7 +61,7 @@ export default function AdminSurfaces() {
   });
 
   if (authLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
+    return <Loading what="Reading the switches" />;
   }
   if (!isReviewer) return <NotFound />;
 
@@ -106,7 +107,7 @@ export default function AdminSurfaces() {
       </Card>
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+        <Loading what="Reading the switches" />
       ) : (
         ORDER.map((cls) => {
           const group = rows.filter((r) => r.cls === cls);

@@ -8,6 +8,7 @@ import { PathPanel } from "@/components/path-panel";
 import { Block } from "@/components/section/block";
 import { useSections } from "@/lib/sections";
 import { novaHandoffTab, type NovaHandoff } from "@shared/nova-handoff";
+import { OUTCOME_PRICE_CENTS, formatMoney, type NovaChargeKind, type PricedOutcomeId } from "@shared/plans";
 import type { ProjectGoal } from "@shared/goals";
 import { CompanyRhythm } from "@/components/company-rhythm";
 import { ArrowRight, CheckCircle2, Circle, ChevronDown, ChevronUp, Lightbulb } from "lucide-react";
@@ -18,6 +19,8 @@ interface Recommendation {
   detail?: string;
   actionLabel: string;
   credits: number;
+  /** What it costs, in the terms this product charges in. See server/nova-briefing.ts. */
+  charge: NovaChargeKind;
   tab?: string;
   /** The job the destination tab picks up on arrival, if there is one. */
   action?: NovaHandoff;
@@ -62,7 +65,15 @@ export function NovaDashboard({
   const isPrimary = sections ? sections.primary === goal : false;
 
   return (
-    <div className="max-w-3xl mx-auto" data-testid="nova-dashboard">
+    /*
+     * Wide enough to use the column it was given. This was `max-w-3xl`, which
+     * held the dashboard to 768px inside a grid cell of around 950 and left a
+     * band of nothing down the right of every path screen — most visible where
+     * Nova's own tables ran off the side of the card while the empty band sat
+     * beside them. `5xl` fills the cell at a normal laptop width and still
+     * stops prose from running to forty words a line on a big monitor.
+     */
+    <div className="max-w-5xl" data-testid="nova-dashboard">
       <PathPanel projectId={projectId} goal={goal} onNavigate={onNavigate} onStartSection={onStartSection} isPrimary={isPrimary} />
       {/* The Run path's setup hands over to a rhythm that doesn't end; it lives under the path, on the same screen. */}
       {goal === "run_company" && <CompanyRhythm projectId={projectId} />}
@@ -77,7 +88,18 @@ export function NovaDashboard({
  * button shows the price. Acting always lands on the tab that owns the work.
  */
 function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavigate: (tab: string) => void }) {
-  const { creditsRemaining, isUnlimited } = useEntitlements();
+  /*
+   * No affordability gate here any more.
+   *
+   * It read `creditsRemaining < rec.credits` — a comparison between two
+   * quantities the product no longer has. Worse, it *disabled* the button, so
+   * a number from the old scheme could lock someone out of an action that is
+   * free to them: a project that bought the whole-business build has every priced outcome
+   * on it covered (server/entitlements.ts), and the allowance has nothing to
+   * do with a priced outcome either way. The price is printed on the button
+   * and the confirmation asks before anything is spent, which is where a
+   * refusal belongs.
+   */
   const requestHandoff = useRequestNovaHandoff();
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -114,20 +136,23 @@ function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavig
         ) : (
           <ul className="divide-y divide-border rounded-lg border border-border">
             {recs.map((rec) => {
-              const cantAfford = !isUnlimited && rec.credits > 0 && creditsRemaining < rec.credits;
               const destination = rec.action ? novaHandoffTab(rec.action) : rec.tab;
+              /* A price, or nothing: "small" comes out of the month's allowance. */
+              const price = rec.charge in OUTCOME_PRICE_CENTS
+                ? formatMoney(OUTCOME_PRICE_CENTS[rec.charge as PricedOutcomeId])
+                : null;
               return (
                 <li key={rec.id} className="flex items-center gap-3 px-3 py-2.5" data-testid={`recommendation-${rec.id}`}>
                   <span className={`h-2 w-2 rounded-full shrink-0 ${SEVERITY_DOT[rec.severity]}`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate" title={rec.detail} data-testid={`rec-title-${rec.id}`}>{rec.title}</p>
-                    {cantAfford && <p className="text-[11px] text-destructive">Needs {rec.credits} credits</p>}
+
                   </div>
                   <Button
                     size="sm"
                     variant={rec.severity === "critical" ? "default" : "ghost"}
                     className="h-7 gap-1 shrink-0 text-xs"
-                    disabled={cantAfford || !destination}
+                    disabled={!destination}
                     onClick={() => {
                       if (rec.action) requestHandoff(rec.action);
                       if (destination) onNavigate(destination);
@@ -135,7 +160,7 @@ function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavig
                     data-testid={`rec-action-${rec.id}`}
                   >
                     {rec.actionLabel}
-                    {rec.credits > 0 && <Badge variant="secondary" className="text-[10px] px-1.5">{rec.credits}</Badge>}
+                    {price && <Badge variant="secondary" className="text-[10px] px-1.5">{price}</Badge>}
                     <ArrowRight className="h-3 w-3" />
                   </Button>
                 </li>

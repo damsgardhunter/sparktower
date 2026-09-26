@@ -27,7 +27,8 @@
  * last confirmed, and a submit that fails puts the message under the field
  * that caused it rather than in a toast that scrolls away.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { symbolOf, DEFAULT_CURRENCY, type CurrencyCode } from "@shared/currency";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -36,25 +37,34 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { DeskCurrency, DeskPeriod, useMoney, usePeriod } from "@/components/sim/desk-currency";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
+import { leverOutcome, optionOutcome, type Outcome } from "@shared/simulation/lever-outcomes";
 import { saturate } from "@shared/simulation/market";
 import type { Role } from "@shared/simulation/types";
 import { CompanyProfile } from "@/components/sim/company-profile";
 import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
+import { capacityBuild } from "@shared/simulation/lag";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
 import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock";
+import { useProjection } from "@/components/sim/projection-panel";
 import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
+  Crosshair,
+  ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
+
+import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
+import { ExpansionVote, type ExpansionVoteData } from "@/components/sim/expansion-vote";
 
 interface Desk {
   phase: "not_started" | "over" | "running" | "finished";
@@ -62,8 +72,21 @@ interface Desk {
   name: string | null;
   product: string | null;
   niche: { id: string; name: string; premise: string; voice: Record<string, string> };
+  /**
+   * What one decision is called in this season: a year, a quarter or a month.
+   *
+   * Sent by the server so the desk and the engine cannot disagree about what a
+   * quarter is called. Optional because a desk from before this existed has no
+   * opinion, and "year" is what it always meant.
+   */
+  period?: { one: string; many: string; of: string };
+  cadence?: string;
+  /** What this company counts its money in — the project's currency, or the default. */
+  currency?: CurrencyCode;
   year: number;
   totalYears: number;
+  /** How many decisions the season is — what `year` counts. See the desk route. */
+  totalPeriods?: number;
   resolvesAt: string | null;
   seasonId?: string;
   /** Set only for developers and for companies running this season. */
@@ -72,6 +95,8 @@ interface Desk {
   yourTitle: string | null;
   /** Only before year one: how many rooms in this market are still in a lobby. */
   roomsStillChoosing?: number;
+  /** One chair at this table: every desk is yours, and nobody else is arriving. */
+  solo?: boolean;
   yourRoomReady?: boolean;
   yourLevers: string[];
   fields: LeverField[];
@@ -93,6 +118,13 @@ interface Desk {
     pipelineLater?: number; brandPipeline?: number; staff?: number;
     /** The seats the company still has; a dissolved one is gone from here. */
     seats?: Role[];
+    /** A capacity build in flight, so the projected room matches the engine's. */
+    buildFrom?: number;
+    buildTo?: number;
+    /** How many of those chairs are actually paid for. One, for a solo founder holding all five. */
+    officers?: number;
+    /** The size of this company's market, which every fixed cost is charged at. */
+    scale?: number;
     techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
   segments: {
@@ -112,8 +144,17 @@ interface Desk {
   valuation: number;
   /** How fast this market's products move, which scales what research buys. */
   innovationPace: number;
+  /** The niche this table went and found, if they have one. */
+  ours: {
+    id: string; name: string; foundInYear: number; from: string; people: number;
+    premium: number; headStartLeft: number; sharedWith: string[]; held: number;
+  } | null;
+  /** The region operations may put to the table this year, and where the vote stands. */
+  expansion: ExpansionVoteData | null;
   table: {
     userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean;
+    /** For putting a face against a vote. */
+    avatarUrl?: string | null;
     /** The chair's standing with the room. Not tracked for the chief executive. */
     person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
   }[];
@@ -128,10 +169,15 @@ interface Desk {
     revenue: number; costs: number; profit: number; cash: number; debt: number;
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
     market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+    auctions?: AuctionRow[];
     event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
     founderValue?: number; founderShare?: number;
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
+  /** Every company in the market, placed — for the map on the Past tab. */
+  standing?: Standing[];
+  /** What the table filed last year, which is the only record of it anywhere. */
+  lastFiled?: { decisions: Record<string, any>; filedBy: Record<string, string> } | null;
   challenge: Challenge | null;
   lastChallenge: ChallengeResult | null;
   distress: {
@@ -160,9 +206,16 @@ interface ChallengeResult {
 /** A market's noun as a column heading: "subscribers" → "Subscribers". */
 const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
-const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
-const compact = (n: number) =>
-  n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+/**
+ * What the season counts in, for every figure on this desk.
+ *
+ * Both formatters had a pound sign written into them, so a company built from
+ * a project that counts in dollars was still priced in sterling on every
+ * screen of the game it was rehearsing. The desk now says which currency it
+ * is (`currency` on its payload) and a context carries it, because the
+ * figures are drawn by six components and threading a prop through all of
+ * them would be six chances to miss one.
+ */
 
 export default function SimulationDeskPage() {
   const { id } = useParams<{ id: string }>();
@@ -182,8 +235,43 @@ export default function SimulationDeskPage() {
     refetchInterval: 8000,
   });
 
+  /*
+   * Read off the payload rather than the context, because this component
+   * renders the providers: a hook called here would read the fallback and
+   * format a dollar company in pounds, or call a quarter a year.
+   */
+  const { money, compact } = useMoney(desk?.currency);
+  /*
+   * The demand curve as it stands with the draft, from the same endpoint the
+   * projection dock already asks. Null until it answers, and the desk's own
+   * forecast stands in meanwhile.
+   */
+
+  const period = usePeriod(desk?.period);
+  /*
+   * Which desks this person is filing for.
+   *
+   * Normally one. A solo founder holds all five, and everywhere the screen
+   * asked "is this my desk?" to decide whether the live draft or the filed
+   * number should be shown, it was asking `yourRole === "cmo"` — which is
+   * false for a founder whose seat is the chief executive's. So somebody
+   * typing a price watched the forecast ignore it, and somebody asking for ten
+   * thousand seats watched the room stay where it was, because both were
+   * reading the filed number instead of the one under their cursor.
+   */
+  const holds = (role: string) => desk?.solo || desk?.yourRole === role;
+
   const [draft, setDraft] = useState<Record<string, any> | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  /*
+   * The demand curve as it stands with the draft, from the same endpoint the
+   * projection dock already asks — one query, shared by both through the
+   * cache. Null until it answers, and the desk's own forecast stands in
+   * meanwhile.
+   */
+  const draftProjection = useProjection(id!, draft, JSON.stringify(desk?.filed ?? {}));
+  const liveDemand = draftProjection.data?.demand ?? null;
 
   /*
    * The server's draft seeds the form once, and then stops touching it. A poll
@@ -215,8 +303,24 @@ export default function SimulationDeskPage() {
     },
     onError: (err: any) => {
       const body = err?.body ?? err?.response ?? {};
-      if (body?.errors) setErrors(body.errors);
-      else toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
+      if (body?.errors) { setErrors(body.errors); return; }
+      /*
+       * The year turned over while they were typing.
+       *
+       * `YEAR_CLOSING` exists precisely so this can say "a moment" rather
+       * than "something went wrong" — and nothing checked for it, so the one
+       * refusal the server went out of its way to make gentle arrived as a
+       * red error about a failure that had not happened. The desk is also a
+       * year out of date at this point, so it refetches: what they typed was
+       * for a year that has closed, and next year's screen is the one to be
+       * looking at.
+       */
+      if (body?.code === "year_closing") {
+        toast({ title: "That year just closed", description: "Next year is opening now — your screen is catching up." });
+        queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${id}/desk`] });
+        return;
+      }
+      toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
     },
   });
 
@@ -310,15 +414,28 @@ export default function SimulationDeskPage() {
       <Shell title={desk.name ?? "Your company"} subtitle="Waiting for year one">
         <Card><CardContent className="p-6 space-y-2" data-testid="card-not-started">
           <p className="text-sm">
-            {waiting === 0
-              ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
-              : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
+            {desk.solo
+              ? "Your company is set up. Year one starts in a few seconds — this page will move on by itself."
+              : waiting === 0
+                ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
+                : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
           </p>
           <p className="text-sm text-muted-foreground">
-            {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
-            You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
-            product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
-            this; the season will be here when it starts.
+            {/*
+              * Two different promises, because two different things are true.
+              * The public market fills a waiting room with players the product
+              * runs. A season built from a project does not — its seats were
+              * bought for named people — and a solo founder has no empty seats
+              * at all, so saying either to them is a lie about their own table.
+              */}
+            {desk.solo
+              ? "Every desk is yours: nobody else is coming, and nobody else is being paid. Nothing is lost by closing this; the season will be here when it starts."
+              : <>
+                  {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
+                  You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
+                  product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
+                  this; the season will be here when it starts.
+                </>}
           </p>
         </CardContent></Card>
       </Shell>
@@ -337,14 +454,16 @@ export default function SimulationDeskPage() {
   const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
 
   return (
+    <DeskCurrency.Provider value={desk.currency ?? DEFAULT_CURRENCY}>
+    <DeskPeriod.Provider value={desk.period ?? { one: "year", many: "years", of: "this year" }}>
     <Shell
       title={desk.name ?? "Your company"}
-      subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
+      subtitle={`${desk.niche.name} · ${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${desk.year} of ${desk.totalPeriods ?? desk.totalYears}`}
       nicheId={desk.niche.id}
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
       year={desk.year}
-      totalYears={desk.totalYears}
+      totalYears={desk.totalPeriods ?? desk.totalYears}
       tabs={(compact) => (
         <DeskTabs
           tab={tab}
@@ -397,6 +516,30 @@ export default function SimulationDeskPage() {
 
         {/* What happened to the market, which is the thing people talk about. */}
         {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
+
+        {/*
+          * And then the two that say why: what the five of you actually filed
+          * and what it bought, and where that left everybody on the map. Both
+          * only exist once there is a year behind you.
+          */}
+        {desk.lastYear && (
+          <WhatTheTableDecided
+            year={desk.lastYear.year}
+            seats={desk.table.map((t) => ({ userId: t.userId, name: t.name, role: t.role, title: t.title, isYou: t.isYou }))}
+            filed={desk.lastFiled?.decisions ?? null}
+            auctions={desk.lastYear.auctions ?? []}
+            standing={desk.standing ?? []}
+            onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)}
+          />
+        )}
+        {desk.lastYear && (desk.standing?.length ?? 0) > 0 && (
+          <WhereTheMarketSits
+            standing={desk.standing!}
+            segments={desk.segments}
+            cities={desk.cities}
+            voice={desk.niche.voice}
+          />
+        )}
         {/*
           * 2. Where the company stands, as KPIs rather than a grid of equal
           * labels. Grouped by the question each answers — the money, the
@@ -519,7 +662,7 @@ export default function SimulationDeskPage() {
             seasonId={desk.seasonId}
             ventureId={desk.ventureId}
             year={desk.year}
-            totalYears={desk.totalYears}
+            totalYears={desk.totalPeriods ?? desk.totalYears}
             as={desk.canAdvance}
           />
         )}
@@ -535,6 +678,15 @@ export default function SimulationDeskPage() {
         )}
         {/* Your own thing to win, and how last year's went. */}
         {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+        {/* What the year's research bought, if this table went looking. */}
+        {desk.ours && <OurNiche niche={desk.ours} customersWord={v.customers} />}
+
+        {/*
+          * The region on the table. Shown to every seat, not only the one
+          * whose lever it is, because it is the one decision here the five of
+          * them settle between them.
+          */}
+        {desk.expansion && <ExpansionVote data={desk.expansion} seats={desk.table} />}
         {/* 3. The decision. */}
         {desk.phase === "finished" ? (
           <Card><CardContent className="p-6 text-sm text-muted-foreground">
@@ -553,7 +705,7 @@ export default function SimulationDeskPage() {
                       fresh={desk.fields.filter((f) => f.unlocksIn === desk.year).map((f) => f.label)}
                       coming={desk.arrivingNextYear ?? []}
                     />
-                    {desk.yourRole === "cto" && desk.productRisk && <ProductRiskLine risk={desk.productRisk} />}
+                    {holds("cto") && desk.productRisk && <ProductRiskLine risk={desk.productRisk} />}
                   </div>
                   {desk.submitted && (
                     <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
@@ -567,6 +719,7 @@ export default function SimulationDeskPage() {
                     <Field
                       key={field.id}
                       field={field}
+                      role={desk.yourRole}
                       value={draft[field.id]}
                       error={errors[field.id]}
                       onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
@@ -577,14 +730,14 @@ export default function SimulationDeskPage() {
                   ))}
                 </div>
 
-                {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
+                {holds("cfo") && Number(draft.raiseAmount) > 0 && (
                   <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
                     Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
                     founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
                     of whatever this becomes. It never has to be repaid, and it never comes back.
                   </p>
                 )}
-                {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
+                {holds("cto") && desk.company.techDebt > 40 && (
                   <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
                     The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
                     {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
@@ -592,7 +745,7 @@ export default function SimulationDeskPage() {
                     every number after it.
                   </p>
                 )}
-                {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
+                {holds("cto") && Number(draft.researchSpend) > 0 && (
                   <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
                     Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
                     landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
@@ -606,7 +759,7 @@ export default function SimulationDeskPage() {
                   data-testid="button-file-decision"
                 >
                   {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {desk.submitted ? "Update this year's decision" : "File this year's decision"}
+                  {desk.submitted ? `Update ${period.of}'s decision` : `File ${period.of}'s decision`}
                 </Button>
                 <p className="text-[11px] text-muted-foreground text-center mt-2">
                   Changeable until the year resolves. Nothing is locked in before then.
@@ -634,7 +787,7 @@ export default function SimulationDeskPage() {
           >
             <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Store className="h-4 w-4" /></span>
             <h3 className="mt-3 text-sm font-bold">The market</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Three things a year, and everyone bids blind.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Five things a {period.one}, and everyone bids blind.</p>
             <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
           </button>
           {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
@@ -726,20 +879,38 @@ export default function SimulationDeskPage() {
           filedStamp={JSON.stringify(desk.filed ?? {})}
         />
 
-        {desk.forecast && (
+        {(liveDemand ?? desk.forecast) && (
           <ForecastCard
-            forecast={desk.forecast}
+            /*
+             * The live one when there is a draft in flight, the desk's
+             * otherwise. The desk's is worked out from filings and refreshed on
+             * an eight-second poll, so the curve under "at $0 per seat" sat
+             * still while somebody changed the price — the decision it is most
+             * obviously about.
+             */
+            forecast={(liveDemand ?? desk.forecast)!}
             voice={v}
-            price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
+            price={Number(holds("cmo") && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
             /*
              * The room the company actually has this year. Capacity ordered now
              * opens next year, so the lever's value is next year's room — set
              * against next year's demand in the projection above, not here.
              * A cut is immediate, so the smaller of the two is what serves.
              */
-            capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
+            capacity={Math.min(c.capacity, Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
+            /*
+             * And the room the lever is actually setting, which is the number
+             * nobody could see. The bar shows what serves *now* — correct, and
+             * unmoved by the one decision on this screen that changes it, so
+             * asking for ten thousand seats looked like it did nothing.
+             */
+            capacityNext={capacityBuild(
+              { capacity: c.capacity, buildFrom: c.buildFrom, buildTo: c.buildTo },
+              Number(holds("coo") && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity),
+              1 / (period.perYear ?? 1),
+            ).next + (c.assetCapacity ?? 0)}
             idleCostPerUnit={desk.idleCostPerUnit}
-            yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
+            yours={holds("coo") ? "capacity" : holds("cmo") ? "price" : null}
           />
         )}
         {/* What is already in motion: the economy's turn, and the work that lands later (lag.ts). */}
@@ -786,6 +957,8 @@ export default function SimulationDeskPage() {
       <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
       <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
     </Shell>
+    </DeskPeriod.Provider>
+    </DeskCurrency.Provider>
   );
 }
 
@@ -798,12 +971,14 @@ export default function SimulationDeskPage() {
  * tells them whether *they* played well.
  */
 function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
+  const period = usePeriod();
+  const { money, compact } = useMoney();
   return (
     <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
         <div className="flex items-center gap-2">
           <Target className="h-4 w-4 text-primary" />
-          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours this year</p>
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours {period.of}</p>
         </div>
         <h2 className="font-semibold text-lg mt-1.5" data-testid="text-challenge-title">{challenge.title}</h2>
         <p className="text-sm text-muted-foreground mt-1">{challenge.brief}</p>
@@ -850,6 +1025,7 @@ function ChallengeCard({ challenge, last }: { challenge: Challenge; last: Challe
 function DistressCard({ distress, isCeo, seats, ventureId }: {
   distress: Desk["distress"]; isCeo: boolean; seats: Role[]; ventureId: string;
 }) {
+  const { money, compact } = useMoney();
   const { toast } = useToast();
   const [seat, setSeat] = useState<Role | "">("");
 
@@ -1198,6 +1374,7 @@ function WayRow({ label, value, when, warn }: { label: string; value: string; wh
 
 /** Last year, said plainly, with the engine's own explanation of why. */
 function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
+  const { money, compact } = useMoney();
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
@@ -1253,6 +1430,7 @@ function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYea
  * The count says how much is in there without anyone having to open it.
  */
 function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"]>; up: boolean; down: boolean }) {
+  const { money, compact } = useMoney();
   const [open, setOpen] = useState(false);
   const market = report.market ?? [];
   /*
@@ -1324,14 +1502,102 @@ function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"
  * is miserable and error-prone in a way that matters here — a stray zero is
  * a decision nobody meant to make.
  */
-function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
-  field: LeverField; value: any; error?: string; onChange: (v: any) => void;
+/**
+ * What a decision gives you, and what it takes.
+ *
+ * The marketplace in this same game already reads `+6 brand`, `+231,600
+ * capacity`, `12% off every unit`, and you can compare two listings in a
+ * second. The decision desk had a paragraph per lever instead, and people
+ * could not answer the one question they were actually asking: if I do this,
+ * what happens? So the consequences get the marketplace's treatment — short
+ * lines, scannable, two columns of meaning.
+ *
+ * The difference from the marketplace is that both halves are always drawn.
+ * A shop sells you upside; a seat at this table is a trade every time, and
+ * hiding the cost under the fold would make this a worse screen than the
+ * paragraph it replaced. `shared/simulation/lever-outcomes.ts` holds the
+ * copy, and a test there refuses a lever that claims to cost nothing.
+ */
+function Trade({ outcome, tight }: { outcome: Outcome | null; tight?: boolean }) {
+  if (!outcome) return null;
+  return (
+    <div className={tight ? "mt-1.5 space-y-0.5" : "mt-2 mb-2 space-y-0.5"} data-testid="lever-trade">
+      {outcome.up.map((line) => (
+        <p key={line} className={`flex items-start gap-1.5 ${tight ? "text-[11px]" : "text-xs"} text-emerald-700 dark:text-emerald-400`}>
+          <ArrowUpRight className="h-3 w-3 mt-[3px] shrink-0" />
+          <span>{line}</span>
+        </p>
+      ))}
+      {outcome.down.map((line) => (
+        <p key={line} className={`flex items-start gap-1.5 ${tight ? "text-[11px]" : "text-xs"} text-amber-700 dark:text-amber-500`}>
+          <ArrowDownRight className="h-3 w-3 mt-[3px] shrink-0" />
+          <span>{line}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A number you can actually clear and retype.
+ *
+ * The field was `value={value ?? 0}` with an onChange that turned "" into 0 —
+ * so pressing backspace on the last digit set the state to 0, which re-rendered
+ * the box as "0", which is what the backspace had just deleted. The only way
+ * to enter a number was to select the whole thing first, and every keystroke
+ * fought whoever was typing.
+ *
+ * So the box holds text while it is being typed in, and the lever holds the
+ * number. Empty is a legitimate thing to be mid-edit — it means "I have not
+ * finished" — and it reads as 0 to everything downstream, so a forecast never
+ * sees NaN. Leaving it empty settles back to 0 on blur, which is what somebody
+ * who cleared a field and changed their mind meant.
+ *
+ * Synced numerically rather than by string, so a value arriving from outside
+ * (a nudge, the seeded draft, a period turning over) replaces the text, while
+ * "" and 0 are treated as agreeing and an empty box is left alone.
+ */
+function NumberBox({ id, value, min, max, step, onChange, testId }: {
+  id?: string; value: number; min?: number; max?: number; step?: number;
+  onChange: (n: number) => void; testId?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text || 0) !== Number(value)) setText(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return (
+    <Input
+      id={id}
+      type="number"
+      inputMode="numeric"
+      value={text}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value === "" ? 0 : Number(e.target.value));
+      }}
+      onBlur={() => {
+        if (text === "" || Number.isNaN(Number(text))) { setText("0"); onChange(0); }
+      }}
+      className="tabular-nums"
+      data-testid={testId}
+    />
+  );
+}
+
+function Field({ field, role, value, error, onChange, cities, isNew, listPrice }: {
+  field: LeverField; role: Role | null; value: any; error?: string; onChange: (v: any) => void;
   cities?: Desk["cities"];
   /** Arrived this year (see UNLOCKS in shared/simulation/responsibilities.ts). */
   isNew?: boolean;
   /** For price tiers: what a segment with no tier pays. */
   listPrice?: number;
 }) {
+  const { money, compact } = useMoney();
   const badge = isNew ? <Badge variant="secondary" className="ml-2 text-[10px] align-middle" data-testid={`badge-new-${field.id}`}>New this year</Badge> : null;
 
   /*
@@ -1351,7 +1617,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}{badge}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-2">
           {(field.options ?? []).map((o) => (
             <div key={o.value} className="rounded-lg border p-2.5">
@@ -1359,6 +1626,7 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{o.label}</p>
                   <p className="text-[11px] text-muted-foreground">{o.help}</p>
+                  <Trade outcome={optionOutcome(role, field.id, o.value)} tight />
                 </div>
                 <div className="flex gap-1" role="radiogroup" aria-label={`${field.label}: ${o.label}`}>
                   {(field.choices ?? []).map((c) => {
@@ -1408,7 +1676,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
             </span>
           )}
         </div>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-2">
           {(field.options ?? []).map((o) => {
             const has = map[o.value] !== undefined && map[o.value] !== "";
@@ -1454,7 +1723,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-1.5">
           {(cities ?? []).map((city) => {
             const selected = open.has(city.id);
@@ -1493,7 +1763,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}{badge}</Label>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
         {(field.options?.length ?? 0) === 0 && (
           /*
            * Why there is nothing to choose, in this lever's own words. Every
@@ -1507,6 +1778,8 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
                 : field.id === "overrule" ? "Nothing to overrule — every seat's own decision stands."
                   : field.id === "replaceSeat" ? "Nobody to replace — the table is as you want it."
                     : field.id === "deals" ? "No offers on the table this year."
+                      : field.id === "expand" ? "Nowhere new announced this year, or you are already committed to one."
+                        : field.id === "expandVote" ? "No region on the table — operations has to put one up."
                       : "Nothing to choose here this year."}
           </p>
         )}
@@ -1521,6 +1794,7 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
             >
               <p className="text-sm font-medium">{o.label}</p>
               <p className="text-[11px] text-muted-foreground mt-0.5">{o.help}</p>
+              <Trade outcome={optionOutcome(role, field.id, o.value)} tight />
             </button>
           ))}
         </div>
@@ -1541,20 +1815,18 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
           ? <span className="text-xs text-muted-foreground tabular-nums">{n}%</span>
           : field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
       </div>
-      <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+      <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
       <div className="flex gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(-step)} data-testid={`button-${field.id}-down`}>−</Button>
-        <Input
+        <NumberBox
           id={`field-${field.id}`}
-          type="number"
-          inputMode="numeric"
-          value={value ?? 0}
+          value={Number(value ?? 0)}
           min={field.min}
           max={field.max}
           step={step}
-          onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-          className="tabular-nums"
-          data-testid={`input-${field.id}`}
+          onChange={onChange}
+          testId={`input-${field.id}`}
         />
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(step)} data-testid={`button-${field.id}-up`}>+</Button>
       </div>
@@ -1577,6 +1849,7 @@ function Criteria({ segment: s, company: c }: {
   segment: Desk["segments"][number];
   company: Desk["company"];
 }) {
+  const { money, compact } = useMoney();
   const parts: { key: keyof typeof s.weights; label: string; tone: string }[] = [
     { key: "price", label: "price", tone: "bg-sky-500" },
     { key: "quality", label: "quality", tone: "bg-violet-500" },
@@ -1625,10 +1898,15 @@ function Criteria({ segment: s, company: c }: {
  * rival if it comes in high. That is the whole decision, and until now it had
  * no cost on one side.
  */
-function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours }: {
-  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number; idleCostPerUnit: number;
+function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCostPerUnit, yours }: {
+  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number;
+  /** What the capacity lever opens for next period — the thing it actually sets. */
+  capacityNext: number;
+  idleCostPerUnit: number;
   yours: "capacity" | "price" | null;
 }) {
+  const period = usePeriod();
+  const { money, compact } = useMoney();
   const curve = [...forecast.curve].sort((a, b) => a.price - b.price);
   const at = (p: number): number => {
     if (!Number.isFinite(p) || curve.length === 0) return forecast.likely;
@@ -1710,9 +1988,23 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
             <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full nova-chip opacity-70" /> likely range</span>
             <span className="flex items-center gap-1.5"><span className="h-3 w-[3px] rounded-full bg-foreground/80" /> most likely</span>
             <span className="flex items-center gap-1.5"><span className="h-3 w-0.5 bg-foreground" /> your room: {Math.round(capacity).toLocaleString()}{roomOffScale && " (off the scale)"}</span>
+            {/*
+              * The second marker, and the reason this card was confusing. The
+              * bar was drawn against the room that serves *this* period, which
+              * the capacity lever cannot change — so a founder asking for ten
+              * thousand seats watched the line stay exactly where it was and
+              * concluded the lever did nothing.
+              */}
+            {Math.round(capacityNext) !== Math.round(capacity) && (
+              <span className="flex items-center gap-1.5" data-testid="text-room-next">
+                <span className="h-3 w-0.5 bg-primary" /> after this {period.one}: {Math.round(capacityNext).toLocaleString()}
+              </span>
+            )}
           </div>
           {yours === "capacity" && (
-            <p className="mt-1 text-[11px] text-muted-foreground">Room you order now opens next year — size it to next year's demand.</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Room you order now opens over the next year — size it to the demand you expect then, not to this {period.one}'s.
+            </p>
           )}
         </div>
 
@@ -1797,3 +2089,67 @@ function ProductRiskLine({ risk }: { risk: ProductRisk }) {
     </p>
   );
 }
+
+
+/**
+ * The niche this table went and found.
+ *
+ * A year of research money bought these people, and until now nothing on the
+ * screen said so. Three things it has to answer, in the order a table asks
+ * them: who are they, how long do we have them to ourselves, and has anybody
+ * else turned up.
+ *
+ * The last one is the one that stings, so it is said plainly rather than
+ * buried: somebody thinking the same thing at the same time is the most
+ * ordinary event in a market and the most surprising one to be on the
+ * receiving end of.
+ */
+function OurNiche({ niche, customersWord }: {
+  niche: NonNullable<Desk["ours"]>;
+  customersWord: string;
+}) {
+  const { money, compact } = useMoney();
+  const shared = niche.sharedWith.length > 0;
+  return (
+    <Card className="rounded-2xl" data-testid="card-our-niche">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Crosshair className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h2 className="font-semibold truncate">{niche.name}</h2>
+              {shared
+                ? <Badge variant="secondary" data-testid="badge-niche-shared">Shared</Badge>
+                : niche.headStartLeft > 0
+                  ? <Badge data-testid="badge-niche-yours">Yours for now</Badge>
+                  : <Badge variant="outline" data-testid="badge-niche-open">Everybody knows</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Found in year {niche.foundInYear}, inside {niche.from.toLowerCase()}.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+          <Stat label={`These ${customersWord}`} value={compact(niche.people)} />
+          <Stat label="Yours" value={compact(niche.held)}
+            sub={niche.people > 0 ? `${Math.round((niche.held / niche.people) * 100)}% of them` : undefined} />
+          <Stat label="They pay" value={`+${niche.premium}%`} sub="against the segment they came from" />
+          <Stat
+            label="Head start"
+            value={niche.headStartLeft > 0 ? `${niche.headStartLeft} year${niche.headStartLeft === 1 ? "" : "s"}` : "Gone"}
+            sub={niche.headStartLeft > 0 ? "before everybody notices" : "an ordinary segment now"}
+          />
+        </div>
+
+        {shared && (
+          <p className="text-xs text-amber-600 mt-3" data-testid="text-niche-shared">
+            {niche.sharedWith.join(" and ")} went looking in the same place and came back with the same
+            people. Neither of you has a head start on the other — you are both selling to them now.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+

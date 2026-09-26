@@ -542,3 +542,395 @@ describe("when the board has taken the chair", () => {
     expect(cmo.status, JSON.stringify(cmo.body)).toBe(200);
   }, 120_000);
 });
+
+/**
+ * Opening a region is the decision that commits the company for years, so it
+ * stopped being one seat's to take. What has to hold over HTTP: every seat is
+ * sent the same region and the same price, a vote only counts once operations
+ * has put it up, the running count is the server's rather than the screen's,
+ * and the table comes back with faces on it.
+ */
+describe("the table votes on where to expand", () => {
+  it("sends every seat the region, counts only what operations put up, and carries a face", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    // Year four, which is when the lever arrives.
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = { ...(season.world as any), year: 4 };
+    await db.update(simSeasons).set({ world, year: 4 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = async (role: "ceo" | "cmo" | "cfo" | "cto" | "coo") =>
+      (await seat(role).agent.get(`/api/sim/ventures/${ventureId}/desk`)).body;
+
+    const coo = await desk("coo");
+    expect(coo.expansion, "a region is announced for year four").toBeTruthy();
+    const region = coo.expansion.region.id as string;
+    expect(coo.expansion.proposed).toBe(false);
+    expect(coo.expansion.carried, "nothing is carried before it is put up").toBe(false);
+
+    // The voting seats are sent the same region, at the same price.
+    const cfoBefore = await desk("cfo");
+    expect(cfoBefore.expansion.region.id).toBe(region);
+    expect(cfoBefore.expansion.cost).toBe(coo.expansion.cost);
+    const voteField = cfoBefore.fields.find((f: any) => f.id === "expandVote");
+    expect(voteField.options.map((o: any) => o.value)).toEqual([region]);
+
+    // A vote filed before operations puts it up counts for nothing.
+    const against = { expandVote: { [region]: "no" } };
+    expect((await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0, ...against } })).status).toBe(200);
+    expect((await desk("cfo")).expansion.votes, "nothing is on the table yet").toEqual({});
+
+    // Operations puts it up, which is its own vote for.
+    expect((await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { supportSpend: 0, efficiencySpend: 0, headcount: 0, expand: region } })).status).toBe(200);
+
+    const now = await desk("cmo");
+    expect(now.expansion.proposed).toBe(true);
+    expect(now.expansion.votes).toEqual({ coo: "yes", cfo: "no" });
+    expect(now.expansion.carried, "one each is a tie, and a tie leaves it shut").toBe(false);
+    expect(now.expansion.yes).toBe(1);
+    expect(now.expansion.no).toBe(1);
+
+    // One more for, and it carries — counted by the server, the same way the engine will.
+    expect((await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 40, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], expandVote: { [region]: "yes" } } })).status).toBe(200);
+    const carried = await desk("ceo");
+    expect(carried.expansion.carried).toBe(true);
+    expect(carried.expansion.yes).toBe(2);
+
+    // And the table carries what the screen needs to put a face against a vote.
+    expect(carried.table.every((t: any) => "avatarUrl" in t)).toBe(true);
+    expect(carried.table.map((t: any) => t.role).sort()).toEqual(["ceo", "cfo", "cmo", "coo", "cto"]);
+  }, 120_000);
+
+  it("asks nobody to vote once the operations seat is gone", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    /*
+     * Dissolving a seat stops that seat's decisions for good, and putting the
+     * region up is operations'. The other four must not be shown a region and
+     * asked to vote on a proposal that can never be made.
+     */
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = {
+      ...(season.world as any),
+      year: 4,
+      companies: (season.world as any).companies.map((c: any) => c.id === ventureId
+        ? { ...c, seats: c.seats.filter((r: string) => r !== "coo") }
+        : c),
+    };
+    await db.update(simSeasons).set({ world, year: 4 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = (await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/desk`)).body;
+    expect(desk.expansion, "no operations seat, no proposal, nothing to vote on").toBeNull();
+    expect(desk.fields.find((f: any) => f.id === "expandVote").options).toEqual([]);
+  }, 120_000);
+});
+
+/**
+ * A founder holding every desk files once and gets all of it back.
+ *
+ * Their filing is written as five rows, one per role, because the engine reads
+ * decisions per role and a role with no row for the period is treated as
+ * absent — "that part of the year ran on last year's plan at about 60%". That
+ * half worked. The read-back did not: the desk handed over
+ * `decisions[seat.role]`, which is the chief executive's row and nothing else,
+ * so every price, spend and target filed from the other four desks came back
+ * empty the moment the page remounted. Nothing was lost — it was in the
+ * database the whole time, in the four rows that line did not read — but a
+ * person switching tabs saw their decisions reset to zero, which is the same
+ * thing from where they are sitting.
+ */
+describe("a solo founder's filing", () => {
+  it("comes back whole after the page is reloaded", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    // One chair: the same shape a project's solo season is built with.
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const ceo = seat("ceo");
+    const filed = await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: {
+        focus: "growth",
+        price: 20,
+        brandSpend: 5_000,
+        capacityTarget: 10_000,
+        borrow: 1_000,
+        featureSpend: 2_500,
+      },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    const again = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(again.status).toBe(200);
+    expect(again.body.solo, "one chair is a solo table").toBe(true);
+    expect(again.body.submitted, "every desk they hold has a row").toBe(true);
+
+    // The part that was broken: four desks' worth of fields, not one.
+    expect(again.body.draft.focus, "the chief executive's own").toBe("growth");
+    expect(again.body.draft.price, "marketing's").toBe(20);
+    expect(again.body.draft.brandSpend).toBe(5_000);
+    expect(again.body.draft.capacityTarget, "operations'").toBe(10_000);
+    expect(again.body.draft.borrow, "finance's").toBe(1_000);
+    expect(again.body.draft.featureSpend, "technology's").toBe(2_500);
+  }, 120_000);
+
+  /* And a five-person table is untouched: each seat still gets its own desk. */
+  it("does not hand a shared table somebody else's levers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 30, brandSpend: 1_000 } });
+    const cfo = await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+
+    expect(cfo.body.solo).toBe(false);
+    expect(cfo.body.draft.price, "the finance seat does not file a price").toBeUndefined();
+  }, 120_000);
+});
+
+/**
+ * A solo founder's draft has to reach the projection.
+ *
+ * The projection endpoint cleaned the incoming draft as `seat.role` — right
+ * for one seat at a five-person table, and wrong for a founder holding all
+ * five, whose single form carries every desk's levers. Their price, capacity
+ * and spend were parsed as the chief executive's, found to be none of the
+ * chief executive's business, and dropped. So the projection answered the same
+ * number however the form was changed, which from the keyboard reads as a
+ * screen that has stopped listening.
+ */
+describe("a solo founder's unfiled draft", () => {
+  it("changes the projection, not just the chief executive's half of it", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    const ask = async (draft: Record<string, unknown>) => {
+      const res = await ceo.agent.get(`/api/sim/ventures/${ventureId}/projection`)
+        .query({ draft: JSON.stringify(draft) });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      return res.body;
+    };
+
+    /* A marketing lever, which the chief executive's desk does not own. */
+    const cheap = await ask({ price: 8, brandSpend: 0 });
+    const dear = await ask({ price: 90, brandSpend: 0 });
+
+    /*
+     * Asserted on demand rather than on revenue, and that is not a weaker
+     * claim — it is the only one available in period one. A company that has
+     * not built any room sells nothing at either price, so revenue is zero
+     * whatever the draft says. Demand is what the forecast card draws and what
+     * the price visibly moves.
+     */
+    expect(cheap.demand, "this period's demand comes back with the draft on it").toBeTruthy();
+    expect(cheap.demand.likely, "cheap brings more people in than dear")
+      .toBeGreaterThan(dear.demand.likely);
+  }, 120_000);
+
+  /* A five-person table still only files for its own desk. */
+  it("does not let one seat project another's levers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+    const cfo = seat("cfo");
+
+    const ask = async (draft: Record<string, unknown>) =>
+      (await cfo.agent.get(`/api/sim/ventures/${ventureId}/projection`).query({ draft: JSON.stringify(draft) })).body;
+
+    const a = await ask({ price: 8 });
+    const b = await ask({ price: 90 });
+    expect(a.demand.likely, "the finance seat does not set a price").toBe(b.demand.likely);
+  }, 120_000);
+});
+
+/**
+ * Last period's plan is this period's starting point.
+ *
+ * A price is not a fresh decision every period — it is a standing one that
+ * somebody occasionally changes. `defaultDraft` has always carried it forward,
+ * resetting only the levers that should never repeat by default (a raise, a
+ * celebrity deal, a rented room), so this is really a test that the carrying
+ * survives the path a solo founder's draft takes, which is not the path it
+ * was written for.
+ */
+describe("what a new period opens with", () => {
+  it("carries the last filed price forward instead of asking again", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 42, brandSpend: 3_000, capacityTarget: 9_000, focus: "margin" } })
+      .expect(200);
+    /* Bring the clock forward: the tick only runs a period that is due. */
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const next = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(next.status).toBe(200);
+    expect(next.body.year, "a period has passed").toBe(2);
+    expect(next.body.submitted, "and nothing is filed for it yet").toBe(false);
+
+    expect(next.body.draft.price, "the price stands until it is changed").toBe(42);
+    expect(next.body.draft.capacityTarget, "and so does the room being built to").toBe(9_000);
+    expect(next.body.draft.focus, "and what the company is for").toBe("margin");
+  }, 120_000);
+
+  /* The one-shot levers do not repeat: a raise is not a standing instruction. */
+  it("does not quietly raise money again every period", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      /* A sponsorship is sold in 100,000 steps — see the lever's own `step`. */
+      /*
+       * `focus` included because a solo filing is validated against all five
+       * desks at once — the chief executive's is one of them, and it requires
+       * a focus. That is the filing working, not a quirk of the test.
+       */
+      .send({ decision: { focus: "growth", price: 30, celebritySpend: 100_000 } })
+      .expect(200);
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const next = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(next.body.draft.price, "the standing one carries").toBe(30);
+    expect(next.body.draft.celebritySpend, "a celebrity deal is signed once, not annually").toBe(0);
+    expect(next.body.draft.raiseAmount, "and a raise is never a standing instruction").toBe(0);
+    expect(next.body.draft.borrow).toBe(0);
+  }, 120_000);
+});
+
+/**
+ * A founder is not asked to manage colleagues they do not have.
+ *
+ * Holding all five desks is right — every decision the company makes is
+ * theirs. Several of those levers are not decisions about the business
+ * though; they are decisions about *people*: splitting the budget between
+ * three seats, setting each seat's target, a bonus pot shared by the seats
+ * that hit theirs, overruling one, replacing one. Asked of one person they
+ * are absurd, and asking tells somebody rehearsing their own business that
+ * they have got something wrong by not having staff.
+ */
+describe("what a solo founder is asked to decide", () => {
+  const forColleagues = ["budget", "targets", "bonusPool", "overrule", "replaceSeat", "holdBackSeat", "rehire"];
+
+  it("does not ask one person to split a budget between themselves", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.status).toBe(200);
+    expect(desk.body.solo).toBe(true);
+
+    const ids = desk.body.fields.map((f: any) => f.id);
+    for (const id of forColleagues) expect(ids, `${id} is a decision about colleagues`).not.toContain(id);
+
+    /*
+     * And it still has the levers that run a business. Only the ones a first
+     * period actually has: responsibilities arrive over a season (see UNLOCKS),
+     * so engineer pay and the rest are absent here for a reason of their own.
+     */
+    for (const id of ["price", "capacityTarget", "featureSpend", "borrow", "focus", "headcount"]) {
+      expect(ids, `${id} is a decision about the business`).toContain(id);
+    }
+  }, 120_000);
+
+  it("does not promise them as arriving later either", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ seatCount: 1 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const coming: string[] = desk.body.arrivingNextYear ?? [];
+    for (const label of ["Split the budget", "Set each seat's target", "Bonus pot"]) {
+      expect(coming, `${label} is never arriving for a table of one`).not.toContain(label);
+    }
+  }, 120_000);
+
+  /* A five-person table keeps every one of them: that is what they are for. */
+  it("still asks a real table to split its budget", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    /* Far enough in that the chief executive's people levers have unlocked. */
+    await db.update(simSeasons).set({ year: 6 }).where(eq(simSeasons.id, seasonId));
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.solo).toBe(false);
+    const ids = desk.body.fields.map((f: any) => f.id);
+    expect(ids, "five people do have a budget to split").toContain("budget");
+  }, 120_000);
+});
+
+/**
+ * Filing twice without touching anything has to work.
+ *
+ * `terms` offers "0", "30", "60", "90" as strings, because a select deals in
+ * strings, and `cleanDecision` stores it back as the number the engine wants.
+ * So the second filing sent 0 where the option said "0", strict equality read
+ * it as an answer nobody had offered, and the whole decision was refused:
+ * "Payment terms: Pick one" — on a payment term the person had picked once
+ * and never touched again.
+ *
+ * It bit a solo founder hardest because their filing is validated against all
+ * five desks at once, so one stale number on the finance desk refused
+ * everything: the price, the capacity, all of it. Which is exactly what was
+ * reported — "none of my decisions are being saved".
+ */
+describe("filing a second time", () => {
+  it("accepts a draft handed straight back from the desk", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    /*
+     * Far enough in that payment terms have arrived (UNLOCKS: cfo/terms, year
+     * 5), and nothing filed for this period — so the draft is built by
+     * `defaultDraft`, which fills `terms` from `company.terms`: the number the
+     * engine keeps. The option list offers strings, because a select does.
+     */
+    await db.update(simSeasons).set({ seatCount: 1, year: 6 }).where(eq(simSeasons.id, seasonId));
+    const ceo = seat("ceo");
+
+    const desk = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.solo).toBe(true);
+    expect(typeof desk.body.draft.terms, "a number, where the option is a string").toBe("number");
+
+    /* Exactly what the screen sends: the desk's own draft, changed in one place. */
+    const filed = await ceo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { ...desk.body.draft, capacityTarget: 9_000 } });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    const after = await ceo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(after.body.draft.capacityTarget, "the change took").toBe(9_000);
+  }, 120_000);
+
+  /* The finance seat at a full table had the same bug waiting. */
+  it("accepts a finance seat that never touched payment terms", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await db.update(simSeasons).set({ year: 6 }).where(eq(simSeasons.id, seasonId));
+    const cfo = seat("cfo");
+
+    await cfo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 } })
+      .expect(200);
+
+    const desk = await cfo.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const again = await cfo.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { ...desk.body.draft, cashBuffer: 1_000 } });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+  }, 120_000);
+});

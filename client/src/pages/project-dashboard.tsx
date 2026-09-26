@@ -89,6 +89,8 @@ export default function ProjectDashboard() {
   const [slideshowData, setSlideshowData] = useState<{ scenes: SceneData[]; storyboard: string; style: string } | null>(null);
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [applyModalOpen, setApplyModalOpen] = useState(false);
+  /* Which open role the application is for — set by the role pressed on the overview. */
+  const [applyRole, setApplyRole] = useState<string | null>(null);
   const [applyMessage, setApplyMessage] = useState("");
   const [applyResumeUrl, setApplyResumeUrl] = useState("");
   const [applyAnswers, setApplyAnswers] = useState<Record<string, string>>({});
@@ -196,6 +198,7 @@ export default function ProjectDashboard() {
         resumeUrl: applyResumeUrl || undefined,
         answers,
         message: applyMessage || undefined,
+        role: applyRole || undefined,
       });
     },
     onSuccess: () => {
@@ -204,6 +207,7 @@ export default function ProjectDashboard() {
       setApplyMessage("");
       setApplyResumeUrl("");
       setApplyAnswers({});
+      setApplyRole(null);
       queryClient.invalidateQueries({ queryKey: ["/api/user/applications"] });
     },
     onError: (error: any) => {
@@ -403,7 +407,7 @@ export default function ProjectDashboard() {
             isOwner={isOwner}
             isMember={!!isMember || isOwner}
             followerCount={followStatus?.count || 0}
-            onApply={() => setApplyModalOpen(true)}
+            onApply={(role) => { setApplyRole(role ?? null); setApplyModalOpen(true); }}
             onManage={() => setLocation(`/projects/${projectId}/manage`)}
           />
 
@@ -602,8 +606,14 @@ export default function ProjectDashboard() {
       <Dialog open={applyModalOpen} onOpenChange={setApplyModalOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Apply to {project.title}</DialogTitle>
-            <DialogDescription>Submit your application. The project owner will review it.</DialogDescription>
+            <DialogTitle>
+              {applyRole ? `Apply as ${applyRole}` : `Apply to ${project.title}`}
+            </DialogTitle>
+            <DialogDescription>
+              {applyRole
+                ? `Your application for ${applyRole} on ${project.title}. The owner reviews it.`
+                : "Submit your application. The project owner will review it."}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">

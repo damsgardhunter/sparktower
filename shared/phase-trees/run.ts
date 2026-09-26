@@ -92,7 +92,7 @@ export const RUN_TREE: PathTree = {
       milestones: [
         { id: "RUN.S2.1", title: "Bring the team in", actor: "user-does", estimateMinutes: 10, tier: "claimed",
           description: "You invite the people who do the work. A business run from your head stops when you are ill; one run from a shared board keeps going." },
-        { id: "RUN.S2.2", title: "The jobs that come round", actor: "nova-builds", estimateMinutes: 25, tier: "artifact", work: "plan",
+        { id: "RUN.S2.2", title: "The jobs that come round", actor: "nova-builds", doneOn: { surface: "recurring-jobs", label: "the jobs list" }, estimateMinutes: 25, tier: "artifact", work: "plan",
           description: "Nova lists the jobs that happen every week, fortnight or month in a business like yours — payroll, invoicing and chasing, stock, reviews, the bank reconciliation — with an owner for each and when it's due. Add them to the board as recurring jobs and they'll reappear on time." },
         { id: "RUN.S2.3", title: "Who covers what", actor: "nova-drafts", estimateMinutes: 15, tier: "artifact",
           description: "A cover plan: for every recurring job, who does it when its owner is away, and where the instructions live. The difference between a holiday and a crisis." },
@@ -122,7 +122,7 @@ export const RUN_TREE: PathTree = {
           description: "A thirteen-week cash forecast built from your check-ins and costs: what comes in, what goes out, the week it gets tight, and what to move now so that week isn't a surprise." },
         { id: "RUN.S4.2", title: "Price check", actor: "nova-builds", estimateMinutes: 25, tier: "artifact", work: "plan",
           description: "Your prices against what each sale really costs and what similar businesses charge — where you're leaving money on the table, where you're priced out, and what a rise would do to the numbers." },
-        { id: "RUN.S4.3", title: "The quarter's three goals", actor: "nova-drafts", estimateMinutes: 20, tier: "artifact",
+        { id: "RUN.S4.3", title: "The quarter's three goals", actor: "nova-drafts", doneOn: { surface: "quarter-goals", label: "this quarter's goals" }, estimateMinutes: 20, tier: "artifact",
           description: "Three goals for the next thirteen weeks, drawn from what the check-ins keep pointing at, each with the number that says it happened and who owns it. Next quarter's review starts from here." },
         { id: "RUN.S4.4", title: "Set the rhythm", actor: "user-does", estimateMinutes: 5, tier: "claimed",
           description: "You pick the day the weekly check-in happens and who joins it. A rhythm that is nobody's appointment is a rhythm that stops in week three." },
@@ -135,7 +135,7 @@ export const RUN_TREE: PathTree = {
          * the answer nobody wants: that the target chosen is a different
          * business, not a harder-working version of this one.
          */
-        { id: "RUN.S4.5", title: "What would it take?", actor: "nova-builds", estimateMinutes: 15, tier: "artifact",
+        { id: "RUN.S4.5", title: "What would it take?", actor: "nova-builds", doneOn: { surface: "wwit", label: "the roadmap" }, estimateMinutes: 15, tier: "artifact",
           description: "You pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from the numbers your check-ins already hold: the arithmetic of the gap, the stages and how long each takes, what has to be true at each one, what breaks first and what it costs to fix, the first ninety days, and an honest verdict on whether it is reachable from here. Re-run it in six months to see whether the gap moved." },
       ],
     },

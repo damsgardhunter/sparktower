@@ -20,8 +20,11 @@ import { sectionDef } from "@/lib/sections";
 import { LOOP_TYPE_INFO, type LoopType } from "@shared/phase-trees";
 import { PATH_FOCUS } from "@shared/notifications";
 import { Chip, Clamp } from "./block";
+import { LiveDot } from "@/components/nova";
+import { useBuildStatus } from "@/lib/build-status";
+import { requestOpenSurface } from "./live";
 import { ACTOR_SHORT, TIER_SHORT, estimate, NOVA_GRADIENT, type PathStatus } from "./path-types";
-import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ListChecks, UserPlus } from "lucide-react";
+import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ArrowDown, ListChecks, UserPlus } from "lucide-react";
 
 export function NextStep({ projectId, data, onNavigate }: { projectId: string; data: PathStatus; onNavigate: (tab: string) => void }) {
   const { toast } = useToast();
@@ -36,6 +39,15 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
   const highlighted = usePathFocus(data, () => setPostingWeek(true));
 
   const { next, current } = data;
+  /*
+   * While Nova is building the whole path, this card is following along rather
+   * than sitting still: the step it shows moves as each one is answered. A
+   * step takes about forty-five seconds though, so between moves the card is
+   * indistinguishable from a frozen one — which is what it was mistaken for.
+   * The line says which step Nova is on, so the pause is visibly a pause in
+   * something that is running.
+   */
+  const { running: build } = useBuildStatus(projectId);
   const sources = new Set(data.phases.flatMap((p) => p.milestones).map((m) => m.expandsFrom).filter(Boolean));
   const isSource = (id: string) => sources.has(id);
 
@@ -229,6 +241,18 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
             {next.steps && <Chip icon={ListChecks} testid="next-steps">{next.steps.done}/{next.steps.total} steps</Chip>}
           </div>
 
+          {build && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="next-action-building">
+              <LiveDot />
+              <span className="min-w-0 truncate">
+                {build.currentTitle ? <>Nova is writing <span className="font-medium text-foreground">{build.currentTitle}</span></> : "Nova is working down your path"}
+                {build.stepsTotal > 0 && (
+                  <span className="tabular-nums"> · {Math.min(build.stepsDone + build.stepsForYou + build.stepsFailed + 1, build.stepsTotal)} of {build.stepsTotal}</span>
+                )}
+              </span>
+            </p>
+          )}
+
           <div className="space-y-1">
             <h3 className="text-lg sm:text-xl font-semibold leading-snug tracking-tight" data-testid="next-action-title">{next.title}</h3>
             <Clamp text={next.description} />
@@ -269,8 +293,26 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
             </div>
           )}
 
+          {/*
+            * A step whose work happens on a surface of its own: the way there,
+            * not the generic generator. Offering "Nova builds it" here wrote a
+            * plausible paragraph over the step and closed it, so the builder
+            * had a tick and no jobs on their board.
+            */}
+          {next.doneOn && (
+            <div className="pt-1">
+              <Button size="sm" onClick={() => requestOpenSurface(next.doneOn!.surface)} data-testid="button-open-surface">
+                <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
+                Open {next.doneOn.label}
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                This one ticks itself once {next.doneOn.label} is done.
+              </p>
+            </div>
+          )}
+
           {/* Nova's work on it, inline. This is what makes the actor label true. */}
-          {showWork && (
+          {!next.doneOn && showWork && (
             <div className="pt-1">
               <WorkView projectId={projectId} taskId={next.workTaskId!} actor={next.step?.actor ?? next.actor} work={next.work} done={false}
                 intake={next.step ? undefined : next.intake} workKind={next.step ? undefined : next.workKind ?? undefined}

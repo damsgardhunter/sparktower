@@ -12,11 +12,11 @@
  * planner and the health-check fixes.
  */
 import type { Express, Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
@@ -31,15 +31,12 @@ import { rateLimit } from "./moderation";
 import { packFor } from "@shared/nova-prompt-packs";
 import { firstPlanFor } from "./nova-first-plan";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -240,7 +237,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     operations: kept.map((x: any) => x.op),
     /** How many of Nova's proposals couldn't be run and were left out. */
     dropped,
-    creditsCharged: CREDIT_COSTS.novaAssist,
+    creditsCharged: CHARGEABLE,
   });
 }
 

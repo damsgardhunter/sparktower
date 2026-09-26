@@ -55,7 +55,7 @@ describe("what the close read's answer does to the verdict", () => {
   it("moves a wrong 'missing' to partial and says which read to believe", async () => {
     const detail = { coverage: "Stripe checkout, webhook verification and a subscription ledger.", gaps: [], strengths: [], present: true };
     const read = vi.fn(async () => detail);
-    const out = await deepReadAll(
+    const { caps: out } = await deepReadAll(
       {} as any, [entry({})], [file("server/webhookHandlers.ts")], null, null,
       { readArea: read as any },
     );
@@ -67,7 +67,7 @@ describe("what the close read's answer does to the verdict", () => {
 
   it("leaves it missing when the close read looked and agrees", async () => {
     const read = vi.fn(async () => ({ coverage: "Nothing here handles money.", gaps: [], strengths: [], present: false }));
-    const out = await deepReadAll(
+    const { caps: out } = await deepReadAll(
       {} as any, [entry({})], [file("server/webhookHandlers.ts")], null, null,
       { readArea: read as any },
     );
@@ -77,20 +77,20 @@ describe("what the close read's answer does to the verdict", () => {
 
   it("leaves it missing when there was nothing to read", async () => {
     const read = vi.fn(async () => ({ coverage: "x", gaps: [], strengths: [], present: true }));
-    const out = await deepReadAll({} as any, [entry({})], [file("client/src/pages/home.tsx")], null, null, { readArea: read as any });
+    const { caps: out } = await deepReadAll({} as any, [entry({})], [file("client/src/pages/home.tsx")], null, null, { readArea: read as any });
     expect(read, "no files, no call, no credit spent").not.toHaveBeenCalled();
     expect(out[0].status).toBe("missing");
   });
 
   it("leaves it missing when the read fails, rather than guessing", async () => {
     const read = vi.fn(async () => null);
-    const out = await deepReadAll({} as any, [entry({})], [file("server/webhookHandlers.ts")], null, null, { readArea: read as any });
+    const { caps: out } = await deepReadAll({} as any, [entry({})], [file("server/webhookHandlers.ts")], null, null, { readArea: read as any });
     expect(out[0].status).toBe("missing");
   });
 
   it("never turns a built area into something else", async () => {
     const read = vi.fn(async () => ({ coverage: "c", gaps: [], strengths: [], present: false }));
-    const out = await deepReadAll(
+    const { caps: out } = await deepReadAll(
       {} as any, [entry({ status: "built", evidence: [{ file: "server/webhookHandlers.ts" }] })],
       [file("server/webhookHandlers.ts")], null, null, { readArea: read as any },
     );

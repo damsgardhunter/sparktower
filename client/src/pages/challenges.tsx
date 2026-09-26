@@ -9,7 +9,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Building2, CalendarClock, Loader2, Trophy, Users } from "lucide-react";
+import { Building2, CalendarClock, Loader2, ShieldCheck, Trophy, Users } from "lucide-react";
+import { formatPrize } from "@shared/challenges-money";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { INDUSTRIES } from "@shared/companies";
@@ -17,8 +18,10 @@ import { deadlineLabel, CHALLENGE_DISCLAIMER } from "@shared/challenges";
 
 interface ChallengeCard {
   id: string; title: string; brief: string; prize: string | null; industry: string | null;
+  /** What is actually in the safe, from the row rather than from the company. */
+  prizeHeld: { amountCents: number; state: string } | null;
   deadline: string; status: "open" | "judging" | "closed"; acceptingEntries: boolean;
-  company: { id: string; name: string; industry: string | null; website: string | null };
+  company: { id: string; name: string; industry: string | null; website: string | null; verifiedDomain: string | null };
   entryCount: number; entered: boolean; myEntryStatus: string | null;
 }
 
@@ -66,12 +69,34 @@ export default function ChallengesPage() {
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Building2 className="h-3.5 w-3.5" />
                     <span className="truncate">{c.company.name}</span>
+                    {/* The domain, because a name can be anything and a domain has been checked. */}
+                    {c.company.verifiedDomain && (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-emerald-700 dark:text-emerald-400" title={`${c.company.verifiedDomain} — verified`}>
+                        <ShieldCheck className="h-3 w-3" />
+                        <span className="hidden sm:inline">{c.company.verifiedDomain}</span>
+                      </span>
+                    )}
                     {c.industry && <Badge variant="outline" className="ml-auto">{c.industry}</Badge>}
                   </div>
                   <h2 className="mt-2 font-semibold leading-snug">{c.title}</h2>
                   <p className="mt-1 text-sm text-muted-foreground line-clamp-2">{c.brief}</p>
+                  {c.prizeHeld?.state === "held" && (
+                    /*
+                      * The money, and the fact that it is already paid in. A
+                      * stated prize and a held one look the same on a card
+                      * unless the card says which it is — and the whole reason
+                      * the escrow exists is so this one can.
+                      */
+                    <p className="mt-3 inline-flex flex-wrap items-center gap-1.5 text-sm font-medium" data-testid={`prize-held-${c.id}`}>
+                      <Trophy className="h-4 w-4 text-amber-500" />
+                      {formatPrize(c.prizeHeld.amountCents)}
+                      <span className="inline-flex items-center gap-1 text-xs font-normal text-emerald-700 dark:text-emerald-400">
+                        <ShieldCheck className="h-3 w-3" />held by SparkTower
+                      </span>
+                    </p>
+                  )}
                   {c.prize && (
-                    <p className="mt-3 text-sm font-medium inline-flex items-center gap-1.5"><Trophy className="h-4 w-4 text-amber-500" />{c.prize}</p>
+                    <p className="mt-1 text-sm text-muted-foreground inline-flex items-center gap-1.5">{c.prize}</p>
                   )}
                   <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1"><CalendarClock className="h-3.5 w-3.5" />{deadlineLabel(c.deadline, Date.now())}</span>

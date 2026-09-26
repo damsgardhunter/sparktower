@@ -9,7 +9,7 @@
 export interface NavItem {
   title: string;
   url: string;
-  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard";
+  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "Gamepad2" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard" | "Banknote";
   /** The surface whose flag hides this item. None for pages that aren't feature areas. */
   surface?: string;
 }
@@ -41,12 +41,28 @@ export const PRIMARY_NAV: NavItem[] = [
 export const SECONDARY_NAV: NavItem[] = [
   /* Matches and the leaderboard are sections of Discover now, not addresses of their own; their
      old URLs still resolve, they just redirect. Their flags still hide them — inside Discover. */
-  { title: "Sprints & simulations", url: "/sprints", icon: "Handshake", surface: "sprints" },
+  /*
+   * "Simulations", not "Sprints & simulations".
+   *
+   * The co-founder sprint it was half-named after is retired — there is no
+   * longer a way to start one — so the word survived only in the label, and a
+   * menu item naming a feature that no longer exists is a menu item people
+   * learn to skip. Both things behind it are simulations: a company invented
+   * in half an hour and valued ten years out, and a market run for a
+   * fortnight. The URL stays `/sprints` because links to it exist.
+   */
+  { title: "Simulations", url: "/sprints", icon: "Gamepad2", surface: "sprints" },
   { title: "Messages", url: "/messages", icon: "MessageSquare", surface: "messages" },
   { title: "Contests and Communities", url: "/contests", icon: "Medal", surface: "contests" },
   // For existing businesses: training seasons, recruiting, challenges they sponsor, startups they follow.
   { title: "Companies", url: "/companies", icon: "Users", surface: "companies" },
   // Real problems companies put up, for founders to answer.
   { title: "Challenges", url: "/challenges", icon: "Trophy", surface: "companies" },
+  /*
+   * Ungated, and deliberately not hidden behind owning a project. The only way
+   * to reach payout setup used to be a campaign's backing tab, so somebody who
+   * had won a challenge prize had nowhere to add a bank account at all.
+   */
+  { title: "Earnings", url: "/earnings", icon: "Banknote" },
   { title: "Pricing", url: "/pricing", icon: "CreditCard" },
 ];

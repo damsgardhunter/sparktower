@@ -10,7 +10,7 @@ import type { Express } from "express";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { getUserEntitlements } from "./entitlements";
-import { CREDIT_COSTS, roadmapRebuildCost } from "@shared/plans";
+import { CHARGE_FOR, CREDIT_COSTS, roadmapRebuildCost, type NovaChargeKind } from "@shared/plans";
 import { PROJECT_SECTIONS, sectionHasContent } from "@shared/project-sections";
 import type { NovaHandoff } from "@shared/nova-handoff";
 import { emptyBlocks, type DocumentPage } from "@shared/documents";
@@ -23,8 +23,19 @@ export interface NovaRecommendation {
   /** Optional extra context under the title. */
   detail?: string;
   actionLabel: string;
-  /** 0 means the action itself is free (navigation, editing). */
+  /** 0 means the action itself is free (navigation, editing). Legacy; see `charge`. */
   credits: number;
+  /**
+   * What the action actually costs, in the terms the product charges in.
+   *
+   * `credits` above is a number from a currency this product stopped using:
+   * shared/plans.ts says "nobody is ever quoted a credit", and the dashboard
+   * was quoting one — a bare `5` in a badge beside the button, next to a
+   * sidebar reading a dollar balance. "free" is free, "small" comes out of the
+   * month's allowance, and anything else is a priced outcome with a price the
+   * client can print.
+   */
+  charge: NovaChargeKind;
   /** Manage tab to open. Every recommendation goes somewhere. */
   tab?: string;
   /**
@@ -168,7 +179,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: `Your brief is missing ${missingBrief.map((s) => s.label.toLowerCase()).join(", ")}`,
           detail: "Nova uses the brief for every roadmap, persona, and pitch — filling it in makes everything else sharper.",
           actionLabel: "Fill in the brief",
-          credits: 0,
+          credits: 0, charge: "free",
           tab: "setup",
           weight: 95,
           severity: "critical",
@@ -182,7 +193,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: "You don't have a roadmap yet",
           detail: "Tell Nova where you want this to end up and it'll break the path into phases.",
           actionLabel: "Build my roadmap",
-          credits: CREDIT_COSTS.roadmapGeneration,
+          credits: CREDIT_COSTS.roadmapGeneration, charge: CHARGE_FOR.roadmapGeneration,
           tab: "roadmap",
           weight: 90,
           severity: "critical",
@@ -195,7 +206,7 @@ export function registerNovaBriefingRoutes(app: Express) {
             title: `You haven't updated your roadmap in ${stale} days`,
             detail: "Nova can re-plan the remaining phases against what you've actually shipped.",
             actionLabel: "Update roadmap",
-            credits: CREDIT_COSTS.roadmapUpdate,
+            credits: CREDIT_COSTS.roadmapUpdate, charge: CHARGE_FOR.roadmapUpdate,
             tab: "roadmap",
             action: "roadmap.update",
             weight: 70 + Math.min(15, stale),
@@ -217,6 +228,7 @@ export function registerNovaBriefingRoutes(app: Express) {
             title: `Your roadmap says nothing has started, but ${movingTasks} task${movingTasks === 1 ? " is" : "s are"} underway`,
             detail: "A rebuild resequences phases, milestones, and priorities around where the project actually is.",
             actionLabel: "Rebuild roadmap",
+            charge: CHARGE_FOR.roadmapRebuild,
             credits: roadmapRebuildCost({
               phases: roadmap.phases.length,
               milestones: milestones.length,
@@ -239,7 +251,7 @@ export function registerNovaBriefingRoutes(app: Express) {
             title: "Not sure what to work on next?",
             detail: "Nova reads your roadmap, milestones, and open tasks and ranks the three highest-impact moves.",
             actionLabel: "Ask Nova what's next",
-            credits: CREDIT_COSTS.nextActions,
+            credits: CREDIT_COSTS.nextActions, charge: CHARGE_FOR.nextActions,
             tab: "roadmap",
             action: "roadmap.nextActions",
             weight: 60,
@@ -266,7 +278,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: `${n} task${n === 1 ? " is" : "s are"} waiting on unfinished work`,
           detail: blockedTasks.slice(0, 3).map((t: any) => t.title).join(" · "),
           actionLabel: "Ask Nova for a way through",
-          credits: CREDIT_COSTS.nextActions,
+          credits: CREDIT_COSTS.nextActions, charge: CHARGE_FOR.nextActions,
           tab: "roadmap",
           action: "roadmap.nextActions",
           weight: 82,
@@ -285,7 +297,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: `${n} task${n === 1 ? " has" : "s have"} been in progress for over a week`,
           detail: `Oldest started ${oldest} days ago · ${stalledTasks.slice(0, 3).map((t: any) => t.title).join(" · ")}`,
           actionLabel: "Review the board",
-          credits: 0,
+          credits: 0, charge: "free",
           tab: "kanban",
           weight: 80,
           severity: "important",
@@ -303,7 +315,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: `Your team is missing ${missingRoles.length === 1 ? `a ${missingRoles[0]}` : `${missingRoles.length} roles`}`,
           detail: missingRoles.slice(0, 4).join(" · "),
           actionLabel: "Find candidates",
-          credits: CREDIT_COSTS.peopleRecommendation,
+          credits: CREDIT_COSTS.peopleRecommendation, charge: CHARGE_FOR.peopleRecommendation,
           tab: "team",
           action: "team.recommendPeople",
           weight: 75,
@@ -318,7 +330,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: "Validate your pricing before continuing development",
           detail: "Nova checks your pricing against your target customer and what comparable products charge.",
           actionLabel: "Run pricing analysis",
-          credits: CREDIT_COSTS.pricingAnalysis,
+          credits: CREDIT_COSTS.pricingAnalysis, charge: CHARGE_FOR.pricingAnalysis,
           tab: "strategy",
           action: "strategy.pricing",
           weight: 72,
@@ -333,7 +345,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: "You haven't defined who you're building for",
           detail: "Nova can draft a realistic customer persona from your brief.",
           actionLabel: "Generate a persona",
-          credits: CREDIT_COSTS.personaGeneration,
+          credits: CREDIT_COSTS.personaGeneration, charge: CHARGE_FOR.personaGeneration,
           tab: "personas",
           action: "personas.generate",
           weight: 65,
@@ -348,7 +360,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: "There's barely anything on your board",
           detail: "Nova can break the project into concrete tasks you can start on.",
           actionLabel: "Generate tasks",
-          credits: CREDIT_COSTS.taskGeneration,
+          credits: CREDIT_COSTS.taskGeneration, charge: CHARGE_FOR.taskGeneration,
           tab: "kanban",
           action: "kanban.generate",
           weight: 78,
@@ -379,7 +391,7 @@ export function registerNovaBriefingRoutes(app: Express) {
             : `${halfWritten.length} documents have ${blocks} empty blocks between them`,
           detail: "A document nobody finished reads as done from the outside. Open it and fill what's left, or let Nova write it.",
           actionLabel: "Finish the document",
-          credits: 0,
+          credits: 0, charge: "free",
           tab: "files",
           weight: 72,
           severity: "important",
@@ -393,7 +405,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           title: "See how you'd hold up in front of an investor",
           detail: "Scored honestly across six categories, with the blockers that would sink a real meeting.",
           actionLabel: "Score my readiness",
-          credits: CREDIT_COSTS.investorReadinessScore,
+          credits: CREDIT_COSTS.investorReadinessScore, charge: CHARGE_FOR.investorReadinessScore,
           tab: "strategy",
           action: "strategy.readiness",
           weight: 50,
@@ -407,7 +419,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           id: "health",
           title: "Get an honest read on whether this is on track",
           actionLabel: "Run a health check",
-          credits: CREDIT_COSTS.healthCheck,
+          credits: CREDIT_COSTS.healthCheck, charge: CHARGE_FOR.healthCheck,
           tab: "analytics",
           action: "analytics.healthCheck",
           weight: 45,

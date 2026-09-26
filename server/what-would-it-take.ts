@@ -38,11 +38,12 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { storage } from "./storage";
-import { requireCredits, modelFor } from "./entitlements";
+import { requireCredits, getUserEntitlements, modelFor } from "./entitlements";
+import { hasBuildPass } from "./wallet";
 import { getOpenAI, openAiConfigured } from "./openai-client";
 import { parseModelJson, respondToAiError } from "./ai-json";
 import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CHARGEABLE, OUTCOME_PRICE_CENTS, formatMoney, NO_CHARGE } from "@shared/plans";
 import { completeRunMilestone } from "./company-rhythm-jobs";
 import { asRunSubcategory, metricsForProject, quarterOf, todayYmd, type CheckinLike } from "@shared/company-rhythm";
 import {
@@ -51,6 +52,7 @@ import {
   type Gap, type MarginRead, type RevenueRead, type UnitRead, type WwitGrounding, type WwitRoadmapBody, type WwitStage,
   type WwitStep, type WwitTarget, type WwitTargetId,
 } from "@shared/what-would-it-take";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
 type Project = typeof projects.$inferSelect;
 
@@ -153,7 +155,11 @@ function notReadyReason(ground: Ground): string | null {
   return null;
 }
 
-const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/*
+ * Tidied before it is cut: these strings reach a `<p>`, not a Markdown
+ * renderer, so a heading's hashes are read as punctuation. server/prose-style.ts.
+ */
+const str = (v: unknown, max: number): string => (typeof v === "string" ? tidyProse(v).slice(0, max) : "");
 const strList = (v: unknown, max: number, count: number): string[] =>
   Array.isArray(v) ? v.map((x) => str(x, max)).filter(Boolean).slice(0, count) : [];
 
@@ -164,6 +170,19 @@ const targetForClient = (t: WwitTarget) => ({
 });
 
 /** A stored row, as the client reads it. */
+/**
+ * Whether this project has ever had one built. The receipt is the roadmap
+ * itself: every run is kept (`what_would_it_take_roadmaps`), so the table
+ * already knows who has paid without a second place to record it.
+ */
+async function hasRoadmap(projectId: string): Promise<boolean> {
+  const [row] = await db.select({ id: whatWouldItTakeRoadmaps.id })
+    .from(whatWouldItTakeRoadmaps)
+    .where(eq(whatWouldItTakeRoadmaps.projectId, projectId))
+    .limit(1);
+  return !!row;
+}
+
 const rowForClient = (row: typeof whatWouldItTakeRoadmaps.$inferSelect) => ({
   id: row.id,
   target: row.target,
@@ -204,6 +223,7 @@ Revenue is not money kept, and you must not treat them as the same. ${margin ? `
 
 Plain English throughout. No jargon, no consulting words ("leverage", "synergies", "10x"), no exclamation marks. Short sentences. Talk about staff, sites, machines, stock, vans, cash and margin — the things this owner actually deals with.
 
+${PROSE_STYLE_RULE}
 Respond ONLY with valid JSON, no markdown fences:
 {
   "headline": "one sentence an owner would say out loud about this gap",
@@ -247,6 +267,17 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
       .orderBy(desc(whatWouldItTakeRoadmaps.generatedAt)).limit(40);
 
     /*
+     * Bought once per project. Free from then on, for three reasons that all
+     * point the same way: this is the thing you are meant to re-run in six
+     * months to see whether the gap moved, a project that ran it on credits
+     * before the price existed has already paid, and the whole-business build
+     * includes it.
+     */
+    const wwitPriceCents = rows.length || (await hasBuildPass(req.user.id, project.id))
+      ? 0
+      : OUTCOME_PRICE_CENTS.wwit;
+
+    /*
      * The latest run for each target and the one before it. The previous run is
      * sent even though nothing on screen shows it in full, because the movement
      * line ("the gap closed from 48× to 31×") is computed from the pair and a
@@ -271,7 +302,12 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
       quarter: quarterOf(),
       subcategory: ground.grounding.subcategory,
       targets: WWIT_TARGETS.map(targetForClient),
-      credits: CREDIT_COSTS.whatWouldItTake,
+      /*
+       * What the next build costs, decided here rather than by the client:
+       * the first one for this project is the purchase, every re-run is free,
+       * and a project on the whole-business build never pays.
+       */
+      price: { cents: wwitPriceCents, display: formatMoney(wwitPriceCents), unlocked: wwitPriceCents === 0 },
       aiAvailable: openAiConfigured(),
       /** What a roadmap would be built from right now, so the card can show it before anyone spends anything. */
       grounding: ground.grounding,
@@ -321,7 +357,34 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
      */
     const call = verdictWithMargin(gap.multiple, ground.margin);
 
-    const ent = await requireCredits(res, userId, CREDIT_COSTS.whatWouldItTake, `the "${target.label}" roadmap`);
+    /*
+     * Bought once per project, not per run.
+     *
+     * This used to charge five credits every time it was built, and the whole
+     * point of the thing is "re-run it in six months and see whether the gap
+     * moved" — a price per run is a price on checking, which is the one
+     * behaviour worth encouraging. So the first one is the purchase and every
+     * re-run afterwards is free.
+     *
+     * A project that already ran it on credits has bought it, and is not asked
+     * again. Charging those owners for what they have already paid for would
+     * be indefensible, and it is one query to avoid.
+     */
+    const boughtAlready = await hasRoadmap(project.id);
+    const ent = boughtAlready
+/*
+       * Bought already, so nothing is charged — but it still goes through
+       * `requireCredits`.
+       *
+       * `getUserEntitlements` alone skips `enforceRateLimit`, which is the
+       * first thing requireCredits does. So a project that had paid once got
+       * unlimited model calls with no burst limit on them at all: the free
+       * part is the design, and the *uncapped* part was an accident of how
+       * the free part was written. `NO_CHARGE` returns the entitlement
+       * without taking anything and keeps the limiter in front of it.
+       */
+      ? await requireCredits(res, userId, NO_CHARGE, "what it would take", { projectId: project.id })
+      : await requireCredits(res, userId, CHARGEABLE, `the "${target.label}" roadmap`, { outcome: "wwit", projectId: project.id });
     if (!ent) return;
 
     try {
@@ -390,7 +453,14 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
         generatedAt: new Date(),
       }).returning();
 
-      await storage.deductCredits(userId, CREDIT_COSTS.whatWouldItTake);
+      /*
+       * Settles the money requireCredits put on hold. Skipped when this
+       * project had already bought it, because nothing was held — and
+       * deductCredits falls back to taking an allowance action when there is
+       * no hold to settle, which would quietly make a free re-run cost
+       * something after all.
+       */
+      if (!boughtAlready) await storage.deductCredits(userId, CHARGEABLE);
       /*
        * Asking where the company is going is the work RUN.S4.5 describes, so
        * doing it closes that step. Never fails the request: the roadmap exists
@@ -398,7 +468,7 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
        */
       await completeRunMilestone(project.id, "RUN.S4.5", userId).catch((e) => console.error("[wwit] path advance failed:", e));
 
-      res.json({ roadmap: rowForClient(row), creditsCharged: CREDIT_COSTS.whatWouldItTake });
+      res.json({ roadmap: rowForClient(row), paidCents: boughtAlready ? 0 : OUTCOME_PRICE_CENTS.wwit });
     } catch (err) {
       console.error("[wwit] couldn't build the roadmap:", err);
       respondToAiError(res, err, "Nova couldn't build that roadmap. Nothing was charged — please try again.");

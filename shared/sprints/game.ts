@@ -104,6 +104,64 @@ export const ROUND_COPY: Record<Round, { title: string; blurb: string }> = {
 /** The whole game, end to end, if every clock runs out. */
 export const TOTAL_SECONDS = PLAYABLE_ROUNDS.reduce((sum, r) => sum + ROUND_SECONDS[r], 0);
 
+// ─── How often you may play ──────────────────────────────────────────────────
+
+/**
+ * One game a day, per person.
+ *
+ * The valuation at the end is a model call over a long prompt, and it is given
+ * away free — so without a ceiling the cost of this feature is set by whoever
+ * is most bored. But the limit is not really about the bill. A game you can
+ * replay immediately is a game you reroll: unhappy with 480, start again, keep
+ * the bot partner you liked, try the same idea with a different budget. That
+ * turns a half-hour of deciding things with somebody into a slot machine, and
+ * the number at the end stops meaning anything — including on the leaderboard,
+ * where it would be ranked against people who only got one go.
+ *
+ * A rolling day rather than a calendar one. Midnight is midnight *somewhere*,
+ * and a server that resets at 00:00 UTC hands Australians their game at
+ * lunchtime and Californians theirs at four in the afternoon. Twenty-four
+ * hours from the last game is the same rule for everybody and can be stated
+ * exactly — "you can play again at 6pm" — without knowing where anyone is.
+ */
+export const GAMES_PER_DAY = 1;
+export const GAME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * When the next game unlocks, given when the last one was started.
+ *
+ * Counted from the *start*, not the finish. A game that was abandoned in round
+ * one has still used the day — otherwise "leave and start again" is a reroll
+ * button with an extra step, which is the exact thing the limit exists to
+ * prevent. The trade is that somebody whose browser died has lost their turn,
+ * and that is why a game still in progress never counts against them: it is
+ * theirs to go back to for as long as its clocks are running.
+ */
+export const gameUnlocksAt = (lastStartedAt: Date | string | null | undefined): Date | null => {
+  if (!lastStartedAt) return null;
+  const at = new Date(lastStartedAt).getTime();
+  return Number.isFinite(at) ? new Date(at + GAME_COOLDOWN_MS) : null;
+};
+
+/**
+ * How long until then, in words a person would use.
+ *
+ * Deliberately vague at the top and precise at the bottom. "In about 9 hours"
+ * is what somebody wants at breakfast; "in 4 minutes" is what they want when
+ * it is nearly time, and rounding that to "in about an hour" would be a lie
+ * they would catch.
+ */
+export function playAgainIn(unlocksAt: Date | string | null | undefined, now: Date = new Date()): string | null {
+  const at = unlocksAt ? new Date(unlocksAt).getTime() : NaN;
+  if (!Number.isFinite(at)) return null;
+  const ms = at - now.getTime();
+  if (ms <= 0) return null;
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `in about ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
 export const nextRound = (round: Round): Round | null => {
   const i = ROUNDS.indexOf(round);
   return i < 0 || i === ROUNDS.length - 1 ? null : ROUNDS[i + 1];

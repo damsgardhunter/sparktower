@@ -34,6 +34,7 @@ import {
   type RhythmMetric, type JobInterval, type MonthlyReport, type GoalProgress,
 } from "@shared/company-rhythm";
 import { WhatWouldItTake } from "@/components/what-would-it-take";
+import { useOpenSurface } from "@/components/section/live";
 
 interface Checkin {
   id: string; weekOf: string; numbers: Record<string, number | null>;
@@ -351,6 +352,8 @@ const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-
 
 function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary }) {
   const { toast } = useToast();
+  // The path step "The jobs that come round" ticks itself when these exist, so its card sends people here.
+  const jobs = useOpenSurface("recurring-jobs");
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [every, setEvery] = useState<JobInterval>("week");
@@ -382,7 +385,7 @@ function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary 
   });
 
   return (
-    <Card data-testid="rhythm-jobs">
+    <Card ref={jobs.ref} className={jobs.asked ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : undefined} data-testid="rhythm-jobs">
       <CardContent className="p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Repeat className="h-3.5 w-3.5 text-muted-foreground" />
@@ -457,6 +460,7 @@ const emptyDraft: GoalDraft = { title: "", metricId: "", target: "", direction: 
 
 function GoalsCard({ projectId, data }: { projectId: string; data: RhythmSummary }) {
   const { toast } = useToast();
+  const goals2 = useOpenSurface("quarter-goals");
   const [quarter, setQuarter] = useState(data.quarter);
   const { data: goals, isLoading } = useGoals(projectId, quarter);
   const [editing, setEditing] = useState<string | "new" | null>(null);
@@ -525,7 +529,7 @@ function GoalsCard({ projectId, data }: { projectId: string; data: RhythmSummary
   );
 
   return (
-    <Card data-testid="rhythm-goals">
+    <Card ref={goals2.ref} className={goals2.asked ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : undefined} data-testid="rhythm-goals">
       <CardContent className="p-5 space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
           <Target className="h-3.5 w-3.5 text-muted-foreground" />

@@ -7,9 +7,10 @@ import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Card, Empty, Icon, Label, Loading, Screen, errText } from "../../src/components/ui";
 import { Callout, Pill, isSwitchedOff } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { EmptySeatRow, LeverList, OpenSeatCard, PhaseBanner, SeatRow, SimSectionTitle } from "../../src/components/sim/SimKit";
-import { ROOM_POLL_MS, useCountdown, useNiches, useVenture } from "../../src/components/sim/useSim";
+import { EmptySeatRow, LeverList, OpenSeatCard, PhaseBanner, SeasonProgress, SeatRow, SimSectionTitle } from "../../src/components/sim/SimKit";
+import { ROOM_POLL_MS, useCountdown, useNiches, useStandings, useVenture } from "../../src/components/sim/useSim";
 import { phaseCopy, type SimRole } from "../../src/components/sim/lobby";
+import { movementRead, standingLine } from "../../src/components/sim/standings";
 
 /**
  * The room: five people, one screen, changing under all of them.
@@ -41,6 +42,12 @@ export default function Room() {
   // Role titles and levers live with the markets, not the room — one cached
   // request rather than restating shared/simulation/types.ts on the phone.
   const { data: meta } = useNiches();
+  /*
+   * Only fetched once the company is actually trading. Asking for standings
+   * while five people are still arguing over seats is a request for a table
+   * that does not exist yet, on the phase where the screen is polling hardest.
+   */
+  const { data: standings } = useStandings(venture?.phase === "running" ? id : undefined);
 
   const { seconds, text: clock } = useCountdown(venture?.secondsLeft, dataUpdatedAt);
   // The minute the room waits for people before bots take the empty seats; restarts when someone joins.
@@ -269,7 +276,22 @@ export default function Room() {
 
           {venture.phase === "running" && (
             <Card accent={colors.success}>
-              <SimSectionTitle icon="flag" title="Year one has begun" color={colors.success} />
+              {/*
+                * The title is the company, not the year. It used to read "Year
+                * one has begun" whatever year it was, which told a team nine
+                * years in something plainly untrue on the screen they open
+                * most.
+                */}
+              <SimSectionTitle icon="flag" title={venture.name ?? "Your company"} color={colors.success} />
+
+              {/* Where the season is, and where you are in it. */}
+              <SeasonProgress
+                year={standings?.year ?? venture.year ?? 1}
+                totalYears={standings?.totalYears ?? venture.totalYears ?? 14}
+                standing={standingLine(standings?.rows)}
+                movement={movementRead(standings?.history)}
+              />
+
               <Text style={{ color: colors.text, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
                 {venture.name ? `${venture.name} is trading` : "Your company is trading"}
                 {venture.product ? `, selling ${venture.product}` : ""}
@@ -290,6 +312,7 @@ export default function Room() {
                 One real day is one year of trading. Each of you files a decision for your own seat; the year resolves for all
                 five of you at once.
               </Text>
+              <Btn label="The whole table" icon="podium-outline" variant="outline" onPress={() => router.push(`/sim/standings/${id}` as any)} testID="sim-open-standings" />
               <Btn label="Back to the markets" icon="arrow-back" variant="outline" onPress={() => router.replace("/sim")} testID="sim-back-to-markets" />
             </Card>
           )}

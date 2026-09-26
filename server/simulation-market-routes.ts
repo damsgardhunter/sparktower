@@ -22,8 +22,11 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
+import { marketOf } from "./simulation-scope";
+import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
+import { currencyForSeason } from "./simulation-desk-routes";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
-import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
+import { assetEffects, marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
 import { valuation, canOffer, assessOffer, alreadySold } from "@shared/simulation/mergers";
 import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
@@ -94,7 +97,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     if (!ctx) return res.status(404).json({ message: "No such company." });
     const { season, company, world } = ctx;
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
 
     const fromTeams = await db.select().from(simListings).where(and(
@@ -112,7 +115,12 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const nameOf = (id: string) => world.companies.find((c) => c.id === id)?.name ?? "Another team";
 
     const listings = [
-      ...marketListings({ seasonId: season.id, year, niche }).map((l) => ({
+      /* Not the things this company already holds — see `owned` on marketListings. */
+      ...marketListings({
+        seasonId: season.id, year, niche,
+        periods: periodsPerYear(season.cadence as Cadence),
+        owned: (company.assets ?? []).map((a) => a.name),
+      }).map((l) => ({
         id: l.id,
         name: l.asset.name,
         kind: l.asset.kind,
@@ -160,6 +168,34 @@ export function registerSimulationMarketRoutes(app: Express): void {
        * facts it cannot act without.
        */
       yourRole: ctx.seat.role,
+      /**
+       * What one decision is called here, and how many of them make a year.
+       *
+       * The auction has always settled once a tick, so a quarterly season's
+       * bids were already decided every quarter — only the words said "year".
+       * `periods` is sent alongside because an asset's life is counted in
+       * periods too: a three-year licence in a quarterly season is twelve of
+       * them, and the screen was printing that as "12 years".
+       */
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
+      periods: periodsPerYear(season.cadence as Cadence),
+      /* What this company counts money in. The page had £ hardcoded in its own formatter. */
+      currency: await currencyForSeason(season.companyId),
+      /*
+       * Where this company stands on each axis a lot can move.
+       *
+       * A listing said "+6 quality" and "+4,038 capacity" and left a founder to
+       * do the arithmetic against numbers held on a different screen — which is
+       * the whole decision. Sent so the listing can say what winning it would
+       * make *this* company, rather than what it would add to somebody.
+       */
+      you: {
+        quality: Math.round(company.quality),
+        brand: Math.round(company.brand),
+        service: Math.round(company.service),
+        capacity: Math.round(company.capacity) + assetEffects(company.assets ?? []).capacity,
+        unitCost: Math.round(company.unitCost * 100) / 100,
+      },
       resolvesAt: season.nextTickAt,
       /** Cash plus what is still borrowable — what a bid can actually be backed by. */
       funds: biddableFunds(company),
@@ -238,9 +274,13 @@ const BID_IS_THE_CEOS = {
     if (!listingId) return res.status(400).json({ message: "Which listing?" });
     if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ message: "That isn't an amount." });
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
-    const open = marketListings({ seasonId: season.id, year, niche }).map((l) => l.id);
+    const open = marketListings({
+      seasonId: season.id, year, niche,
+      periods: periodsPerYear(season.cadence as Cadence),
+      owned: (company.assets ?? []).map((a) => a.name),
+    }).map((l) => l.id);
     const [fromTeam] = await db.select().from(simListings).where(and(
       eq(simListings.id, listingId),
       eq(simListings.status, "open"),
@@ -451,7 +491,11 @@ const BID_IS_THE_CEOS = {
 
     res.json({
       year: season.year,
+      /* Years, kept for anything that still wants them. */
       totalYears: season.totalYears,
+      /* And the denominator `year` is actually counted in. See the desk route. */
+      totalPeriods: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence),
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
       yourRole: seat.role,
       resolvesAt: season.nextTickAt,
       /** Where the season is, so a finished one does not render as a live screen. */
@@ -625,18 +669,41 @@ const BID_IS_THE_CEOS = {
      * all of them for a business they handed over once. The second buyer paid
      * for an empty company.
      *
-     * The update is conditional on the offer still being open, so two
-     * acceptances arriving in the same millisecond cannot both win: the
-     * database settles it, exactly as it does for a seat in the lobby.
+     * Two guards, because they answer two different questions.
+     *
+     * The condition on `status` makes each offer atomic with itself: the same
+     * offer answered twice is answered once. What it cannot do is make the
+     * *company* atomic — two offers to the same company are two different
+     * rows, so both acceptances matched their own row and both won, and each
+     * then declined "the other pendings" by which point neither was pending.
+     * The company was paid for twice and handed over once.
+     *
+     * A `not exists` here would not close it either: under READ COMMITTED both
+     * statements read their own snapshot and both find no accepted offer. What
+     * closes it is the partial unique index on (to_venture_id, year) where
+     * status = 'accepted' (migration 0054) — the second acceptance is refused
+     * by the database, and caught below as the 409 it always should have been.
      */
-    const answered = await db.update(simOffers)
-      .set({
-        status: accept ? "accepted" : "declined",
-        respondedById: req.user.id,
-        respondedAt: new Date(),
-      })
-      .where(and(eq(simOffers.id, offer.id), eq(simOffers.status, "pending")))
-      .returning({ id: simOffers.id });
+    let answered: { id: string }[];
+    try {
+      answered = await db.update(simOffers)
+        .set({
+          status: accept ? "accepted" : "declined",
+          respondedById: req.user.id,
+          respondedAt: new Date(),
+        })
+        .where(and(eq(simOffers.id, offer.id), eq(simOffers.status, "pending")))
+        .returning({ id: simOffers.id });
+    } catch (err: any) {
+      // 23505: somebody else's acceptance of this company got there first.
+      if (err?.code === "23505") {
+        return res.status(409).json({
+          message: "This company has already been sold this year — that offer is off the table.",
+          code: "already_sold",
+        });
+      }
+      throw err;
+    }
 
     if (answered.length === 0) {
       return res.status(409).json({
@@ -756,11 +823,15 @@ const BID_IS_THE_CEOS = {
       .where(and(eq(simReports.seasonId, season.id), eq(simReports.ventureId, company.id)))
       .orderBy(simReports.year);
 
-    const niche = nicheById(season.nicheId);
+    const niche = marketOf(season);
 
     res.json({
       year: season.year,
+      /* Years, kept for anything that still wants them. */
       totalYears: season.totalYears,
+      /* And the denominator `year` is actually counted in. See the desk route. */
+      totalPeriods: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence),
+      period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
       status: season.status,
       /*
        * The market's own vocabulary, so a league table of restaurants counts

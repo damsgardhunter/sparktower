@@ -432,8 +432,13 @@ describe("two buyers, one company", () => {
   }, 240_000);
 
   it("settles simultaneous acceptances to one answer", async () => {
-    // Two requests can read "pending" in the same millisecond. The database has
-    // to be the thing that decides, as it is for a seat in the lobby.
+    /*
+     * Two requests can read "pending" in the same millisecond, and the guard
+     * on the offer's own status does not settle it: two offers to the same
+     * company are two different rows, so both acceptances matched and both
+     * won. The database is what decides, through the partial unique index on
+     * (to_venture_id, year) where the status is accepted — migration 0054.
+     */
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
     const c = await thirdTeam(app, seasonId);
@@ -446,11 +451,22 @@ describe("two buyers, one company", () => {
     await c.ceo.agent.post(`/api/sim/ventures/${c.ventureId}/offers`).send({ targetId: b.ventureId, amount: 2_500_000 });
     const pending = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
 
-    await Promise.all(pending.map((o) =>
+    const answers = await Promise.all(pending.map((o) =>
       b.ceo.agent.post(`/api/sim/ventures/${b.ventureId}/offers/${o.id}/respond`).send({ accept: true })));
 
     const after = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
-    expect(after.filter((o) => o.status === "accepted")).toHaveLength(1);
+    expect(after.filter((o) => o.status === "accepted"), "a company is sold once").toHaveLength(1);
+
+    /*
+     * And the one that lost was told so, in words. A 500 here would be the
+     * same bug wearing a different hat: the buyer would not know whether they
+     * had bought a company.
+     */
+    const statuses = answers.map((r) => r.status).sort();
+    expect(statuses, answers.map((r) => JSON.stringify(r.body)).join(" / ")).toEqual([200, 409]);
+    const loser = answers.find((r) => r.status === 409)!;
+    expect(["already_sold", "not_pending"], loser.body.code).toContain(loser.body.code);
+    expect(loser.body.message).toBeTruthy();
   }, 240_000);
 });
 

@@ -12,6 +12,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { RESIGN_AT } from "@shared/simulation/people";
 import {
   DEAL_CHASERS_LEAVE, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, dealOutcome, dealsFor,
+  expansionOutcome,
   dividend, firstYearReach, lawsuitOf, programmeYield, promoAppeal, winBack,
 } from "@shared/simulation/world";
 import { reviewInvestors } from "@shared/simulation/finance";
@@ -269,6 +270,52 @@ describe("expansion", () => {
     const opened = resolveYear({ ...committed.world, year: 7 }, [plain()]);
     expect(after(opened).cities).toContain(announced.id);
     expect(report(opened).notes.join(" ")).toMatch(/as far as the brand/);
+  });
+
+  it("counts the table's votes, a tie and silence meaning different things", () => {
+    // Operations putting it up is the first vote for, which is why one vote carries.
+    expect(expansionOutcome(["yes"])).toEqual({ carried: true, yes: 1, no: 0 });
+    expect(expansionOutcome(["yes", "yes", "no"]).carried).toBe(true);
+    expect(expansionOutcome(["yes", "no"]).carried, "a tie leaves the region shut").toBe(false);
+    expect(expansionOutcome(["yes", "no", "no"]).carried).toBe(false);
+    expect(expansionOutcome([]).carried, "nobody proposed it").toBe(false);
+  });
+
+  it("does not open a region the table voted down, and says who wanted it", () => {
+    const c = team({ cities: ["london"], brand: 30 });
+    const announced = announcedRegion({ niche, seasonId: "wld", year: 6, open: ["london"] })!;
+    const against = { expandVote: { [announced.id]: "no" as const } };
+
+    const voted = resolveYear(world(c), [plain({
+      coo: { expand: announced.id },
+      cmo: against, cfo: against, cto: against,
+    })]);
+    expect(after(voted).expanding, "three against one").toBeUndefined();
+    expect(report(voted).notes.join(" ")).toMatch(/1 for and 3 against/);
+
+    // And the money stays in the bank: a region not opened is not paid for.
+    const alone = resolveYear(world(c), [plain({ coo: { expand: announced.id } })]);
+    expect(after(voted).cash).toBeGreaterThan(after(alone).cash);
+  });
+
+  it("opens it when the table agrees, silence counting as silence rather than opposition", () => {
+    const c = team({ cities: ["london"], brand: 30 });
+    const announced = announcedRegion({ niche, seasonId: "wld", year: 6, open: ["london"] })!;
+    const r = resolveYear(world(c), [plain({
+      coo: { expand: announced.id },
+      ceo: { expandVote: { [announced.id]: "yes" } },
+      cfo: { expandVote: { [announced.id]: "no" } },
+    })]);
+    expect(after(r).expanding).toEqual({ cityId: announced.id, opensYear: 7 });
+    expect(report(r).notes.join(" ")).toMatch(/2 for and 1 against/);
+  });
+
+  it("ignores a vote on a region nobody put up", () => {
+    const c = team({ cities: ["london"], brand: 30 });
+    const announced = announcedRegion({ niche, seasonId: "wld", year: 6, open: ["london"] })!;
+    const yes = { expandVote: { [announced.id]: "yes" as const } };
+    const r = resolveYear(world(c), [plain({ ceo: yes, cmo: yes, cfo: yes, cto: yes })]);
+    expect(after(r).expanding, "four for and no proposal is not a decision").toBeUndefined();
   });
 });
 

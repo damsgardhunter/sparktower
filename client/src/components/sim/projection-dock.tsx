@@ -16,9 +16,11 @@
  * `--viz-bad`, and never alone — always with an arrow, a sign and words.
  */
 import { useState } from "react";
+import { LiveDot } from "@/components/nova";
 import { cn } from "@/lib/utils";
 import { ArrowDown, ArrowUp, ChevronUp, ShieldAlert, AlertTriangle, Banknote } from "lucide-react";
-import { useProjection, gbp } from "./projection-panel";
+import { useProjection } from "./projection-panel";
+import { useMoney, usePeriod } from "./desk-currency";
 
 export interface Commitment {
   spend: number;
@@ -41,16 +43,17 @@ interface DockProps {
 
 /** A figure, and what this seat's unfiled change is doing to it. */
 function Figure({ label, value, delta, testId }: { label: string; value: number; delta: number; testId: string }) {
+  const { compact } = useMoney();
   const moved = Math.abs(delta) >= 1;
   const up = delta > 0;
   return (
     <div data-testid={testId}>
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={cn("text-xl font-extrabold tracking-tight tabular-nums", value < 0 && "text-[var(--viz-bad)]")}>{gbp(value)}</p>
+      <p className={cn("text-xl font-extrabold tracking-tight tabular-nums", value < 0 && "text-[var(--viz-bad)]")}>{compact(value)}</p>
       {moved && (
         <p className={cn("flex items-center gap-0.5 text-[11px] font-medium", up ? "text-[var(--viz-good)]" : "text-[var(--viz-bad)]")} data-testid={`${testId}-delta`}>
           {up ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
-          {up ? "+" : ""}{gbp(delta)} <span className="font-normal text-muted-foreground">from your change</span>
+          {up ? "+" : ""}{compact(delta)} <span className="font-normal text-muted-foreground">from your change</span>
         </p>
       )}
     </div>
@@ -58,6 +61,8 @@ function Figure({ label, value, delta, testId }: { label: string; value: number;
 }
 
 function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings }: DockProps) {
+  const { compact } = useMoney();
+  const period = usePeriod();
   const { data, isFetching } = useProjection(ventureId, draft, filedStamp);
   const committed = live ? live.spend + live.fixed : 0;
   const over = live ? committed > live.available : false;
@@ -66,14 +71,11 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-bold">{data ? `Year ${data.year}, if it ended today` : "This year, if it ended today"}</p>
+          <p className="text-sm font-bold">{data ? `${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${data.year}, if it ended today` : `${period.of.charAt(0).toUpperCase() + period.of.slice(1)}, if it ended today`}</p>
           <p className="text-[11px] text-muted-foreground">Updates as you change your plan</p>
         </div>
         {/* Live: pulses while the next answer is being worked out. */}
-        <span className="relative flex h-2.5 w-2.5 shrink-0" aria-label={isFetching ? "Updating" : "Up to date"} data-testid="dock-live">
-          {isFetching && <span className="absolute inline-flex h-full w-full rounded-full nova-chip opacity-60 animate-ping" />}
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full nova-chip" />
-        </span>
+        <LiveDot size="md" active={isFetching} aria-label={isFetching ? "Updating" : "Up to date"} data-testid="dock-live" />
       </div>
 
       {!data ? (
@@ -111,8 +113,8 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
           <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
             <Banknote className="h-3.5 w-3.5" /> The table has committed
           </p>
-          <p className={cn("text-lg font-extrabold tabular-nums", over && "text-destructive")} data-testid="text-commitment">{gbp(committed)}</p>
-          <p className="text-[11px] text-muted-foreground">against {gbp(live.available)} available · {gbp(live.fixed)} of it salaries</p>
+          <p className={cn("text-lg font-extrabold tabular-nums", over && "text-destructive")} data-testid="text-commitment">{compact(committed)}</p>
+          <p className="text-[11px] text-muted-foreground">against {compact(live.available)} available · {compact(live.fixed)} of it salaries</p>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
             <div className={cn("h-full rounded-full", over ? "bg-destructive" : "nova-chip")} style={{ width: `${Math.min(100, (committed / Math.max(1, live.available)) * 100)}%` }} />
           </div>
@@ -121,12 +123,12 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
           <div className="mt-2 space-y-1">
             {live.openingCost > 0 && (
               <p className="flex justify-between text-[11px] text-amber-600" data-testid="text-opening-cost">
-                <span>opening new places</span><span className="tabular-nums">{gbp(live.openingCost)}</span>
+                <span>opening new places</span><span className="tabular-nums">{compact(live.openingCost)}</span>
               </p>
             )}
             {live.bySeat.filter((b) => b.spend > 0).map((b) => (
               <p key={b.role} className="flex justify-between text-[11px]">
-                <span className="uppercase text-muted-foreground">{b.role}</span><span className="tabular-nums">{gbp(b.spend)}</span>
+                <span className="uppercase text-muted-foreground">{b.role}</span><span className="tabular-nums">{compact(b.spend)}</span>
               </p>
             ))}
             {live.bySeat.every((b) => b.spend === 0) && <p className="text-[11px] text-muted-foreground">Nobody has committed anything yet.</p>}
@@ -165,6 +167,7 @@ export function ProjectionRail(props: DockProps & { top: number }) {
 
 /** Along the bottom, on a phone: the two numbers people check, opening into the rest. */
 export function ProjectionBar(props: DockProps) {
+  const { compact } = useMoney();
   const [open, setOpen] = useState(false);
   const { data } = useProjection(props.ventureId, props.draft, props.filedStamp);
   return (
@@ -180,11 +183,11 @@ export function ProjectionBar(props: DockProps) {
           <span className="flex gap-5">
             <span>
               <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">Profit</span>
-              <span className={cn("text-base font-extrabold tabular-nums", (data?.drafted.profit ?? 0) < 0 && "text-[var(--viz-bad)]")}>{data ? gbp(data.drafted.profit) : "…"}</span>
+              <span className={cn("text-base font-extrabold tabular-nums", (data?.drafted.profit ?? 0) < 0 && "text-[var(--viz-bad)]")}>{data ? compact(data.drafted.profit) : "…"}</span>
             </span>
             <span>
               <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">Cash at year end</span>
-              <span className={cn("text-base font-extrabold tabular-nums", (data?.drafted.cashEnd ?? 0) < 0 && "text-[var(--viz-bad)]")}>{data ? gbp(data.drafted.cashEnd) : "…"}</span>
+              <span className={cn("text-base font-extrabold tabular-nums", (data?.drafted.cashEnd ?? 0) < 0 && "text-[var(--viz-bad)]")}>{data ? compact(data.drafted.cashEnd) : "…"}</span>
             </span>
           </span>
           <ChevronUp className={cn("h-4 w-4 shrink-0 transition-transform", !open && "rotate-180")} />

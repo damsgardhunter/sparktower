@@ -26,6 +26,7 @@ export interface IAuthStorage {
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   linkGoogleAccount(userId: string, googleId: string): Promise<User>;
+  linkAppleAccount(userId: string, appleId: string, proved: boolean): Promise<User>;
 }
 
 class AuthStorage implements IAuthStorage {
@@ -117,6 +118,50 @@ class AuthStorage implements IAuthStorage {
       await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId}`);
       console.warn(
         `[auth] ${userId} had an unverified password on ${user.email} and Google proved that address: ` +
+        `password cleared and sessions ended, so whoever registered it cannot keep using it.`,
+      );
+    }
+    return user;
+  }
+
+  /**
+   * The same door for Apple, with one difference that matters.
+   *
+   * Google always proves the address it hands over. Apple does not: with "Hide
+   * My Email" the address is a relay Apple invented for this app, which proves
+   * nothing about the real mailbox — so whether the pre-registration takeover
+   * fires is decided by the caller, which is the only place that can see
+   * `email_verified` and `is_private_email` on the token.
+   *
+   * `proved` false means the identity is trustworthy and the *address* is not,
+   * which is enough to sign somebody in and not enough to take a password off
+   * an account that claimed that address first.
+   */
+  async linkAppleAccount(userId: string, appleId: string, proved: boolean): Promise<User> {
+    const [existing] = await db.select().from(users).where(eq(users.id, userId));
+    const unproven = proved && existing && !existing.emailVerifiedAt;
+
+    const [user] = await db
+      .update(users)
+      .set({
+        appleId,
+        authProvider: "apple",
+        updatedAt: new Date(),
+        ...(unproven
+          ? {
+              passwordHash: null,
+              emailVerifiedAt: new Date(),
+              accessTokensRevokedAt: new Date(),
+            }
+          : {}),
+      })
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (unproven) {
+      await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId}`);
+      console.warn(
+        `[auth] ${userId} had an unverified password on ${user.email} and Apple proved that address: ` +
         `password cleared and sessions ended, so whoever registered it cannot keep using it.`,
       );
     }

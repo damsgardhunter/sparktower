@@ -9,6 +9,7 @@ import {
   SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
 } from "@expo-google-fonts/space-grotesk";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
+import { PayWallHost } from "../src/components/Pay";
 import { colors, fontFamily, isDark } from "../src/theme";
 
 const queryClient = new QueryClient({
@@ -110,7 +111,10 @@ export default function RootLayout() {
           <StatusBar style={isDark ? "light" : "dark"} />
           {/* On a font error, fall through to the system font rather than
               stranding the user on a spinner. */}
-          {fontsLoaded || fontError ? <AuthGate /> : <Loading />}
+          {/* Anything, anywhere, that costs money gets the same sheet. */}
+          <PayWallHost>
+            {fontsLoaded || fontError ? <AuthGate /> : <Loading />}
+          </PayWallHost>
         </AuthProvider>
       </QueryClientProvider>
     </SafeAreaProvider>

@@ -4,26 +4,23 @@
 import { rateLimit } from "./moderation";
 import { parseModelJson } from "./ai-json";
 import type { Express } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, modelFor, coachingDirectiveFor } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import {
   LOOKING_FOR_ROLES, LOOKING_FOR_STAGES, LOOKING_FOR_COMMITMENTS,
   type ProfileEducation, type ProfileExperience, type ProfileLookingFor,
   type ProfilePortfolioProject,
 } from "@shared/schema";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 const MAX_RESUME_CHARS = 20_000;
 /** Résumés above this are rejected rather than sent to the model. */
@@ -349,7 +346,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       // `apply: false` returns a preview so the user can review before it
       // overwrites what they already have.
       if (apply === false) {
-        return res.json({ draft, applied: false, source, creditsCharged: CREDIT_COSTS.resumeEvaluation });
+        return res.json({ draft, applied: false, source, creditsCharged: CHARGEABLE });
       }
 
       const existing = await storage.getUserProfile(userId);
@@ -369,7 +366,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         resumeParsedAt: new Date(),
       } as any);
 
-      res.json({ draft, profile, applied: true, source, creditsCharged: CREDIT_COSTS.resumeEvaluation });
+      res.json({ draft, profile, applied: true, source, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Resume evaluation error:", error);
       res.status(500).json({ message: "Failed to evaluate the résumé" });

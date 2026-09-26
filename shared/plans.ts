@@ -1,21 +1,632 @@
 /**
- * Single source of truth for subscription tiers, entitlements, and pricing copy.
+ * Single source of truth for what SparkTower charges for, and what it doesn't.
  *
- * Everything tier-related reads from here: credit limits (server/storage.ts),
- * feature gates (server/entitlements.ts), the Stripe product seed
- * (server/seed-stripe.ts), the /api/plans response, and the pricing page.
- * Change a number here and it changes everywhere.
+ * ## The decision this file encodes
+ *
+ * Everything a person does themselves is free, forever, for everyone: paths,
+ * boards, milestones, check-ins, publishing, the feed, teams, private
+ * projects, the public market simulation, company accounts. Paying never buys
+ * standing, reach, visibility or a feature — it buys Nova doing a piece of
+ * work for you, and nothing else. That is why every gate that used to sell a
+ * capability (private projects, analytics depth, matching level, health
+ * checks, strategy, sprint creation, premium visibility, early access) is now
+ * on for everybody: see ENTITLEMENTS below, which is deliberately one record
+ * repeated four times rather than four different ones.
+ *
+ * What costs money is the model bill, and it is charged in dollars:
+ *
+ *   - a monthly allowance of MONTHLY_SMALL_ACTIONS small Nova actions, free;
+ *   - a $1 day pass: unlimited small actions for 24 hours, for when it runs out;
+ *   - a fixed price per big outcome — a roadmap, a document, an audit, the
+ *     whole business built out, a company's training season seat.
+ *
+ * Nobody is ever quoted a credit. The old CREDIT_COSTS table survives at the
+ * bottom of this file as a compatibility shim (clients still read it to draw
+ * "this is a bigger job" hints), but nothing in the server prices anything
+ * from it any more — server/entitlements.ts prices from CHARGE_FOR below.
+ *
+ * ## Whole dollars, with one deliberate exception
+ *
+ * Every price here is a whole number of dollars, because the point of leaving
+ * credits behind was that nobody should have to convert a number into money in
+ * their head, and $3 does that better than $2.99 does.
+ *
+ * `business` is the exception, at $14.99. It is the only price on this list
+ * big enough for the threshold to matter — the difference between "about
+ * fifteen dollars" and "about thirty" is the decision somebody actually makes,
+ * and at that size the convention of the shelf beats the tidiness of the
+ * table. Every other price stays whole, and a new one should be whole unless
+ * there is the same argument for it.
+ *
+ * Everything money-related reads from here: the wallet (server/wallet.ts), the
+ * charge itself (server/entitlements.ts), top-up checkout and the webhook, the
+ * /api/plans response, and the pricing page. Change a number here and it
+ * changes everywhere.
  */
+
+// ---------------------------------------------------------------------------
+// The price list
+// ---------------------------------------------------------------------------
+
+/**
+ * A "small" Nova action: a chat turn, a next-step nudge, a persona, a progress
+ * summary, tidying the board. One model call over the project, bounded.
+ *
+ * Twenty-five a month is roughly a busy fortnight of Nova at a builder's
+ * elbow. It resets on the calendar month (storage.resetCreditsIfNeeded) and is
+ * counted in actions, not in credits: one action is one action, whether it
+ * read three tasks or thirty. Weighting them would put us back in the business
+ * of quoting people a number they have to convert into money in their head.
+ */
+export const MONTHLY_SMALL_ACTIONS = 25;
+
+/** The outcomes that carry a price. Everything else Nova does is small, or free. */
+export type PricedOutcomeId =
+  | "actionPack"
+  | "roadmap"
+  | "document"
+  | "codeAudit"
+  | "business"
+  | "seasonSeat"
+  | "customSeason"
+  | "wwit"
+  | "simulations"
+  | "challenge"
+  | "marketing"
+  | "brand"
+  | "imagePass";
+
+/**
+ * What each outcome costs, in cents. Whole dollars on purpose: the point of
+ * moving off credits is that a person can read the price without arithmetic.
+ *
+ *   actionPack — ACTIONS_PER_PACK more small Nova actions. The thing you buy
+ *                when the month's free allowance runs out and you are mid-flow.
+ *                Spent one at a time and never expiring, which is the whole
+ *                difference from the day pass it replaced: that sold a window,
+ *                so what it really cost depended on how fast you could type.
+ *   roadmap    — Nova builds the path and roadmap: phases, milestones, order.
+ *   document   — the document builder, plan and fill, one price for the whole
+ *                document however many blocks it turns out to have.
+ *   codeAudit  — Nova reads the repository against the plan.
+ *   business   — every section of the path built out, end to end, for one
+ *                project. The deliberate "just do it all" purchase.
+ *   seasonSeat — one seat in a company's private training season. The public
+ *                market stays free for everyone, always.
+ *   imagePass  — a day of unlimited image generation. Pictures are the one
+ *                thing here that costs real money per press rather than per
+ *                month, so they are not covered by the ordinary day pass: the
+ *                first generation for a project (or a badge) is free, and
+ *                anyone who wants more buys the day.
+ *   challenge  — posting a company challenge. Not revenue: $4.99 is not a
+ *                business. It is the cheapest way to make posting a challenge
+ *                a decision rather than a reflex, on a surface where the cost
+ *                of a careless one falls on whoever spends a fortnight
+ *                entering it. The prize is separate and is held, not spent —
+ *                see shared/challenges-money.ts.
+ *   simulations— the decision simulator and the ten-year outlook for one
+ *                project: ask what happens if you hire twelve people, or put a
+ *                thousand a month into marketing, and get the answer worked out
+ *                month by month against your own figures. One purchase for the
+ *                project rather than one per question, on the same argument as
+ *                the roadmap: a price per run is a price on checking, and
+ *                checking is the behaviour worth encouraging. Included in
+ *                `business`.
+ *   marketing  — a marketing scheme for a product that already exists: the
+ *                owner or their marketer writes the plan — who it is aimed at,
+ *                where it runs, what it offers, what it costs and how it is
+ *                measured — Nova reads it against the business's own figures
+ *                and scores it, and a scheme good enough to be worth testing
+ *                can then be run through the simulator for a year. Priced per
+ *                project like the simulations it feeds, and higher than them
+ *                because it is the one thing here a person can hand to a
+ *                client. Included in `business`.
+ *   wwit       — "What would it take?": the route from where a company is to a
+ *                size it picks, built from its own check-in numbers. Priced
+ *                with the roadmap and the document because it is the same kind
+ *                of thing — one commissioned piece of work with an answer at
+ *                the end — and it is included in `business`, which buys the
+ *                lot. A project that already ran it on credits keeps it.
+ *   brand      — a placeholder logo and a cover image drawn to match it, for
+ *                one project. A dollar, which is the lowest price on this list
+ *                and the only one that could be lower: it is two pictures and
+ *                it is explicitly a stand-in for a designer, so pricing it
+ *                like a piece of commissioned work would be selling it as one.
+ *                It is a dollar rather than free because two images cost real
+ *                money on every press, and free image generation attached to a
+ *                project is the one thing here a script would sit on all
+ *                night. Included in `business`, which buys the project.
+ */
+export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
+  actionPack: 500,
+  roadmap: 300,
+  document: 300,
+  codeAudit: 500,
+  business: 1499,
+  seasonSeat: 300,
+  customSeason: 1000,
+  wwit: 300,
+  simulations: 300,
+  challenge: 499,
+  marketing: 600,
+  brand: 100,
+  imagePass: 500,
+};
+
+/**
+ * What the legacy `amount` argument on requireCredits/deductCredits means now.
+ *
+ * It used to be a price in credits. It isn't one any more — the price is
+ * `opts.outcome`, or the allowance — so the only thing left for a number to
+ * say is whether this action costs anything at all. Named rather than written
+ * as 0 and 1 at the call site, because a bare literal in a metering call is
+ * exactly the thing test/unit/ai-metering.test.ts exists to catch: a price
+ * that stopped living in one place.
+ */
+export const CHARGEABLE = 1;
+export const NO_CHARGE = 0;
+
+/**
+ * How many small Nova actions one pack buys.
+ *
+ * The same number as the free monthly allowance, deliberately: "another
+ * twenty-five" is a thing somebody can hold in their head against the
+ * twenty-five they already get, and a pack that did not match it would make
+ * both numbers harder to remember.
+ */
+export const ACTIONS_PER_PACK = 25;
+
+/**
+ * What a day pass bought, in hours.
+ *
+ * Nothing sells one any more — see ACTIONS_PER_PACK — and this stays because
+ * passes already paid for are still honoured until they run out.
+ */
+export const DAY_PASS_HOURS = 24;
+
+/** The image pass runs the same day-shaped window as the ordinary one. */
+export const IMAGE_PASS_HOURS = 24;
+
+/**
+ * Unlimited, with a ceiling — the same argument as the AI burst limit, and it
+ * bites harder here. Fifty images an hour is more than any person makes on
+ * purpose and far less than a script makes by accident, and at this model's
+ * prices an unbounded "unlimited" is the one thing on the price list that
+ * could cost us more in a night than everything else earns in a month.
+ */
+export const IMAGE_PASS_HOURLY_LIMIT = 50;
+
+/**
+ * How many generations a thing gets before the pass is needed.
+ *
+ * One, per project and per badge. Enough to see what Nova makes of your
+ * product without deciding anything, and not enough to run the picture
+ * machine for free. Counted per generation rather than per image, so the
+ * first go at a five-slot project page or a five-scene storyboard is the free
+ * one rather than a fifth of it.
+ */
+export const FREE_IMAGE_RUNS = 1;
+
+/**
+ * Top-up amounts offered in Stripe Checkout.
+ *
+ * Round numbers, and enough of them that the whole-business build and a
+ * twenty-seat season are each one trip through Checkout rather than four. The
+ * server refuses any amount not in this list, so the client can't name its own
+ * price. A balance never expires — it is the person's money.
+ */
+/**
+ * What an iPhone can buy, and what each one is worth.
+ *
+ * Apple will not let an app take money for digital goods any other way
+ * (Guideline 3.1.1), so the balance has to be sellable as In-App Purchases —
+ * consumables, since money on a balance is spent and gone rather than
+ * unlocking anything.
+ *
+ * The product identifiers are the ones created in App Store Connect and they
+ * are the *only* thing the server maps to money. A client that reports buying
+ * something not on this list is ignored: the amount is never taken from what
+ * the phone says it paid, because a phone can say anything.
+ *
+ * The amounts match the first three of `TOP_UP_CENTS`, because Apple's price
+ * tiers are fixed and these three are the ones that line up with them.
+ */
+export const APPLE_PRODUCTS: Record<string, number> = {
+  "com.sparktower.topup.500": 500,
+  "com.sparktower.topup.1000": 1000,
+  "com.sparktower.topup.2000": 2000,
+};
+
+export const TOP_UP_CENTS: readonly number[] = [500, 1000, 2000, 3000, 5000, 10000] as const;
+
+/** The three offered first, on a wallet with nothing particular to pay for. */
+export const TOP_UP_DEFAULTS: readonly number[] = [500, 1000, 2000] as const;
+
+/** "$3", "$0.50", "$30". Used in copy and in the 402 body, so a dialog needn't format money itself. */
+export function formatMoney(cents: number): string {
+  const whole = cents % 100 === 0;
+  return `$${whole ? cents / 100 : (cents / 100).toFixed(2)}`;
+}
+
+/**
+ * What a person has to spend, and what this month's allowance has left.
+ *
+ * Shared rather than server-side, because the 402 below carries one and the
+ * dialog that reads it must be describing the same thing the route charged.
+ */
+export interface Wallet {
+  balanceCents: number;
+  balanceDisplay: string;
+  /** Small actions used this calendar month, and the free allowance they come out of. */
+  allowanceUsed: number;
+  allowanceLimit: number;
+  allowanceRemaining: number;
+  /**
+   * Small Nova actions bought and not yet spent, on top of the free monthly
+   * allowance above. They do not expire.
+   */
+  actionsBought: number;
+  /** A developer's account: nothing is charged. Always false in production. */
+  devUnlimited: boolean;
+  /**
+   * When an old day pass runs out, or null.
+   *
+   * Nothing sells one any more — actions are bought in packs — and one already
+   * paid for is honoured to the hour it was sold for.
+   */
+  dayPassUntil: string | null;
+  dayPassActive: boolean;
+  /** …and the image pass, which is a different five-dollar thing. */
+  imagePassUntil: string | null;
+  imagePassActive: boolean;
+}
+
+/**
+ * The body of every 402 this product sends.
+ *
+ * It carries everything a dialog needs — what was being bought, what it costs,
+ * what is on the account, and which one thing to offer — so that no screen has
+ * to know the price list, and a price that changes on the server changes in
+ * every dialog at once. `remedy` is the server's answer to "what is the button
+ * for", and there is deliberately only ever one.
+ */
+export interface PaymentRequiredBody {
+  code: "payment_required";
+  message: string;
+  /** Human name of what they were trying to do ("a codebase audit"). */
+  label: string;
+  /** Which priced outcome, or null for a small action off the allowance. */
+  outcome: PricedOutcomeId | null;
+  price: { cents: number; display: string } | null;
+  wallet: Wallet;
+  /*
+   * The one thing to offer. "buy_pass" covers both passes — the dollar one for
+   * small actions and the five-dollar one for images — because to a person
+   * they are the same press, and `outcome` already says which.
+   *
+   * There used to be a "buy_day_pass" beside it, from before the two passes
+   * were one press. Nothing had produced it since: `paymentRequired` only ever
+   * writes "buy_pass". It stayed in the type long enough for a test to assert
+   * it and fail, and for the payment dialog to check for both — a value that
+   * cannot arrive, tested for in two places and sent by none.
+   */
+  remedy: "buy_pass" | "top_up" | "none";
+  topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
+  /** So the client never hard-codes a path that moves. */
+  endpoints: { wallet: string; actionPack: string; topUp: string; build: string };
+}
+
+export const PAY_ENDPOINTS = {
+  wallet: "/api/nova/wallet",
+  /*
+   * The path still says "day-pass" and what it sells is a pack of actions.
+   * Renaming it would 404 every client already loaded in a browser, and a
+   * person mid-flow being told the button does not exist is a worse thing than
+   * a stale word in a URL. The name goes when the old clients have.
+   */
+  actionPack: "/api/nova/day-pass",
+  imagePass: "/api/nova/image-pass",
+  topUp: "/api/nova/top-up",
+  build: "/api/nova/build-my-business",
+} as const;
+
+/** The smallest offered top-up that clears a shortfall, or the largest if nothing does. */
+export function topUpFor(shortfallCents: number): number {
+  return TOP_UP_CENTS.find((c) => c >= shortfallCents) ?? TOP_UP_CENTS[TOP_UP_CENTS.length - 1];
+}
+
+/**
+ * How Nova's actions are priced, one line each.
+ *
+ * "small" comes out of the monthly allowance (or is free under a day pass).
+ * "free" costs nothing at all and never asks. Anything else names the outcome
+ * it is part of, and is paid for in dollars at OUTCOME_PRICE_CENTS.
+ *
+ * Read the "document" rows together: the plan is where the $3 is taken, and
+ * every fill, re-plan and tighten inside that document is free afterwards —
+ * that is what "one price for the whole document" means. Same shape for the
+ * roadmap: generation and a full rebuild are the purchase; keeping it current
+ * afterwards is a small action, because charging someone $3 to nudge a plan
+ * they already paid for is how a product teaches people not to touch it.
+ */
+export type NovaChargeKind = "free" | "small" | PricedOutcomeId;
+
+export type NovaActionId =
+  | "novaChat" | "novaGuide" | "taskGeneration" | "taskSequencing" | "taskAssist"
+  | "novaAssist" | "loopAudit" | "personaGeneration" | "progressSummary"
+  | "gapDetection" | "peopleRecommendation" | "nextActions" | "healthCheck"
+  | "healthFix" | "strategyRecommendation" | "videoGeneration" | "profileVisuals"
+  | "postImage" | "resumeEvaluation" | "matchExplanation" | "reputationEvaluation"
+  | "pricingAnalysis" | "whatWouldItTake" | "decisionSimulation" | "tenYearOutlook"
+  | "marketingScheme"
+  | "pitchDeckOutline"
+  | "investorReadinessScore" | "mockInterviewQuestion" | "mockInterviewGrading"
+  | "pitchCritique" | "sprintIdeaSuggestion" | "practiceSprint" | "novaPartnerReply"
+  | "novaPartnerAnswers" | "sprintReport"
+  | "roadmapGeneration" | "roadmapUpdate" | "roadmapRebuild"
+  | "documentPlan" | "documentFill" | "documentReplan" | "documentTighten"
+  | "codeAudit"
+  | "brandKit"
+  | "buildMyBusiness";
+
+export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
+  // --- Nova at your elbow. The allowance, and the day pass. ---
+  novaChat: "small",
+  novaGuide: "small",
+  taskGeneration: "small",
+  taskSequencing: "small",
+  taskAssist: "small",
+  novaAssist: "small",
+  loopAudit: "small",
+  personaGeneration: "small",
+  progressSummary: "small",
+  gapDetection: "small",
+  peopleRecommendation: "small",
+  nextActions: "small",
+  healthCheck: "small",
+  healthFix: "small",
+  strategyRecommendation: "small",
+  /*
+   * The pictures. Not "small": a small action is a paragraph of text and
+   * these are the most expensive thing in the product per press, some of them
+   * five at a time. They have their own rule — a free first go per project or
+   * badge, then the image pass — which is why they name it rather than a
+   * price. See requireImages in server/images.ts.
+   */
+  videoGeneration: "imagePass",
+  profileVisuals: "imagePass",
+  postImage: "imagePass",
+  resumeEvaluation: "small",
+  matchExplanation: "small",
+  pricingAnalysis: "small",
+  pitchDeckOutline: "small",
+  investorReadinessScore: "small",
+  mockInterviewQuestion: "small",
+  mockInterviewGrading: "small",
+  pitchCritique: "small",
+  sprintIdeaSuggestion: "small",
+  practiceSprint: "small",
+  novaPartnerReply: "small",
+  novaPartnerAnswers: "small",
+  sprintReport: "small",
+
+  /*
+   * The builder index is rebuilt for everybody on the hour and Nova's weekly
+   * read is the platform's cost, not the builder's. Zero rather than deleted,
+   * so an older client that still asks is told the truth.
+   */
+  reputationEvaluation: "free",
+
+  // --- The priced outcomes. ---
+  roadmapGeneration: "roadmap",
+  roadmapRebuild: "roadmap",
+  /** Keeping a bought roadmap current. Not a second purchase. */
+  roadmapUpdate: "small",
+
+  documentPlan: "document",
+  /** Inside a document whose plan was paid for. */
+  documentFill: "free",
+  documentReplan: "free",
+  documentTighten: "free",
+
+  codeAudit: "codeAudit",
+
+  /**
+   * A placeholder logo and the cover drawn from it. One press, two pictures,
+   * one price — and free on a project the whole-business build has bought.
+   */
+  brandKit: "brand",
+
+  /** The whole path, once, for one project. Everything on it is free afterwards. */
+  buildMyBusiness: "business",
+
+  whatWouldItTake: "wwit",
+
+  /*
+   * Bought once for a project, then unlimited. Both of these read the same
+   * company profile and answer versions of the same question — where does this
+   * business go from here — so they are one purchase rather than two, and a
+   * second scenario is free because the second scenario is the point. Nobody
+   * learns anything from one projection.
+   */
+  decisionSimulation: "simulations",
+  // Read a marketing scheme: bought once for the project, like the simulations it feeds.
+  marketingScheme: "marketing",
+  tenYearOutlook: "simulations",
+};
+
+/** What one action costs and how, ready to put in front of a person. */
+export interface ActionPrice {
+  action: NovaActionId;
+  kind: NovaChargeKind;
+  /** Null for "free" and for "small" — a small action is paid for by the allowance or the pass, not by a price. */
+  cents: number | null;
+  display: string;
+}
+
+export function priceOf(action: NovaActionId): ActionPrice {
+  const kind = CHARGE_FOR[action];
+  if (kind === "free") return { action, kind, cents: null, display: "Free" };
+  if (kind === "small") return { action, kind, cents: null, display: "Included" };
+  const cents = OUTCOME_PRICE_CENTS[kind];
+  return { action, kind, cents, display: formatMoney(cents) };
+}
+
+/**
+ * The name and blurb for something priced, safely.
+ *
+ * `OUTCOME_COPY` is keyed by `PricedOutcomeId`, and three places in the payment
+ * dialog reached into it with something wider: `priceOf` returns a `kind` that
+ * may be "free" or "small", and the 402's `outcome` is whatever the server put
+ * there. Two of those sites cast with `as PricedOutcomeId`, which silences the
+ * compiler without making the value one — and `OUTCOME_COPY[kind].name` on a
+ * miss throws "Cannot read properties of undefined", which took out the whole
+ * dialog. A payment dialog that white-screens is worse than one with a
+ * less specific label on the button.
+ *
+ * So: look it up, and when there is nothing there, say so in a way that still
+ * reads like a sentence. The console line is deliberate — a fallback that is
+ * invisible is a bug that stays.
+ */
+export function outcomeCopy(
+  id: string | null | undefined,
+): { name: string; blurb: string } | null {
+  if (!id) return null;
+  const found = (OUTCOME_COPY as Record<string, { name: string; blurb: string }>)[id];
+  if (found) return found;
+  if (typeof console !== "undefined") {
+    console.warn(`[plans] no copy for priced outcome "${id}" — falling back. Add it to OUTCOME_COPY.`);
+  }
+  return null;
+}
+
+/** What the pricing page and the top-up dialog list, in the order they read best. */
+export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string }> = {
+  actionPack: {
+    name: "More Nova actions",
+    blurb: `${ACTIONS_PER_PACK} more small Nova actions, spent one at a time. What you buy when the month's free allowance has run out — they never expire, so nothing is wasted by buying them on a quiet week.`,
+  },
+  roadmap: {
+    name: "Build my path and roadmap",
+    blurb: "Nova turns the goal into phases, milestones and an order to do them in.",
+  },
+  document: {
+    name: "Write a document",
+    blurb: "Plan and fill, one price for the whole document however long it turns out to be.",
+  },
+  codeAudit: {
+    name: "Audit my codebase",
+    blurb: "Nova reads the repository against the plan and says what is really built.",
+  },
+  business: {
+    name: "Nova builds the whole business",
+    blurb: "Every section of the path built out, end to end, for one project.",
+  },
+  wwit: {
+    name: "What would it take?",
+    blurb: "Pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from your own check-in numbers: the gap, the stages, what breaks first, and an honest verdict on whether it's reachable from here.",
+  },
+  challenge: {
+    name: "Post a challenge",
+    blurb: "One challenge, posted by a verified company. The prize is separate and is held by SparkTower until you pick a winner, so entrants can see the money is real before they spend a fortnight on it.",
+  },
+  simulations: {
+    name: "Simulate a decision",
+    blurb: "Ask what happens if you hire, borrow, put prices up or spend on marketing, and see it month by month against your own numbers — three ways it could go, and against doing nothing. Bought once for a project; every question after that is free.",
+  },
+  brand: {
+    name: "Draw me a logo and cover",
+    blurb: "Pick a direction — a name logo, artistic, simple or symmetric — and Nova draws a placeholder logo from your brief, then a cover image built around that logo so the two match. Yours to replace the day you have a designer.",
+  },
+  marketing: {
+    name: "Test a marketing scheme",
+    blurb: "Write the plan for a product that already exists — who it is for, where it runs, what it offers, what it costs, how you will know it worked — and Nova scores it against your own figures. A scheme worth testing can then be run for a year in the simulator. Bought once for a project.",
+  },
+  imagePass: {
+    name: "A day of images",
+    blurb: `Unlimited image generation for ${IMAGE_PASS_HOURS} hours — project pages, post images, storyboards, badges. Up to ${IMAGE_PASS_HOURLY_LIMIT} an hour.`,
+  },
+  seasonSeat: {
+    name: "Training season seat",
+    blurb: "Per seat, when a company runs the market simulation privately. The first season is free, and the public market always is.",
+  },
+  customSeason: {
+    name: "A market built around your project",
+    blurb: "Nova reads your project and writes the market it is actually in — who buys, where they are, and the four companies who already have them. Yours to play as many times as you like; replaying one costs nothing.",
+  },
+};
+
+/** The whole price list in one object — what GET /api/nova/wallet and the pricing page serve. */
+export const PRICE_LIST = {
+  monthlySmallActions: MONTHLY_SMALL_ACTIONS,
+  dayPassHours: DAY_PASS_HOURS,
+  topUpCents: TOP_UP_CENTS,
+  topUpDefaults: TOP_UP_DEFAULTS,
+  outcomes: (Object.keys(OUTCOME_PRICE_CENTS) as PricedOutcomeId[]).map((id) => ({
+    id,
+    cents: OUTCOME_PRICE_CENTS[id],
+    display: formatMoney(OUTCOME_PRICE_CENTS[id]),
+    ...OUTCOME_COPY[id],
+  })),
+} as const;
+
+// ---------------------------------------------------------------------------
+// Pricing page presentation
+// ---------------------------------------------------------------------------
+
+export interface PricingRow {
+  label: string;
+  price: string;
+  detail: string;
+}
+
+/** What the pricing page shows now: one free column, and a short list of prices. */
+export const PRICING_ROWS: PricingRow[] = [
+  { label: "Everything you do yourself", price: "Free", detail: "Paths, boards, milestones, check-ins, publishing, the feed, teams, private projects, the public market, company accounts. Forever, for everyone." },
+  { label: "Nova at your elbow", price: "Free", detail: `${MONTHLY_SMALL_ACTIONS} small Nova actions a month — chat, nudges, personas, progress summaries, tidying the board.` },
+  { label: OUTCOME_COPY.actionPack.name, price: formatMoney(OUTCOME_PRICE_CENTS.actionPack), detail: OUTCOME_COPY.actionPack.blurb },
+  { label: OUTCOME_COPY.roadmap.name, price: formatMoney(OUTCOME_PRICE_CENTS.roadmap), detail: OUTCOME_COPY.roadmap.blurb },
+  { label: OUTCOME_COPY.document.name, price: formatMoney(OUTCOME_PRICE_CENTS.document), detail: OUTCOME_COPY.document.blurb },
+  { label: OUTCOME_COPY.codeAudit.name, price: formatMoney(OUTCOME_PRICE_CENTS.codeAudit), detail: OUTCOME_COPY.codeAudit.blurb },
+  { label: OUTCOME_COPY.wwit.name, price: formatMoney(OUTCOME_PRICE_CENTS.wwit), detail: OUTCOME_COPY.wwit.blurb },
+  { label: OUTCOME_COPY.brand.name, price: formatMoney(OUTCOME_PRICE_CENTS.brand), detail: OUTCOME_COPY.brand.blurb },
+  { label: "Your first images", price: "Free", detail: "The first set of AI images for a project — and the first for each badge — costs nothing. Badges themselves are always free to earn and to keep." },
+  { label: OUTCOME_COPY.imagePass.name, price: formatMoney(OUTCOME_PRICE_CENTS.imagePass), detail: OUTCOME_COPY.imagePass.blurb },
+  { label: OUTCOME_COPY.business.name, price: formatMoney(OUTCOME_PRICE_CENTS.business), detail: OUTCOME_COPY.business.blurb },
+  { label: OUTCOME_COPY.seasonSeat.name, price: `${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)}/seat`, detail: OUTCOME_COPY.seasonSeat.blurb },
+];
+
+export const PRICING_NOTICE =
+  "Paying never buys standing, reach or features — only Nova doing work for you. " +
+  "Money you add never expires, and an action that fails is refunded automatically.";
+
+// ===========================================================================
+// Compatibility layer
+// ===========================================================================
+//
+// Everything below this line exists so that removing subscriptions didn't turn
+// into a rewrite of half the app. Roughly forty server files and twenty client
+// files import a tier, an entitlement or a credit cost from here. They keep
+// compiling, and they keep meaning something true:
+//
+//   - tiers still exist as *strings on old rows* (users.subscription_tier, and
+//     Stripe price metadata on subscriptions that are being wound down), so
+//     normalizeTier and friends still have work to do;
+//   - entitlements still exist as a shape, but every tier now gets the same
+//     one — all on — because no feature is sold any more. requireFeature and
+//     requireLevel therefore always pass, and they were left in place rather
+//     than deleted from thirty call sites, where a botched deletion is a
+//     feature silently disappearing;
+//   - CREDIT_COSTS is now presentation only: a rough "how big is this job"
+//     hint some clients draw. Nothing prices anything from it.
+//
+// None of it should grow. New money questions are answered above.
 
 export type TierId = "free" | "starter" | "builder" | "pro";
 
 export const TIER_IDS: TierId[] = ["free", "starter", "builder", "pro"];
 
-/**
- * Tiers from an earlier pricing structure. Existing subscribers still carry
- * these strings in users.subscription_tier and in Stripe price metadata, so
- * they're mapped forward rather than dropped to free.
- */
+/** Tiers from earlier pricing structures, still sitting in rows and in Stripe metadata. */
 export const LEGACY_TIER_ALIASES: Record<string, TierId> = {
   spark_pro: "starter",
   spark_business: "builder",
@@ -29,7 +640,7 @@ export function normalizeTier(tier: string | null | undefined): TierId {
   return LEGACY_TIER_ALIASES[tier] || "free";
 }
 
-/** Higher rank == more capable. Used for upgrade/downgrade comparisons. */
+/** Higher rank == later in TIER_IDS. Only still used to wind down old subscriptions. */
 export function tierRank(tier: string | null | undefined): number {
   return TIER_IDS.indexOf(normalizeTier(tier));
 }
@@ -38,65 +649,103 @@ export function isAtLeast(tier: string | null | undefined, minimum: TierId): boo
   return tierRank(tier) >= TIER_IDS.indexOf(minimum);
 }
 
-// ---------------------------------------------------------------------------
-// Entitlements
-// ---------------------------------------------------------------------------
-
-export type Level<T extends string> = T;
 export type CoachingLevel = "basic" | "enhanced" | "advanced";
 export type MatchingLevel = "basic" | "enhanced" | "priority";
 export type AnalyticsLevel = "none" | "basic" | "advanced";
 export type MemoryLevel = "basic" | "expanded" | "full";
 export type TaskGenLevel = "none" | "limited" | "full";
+export type Level<T extends string> = T;
 
 export interface Entitlements {
-  /** Monthly Nova credit allowance. Infinity for Pro (see FAIR_USE_MONTHLY_CAP). */
+  /** Small Nova actions included each month. Same for everyone. */
   credits: number;
-  /** Max private projects. 0 = none, Infinity = unlimited. */
+  /** Max private projects. Infinity: they were never a thing worth selling. */
   privateProjects: number;
-  /** Depth of Nova's project coaching prompts. */
   novaCoaching: CoachingLevel;
-  /** How much prior project context Nova is given (message count). */
   novaMemory: MemoryLevel;
-  /** Nova AI Roadmap Builder. */
   aiRoadmap: boolean;
-  /** Nova revising an existing roadmap as the project moves. */
   roadmapUpdates: boolean;
-  /** AI-generated milestones from a roadmap. */
   aiMilestones: boolean;
-  /** AI task generation depth. */
   aiTaskGeneration: TaskGenLevel;
-  /** Teammate matching quality. */
   teamMatching: MatchingLevel;
-  /** Project analytics depth. */
   projectAnalytics: AnalyticsLevel;
-  /** Requests jump the queue and use the stronger model. */
+  /**
+   * Whether requests use the stronger, dearer model. False for everyone: it is
+   * a cost decision, not something anyone is sold, and the prices above are
+   * set against the standard model's bill.
+   */
   priorityAi: boolean;
-  /** AI project health checks. */
   projectHealthChecks: boolean;
-  /** AI strategy recommendations. */
   strategyRecommendations: boolean;
-  /** Can create their own Sprints (not just join). */
   createSprints: boolean;
-  /** Elevated placement in discover/profile surfaces. */
   premiumVisibility: boolean;
-  /** Early access to new Nova capabilities. */
   earlyAccess: boolean;
 }
 
-/** Feature keys that are simple on/off gates, usable with requireFeature(). */
 export type BooleanFeature = {
   [K in keyof Entitlements]: Entitlements[K] extends boolean ? K : never;
 }[keyof Entitlements];
 
 /**
- * Pro is marketed as unlimited. This cap exists so a single account can't run
- * thousands of automated calls and destroy margins — it's the enforcement arm
- * of the fair-use clause in the terms. Deliberately far above any human use.
+ * What everybody gets. One record, not four.
+ *
+ * Written out as a constant and then handed to every tier so that a reader
+ * grepping ENTITLEMENTS.pro sees immediately that there is nothing special in
+ * it. Deleting the tier keys would break every caller for no gain.
+ */
+export const FREE_FOR_EVERYONE: Entitlements = {
+  credits: MONTHLY_SMALL_ACTIONS,
+  privateProjects: Infinity,
+  novaCoaching: "advanced",
+  novaMemory: "full",
+  aiRoadmap: true,
+  roadmapUpdates: true,
+  aiMilestones: true,
+  aiTaskGeneration: "full",
+  teamMatching: "priority",
+  projectAnalytics: "advanced",
+  priorityAi: false,
+  projectHealthChecks: true,
+  strategyRecommendations: true,
+  createSprints: true,
+  premiumVisibility: true,
+  earlyAccess: true,
+};
+
+export const ENTITLEMENTS: Record<TierId, Entitlements> = {
+  free: FREE_FOR_EVERYONE,
+  starter: FREE_FOR_EVERYONE,
+  builder: FREE_FOR_EVERYONE,
+  pro: FREE_FOR_EVERYONE,
+};
+
+export function getEntitlements(_tier?: string | null): Entitlements {
+  return FREE_FOR_EVERYONE;
+}
+
+export function hasFeature(_tier: string | null | undefined, feature: BooleanFeature): boolean {
+  return FREE_FOR_EVERYONE[feature] === true;
+}
+
+/** Everything is on the free tier now, so the answer is always "free" (or null if the key is off). */
+export function minimumTierFor(feature: BooleanFeature): TierId | null {
+  return FREE_FOR_EVERYONE[feature] === true ? "free" : null;
+}
+
+/**
+ * The old runaway-automation ceiling. Kept as the burst backstop on the
+ * unlimited side of a day pass: a pass is unlimited for a person, and this is
+ * what stops it being unlimited for a script. server/moderation.ts's per-minute
+ * AI limit is the first line; this is the month's.
  */
 export const FAIR_USE_MONTHLY_CAP = 5000;
 
-/** Nova context depth per memory level, in prior messages. */
+export const FAIR_USE_NOTICE =
+  `*A day pass is unlimited for normal individual use, subject to a fair-use limit of ` +
+  `${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions per month to prevent automated abuse. ` +
+  `We'll always reach out before restricting an account.`;
+
+/** Nova context depth. One level for everyone now; the map stays for the lookups. */
 export const MEMORY_MESSAGE_LIMIT: Record<MemoryLevel, number> = {
   basic: 10,
   expanded: 30,
@@ -110,132 +759,203 @@ export const TASK_GEN_LIMIT: Record<TaskGenLevel, number> = {
   full: 15,
 };
 
-export const ENTITLEMENTS: Record<TierId, Entitlements> = {
-  free: {
-    credits: 20,
-    privateProjects: 0,
-    novaCoaching: "basic",
-    novaMemory: "basic",
-    aiRoadmap: false,
-    roadmapUpdates: false,
-    aiMilestones: false,
-    aiTaskGeneration: "none",
-    teamMatching: "basic",
-    projectAnalytics: "none",
-    priorityAi: false,
-    projectHealthChecks: false,
-    strategyRecommendations: false,
-    createSprints: false,
-    premiumVisibility: false,
-    earlyAccess: false,
-  },
-  starter: {
-    credits: 200,
-    privateProjects: 3,
-    novaCoaching: "enhanced",
-    novaMemory: "expanded",
-    aiRoadmap: false,
-    roadmapUpdates: false,
-    aiMilestones: false,
-    aiTaskGeneration: "limited",
-    teamMatching: "enhanced",
-    projectAnalytics: "basic",
-    priorityAi: false,
-    projectHealthChecks: false,
-    strategyRecommendations: false,
-    createSprints: true,
-    premiumVisibility: false,
-    earlyAccess: false,
-  },
-  builder: {
-    credits: 750,
-    privateProjects: Infinity,
-    novaCoaching: "advanced",
-    novaMemory: "full",
-    aiRoadmap: true,
-    roadmapUpdates: true,
-    aiMilestones: true,
-    aiTaskGeneration: "full",
-    teamMatching: "priority",
-    projectAnalytics: "advanced",
-    priorityAi: false,
-    projectHealthChecks: false,
-    strategyRecommendations: false,
-    createSprints: true,
-    premiumVisibility: false,
-    earlyAccess: false,
-  },
-  pro: {
-    credits: Infinity,
-    privateProjects: Infinity,
-    novaCoaching: "advanced",
-    novaMemory: "full",
-    aiRoadmap: true,
-    roadmapUpdates: true,
-    aiMilestones: true,
-    aiTaskGeneration: "full",
-    teamMatching: "priority",
-    projectAnalytics: "advanced",
-    priorityAi: true,
-    projectHealthChecks: true,
-    strategyRecommendations: true,
-    createSprints: true,
-    premiumVisibility: true,
-    earlyAccess: true,
-  },
+/**
+ * Presentation only. These numbers used to be money; now they are a rough
+ * sense of size, which is all a client ever drew them for ("this is a bigger
+ * job than a chat turn"). Nothing is priced from them — see CHARGE_FOR.
+ */
+// ─── What the AI actually costs, and the ceilings that bound it ──────────────
+
+/**
+ * What a credit actually costs to serve, in dollars.
+ *
+ * Measured, not estimated: about a thousand credits of real use cost about
+ * forty dollars of model spend. Everything below is derived from it, so when
+ * the number changes — a cheaper model, shorter prompts, caching — the
+ * ceilings move with it rather than staying where somebody once guessed.
+ *
+ * It is also the number that says the allowances are wrong. At four cents a
+ * credit, Starter's two hundred credits cost $8.00 against $7.46 of net
+ * revenue, Builder's seven hundred and fifty cost $30.00 against $16.20, and
+ * Pro's fair-use ceiling of five thousand costs $200.00 against $28.82. Those
+ * are not margins, they are subsidies, and they are only survivable while
+ * hardly anybody spends what they were promised.
+ *
+ * The ceilings in this file bound the damage. They do not fix it: a plan
+ * cannot be made profitable by a daily limit alone when its monthly promise
+ * is already underwater. See docs/ai-margins.md.
+ */
+export const COST_PER_CREDIT_USD = 0.04;
+
+/** Stripe takes 2.9% and thirty cents, so a plan's price is not its revenue. */
+export const netOf = (priceMonthly: number): number =>
+  priceMonthly > 0 ? priceMonthly - (priceMonthly * 0.029 + 0.30) : 0;
+
+/** How many credits a price can include at a given gross margin. The sizing tool for any repricing. */
+export const creditsAtMargin = (priceMonthly: number, margin = 0.7): number =>
+  Math.floor((netOf(priceMonthly) * (1 - margin)) / COST_PER_CREDIT_USD);
+
+/**
+ * The daily ceiling a price can carry, and the arithmetic behind it.
+ *
+ * Set so that the worst case — somebody spending the whole ceiling every day
+ * of the month — still breaks even rather than losing money. Anyone using the
+ * product normally lands far below it, around 40% of the cap on twenty days,
+ * which comes out near a 74% margin. The ceiling is not the plan; it is the
+ * floor under the plan.
+ *
+ * Measured against a real day of heavy use: a founder working on the product
+ * all day, across every surface, spent $7.76 — about 194 credits. No price
+ * under roughly $390 a month supports that uncapped. The ceiling is what makes
+ * the difference between a plan that occasionally serves a heavy user and one
+ * that is quietly funding somebody's full-time job.
+ */
+export const dailyCapFor = (priceMonthly: number): number =>
+  Math.floor(netOf(priceMonthly) / 30 / COST_PER_CREDIT_USD);
+
+/**
+ * What the whole platform may spend on AI in a day, in dollars.
+ *
+ * Per-account ceilings answer "can one person run up a bill". They do not
+ * answer the question that actually matters on a launch day, which is "can a
+ * thousand people who have paid nothing run up a bill between them". Twenty
+ * free credits is eighty pence of model spend; a thousand signups all
+ * spending them is $800 in a day, and a week of that is $5,600 against no
+ * revenue at all.
+ *
+ * So there is a ceiling over everything, checked in the same place as the
+ * per-account ones. It is a brake, not a budget: set it to what a bad day may
+ * cost before somebody has to look at it, rather than to what a good day
+ * should.
+ *
+ * The default. `AI_DAILY_SPEND_CAP_USD` overrides it — read on the server,
+ * because this file is shared with the browser and the browser has no
+ * business knowing. Setting it to 0 turns the brake off, which is a thing to
+ * do deliberately and not by accident.
+ */
+export const PLATFORM_DAILY_SPEND_USD = 250;
+
+/**
+ * Where free accounts stop, as a share of that ceiling.
+ *
+ * When the day is running hot, the people to stop first are the ones who have
+ * paid nothing — not the customer halfway through a piece of work who is the
+ * reason there is any revenue at all. Free accounts lose Nova at 60% of the
+ * day's ceiling; paying ones keep going to 100%.
+ */
+export const FREE_TIER_SPEND_SHARE = 0.6;
+
+/**
+ * What one account may spend in a day, in credits.
+ *
+ * The monthly allowance says what a subscription buys. It does not say when,
+ * and a month's worth spent in two days is the shape that costs money: the
+ * bill for the inference arrives now, the subscription renews in four weeks,
+ * and somebody who burns the lot in week one and leaves has been served at a
+ * loss.
+ *
+ * Set from what a day is allowed to cost rather than from a fraction of the
+ * allowance, because the allowance is the thing that is wrong. A Pro day is
+ * capped near five dollars of spend — generous next to any real use, and a
+ * twentieth of what an uncapped Pro month could cost today.
+ */
+export const DAILY_CREDIT_CAP: Record<TierId, number> = {
+  free: 10,      // $0.40 a day
+  starter: 25,   // $1.00
+  builder: 60,   // $2.40
+  pro: 120,      // $4.80
 };
 
-export function getEntitlements(tier: string | null | undefined): Entitlements {
-  return ENTITLEMENTS[normalizeTier(tier)];
-}
+/*
+ * These are the ceilings the *proposed* prices can carry, not today's.
+ *
+ * `dailyCapFor` on the current prices gives 6, 13 and 24 — because Starter at
+ * $7.99 cannot carry 25 credits a day, and Pro at $29.99 cannot carry 120. The
+ * caps above are set for a ladder of roughly $19, $39 and $149, where they
+ * break even in the worst month and clear 74% in a normal one.
+ *
+ * Left deliberately at the generous end rather than cut to what today's prices
+ * afford, because dropping a paying customer from 120 credits a day to 24
+ * overnight is a decision about people, not arithmetic. Until the prices move,
+ * these bound the damage without being the fix. See docs/ai-margins.md.
+ */
 
-export function hasFeature(tier: string | null | undefined, feature: BooleanFeature): boolean {
-  return getEntitlements(tier)[feature] === true;
-}
-
-/** The cheapest tier that grants a given boolean feature, for upsell copy. */
-export function minimumTierFor(feature: BooleanFeature): TierId | null {
-  return TIER_IDS.find((t) => ENTITLEMENTS[t][feature] === true) ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// Credit costs
-// ---------------------------------------------------------------------------
+/**
+ * Ceilings on the actions whose real cost is nothing like their price.
+ *
+ * A credit is a price. It is not a cost, and for most actions the two are
+ * close enough that the credit cap is protection enough. For a few they are
+ * not: a codebase audit is eight credits and reads up to ten files across
+ * eleven areas, which is hundreds of thousands of tokens for about five
+ * pence. A daily credit cap alone would let a Pro account run thirty of those
+ * a day quite legitimately.
+ *
+ * So these are capped by the day *and* by the month, because they are not
+ * daily actions. Auditing a codebase is something a team does when something
+ * has changed, every few weeks — a limit of two a day and eight a month is
+ * more than anybody reasonable needs and far less than what breaks the plan.
+ *
+ * These numbers are a guess made without data, which is the honest thing to
+ * say about them. `ai_spend` now records the tokens behind every call; once
+ * there is a month of it, set these from what the actions actually cost.
+ */
+export interface ActionCeiling { day: number; month: number }
+export const HEAVY_ACTION_LIMITS: Record<string, Record<TierId, ActionCeiling>> = {
+  codeAudit: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 1, month: 3 },
+    builder: { day: 2, month: 8 },
+    pro:     { day: 3, month: 15 },
+  },
+  loopAudit: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 2, month: 8 },
+    builder: { day: 4, month: 20 },
+    pro:     { day: 6, month: 40 },
+  },
+  documentPlan: {
+    free:    { day: 1, month: 2 },
+    starter: { day: 3, month: 15 },
+    builder: { day: 8, month: 50 },
+    pro:     { day: 15, month: 120 },
+  },
+  roadmapRebuild: {
+    free:    { day: 1, month: 2 },
+    starter: { day: 2, month: 10 },
+    builder: { day: 5, month: 30 },
+    pro:     { day: 8, month: 60 },
+  },
+  simulationBuild: {
+    free:    { day: 0, month: 0 },
+    starter: { day: 2, month: 10 },
+    builder: { day: 4, month: 25 },
+    pro:     { day: 6, month: 50 },
+  },
+};
 
 export const CREDIT_COSTS = {
   novaChat: 1,
   novaGuide: 1,
   taskGeneration: 1,
-  /** Nova re-sequences the board into a runnable order. */
   taskSequencing: 2,
-  /**
-   * Nova plans the work: milestones broken into ordered, estimated tasks.
-   * Priced above sequencing because it reasons over the whole project and
-   * writes a plan, rather than re-ordering what's already there.
-   */
   taskAssist: 4,
-  /**
-   * Nova's help on one surface — milestones, research, pricing, strategy.
-   * Priced between a chat turn and a full task plan: it reasons over the
-   * project and proposes concrete changes, but scoped to one area.
-   */
   novaAssist: 3,
+  /**
+   * Nova designs a whole season from the company's project: which market is
+   * shaped like their business, how much of the world, how many rivals, how
+   * many years, and what each thing in the game stands for in their business.
+   * Priced with a surface assist — one reasoned read, one answer — and the
+   * simulation itself is paid for by the seat, not by the credit.
+   */
+  simulationBuild: 3,
   /**
    * Nova audits the real codebase against the plan. Priced above a health
    * check because it ingests and reasons over an entire repository.
    */
   codeAudit: 8,
-  /**
-   * Nova audits the five loops against the products customers already use.
-   * Priced with a surface assist: one reasoned read over the loops and brief.
-   */
   loopAudit: 3,
-  // --- Nova document builder ---
-  /** Nova plans a document: pages, grid, and a headline for every block. */
   documentPlan: 5,
-  /** Filling one block's content. Whole-document fills charge per block. */
   documentBlockFill: 1,
-  /** Floor and ceiling for a whole-document fill, whatever the block count. */
   documentFillMin: 3,
   documentFillMax: 40,
   personaGeneration: 1,
@@ -245,54 +965,25 @@ export const CREDIT_COSTS = {
   roadmapGeneration: 3,
   roadmapUpdate: 2,
   healthCheck: 2,
-  /** Nova applies one health-check recommendation to the project itself. */
   healthFix: 3,
   strategyRecommendation: 2,
   videoGeneration: 5,
-  /** Five images for the public project page, drawn from the logo and cover. */
   profileVisuals: 5,
-  /** Redrawing one of those images. */
   profileVisualSingle: 1,
-  /** One image for a feed post, drawn from the post (and the project's logo and brief, when it's on a project). */
   postImage: 2,
-  /** "What should I do next?" — ranks the 3 highest-impact actions. */
   nextActions: 3,
-  /**
-   * Full roadmap rebuild. Priced as a range because cost scales with how much
-   * project context has to be re-planned; see roadmapRebuildCost().
-   */
   roadmapRebuildMin: 8,
   roadmapRebuildMax: 15,
-  /** Nova reads a résumé and builds out the profile. */
   resumeEvaluation: 4,
-  /** Nova's one-line reasons on generated matches — an optional extra on a free route. */
   matchExplanation: 1,
-  /** Recalculating a builder's reputation. No model runs; priced as it always was, charged on success. */
-  /**
-   * Nothing: the builder index is rebuilt for everybody on the hour and Nova's
-   * weekly read is the platform's cost, not the builder's. Kept at zero rather
-   * than deleted so an older client that still sends the old request is quoted
-   * the truth instead of a price that no longer exists.
-   */
   reputationEvaluation: 0,
-  /** Checks pricing against the target customer and comparable products. */
   pricingAnalysis: 5,
-  /**
-   * "What would it take?" — the route from a running company's real numbers to
-   * $1m, $100m, $1bn or $50bn a year. Priced with the readiness score: one
-   * reasoned read over every check-in, goal and recurring job the company has
-   * filed, ending in a staged plan and a verdict. It is meant to be re-run
-   * every few months rather than every week, so it is not priced as a chat
-   * turn — a cheap version of this would be run daily and read as noise.
-   */
   whatWouldItTake: 5,
-  // Investor readiness suite
   pitchDeckOutline: 8,
   investorReadinessScore: 5,
   mockInterviewQuestion: 1,
   mockInterviewGrading: 2,
   pitchCritique: 5,
-  // Sprints
   sprintIdeaSuggestion: 1,
   practiceSprint: 1,
   novaPartnerReply: 1,
@@ -300,201 +991,106 @@ export const CREDIT_COSTS = {
   sprintReport: 3,
 } as const;
 
-/**
- * A whole-document fill costs one credit per block, floored and capped.
- *
- * Per-block pricing is the honest shape — a 30-page business plan really is
- * thirty times the work of a one-pager — but an unbounded charge on a document
- * the user hasn't seen filled yet is a nasty surprise, hence the ceiling. The
- * client quotes this before the run.
- */
+/** Size hint for a whole-document fill. The document itself is one price. */
 export function documentFillCost(blockCount: number): number {
   const { documentFillMin: min, documentFillMax: max, documentBlockFill } = CREDIT_COSTS;
   const raw = Math.max(0, Math.round(blockCount)) * documentBlockFill;
   return Math.max(min, Math.min(max, raw));
 }
 
-/**
- * A rebuild re-plans everything, so it costs more when there's more to
- * re-plan. Scales linearly from the floor to the ceiling based on how much
- * project material Nova has to reconcile — phases, milestones and tasks.
- *
- * Quoted to the user before they commit so the charge is never a surprise.
- */
+/** Size hint for a roadmap rebuild. A rebuild is priced as a roadmap. */
 export function roadmapRebuildCost(counts: {
   phases: number;
   milestones: number;
   tasks: number;
 }): number {
   const { roadmapRebuildMin: min, roadmapRebuildMax: max } = CREDIT_COSTS;
-  // Weight phases heaviest — each one is a unit of re-planning.
   const weight = counts.phases * 1.5 + counts.milestones + counts.tasks * 0.25;
-  // ~20 weighted units saturates to the ceiling.
   const scaled = Math.round(min + Math.min(1, weight / 20) * (max - min));
   return Math.max(min, Math.min(max, scaled));
 }
 
-// ---------------------------------------------------------------------------
-// Pricing page presentation
-// ---------------------------------------------------------------------------
-
 export interface PlanFeatureRow {
   label: string;
-  /** true/false for a check or dash; a string renders as a level label. */
   values: Record<TierId, boolean | string>;
 }
 
-/**
- * The full comparison matrix, rendered as a table lower on the pricing page.
- * Credits appear here rather than as each plan's headline — the plans sell the
- * outcome, the table sells the details.
- */
+/** Kept so the old comparison table still renders while the pricing page is rebuilt: every row, free. */
 export const COMPARISON_ROWS: PlanFeatureRow[] = [
-  { label: "Price", values: { free: "$0", starter: "$7.99/mo", builder: "$16.99/mo", pro: "$29.99/mo" } },
-  { label: "Nova AI credits", values: { free: "20/month", starter: "200/month", builder: "750/month", pro: "Unlimited*" } },
-  { label: "Public projects", values: { free: true, starter: true, builder: true, pro: true } },
-  { label: "Join contests", values: { free: true, starter: true, builder: true, pro: true } },
-  { label: "Community access", values: { free: true, starter: true, builder: true, pro: true } },
-  { label: "Private projects", values: { free: false, starter: "3", builder: "Unlimited", pro: "Unlimited" } },
-  { label: "Nova project coaching", values: { free: "Basic", starter: "Enhanced", builder: "Advanced", pro: "Advanced" } },
-  { label: "AI roadmap creation", values: { free: false, starter: false, builder: true, pro: true } },
-  { label: "Roadmap updates", values: { free: false, starter: false, builder: true, pro: true } },
-  { label: "AI task generation", values: { free: false, starter: "Limited", builder: true, pro: true } },
-  { label: "Team matching", values: { free: "Basic", starter: "Enhanced", builder: "Priority", pro: "Priority" } },
-  { label: "Project analytics", values: { free: false, starter: "Basic", builder: "Advanced", pro: "Advanced" } },
-  { label: "Nova project memory", values: { free: "Basic", starter: "Expanded", builder: "Full", pro: "Full" } },
-  { label: "Create your own Sprints", values: { free: false, starter: true, builder: true, pro: true } },
-  { label: "AI project health checks", values: { free: false, starter: false, builder: false, pro: true } },
-  { label: "AI strategy recommendations", values: { free: false, starter: false, builder: false, pro: true } },
-  { label: "Priority AI processing", values: { free: false, starter: false, builder: false, pro: true } },
-  { label: "Premium project visibility", values: { free: false, starter: false, builder: false, pro: true } },
-  { label: "Early access to new Nova features", values: { free: false, starter: false, builder: false, pro: true } },
-];
+  "Everything you build yourself",
+  "Public and private projects",
+  "Paths, boards and milestones",
+  "Teams and company accounts",
+  "The public market simulation",
+  "Nova project coaching",
+  "Team matching",
+  "Project analytics",
+  "Create your own Sprints",
+].map((label) => ({ label, values: { free: true, starter: true, builder: true, pro: true } }));
 
 export interface PlanPresentation {
   tier: TierId;
-  /** Progression word shown above the plan name — Explore → Accelerate. */
   stage: string;
   name: string;
-  /** One line under the stage, framing the outcome. */
   promise: string;
-  /** Headline on the plan card. */
   headline: string;
-  /** Two-sentence pitch selling the result, not the credits. */
   pitch: string;
   priceMonthly: number;
   cta: string;
-  /** Benefit-led bullets. Credits sit mid-list, never first. */
   highlights: string[];
-  /** Renders with visual emphasis as the recommended plan. */
   featured?: boolean;
-  /** Small print under the CTA. */
   footnote?: string;
 }
 
-export const PLAN_PRESENTATION: Record<TierId, PlanPresentation> = {
-  free: {
-    tier: "free",
-    stage: "Explore",
-    name: "Free",
-    promise: "Turn an idea into your first project.",
-    headline: "Turn your idea into something real.",
-    pitch: "Tell Nova what you're thinking about building. It'll help you shape the idea into an actual project you can share.",
-    priceMonthly: 0,
-    cta: "Start Building Free",
-    highlights: [
-      "Shape your idea with Nova",
-      "Create public projects",
-      "20 Nova AI credits/month",
-      "Join contests and Sprints",
-      "Discover other builders",
-      "Basic team matching",
-      "Community access",
-    ],
-  },
-  starter: {
-    tier: "starter",
-    stage: "Start",
-    name: "Starter",
-    promise: "Get Nova's help building your project.",
-    headline: "Get serious about your idea.",
-    pitch: "Nova breaks your project down, suggests what to work on, and remembers where you left off. Keep work private until you're ready to show it.",
-    priceMonthly: 7.99,
-    cta: "Start Building",
-    highlights: [
-      "Everything in Free",
-      "AI project breakdowns",
-      "AI-generated task suggestions",
-      "3 private projects",
-      "200 Nova AI credits/month",
-      "Enhanced teammate matching",
-      "Basic project analytics",
-      "Create your own Sprints",
-    ],
-  },
-  builder: {
-    tier: "builder",
-    stage: "Build",
-    name: "Builder",
-    promise: "Get a personalized roadmap from idea to launch.",
-    headline: 'Turn "someday" into a plan.',
-    pitch: "Nova turns your goal into a personalized roadmap, breaks it into milestones, and helps you figure out what to work on next.",
-    priceMonthly: 16.99,
-    cta: "Build My Roadmap",
-    featured: true,
-    footnote: "Recommended for founders, creators, students, and serious builders.",
-    highlights: [
-      "Personalized AI roadmaps",
-      "AI-generated milestones & tasks",
-      "Nova keeps your roadmap current",
-      "Unlimited private projects",
-      "750 Nova AI credits/month",
-      "Find people with the skills you're missing",
-      "Advanced project analytics",
-      "Track your progress from idea → launch",
-    ],
-  },
-  pro: {
-    tier: "pro",
-    stage: "Accelerate",
-    name: "Pro",
-    promise: "Nova works alongside you without limits.",
-    headline: "Build without limits.",
-    pitch: "Unlimited Nova, priority processing, and ongoing analysis of your project's health and strategy. For people building every day.",
-    priceMonthly: 29.99,
-    cta: "Build Without Limits",
-    footnote: "Unlimited subject to fair use. See terms.",
-    highlights: [
-      "Unlimited Nova AI usage*",
-      "Unlimited roadmaps and projects",
-      "Priority AI processing",
-      "AI project health checks",
-      "AI strategy recommendations",
-      "Advanced team recommendations",
-      "Full project history and context",
-      "Early access to new Nova capabilities",
-      "Premium project visibility",
-    ],
-  },
+/**
+ * One "plan", because there is one: free. The record is still keyed by tier so
+ * that code holding a legacy tier string can still look up a name to show
+ * somebody whose old subscription hasn't finished winding down.
+ */
+const FREE_PLAN: PlanPresentation = {
+  tier: "free",
+  stage: "Build",
+  name: "Free",
+  promise: "Build the whole thing. Pay only when Nova does the work.",
+  headline: "Everything you do yourself is free.",
+  pitch:
+    "Paths, boards, milestones, teams, publishing, the market — all of it, forever. " +
+    `Nova comes with ${MONTHLY_SMALL_ACTIONS} small actions a month, and when you want Nova to build ` +
+    "something outright, you pay for that one thing in dollars.",
+  priceMonthly: 0,
+  cta: "Start Building",
+  footnote: PRICING_NOTICE,
+  highlights: [
+    "Every feature, free forever",
+    `${MONTHLY_SMALL_ACTIONS} small Nova actions a month`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.actionPack)} for ${ACTIONS_PER_PACK} more, whenever you want them`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.roadmap)} — Nova builds your path and roadmap`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.document)} — Nova writes a document`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.codeAudit)} — Nova audits your codebase`,
+    `${formatMoney(OUTCOME_PRICE_CENTS.business)} — Nova builds the whole business`,
+  ],
 };
 
-export const FAIR_USE_NOTICE =
-  `*Pro includes unlimited Nova usage for normal individual use, subject to a fair-use ` +
-  `limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions per month to prevent ` +
-  `automated abuse. We'll always reach out before restricting an account.`;
+export const PLAN_PRESENTATION: Record<TierId, PlanPresentation> = {
+  free: FREE_PLAN,
+  starter: { ...FREE_PLAN, tier: "starter" },
+  builder: { ...FREE_PLAN, tier: "builder" },
+  pro: { ...FREE_PLAN, tier: "pro" },
+};
 
-/** Stripe product/price definitions, derived from the presentation above. */
-export const STRIPE_PLANS = TIER_IDS.filter((t) => t !== "free").map((tier) => {
-  const plan = PLAN_PRESENTATION[tier];
-  const ent = ENTITLEMENTS[tier];
-  return {
-    tier,
-    name: `Spark ${plan.name}`,
-    description: plan.promise,
-    unitAmount: Math.round(plan.priceMonthly * 100),
-    metadata: {
-      tier,
-      credits: ent.credits === Infinity ? "unlimited" : String(ent.credits),
-    },
-  };
-});
+/**
+ * Stripe products to seed. No subscription products any more: the only thing
+ * Checkout sells is a top-up, and those are created inline with `price_data`
+ * from TOP_UP_CENTS (see /api/nova/top-up), so there is nothing to seed.
+ *
+ * Left as an empty array rather than deleted so server/seed-stripe.ts keeps
+ * compiling and keeps being a no-op that says so, instead of vanishing and
+ * taking the wind-down story with it.
+ */
+export const STRIPE_PLANS: {
+  tier: TierId;
+  name: string;
+  description: string;
+  unitAmount: number;
+  metadata: Record<string, string>;
+}[] = [];

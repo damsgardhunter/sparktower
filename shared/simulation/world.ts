@@ -17,6 +17,46 @@ import { marketPriceOf } from "./decisions";
 import { rng } from "./random";
 
 /** What a year of the whole market could spend, for pricing things in this market's money. */
+/**
+ * How big a business this market supports, against the ones written by hand.
+ *
+ * The seven markets in `niches.ts` are all worth about the same — £400m a
+ * year — and everything about the opening company is tuned to that: six
+ * million in the bank, five executives on real salaries, staff at £85,000.
+ * None of that is a number the engine needs. It is a number those seven
+ * markets need.
+ *
+ * A market written for one business is not that size. Asked for scheduling
+ * software for small veterinary practices, Nova correctly wrote a market of
+ * fourteen thousand clinics worth £1.65m a year — and the company opened in
+ * it with six million pounds, which is three and a half times the entire
+ * market, and a salary bill it could never earn back. It lost money every
+ * year of fourteen and ended five and a half million down. The market was
+ * right and the company was absurd.
+ *
+ * So the company scales to the market. A market a fraction of the size gets a
+ * business a fraction of the size: less in the bank, smaller salaries, fewer
+ * pounds in every direction. The decisions are identical and the ratios are
+ * identical — which is the point, because the ratios are the game.
+ *
+ * The reference sits just below the smallest of the seven, so every one of
+ * them clamps to exactly one and none of them moves by a penny. That is not
+ * tidiness: drone delivery is worth £384m against a £400m reference, and a
+ * reference of £400m quietly cut its opening bank by four per cent — a
+ * balance change nobody asked for, in a market that was already the hardest.
+ *
+ * Floored as well as capped: below a hundredth of the reference the numbers
+ * stop reading like a business and start reading like pocket money, and a
+ * market that small is one Nova should not have written.
+ */
+export const REFERENCE_POTENTIAL = 350_000_000;
+export const MARKET_SCALE_MIN = 0.01;
+
+export function marketScale(niche: Pick<Niche, "segments">): number {
+  const scale = marketPotential(niche) / REFERENCE_POTENTIAL;
+  return Math.max(MARKET_SCALE_MIN, Math.min(1, scale));
+}
+
 export const marketPotential = (niche: Pick<Niche, "segments">): number =>
   marketPriceOf(niche as Niche) * niche.segments.reduce((sum, s) => sum + s.size, 0);
 
@@ -163,9 +203,11 @@ export const statementCost = (niche: Niche): number => Math.round(marketPotentia
  * settle and some reputation. Insurance pays most of the money, never the
  * reputation.
  */
-export function lawsuitOf(input: { service: number; seed: string; year: number }): { cost: number; reputation: number } | null {
-  if (input.year < 3) return null;
-  const chance = 0.03 + Math.max(0, 50 - input.service) / 1000;
+/** `per` is one period's share of a year, and `year` counts periods, so both are read in years. */
+export function lawsuitOf(input: { service: number; seed: string; year: number; per?: number }): { cost: number; reputation: number } | null {
+  const per = input.per ?? 1;
+  if (input.year * per < 3) return null;
+  const chance = (0.03 + Math.max(0, 50 - input.service) / 1000) * per;
   if (rng(input.seed)() >= chance) return null;
   return { cost: 0.03, reputation: 4 };
 }
@@ -280,16 +322,24 @@ export const PROGRAMMES: Record<ProgrammeId, { name: string; blurb: string; unit
 export const programmeCost = (niche: Niche): number => Math.round(marketPotential(niche) * 0.001 / 1000) * 1000;
 
 /** What running programmes deliver this year: a third of each, in each of the three years after it started. */
-export function programmeYield(programmes: Programme[] | undefined, year: number): { unitCost: number; quality: number; reputation: number; brand: number; service: number } {
+/**
+ * A programme pays out over three *years*, however many decisions make one.
+ *
+ * `year` counts periods, so the window and the instalment both have to be
+ * measured in them — otherwise a monthly season handed over three years of a
+ * programme's benefit in three months and then stopped.
+ */
+export function programmeYield(programmes: Programme[] | undefined, year: number, periods = 1): { unitCost: number; quality: number; reputation: number; brand: number; service: number } {
   const out = { unitCost: 1, quality: 0, reputation: 0, brand: 0, service: 0 };
+  const over = 3 * Math.max(1, periods);
   for (const p of programmes ?? []) {
-    if (year <= p.started || year > p.started + 3) continue;
+    if (year <= p.started || year > p.started + over) continue;
     const e = PROGRAMMES[p.id];
-    if (e.unitCost) out.unitCost *= Math.pow(e.unitCost, 1 / 3);
-    out.quality += (e.quality ?? 0) / 3;
-    out.reputation += (e.reputation ?? 0) / 3;
-    out.brand += (e.brand ?? 0) / 3;
-    out.service += (e.service ?? 0) / 3;
+    if (e.unitCost) out.unitCost *= Math.pow(e.unitCost, 1 / over);
+    out.quality += (e.quality ?? 0) / over;
+    out.reputation += (e.reputation ?? 0) / over;
+    out.brand += (e.brand ?? 0) / over;
+    out.service += (e.service ?? 0) / over;
   }
   return out;
 }
@@ -309,6 +359,24 @@ export function announcedRegion(input: { niche: Niche; seasonId: string; year: n
 }
 
 export const EXPANSION_DISCOUNT = 0.7;
+
+/**
+ * Whether the table agreed to open the announced region.
+ *
+ * Opening a region is the decision that commits the company for years — the
+ * entry cost now, the rent for ever, and a year of reaching almost nobody —
+ * so it is not one seat's to take. Operations puts it up; every seat votes;
+ * a majority of the votes actually cast carries it.
+ *
+ * Operations proposing counts as a vote for, which is what makes a table of
+ * one (or a table where nobody else looked) still able to expand. Silence
+ * from the rest is silence, not opposition. A tie fails: a company that
+ * cannot agree to open a region has not agreed to open it.
+ */
+export function expansionOutcome(votes: ("yes" | "no")[]): { carried: boolean; yes: number; no: number } {
+  const yes = votes.filter((v) => v === "yes").length;
+  return { carried: yes > votes.length - yes && yes > 0, yes, no: votes.length - yes };
+}
 
 /** How much of a newly opened region a company reaches in its first year there: as far as its brand does. */
 export const firstYearReach = (brand: number): number => Math.max(0.15, Math.min(1, brand / 60));

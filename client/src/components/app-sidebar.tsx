@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck, ChevronDown, Banknote, Megaphone, ShieldAlert } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy, MessageSquareWarning } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -20,14 +20,43 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { Progress } from "@/components/ui/progress";
-import { useEntitlements } from "@/hooks/use-entitlements";
 import { TierSwitcher } from "@/components/tier-switcher";
-import { PLAN_PRESENTATION } from "@shared/plans";
+import { formatMoney } from "@shared/plans";
+import { useWallet } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
-const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, MessageSquare, Trophy, Medal, CreditCard };
+const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, Gamepad2, MessageSquare, Trophy, Medal, CreditCard, Banknote };
 const MORE_OPEN_KEY = "st_nav_more_open";
+
+/**
+ * Money on the account and this month's free Nova actions — the two numbers
+ * that decide whether the next thing someone presses will ask them for
+ * anything. A link to the price list rather than to an upgrade, because there
+ * is nothing to upgrade to.
+ */
+function WalletSummary() {
+  const { user } = useAuth();
+  const { data: wallet } = useWallet(!!user);
+  if (!user || !wallet) return null;
+  return (
+    <div className="px-2 py-2 rounded-lg bg-sidebar-accent/50" data-testid="sidebar-wallet">
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="text-xs font-medium text-muted-foreground">Balance</span>
+        <span className="text-xs font-semibold tabular-nums" data-testid="text-sidebar-balance">{wallet.balanceDisplay}</span>
+      </div>
+      <p className="text-xs text-muted-foreground" data-testid="text-sidebar-allowance">
+        {wallet.dayPassActive
+          ? "Day pass on — small actions unlimited"
+          : wallet.actionsBought > 0
+            ? `${wallet.allowanceRemaining} free + ${wallet.actionsBought} bought Nova actions left`
+            : `${wallet.allowanceRemaining} of ${wallet.allowanceLimit} free Nova actions left`}
+      </p>
+      <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-pricing">
+        {wallet.balanceCents > 0 ? "Add to your balance" : `Top up from ${formatMoney(500)}`}
+      </Link>
+    </div>
+  );
+}
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -39,10 +68,6 @@ export function AppSidebar() {
   const toggleMore = () => setMoreOpen((open) => { try { localStorage.setItem(MORE_OPEN_KEY, open ? "0" : "1"); } catch { /* remembered for this visit only */ } return !open; });
   const { user, logout } = useAuth();
   const displayName = user?.firstName ? `${user.firstName} ${user.lastName || ""}` : user?.email || "User";
-
-  const {
-    tier, plan, subscription, creditsUsed, creditsLimit, creditsRemaining, isUnlimited,
-  } = useEntitlements();
 
   // Not polled for a surface that's switched off: its endpoint answers 404 then anyway.
   const { data: unreadData } = useQuery<{ count: number }>({
@@ -64,15 +89,36 @@ export function AppSidebar() {
   const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
   // Featured tools is the one admin page reviewers can't use — /api/admin/promotions is admins only.
   const isAdmin = !!user && (user as any).platformRole === "admin";
+  /*
+   * Owner, which is not a platform role but an allowlisted email — so it has
+   * to be asked for rather than read off the user. Fetched once and left
+   * alone: the app's default staleTime is Infinity and this answer does not
+   * change inside a session.
+   */
+  const { data: ownerAccess } = useQuery<{ owner: boolean }>({
+    queryKey: ["/api/admin/analytics/access"],
+    enabled: !!user,
+  });
+  const isOwner = !!ownerAccess?.owner;
   const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
     queryKey: ["/api/admin/safety/status"],
     enabled: isReviewer,
     refetchInterval: 5 * 60_000,
   });
 
-  const progressPercent = isUnlimited || creditsLimit <= 0
-    ? 0
-    : Math.min(100, (creditsUsed / creditsLimit) * 100);
+  /*
+   * How many problem reports nobody has read. Badged, because a queue with no
+   * count on it is a queue somebody opens once and then forgets exists — and
+   * the whole point of taking reports is reading them.
+   *
+   * Five minutes, like the safety poll beside it: a bug report is not urgent
+   * to the minute, and this runs on every admin's sidebar on every screen.
+   */
+  const { data: problems } = useQuery<{ new: number }>({
+    queryKey: ["/api/admin/problem-reports/unread"],
+    enabled: isAdmin,
+    refetchInterval: 5 * 60_000,
+  });
 
   return (
     <Sidebar className="border-r border-sidebar-border">
@@ -173,6 +219,30 @@ export function AppSidebar() {
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
+                      isActive={location === "/admin/problems"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      {/* What people said is broken, as opposed to who reported whom. */}
+                      <Link href="/admin/problems" data-testid="link-admin-problems">
+                        <MessageSquareWarning className="h-4 w-4" />
+                        <span className="flex-1">Problems</span>
+                        {problems && problems.new > 0 && (
+                          <Badge
+                            variant="destructive"
+                            className="no-default-hover-elevate no-default-active-elevate text-xs"
+                            data-testid="badge-problems"
+                          >
+                            {problems.new}
+                          </Badge>
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
                       isActive={location === "/admin/security"}
                       className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
                     >
@@ -180,6 +250,25 @@ export function AppSidebar() {
                       <Link href="/admin/security" data-testid="link-security-console">
                         <ShieldAlert className="h-4 w-4" />
                         <span className="flex-1">Security</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/console"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      {/*
+                        * Where a support request gets answered. Admin to open;
+                        * the money and ownership actions inside it are the
+                        * owner's alone, and the page draws them as such.
+                        */}
+                      <Link href="/admin/console" data-testid="link-customer-console">
+                        <LifeBuoy className="h-4 w-4" />
+                        <span className="flex-1">Customers</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -196,6 +285,21 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* What the platform has taken and what of it is actually ours. */}
+                {isOwner && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/revenue"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      <Link href="/admin/revenue" data-testid="link-admin-revenue">
+                        <WalletIcon className="h-4 w-4" />
+                        <span className="flex-1">Revenue</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {isAdmin && (
                   <SidebarMenuItem>
                     <SidebarMenuButton
@@ -248,36 +352,14 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="p-4 mt-auto space-y-3">
         <TierSwitcher />
-        {subscription && (
-          <div className="px-2 py-2 rounded-lg bg-sidebar-accent/50" data-testid="sidebar-credit-usage">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                {plan.name} Plan
-              </span>
-              {isUnlimited ? (
-                <span className="text-xs text-primary flex items-center gap-1">
-                  <Sparkles className="h-3 w-3" /> Unlimited
-                </span>
-              ) : (
-                <span className="text-xs text-muted-foreground">
-                  {creditsRemaining} left
-                </span>
-              )}
-            </div>
-            {!isUnlimited && (
-              <Progress value={progressPercent} className="h-1.5" />
-            )}
-            {tier === "free" ? (
-              <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
-                {PLAN_PRESENTATION.builder.promise}
-              </Link>
-            ) : tier !== "pro" ? (
-              <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
-                Compare plans
-              </Link>
-            ) : null}
-          </div>
-        )}
+        {/*
+          * What they actually have: money on the account, and this month's
+          * free Nova actions. It used to be a plan name, a credit bar and a
+          * link to upgrade — three things that stopped being true when
+          * subscriptions went, and the most-seen place in the app to be wrong
+          * about what somebody is paying for.
+          */}
+        <WalletSummary />
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="h-12">

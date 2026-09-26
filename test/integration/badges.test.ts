@@ -70,6 +70,37 @@ describe("earning one", () => {
     expect(earned.badge.name).toBe("Fully Introduced");
   }, 120_000);
 
+  /*
+   * Creating a project, which is the award nothing was watching.
+   *
+   * `awardBadge` returns null for an id that is not in the catalog, logs
+   * "Skipping unknown badge" and carries on — deliberately, so a decoration
+   * cannot fail the request it decorates. The cost of that kindness is that a
+   * missing catalog is invisible: every award in every test quietly did
+   * nothing and every test still passed. The e2e database ran that way for
+   * real, with zero rows in `badges`, because the server seeds the catalog as
+   * it boots and the global setup truncated it straight afterwards.
+   *
+   * So this checks an award end to end through a route somebody actually
+   * takes, rather than checking the catalog and the award mechanism apart
+   * from each other and believing the pair works.
+   */
+  it("gives a founder their badge for creating a project", async () => {
+    const app = await getTestApp();
+    const me = await member(app);
+
+    const project = await me.agent.post("/api/projects").send({
+      title: "Badged On Creation", description: "A project that earns its founder a badge.",
+      category: "saas", goal: "ship_mvp", subcategory: "saas",
+    });
+    expect(project.status, JSON.stringify(project.body).slice(0, 200)).toBe(200);
+
+    const mine = await me.agent.get(`/api/users/${me.id}/badges`);
+    const earned = mine.body.find((b: any) => b.badgeId === BADGE.firstProject);
+    expect(earned, "creating a project must actually award the badge, not skip it").toBeTruthy();
+    expect(earned.badge, "the catalog row has to be there for the profile to render it").toBeTruthy();
+  }, 120_000);
+
   it("survives two awards landing at once", async () => {
     const app = await getTestApp();
     const me = await member(app);

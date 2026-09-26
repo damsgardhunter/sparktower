@@ -32,6 +32,7 @@
 import { CATALOGUES } from "./catalogues";
 import type { Company, CompanyAsset, Niche } from "./types";
 import { hash, rng, sample } from "./random";
+import { marketScale } from "./world";
 
 /** What an asset does while you hold it, applied on top of what the company built itself. */
 export interface AssetEffect {
@@ -192,6 +193,46 @@ const SLOTS: AssetTemplate[] = [
 const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 /**
+ * The nine slots said in this market's own words, without asking a model.
+ *
+ * The generic names above are retail's — shelves, carriers, fulfilment lines —
+ * and they were shown to every market that had no catalogue entry, which is
+ * every market Nova has ever written. A founder rehearsing software was
+ * offered a retail shelf agreement for a product with no shelves.
+ *
+ * Nova names these at build time now, but that only helps markets built after
+ * it, and a season already under way cannot be re-written without throwing
+ * away the market somebody is playing. Every market already carries the words
+ * for this — `voice` exists precisely so a screen can say "builders" rather
+ * than "customers" — so the fallback is derived rather than generic. Free,
+ * deterministic, and it improves the catalogue markets that have no entry too.
+ *
+ * Only the names that were actually wrong. A patent is a patent in every
+ * trade, and an ambassador is an ambassador; replacing those with something
+ * assembled out of tokens would be worse English for no gain.
+ */
+function inThisMarketsWords(slot: AssetTemplate, i: number, v: Niche["voice"]): AssetTemplate {
+  const cap = v.capacity || "capacity";
+  const many = v.customers || "customers";
+  const places = v.places || "regions";
+  switch (i) {
+    case 0: return { ...slot, name: `Somebody else's route to ${many}`,
+      blurb: `Their way in, not yours. More ${many} can reach you without you building anything.` };
+    case 1: return { ...slot, name: `Bundled in where ${many} already are`,
+      blurb: "You arrive already there. Expensive, short, and very hard to argue with while it lasts." };
+    case 5: return { ...slot, name: `More ${cap}`,
+      blurb: `Room to serve more ${many}, and somewhere to answer them from.` };
+    case 6: return { ...slot, name: `Automating how ${many} are served`,
+      blurb: `Cuts what every ${v.unit || "sale"} costs, for as long as you keep it running.` };
+    case 7: return { ...slot, name: `An endorsement ${many} already trust`,
+      blurb: "Borrowed credibility with the people who care most about it." };
+    case 8: return { ...slot, name: `A name known across the ${places}`,
+      blurb: "Quieter than a celebrity, and it does not have opinions in public." };
+    default: return slot;
+  }
+}
+
+/**
  * This market's things for sale: the slots' numbers under this market's words.
  *
  * Falls back to a slot's own wording when a market has no catalogue, or when
@@ -200,11 +241,41 @@ const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => s
  * worse than a generic label.
  */
 export function templatesFor(niche: Niche): AssetTemplate[] {
+  /*
+   * The market's own words first, then the catalogue, then the generic slot.
+   *
+   * A market Nova wrote has no catalogue entry, so a founder rehearsing a SaaS
+   * business was offered a retail shelf agreement and a carrier bundle — the
+   * generic names, which are retail's. `niche.assets` is that market naming
+   * its own, and it wins over the catalogue because a market that came with
+   * its own vocabulary is more specific than an id lookup that missed.
+   */
   const catalogue = CATALOGUES[niche.id];
-  if (!catalogue) return SLOTS;
+  const written = niche.assets;
+  if (!catalogue && !written) return SLOTS.map((slot, i) => inThisMarketsWords(slot, i, niche.voice));
+
+  /*
+   * A written market's entries are taken by kind, in order, rather than by
+   * position. A catalogue is hand-written and lines up by construction; a
+   * model's answer is not, and one entry dropped for naming the wrong kind
+   * would shift every later one onto the wrong slot — a patent's economics
+   * under a warehouse's name. Queueing per kind means a bad entry costs its
+   * own slot and nothing else's.
+   */
+  const queue = new Map<string, { name: string; blurb: string }[]>();
+  for (const entry of written ?? []) {
+    if (!entry?.name) continue;
+    const list = queue.get(entry.kind) ?? [];
+    list.push({ name: entry.name, blurb: entry.blurb });
+    queue.set(entry.kind, list);
+  }
+
   return SLOTS.map((slot, i) => {
-    const entry = catalogue[i];
-    return entry && entry.kind === slot.kind ? { ...slot, name: entry.name, blurb: entry.blurb } : slot;
+    const mine = queue.get(slot.kind)?.shift();
+    if (mine) return { ...slot, name: mine.name, blurb: mine.blurb || slot.blurb };
+    const entry = catalogue?.[i];
+    if (entry && entry.kind === slot.kind) return { ...slot, name: entry.name, blurb: entry.blurb };
+    return inThisMarketsWords(slot, i, niche.voice);
   });
 }
 
@@ -223,13 +294,29 @@ export interface Listing {
 }
 
 /**
- * Roughly a year of payroll, which is the unit a team already understands.
+ * Roughly a year of payroll in one of the seven catalogue markets.
  *
- * Pricing assets against the salary bill rather than a flat number means a
- * listing means the same thing in both markets and stays meaningful if the
- * economy is rebalanced again.
+ * Pricing assets against the salary bill rather than a flat number was the
+ * intention and this was the flat number: a constant, applied whole to every
+ * market including the ones Nova writes for a startup. Those run at a
+ * hundredth of a catalogue market, so a founder holding £46,000 was shown
+ * three things to buy at £1.4m, £1.6m and £2.5m, each labelled "more than the
+ * company can back" — a shop with nothing in it they could afford, every year,
+ * for the whole season.
+ *
+ * `yearOfCosts` is the figure the comment always described. Unchanged for the
+ * seven, which are all sized around this.
  */
 const YEAR_OF_COSTS = 1_100_000;
+
+/**
+ * A year of payroll in *this* market.
+ *
+ * The same `marketScale` the opening bank, the salaries and the challenge
+ * rewards are all sized by, so an asset costs what it should relative to the
+ * company that might buy it rather than relative to a market it is not in.
+ */
+const yearOfCosts = (niche: Niche): number => YEAR_OF_COSTS * marketScale(niche);
 
 /**
  * What the open market is offering this year.
@@ -239,14 +326,54 @@ const YEAR_OF_COSTS = 1_100_000;
  * a marketplace with everything in it is a shopping list, and a marketplace
  * with three things in it is an argument about which one.
  */
-export function marketListings(input: { seasonId: string; year: number; niche: Niche; count?: number }): Listing[] {
-  const { seasonId, year, niche, count = 3 } = input;
+/** `year` counts periods; `periods` is how many make one, because a licence's life is written in years. */
+export function marketListings(input: {
+  seasonId: string; year: number; niche: Niche; count?: number; periods?: number;
+  /**
+   * Names this company already owns, which are not worth offering it again.
+   *
+   * A second copy of a patent it holds is not a second patent — `applyAsset`
+   * would stack two of the same effect, and a team spending a year's cash on
+   * something it already has is a trap rather than a decision. The pool is
+   * still the whole market's, so removing what one company holds does not
+   * change what the others are shown; it only stops this one being offered
+   * its own shelf back.
+   */
+  owned?: string[];
+}): Listing[] {
+  const { seasonId, year, niche, count = 5, periods = 1 } = input;
   const seed = `${seasonId}:${year}:market`;
-  const chosen = sample(seed, templatesFor(niche), count);
+  /*
+   * Dealt first, hidden second — and that order is not a detail.
+   *
+   * Settlement (`settleAuctions`) deals this same hand from the same seed to
+   * decide who won what, and it has no company to filter for. Removing a
+   * template *before* the sample would make one company's screen show
+   * listings that do not exist in the settlement's set, so a bid would be
+   * placed against an id nothing would ever settle. The pool stays whole; a
+   * company simply is not shown the thing it already owns.
+   */
+  const held = new Set(input.owned ?? []);
+  const chosen = sample(seed, templatesFor(niche), count)
+    .filter((t) => !held.has(t.name));
 
   return chosen.map((template, i) => {
-    const jitter = 0.85 + rng(`${seed}:${i}:price`)() * 0.35;
-    const price = Math.round((template.weight * YEAR_OF_COSTS * jitter) / 50_000) * 50_000;
+    /*
+     * Seeded on the template, not on its position in the list.
+     *
+     * With the index in the seed, hiding one listing from a company shifted
+     * every later one up a place and repriced it — so the same asset had one
+     * price on the screen and another at settlement. What a thing costs is a
+     * fact about the thing, not about how many rows are above it.
+     */
+    const jitter = 0.85 + rng(`${seed}:${template.name}:price`)() * 0.35;
+    /*
+     * Rounded to something that reads like a price, at the size of this
+     * market. A flat £50,000 step made every listing in a startup market
+     * round to the same number — or to nothing at all.
+     */
+    const step = Math.max(500, Math.round((yearOfCosts(niche) / 22) / 500) * 500);
+    const price = Math.max(step, Math.round((template.weight * yearOfCosts(niche) * jitter) / step) * step);
     return {
       id: `mkt_${hash(`${seed}:${template.name}`).toString(36)}`,
       blurb: template.blurb,
@@ -258,7 +385,9 @@ export function marketListings(input: { seasonId: string; year: number; niche: N
         name: template.name,
         effect: template.effect(niche),
         bookValue: price,
-        expiresIn: template.life,
+        // `expiresIn` is counted down once a tick, and a life is written in
+        // years, so a five-year licence is sixty months.
+        expiresIn: template.life === undefined ? undefined : template.life * Math.max(1, periods),
       },
     };
   });
@@ -280,6 +409,60 @@ export function resaleValue(asset: CompanyAsset, opts: { forced: boolean }): num
   const wear = asset.expiresIn === undefined ? 0.85 : Math.max(0.35, Math.min(0.8, 0.28 + asset.expiresIn * 0.13));
   const distress = opts.forced ? 0.6 : 1;
   return Math.round(asset.bookValue * wear * distress);
+}
+
+/**
+ * How often an incumbent turns up to the auction, per lot.
+ *
+ * Nothing ever bid against a solo founder. `fileBotBids` covers bot-run
+ * *player* companies, and a season built from somebody's project has none — so
+ * every lot in the first season anybody played came back "nobody met the
+ * reserve", five times a period, for the whole season. An auction nobody else
+ * attends is not an auction; it is a shop with a fixed price and a longer wait.
+ *
+ * Per incumbent per lot, so four rivals give roughly a third of lots a
+ * contest — often enough that a reserve-matching bid is a real risk, rare
+ * enough that turning up is usually still enough.
+ */
+export const INCUMBENT_BID_CHANCE = 0.1;
+
+/** A little over the reserve: enough to beat somebody who bid exactly it. */
+export const INCUMBENT_BID_MIN = 1.02;
+export const INCUMBENT_BID_MAX = 1.15;
+
+/**
+ * The incumbents' sealed bids for this period's lots.
+ *
+ * Deterministic from the season, the period and the pair, so a re-run of a
+ * tick deals the same auction and a replayed season plays out identically.
+ * Seeded on nothing that is already in the table, which is what keeps the
+ * auction sealed: they are not reacting to the player's number, they are
+ * turning up or not.
+ *
+ * Deliberately blunt. An incumbent does not value a lot, work out what it is
+ * worth to them, or bid strategically — it offers a little over the reserve or
+ * it stays home. What it buys is the possibility of losing, which is the whole
+ * of what was missing.
+ */
+export function incumbentBids(input: {
+  seasonId: string;
+  year: number;
+  listings: Listing[];
+  incumbents: { id: string }[];
+}): Bid[] {
+  const { seasonId, year, listings, incumbents } = input;
+  const out: Bid[] = [];
+  for (const listing of listings) {
+    /* Never their own: an incumbent selling to itself is not a market. */
+    for (const who of incumbents) {
+      if (listing.sellerId === who.id) continue;
+      const seed = `${seasonId}:${year}:${listing.id}:${who.id}`;
+      if (rng(`${seed}:turnup`)() >= INCUMBENT_BID_CHANCE) continue;
+      const over = INCUMBENT_BID_MIN + rng(`${seed}:amount`)() * (INCUMBENT_BID_MAX - INCUMBENT_BID_MIN);
+      out.push({ ventureId: who.id, listingId: listing.id, amount: Math.round(listing.reserve * over) });
+    }
+  }
+  return out;
 }
 
 export interface Bid {

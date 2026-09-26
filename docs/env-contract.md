@@ -76,6 +76,35 @@ site whose key expires should keep serving the people already on it.
 |---|---|---|
 | `PASSWORD_BREACH_CHECK` | on, except under `NODE_ENV=test` | `off` stops every password being checked against the public breach corpus (`server/password-breach.ts`). The check already fails open when the API is unreachable, so this is only for a deployment that must make no outbound calls at all — and it means accepting passwords that are known to be in a dump. The test suite leaves it off so hundreds of account creations don't each wait on a network timeout; the tests that cover the behaviour turn it on and stub the call. |
 
+## Working locally without spending money
+
+Two things in this product cost real money the moment you touch them: the model
+calls behind every Nova feature, and Stripe. Neither is needed to drive the app
+locally, and neither should be used to.
+
+| Variable | Default | What turning it on does |
+|---|---|---|
+| `AI_STUB` | off | `1` makes every OpenAI call return a synthetic answer built from the JSON shape the prompt asked for (`server/ai-stub.ts`). Nothing reaches OpenAI, nothing is billed, and no key is needed at all — `openAiConfigured()` reports true so the features still offer themselves. Refused under `NODE_ENV=production`, whatever the value. |
+| `ALLOW_DEV_TIER_OVERRIDE` | off | Already existed for `/api/dev/set-tier`; it also gates `/api/dev/credit-wallet` and `/api/dev/reset-credits`. Outside production these routes are open without it. |
+| `DEV_FREE_CHALLENGES` | off | Posting a challenge costs nothing and the prize is held without taking it from a balance. Needs `ALLOW_DEV_TIER_OVERRIDE` too in production, and is refused outright on a server with live Stripe keys. The prize still moves through the safe, so awarding and refunding are the real code. |
+
+`POST /api/dev/credit-wallet` with `{"amountCents": 5000}` puts money on the
+signed-in account the way the Stripe webhook does — a real ledger row, a real
+balance — so the priced outcomes ($30 for the whole-business build, the day
+pass, the documents) can be bought and tested end to end. It refuses outright on
+a server holding a live `sk_live_` key.
+
+A local walkthrough, then, is:
+
+```
+AI_STUB=1 STRIPE_SECRET_KEY= npm run dev
+# then, signed in: curl -X POST .../api/dev/credit-wallet -d '{"amountCents":5000}'
+```
+
+Writing `balance_cents` straight into Postgres does work and is worse: the
+ledger is the truth and the column is the cache (`server/wallet.ts`), so a hand
+-written balance is one the two disagree about from then on.
+
 ## Set by the platform, never by hand
 
 Render sets `PORT` (the server reads it; never set it yourself) and

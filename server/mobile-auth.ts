@@ -15,13 +15,14 @@ import { sendVerificationEmail } from "./email-verification";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { db } from "./db";
 import { authStorage } from "./replit_integrations/auth/storage";
 import { checkEmailShape, normalizeEmail } from "@shared/email-address";
 import { domainCanReceiveMail } from "./email-deliverable";
 import { domainOf } from "./public-url";
 import { users, mobileRefreshTokens } from "@shared/schema";
-import { eq, and, isNull, gt } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { isDeleted } from "./account-data";
 import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
@@ -221,6 +222,25 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
   }
 };
 
+/**
+ * Apple's public keys, fetched once and kept.
+ *
+ * `createRemoteJWKSet` caches them and re-fetches only when a token arrives
+ * signed by a key it has not seen — which is what happens when Apple rotates.
+ * Built lazily so a server with no Apple configuration never reaches out.
+ */
+let appleJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+const appleKeys = () =>
+  (appleJwks ??= createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys")));
+
+/** The claims this route reads. Apple sends the two flags as strings on some flows. */
+interface AppleClaims {
+  sub?: string;
+  email?: string;
+  email_verified?: boolean | string;
+  is_private_email?: boolean | string;
+}
+
 export function registerMobileAuthRoutes(app: Express) {
   /** Email + password sign-in for mobile. */
   app.post("/api/auth/mobile/login", async (req, res) => {
@@ -399,6 +419,138 @@ export function registerMobileAuthRoutes(app: Express) {
     } catch (error) {
       console.error("Mobile Google auth error:", error);
       res.status(500).json({ message: "Google sign-in failed" });
+    }
+  });
+
+  /**
+   * Sign in with Apple, from the phone.
+   *
+   * Apple hands the app an identity token: a JWT it signed, carrying a `sub`
+   * that is stable for this person in this app and never changes. Everything
+   * here hangs off that identifier rather than off the email, because Apple's
+   * email is not dependable in the way Google's is:
+   *
+   *   - "Hide My Email" substitutes a per-app relay address. It is a real,
+   *     deliverable address and it is not the person's own, so it proves
+   *     nothing about a mailbox somebody else may have registered.
+   *   - The name, and on some flows the email, are handed over **once**, on
+   *     the first authorization, and never again. A second sign-in has the
+   *     token and nothing else, which is why the name is taken from the body
+   *     and only ever used to fill a blank.
+   *
+   * The token is verified against Apple's published keys — not decoded and
+   * trusted, which would let anyone sign in as anyone by writing their own
+   * JSON. `jose` fetches and caches the key set and checks the signature, the
+   * issuer, the audience and the expiry.
+   */
+  app.post("/api/auth/mobile/apple", async (req, res) => {
+    // public-write: an identity token signed by Apple, verified below; rate limited like every other sign-in
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
+    try {
+      const { identityToken, device, fullName } = req.body as {
+        identityToken?: string; device?: string; fullName?: { givenName?: string; familyName?: string } | null;
+      };
+      if (!identityToken) return res.status(400).json({ message: "identityToken is required" });
+
+      /*
+       * Who the token is allowed to be for. The native app's bundle id, and
+       * the Services ID if one is configured for the web flow — a token minted
+       * for some other app must not sign anybody in here.
+       */
+      const audiences = [process.env.APPLE_BUNDLE_ID, process.env.APPLE_SERVICES_ID].filter(Boolean) as string[];
+      if (!audiences.length) {
+        return res.status(503).json({ message: "Apple sign-in isn't configured on the server." });
+      }
+
+      let claims: AppleClaims;
+      try {
+        const { payload } = await jwtVerify(identityToken, appleKeys(), {
+          issuer: "https://appleid.apple.com",
+          audience: audiences,
+        });
+        claims = payload as AppleClaims;
+      } catch (verifyErr: any) {
+        console.error("Apple identity token verification failed:", verifyErr?.message);
+        return res.status(401).json({ message: "That Apple sign-in couldn't be verified." });
+      }
+
+      if (!claims.sub) return res.status(401).json({ message: "Apple didn't return an account identifier." });
+
+      /*
+       * Apple sends these as strings on some flows and booleans on others, so
+       * both are read the same way rather than one being trusted.
+       */
+      const truthy = (v: unknown) => v === true || v === "true";
+      const isRelay = truthy(claims.is_private_email);
+      const emailVerified = truthy(claims.email_verified);
+      const email = typeof claims.email === "string" ? normalizeEmail(claims.email) : "";
+
+      // The identifier first: this is the only thing that is there every time.
+      let [user] = await db.select().from(users).where(eq(users.appleId, claims.sub));
+
+      if (!user && email) {
+        /*
+         * Then the address, so somebody who already has an account does not
+         * get a second one. A relay address can still match — it is unique to
+         * this app, so a row holding one can only be theirs — but it never
+         * counts as *proof* of the address, which is what decides whether an
+         * unverified password is cleared. See `linkAppleAccount`.
+         */
+        const [byEmail] = await db.select().from(users).where(sql`lower(${users.email}) = ${email}`);
+        if (byEmail) {
+          user = await authStorage.linkAppleAccount(byEmail.id, claims.sub, emailVerified && !isRelay);
+        }
+      }
+
+      if (!user) {
+        if (!surfaceEnabled("signup")) {
+          return res.status(404).json({ message: "New accounts can't be created right now.", code: "signup_closed" });
+        }
+        /*
+         * No email at all is possible: a second sign-in on a device that never
+         * completed the first, or a revoked-and-returned grant. There is
+         * nothing to create an account *from* in that case — an account here
+         * needs an address to reach somebody at — so they are asked to go
+         * round once more rather than given a row with no way to contact them.
+         */
+        if (!email) {
+          return res.status(409).json({
+            code: "apple_no_email",
+            message: "Apple didn't share an email this time. In Settings › Apple Account › Sign in with Apple, "
+              + "remove SparkTower and try again — it'll ask once more.",
+          });
+        }
+        [user] = await db.insert(users).values({
+          email,
+          appleId: claims.sub,
+          firstName: fullName?.givenName?.slice(0, 80) || "",
+          lastName: fullName?.familyName?.slice(0, 80) || "",
+          authProvider: "apple",
+          /*
+           * A relay address is deliverable and Apple forwards it, so it counts
+           * as reachable — and it is verified in the only sense that matters
+           * here, which is that Apple will deliver to it. A shared real
+           * address is verified when Apple says so.
+           */
+          emailVerifiedAt: emailVerified || isRelay ? new Date() : null,
+        }).returning();
+        await stampSignupAttribution(user.id, req);
+      } else if (fullName?.givenName && !user.firstName) {
+        /*
+         * The name comes back once, ever. If it arrives for somebody we
+         * already know and who never had one, take it — but never overwrite a
+         * name they have since chosen for themselves.
+         */
+        [user] = await db.update(users)
+          .set({ firstName: fullName.givenName.slice(0, 80), lastName: fullName.familyName?.slice(0, 80) || user.lastName })
+          .where(eq(users.id, user.id)).returning();
+      }
+
+      if (mfaEnabledFor(user)) return res.json({ mfaRequired: true, challengeToken: signMfaChallenge(user.id) });
+      res.json({ ...(await buildSession(user.id, device)), mfaEnrollmentRequired: mfaRequiredFor(user) });
+    } catch (error) {
+      console.error("Mobile Apple auth error:", error);
+      res.status(500).json({ message: "Apple sign-in failed" });
     }
   });
 

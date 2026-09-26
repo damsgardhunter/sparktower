@@ -83,7 +83,7 @@ export const SURFACES: SurfaceDef[] = [
   // --- Network: needs other people to mean anything ---------------------
   { id: "feed",       label: "Feed",                 cls: "network", defaultEnabled: true,  note: "Works at small numbers — a post needs no counterpart. Highest spam surface.", needsPeople: 3, sequence: "wedge" },
   { id: "matches",    label: "Matches",              cls: "network", defaultEnabled: true,  note: "Compares profiles; thin until several people have onboarded.", needsPeople: 10, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and 10+ active builders a week are on paths." },
-  { id: "sprints",    label: "Sprints & simulations", cls: "network", defaultEnabled: true, note: "Needs a partner, or four. Trial sprints, matchmaking, and the market simulation.", needsPeople: 6, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and builders ask for a partner to do a step with." },
+  { id: "sprints",    label: "Simulations", cls: "network", defaultEnabled: true, note: "Needs a partner, or four. Trial sprints, matchmaking, and the market simulation. Not the decision simulator in a project's Simulations tab — that runs one owner's own numbers and needs nobody.", needsPeople: 6, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and builders ask for a partner to do a step with." },
   { id: "connections", label: "Connections",         cls: "network", defaultEnabled: true,  note: "Needs people to connect to.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven; follows on published steps come first." },
   { id: "messages",   label: "Messages / DMs",       cls: "network", defaultEnabled: true,  note: "Highest abuse surface. Needs rate limits and reporting before wide sharing.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and reporting and limits are in place for DMs." },
   { id: "leaderboard", label: "Leaderboard",         cls: "network", defaultEnabled: true,  note: "Ranks public projects; a list until there are several.", needsPeople: 8, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and there are enough public projects to rank." },
@@ -124,8 +124,8 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
   // the same way `/admin/backing` belongs to backing.
   contests: ["/contests", "/admin/contests"],
   /*
-   * `/simulation` as well as `/sprints`. The surface is labelled "Sprints &
-   * simulations" and its note names the market simulation, but the simulation's
+   * `/simulation` as well as `/sprints`. The surface is called "Simulations"
+   * and its note names the market simulation, but the simulation's
    * pages live at `/simulation/*` and nothing here claimed them — so an admin
    * who turned the surface off hid the sprint pages and left the whole
    * simulation reachable, which is the opposite of what the switch says it does.
@@ -179,8 +179,8 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches", "/api/projects/:id/recommend-people"],
   /*
-   * `/api/sim` as well as `/api/games`. This surface said "Sprints &
-   * simulations" and covered only the sprint games: every simulation
+   * `/api/sim` as well as `/api/games`. This surface named the simulations
+   * and covered only the sprint games: every simulation
    * endpoint — the desk, the market, offers, standings, advancing a season —
    * is under `/api/sim`, and none of it was behind the switch. Turning the
    * surface off closed the sprints and left the entire simulation serving,

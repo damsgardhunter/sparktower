@@ -27,6 +27,7 @@ import {
   Cpu,
   Users,
   Clock,
+  Coins,
   FolderOpen,
   Globe,
   Upload,
@@ -49,6 +50,7 @@ import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type 
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
 import { PROJECT_CATEGORIES } from "@shared/categories";
+import { CURRENCIES } from "@shared/currency";
 
 interface Message {
   role: "user" | "assistant";
@@ -218,6 +220,8 @@ export default function ProjectCreate() {
     title: "",
     description: "",
     category: "",
+    // The business's own money; SparkTower's prices stay in dollars.
+    currency: "USD",
     rolesNeeded: [],
     techStack: [],
     teamSize: 1,
@@ -298,7 +302,17 @@ export default function ProjectCreate() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowIntro(false);
-      setMessages([
+      /*
+       * Only when there is nothing to come back to.
+       *
+       * This used to set the greeting flat, two seconds after mount, which is
+       * a second and a half after the draft above has finished restoring —
+       * so coming back to a half-finished project wiped the conversation that
+       * produced it and left the form beside a Nova saying hello for the
+       * first time. Everything the two of you worked out was still in
+       * localStorage; the page just talked over it.
+       */
+      setMessages((prev) => prev.length ? prev : [
         {
           role: "assistant",
           content:
@@ -685,6 +699,34 @@ export default function ProjectCreate() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                {/*
+                  * What the business counts in. Every figure about it — the
+                  * numbers it files, what the simulator answers in — is written
+                  * in this; what SparkTower charges stays in dollars, because
+                  * that is what Stripe takes. A café in Leeds was being asked
+                  * for its turnover in dollar bands.
+                  */}
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                    <Coins className="h-3 w-3" /> Its money
+                  </label>
+                  <Select
+                    value={projectData.currency || "USD"}
+                    onValueChange={(val) => editField("currency", val)}
+                  >
+                    <SelectTrigger className="mt-1" data-testid="select-project-currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CURRENCIES.map((c) => (
+                        <SelectItem key={c.code} value={c.code} data-testid={`select-currency-${c.code}`}>
+                          {c.symbol} {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground mt-1">What this business counts in. SparkTower's own prices stay in dollars.</p>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1 mb-2">

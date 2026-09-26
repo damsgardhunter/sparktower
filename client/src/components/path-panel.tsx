@@ -17,12 +17,14 @@ import type { ProjectGoal } from "@shared/goals";
 import { Block, Blocks } from "@/components/section/block";
 import { useLivePath, useOpenMilestoneRequests, SyncDot } from "@/components/section/live";
 import { NextStep } from "@/components/section/next-step";
-import { ProgressStats, NovaRead } from "@/components/section/progress";
+import { NovaBuildsBusiness } from "@/components/section/nova-builds-business";
+import { ProgressStats, ProgressStrip, NovaRead } from "@/components/section/progress";
 import { CodebaseSync } from "@/components/section/codebase";
 import { RecentActivity } from "@/components/section/activity";
 import { PathMap } from "@/components/section/path-map";
+import { TakeItAway } from "@/components/section/take-it-away";
 import { NOVA_GRADIENT, plural, type PathStatus } from "@/components/section/path-types";
-import { Activity, ChevronDown, ChevronUp, Code2, Compass, GitBranch, ListTree, Loader2, LogOut, Map as MapIcon, Play, Repeat, Sparkles, TrendingUp, HandCoins } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, Code2, Compass, FileDown, GitBranch, ListTree, Loader2, LogOut, Map as MapIcon, Play, Repeat, Sparkles, TrendingUp, HandCoins } from "lucide-react";
 
 export type { PathStatus, NoPath, PathResponse } from "@/components/section/path-types";
 
@@ -95,10 +97,15 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
 
   const data: PathStatus = raw;
 
+  const loopsWritten = data.loopTree ? data.loopTree.loops.filter((l) => l.written).length : 0;
+
   return (
     <Blocks className="" >
       <Block title="Next step" icon={Compass} testid="path-panel">
         <NextStep projectId={projectId} data={data} onNavigate={onNavigate} />
+
+        {/* Nova doing the whole path at once, and what it's doing while it does. */}
+        <NovaBuildsBusiness projectId={projectId} />
 
         {/* The fork: keep building, or go to users. Chosen, never drifted into. */}
         {data.offer && (
@@ -123,45 +130,82 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
         )}
       </Block>
 
-      <Block title="Progress" icon={TrendingUp}>
+      {/*
+        * How far along, in one line, directly under the step. The four tiles
+        * and Nova's read of the pace are the same information at length, and
+        * they are one click down rather than a quarter of the first screen.
+        */}
+      <Block title="Progress" icon={TrendingUp} collapsible defaultOpen={false} summary={<ProgressStrip data={data} />} testid="block-progress">
         <ProgressStats data={data} />
         <NovaRead projectId={projectId} data={data} adopting={adopt.isPending} onReevaluate={() => adopt.mutate()} />
       </Block>
 
       {data.loopTree && (
-        <Block title={`Loops · ${data.loopTree.loops.length}`} icon={ListTree} testid="loop-tree-section">
+        <Block
+          title={`Loops · ${data.loopTree.loops.length}`} icon={ListTree} testid="loop-tree-section"
+          collapsible defaultOpen={false}
+          summary={`${loopsWritten} of ${data.loopTree.loops.length} written`}
+        >
           <LoopTree projectId={projectId} tree={data.loopTree} />
         </Block>
       )}
 
       {data.capital && data.capital.answered > 0 && (
-        <Block title="Fundability" icon={HandCoins}>
+        <Block
+          title="Fundability" icon={HandCoins} testid="block-fundability"
+          collapsible defaultOpen={false}
+          summary={`${data.capital.score}/100 · ${data.capital.band.label}`}
+        >
           <CapitalProfileCard capital={data.capital} />
         </Block>
       )}
 
-      <Block title="Codebase" icon={Code2} right={<SyncDot updatedAt={dataUpdatedAt} fetching={isFetching} error={isError} />}>
+      <Block
+        title="Codebase" icon={Code2} testid="block-codebase"
+        collapsible defaultOpen={false}
+        summary={data.auditUpdate?.at ? "Read by Nova" : "Not read yet"}
+        right={<SyncDot updatedAt={dataUpdatedAt} fetching={isFetching} error={isError} />}
+      >
         <CodebaseSync projectId={projectId} data={data} onNavigate={onNavigate} />
       </Block>
 
+      {/* What the path has written, as a file — see section/take-it-away.tsx. */}
+      <Block title="Take it away" icon={FileDown} testid="block-export" collapsible defaultOpen={false} summary="PDF or Markdown">
+        <TakeItAway projectId={projectId} goal={goal} />
+      </Block>
+
       {data.events.length > 0 && (
-        <Block title="Recent activity" icon={Activity}>
+        <Block
+          title="Recent activity" icon={Activity} testid="block-activity"
+          collapsible defaultOpen={false}
+          summary={data.events[0]?.title}
+        >
           <RecentActivity events={data.events} />
         </Block>
       )}
 
+      {/*
+        * The map had its own Show/Hide button inside a block that was always
+        * open — two controls doing one job. The block's own collapse is the
+        * control now, and `showMap` follows it so a milestone opened from a
+        * notification still brings the map up with it.
+        */}
       <Block
         title={`Whole path · ${data.phases.length} phases`}
         icon={MapIcon}
-        right={
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowMap(!showMap)} data-testid="button-toggle-path">
-            {showMap ? <ChevronUp className="h-3.5 w-3.5 mr-1" /> : <ChevronDown className="h-3.5 w-3.5 mr-1" />}{showMap ? "Hide" : "Show"}
-          </Button>
-        }
+        testid="block-whole-path"
+        collapsible
+        /*
+         * Keyed on `showMap` so that asking to open a milestone — from a
+         * notification, say — remounts this block open. `defaultOpen` is read
+         * once, by design: everywhere else the block should remember what the
+         * person did with it.
+         */
+        key={showMap ? "map-open" : "map-closed"}
+        defaultOpen={showMap}
+        summary={data.promise}
       >
-        {showMap
-          ? <PathMap projectId={projectId} goal={goal} data={data} flash={flash} openId={open} onOpen={setOpen} isPrimary={isPrimary} />
-          : <p className="text-xs text-muted-foreground">{data.promise}</p>}
+        <PathMap projectId={projectId} goal={goal} data={data} flash={flash} openId={open} onOpen={setOpen} isPrimary={isPrimary} />
       </Block>
     </Blocks>
   );

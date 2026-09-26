@@ -45,7 +45,20 @@ export function ProjectCard({ project, explore, following = false, update }: Pro
   return (
     <Card
       ref={impressionRef}
-      className="hover-elevate cursor-pointer overflow-visible"
+      /*
+       * The same soft Nova ring the companies grid uses.
+       *
+       * A project card and a company card are the same kind of object to
+       * somebody browsing — a thing with a name and a description that opens
+       * when you press it — and they did not look like it: companies sat in a
+       * gradient-edged tile that lifts on hover, projects in a plain bordered
+       * box. The soft ring rather than the full one for the same reason given
+       * on the companies grid: these are a grid of equals, and the loud
+       * gradient belongs to the one thing on a screen that should draw the
+       * eye. `border-0` because the ring is drawn with a border of its own,
+       * and Card brings one.
+       */
+      className="nova-ring-soft nova-hover-glow border-0 cursor-pointer overflow-visible"
       onClick={() => {
         if (target) trackExplore(EXPLORE_EVENTS.openProject, target);
         setLocation(`/projects/${project.id}`);

@@ -72,7 +72,45 @@ export const PROJECT_VISUAL_SLOT_KEYS = PROJECT_VISUAL_SLOTS.map((s) => s.slot);
  */
 export type ProjectVisuals = Partial<Record<ProjectVisualSlot, string>> & {
   hidden?: ProjectVisualSlot[];
+  /**
+   * How many times each slot has been drawn, which decides the next one's
+   * treatment. See VISUAL_TAKES: without it a redraw with the same logo and
+   * the same brief builds the same prompt and gets the same picture back.
+   */
+  takes?: Partial<Record<ProjectVisualSlot, number>>;
 };
+
+/**
+ * A different picture on every press.
+ *
+ * The prompt is built from the project — its logo, its brief, the slot's
+ * subject — and none of that changes when somebody presses redraw. So the
+ * model was handed an identical prompt and, reasonably, handed back an
+ * almost identical image: "redo" looked broken because nothing about the
+ * request said it was a second attempt.
+ *
+ * These are the part that changes. Each is a genuinely different photograph
+ * of the same subject — where the camera is, how it is lit, how the frame is
+ * arranged — rather than a different subject or a different brand. The
+ * palette, the logo and what the image is *of* stay fixed, because those are
+ * the things the builder chose; only the take changes.
+ *
+ * Rotated by the slot's draw count rather than picked at random, so pressing
+ * redraw twice can never land on the same take twice, and a sixth press comes
+ * back round to the first having been five real attempts away from it.
+ */
+export const VISUAL_TAKES: readonly string[] = [
+  "Take: a wide establishing shot with generous negative space, the subject small in the frame, soft daylight.",
+  "Take: close and tight on the detail that matters, shallow depth of field, the background falling away.",
+  "Take: a high three-quarter view looking down on an arranged scene, everything laid out and legible.",
+  "Take: dramatic low-key lighting from one side, deep shadow, a single bright accent in the brand's colour.",
+  "Take: flat-on and symmetrical, graphic and poster-like, bold blocks of the brand's palette.",
+  "Take: a candid moment slightly off-centre, natural light, motion implied rather than posed.",
+] as const;
+
+/** The take for the nth draw of a slot (0-based), cycling. */
+export const takeFor = (draws: number): string =>
+  VISUAL_TAKES[((draws % VISUAL_TAKES.length) + VISUAL_TAKES.length) % VISUAL_TAKES.length];
 
 export const isProjectVisualSlot = (v: unknown): v is ProjectVisualSlot =>
   typeof v === "string" && (PROJECT_VISUAL_SLOT_KEYS as string[]).includes(v);
