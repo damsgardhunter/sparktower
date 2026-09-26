@@ -550,6 +550,50 @@ describe("simulation seats", () => {
     return { user, company };
   }
 
+  /**
+   * A payment method that settles later still buys what it paid for.
+   *
+   * Stripe sends a delayed payment as two events: `completed` while it is
+   * still `unpaid`, then `async_payment_succeeded` once the money lands. A
+   * blanket `if (settledLater) return;` sat above the seats, the game plays
+   * and the donations — so the first event was skipped for being unpaid and
+   * the second was skipped for being the wrong type. The customer paid and
+   * received nothing at all, and nothing anywhere said so.
+   */
+  it("credits seats when the payment settles after the checkout closed", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    const sessionId = `cs_delayed_${Math.random().toString(36).slice(2, 10)}`;
+
+    // One: the checkout closes, and the money has not arrived.
+    const opened = seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "unpaid" });
+    expect((await deliver(app, opened)).status).toBe(200);
+    expect(await balances(company.id), "nothing yet, because nothing is paid").toEqual({ play: 0, nova: 0 });
+
+    // Two: it settles.
+    const settled = {
+      ...seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "paid" }),
+      type: "checkout.session.async_payment_succeeded",
+    };
+    expect((await deliver(app, settled)).status).toBe(200);
+    expect(await balances(company.id), "paid, so the seats arrive").toEqual({ play: 5, nova: 0 });
+  }, 60_000);
+
+  /* And the same session twice still credits once. */
+  it("credits a delayed payment once, however many times it is delivered", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    const sessionId = `cs_twice_${Math.random().toString(36).slice(2, 10)}`;
+    const settled = () => ({
+      ...seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "paid" }),
+      type: "checkout.session.async_payment_succeeded",
+    });
+
+    expect((await deliver(app, settled())).status).toBe(200);
+    expect((await deliver(app, settled())).status).toBe(200);
+    expect(await balances(company.id)).toEqual({ play: 5, nova: 0 });
+  }, 60_000);
+
   it("credits play seats and Nova seats to their own balances", async () => {
     const app = await getTestApp();
     const { user, company } = await aCompany();

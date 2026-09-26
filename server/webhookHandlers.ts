@@ -236,7 +236,21 @@ export class WebhookHandlers {
       return;
     }
 
-    if (settledLater) return;
+    /*
+     * Everything below here handles a delayed payment too.
+     *
+     * There used to be an `if (settledLater) return;` on this line, and it
+     * meant that a checkout paid by a method that settles later — which is
+     * most of them outside cards — completed unpaid, was skipped, then settled
+     * as `async_payment_succeeded` and was skipped again. The customer paid and
+     * got nothing: no seats, no plays, no donation recorded. The top-up above
+     * already handled both events; the three below did not, and the guard is
+     * why.
+     *
+     * Each of them is safe on either event for the same two reasons: none acts
+     * unless Stripe says `payment_status === 'paid'`, and each is idempotent on
+     * the session id, so the same session arriving twice credits once.
+     */
 
     /*
      * Seats on the simulation: a one-off payment, credited to the company that
@@ -316,6 +330,17 @@ export class WebhookHandlers {
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;
       if (!projectId || !donorId || !amount) return;
+      /*
+       * Paid, or nothing happens.
+       *
+       * The seats and the plays have always asked this; donations never did,
+       * and were saved from recording an unpaid one only by the `settledLater`
+       * guard above — which skipped the event that says it *was* paid. So a
+       * delayed donation was either recorded before the money arrived or not
+       * at all, depending on which event turned up. Asked here, both events
+       * behave, and an abandoned checkout records nothing.
+       */
+      if (session.payment_status && session.payment_status !== 'paid') return;
       const amountCents = parseInt(amount);
       // The session id is unique on donations: a redelivery inserts nothing
       // and therefore increments nothing. The two writes are one transaction.
