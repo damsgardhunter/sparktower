@@ -13,7 +13,9 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
-import { ReportProblemFooter } from "@/components/report-problem";
+import { SiteFooter } from "@/components/site-footer";
+import { LanguageProvider } from "@/lib/i18n";
+import Careers from "@/pages/careers";
 import Home from "@/pages/home";
 import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
@@ -161,6 +163,8 @@ function Router() {
           */}
         <Route path="/privacy" component={PrivacyPolicy} />
         <Route path="/terms" component={TermsOfService} />
+        {/* Somebody looking for a job is not a customer and has no account. */}
+        <Route path="/careers" component={Careers} />
         {/* Named by /.well-known/security.txt, so it must answer for a stranger. */}
         <Route path="/security" component={SecurityPolicy} />
         <Route>
@@ -173,7 +177,7 @@ function Router() {
           * most: somebody who cannot sign in is by definition not signed in,
           * and "I cannot sign in" is the report you least want to lose.
           */}
-        <ReportProblemFooter />
+        <SiteFooter />
       </div>
     );
   }
@@ -213,7 +217,7 @@ function Router() {
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
           <main className="flex-1 overflow-hidden"><NotFound /></main>
-          <ReportProblemFooter />
+          <SiteFooter />
         </div>
       </div>
     );
@@ -381,12 +385,14 @@ function Router() {
             <Route path="/admin/revenue" component={AdminRevenue} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route path="/admin/contests" component={AdminContests} />
+            {/* Public on purpose: somebody looking for a job has no account here. */}
+            <Route path="/careers" component={Careers} />
             <Route component={NotFound} />
           </Switch>
           </ErrorBoundary>
         </main>
         {/* Every screen ends with a way to say it is broken. */}
-        <ReportProblemFooter />
+        <SiteFooter />
       </div>
     </div>
   );
@@ -400,6 +406,8 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      {/* Above the app, because the footer that switches it is inside it. */}
+      <LanguageProvider>
       <ThemeProvider defaultTheme="light" storageKey="sparktower-theme">
         <TooltipProvider>
           <SidebarProvider style={style as React.CSSProperties}>
@@ -424,6 +432,7 @@ function App() {
           </SidebarProvider>
         </TooltipProvider>
       </ThemeProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }
