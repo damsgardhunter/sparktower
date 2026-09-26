@@ -119,14 +119,26 @@ export default function SimulationMarketPage() {
     refetchOnMount: "always",
   });
 
+  /*
+   * Above the early return, because these are hooks.
+   *
+   * They used to sit below it, so the first render — the loading one — called
+   * two fewer hooks than every render after it. React matches hooks by call
+   * order, and a component whose hook count changes between renders is the one
+   * thing the rules exist to prevent: it works until something makes the
+   * spinner render and the loaded render share a mount, and then it throws
+   * "rendered more hooks than during the previous render" somewhere else
+   * entirely. Both take an optional argument and fall back to the context, so
+   * moving them costs nothing while the payload is still in flight.
+   */
+  const period = usePeriod(market?.period ? { ...market.period, perYear: market.periods } : undefined);
+  const { compact } = useMoney(market?.currency as any);
+
   if (isLoading || !market) {
     return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
   }
 
   const isCeo = market.yourRole === "ceo";
-  /* Read off the payload: this component renders the providers below it. */
-  const period = usePeriod(market.period ? { ...market.period, perYear: market.periods } : undefined);
-  const { compact } = useMoney(market.currency as any);
   const Period = period.one.charAt(0).toUpperCase() + period.one.slice(1);
 
   return (

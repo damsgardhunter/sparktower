@@ -12,7 +12,7 @@
  * The anchors at the bottom are deliberately wide. They are there to catch a
  * market that has wandered off, not to pin one down.
  */
-import { buildWorld, economyFor } from "../shared/simulation/season.ts";
+import { buildWorld } from "../shared/simulation/season.ts";
 import { resolveYear } from "../shared/simulation/resolve.ts";
 import { NICHES } from "../shared/simulation/niches.ts";
 import { ROLES } from "../shared/simulation/types.ts";

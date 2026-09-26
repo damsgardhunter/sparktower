@@ -85,7 +85,16 @@ export default function AdminAiSpend() {
   });
   const isOwner = !!access?.owner;
 
-  const q = <T,>(path: string, withDays = true) => useQuery<T>({
+  /*
+   * Named `useSpend` rather than `q` because that is what it is: a custom hook
+   * wrapping useQuery, called six times below in a fixed order at the top of
+   * this component. The old name made `react-hooks/rules-of-hooks` an error —
+   * the rule reads the name to decide whether a function may hold a hook, and
+   * `q` is neither a component nor a hook by that test. The order was always
+   * fixed and the code always worked; the lint was right about the name and
+   * could not be told the rest.
+   */
+  const useSpend = <T,>(path: string, withDays = true) => useQuery<T>({
     queryKey: [path, withDays ? days : null],
     queryFn: async () => {
       const res = await fetch(withDays ? `${path}?days=${days}` : path, { credentials: "include" });
@@ -97,12 +106,12 @@ export default function AdminAiSpend() {
     refetchInterval: 30_000,
   });
 
-  const today = q<Today>("/api/admin/ai-spend/today", false);
-  const daily = q<{ rows: DailyRow[] }>("/api/admin/ai-spend/daily");
-  const sections = q<{ rows: SectionRow[] }>("/api/admin/ai-spend/sections");
-  const people = q<{ rows: PersonRow[] }>("/api/admin/ai-spend/people");
-  const free = q<FreeTier>("/api/admin/ai-spend/free-tier");
-  const settings = q<Settings>("/api/admin/ai-spend/settings", false);
+  const today = useSpend<Today>("/api/admin/ai-spend/today", false);
+  const daily = useSpend<{ rows: DailyRow[] }>("/api/admin/ai-spend/daily");
+  const sections = useSpend<{ rows: SectionRow[] }>("/api/admin/ai-spend/sections");
+  const people = useSpend<{ rows: PersonRow[] }>("/api/admin/ai-spend/people");
+  const free = useSpend<FreeTier>("/api/admin/ai-spend/free-tier");
+  const settings = useSpend<Settings>("/api/admin/ai-spend/settings", false);
 
   if (accessLoading) {
     return <div className="flex justify-center p-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
