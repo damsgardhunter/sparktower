@@ -15,17 +15,32 @@ import { open as openSecret } from "./secret-box";
 
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 
+/** How many tables one read will describe. See the note at the query below. */
+export const MAX_TABLES = 500;
+
 export async function introspectDataShape(connectionString: string, source: DataShape["source"], opts: { exactUnder?: number; maxTables?: number; ssl?: boolean } = {}): Promise<DataShape> {
   const at = new Date().toISOString();
   const client = new pg.Client({ connectionString, statement_timeout: 8000, connectionTimeoutMillis: 8000, ...(opts.ssl ? { ssl: { rejectUnauthorized: false } } : {}) });
   try {
     await client.connect();
     await client.query("BEGIN READ ONLY");
-    const tables = (await client.query<{ name: string; est: number }>(`
+    /*
+     * The ceiling is a bound on work, not an opinion about how big a schema may
+     * be — and it was 150 while this repository's own schema was 153. Tables
+     * come back alphabetically and were cut at the ceiling, so crossing it did
+     * not drop an arbitrary handful: it dropped the tail of the alphabet, and
+     * `users` with it. Silently. Raised well clear of anything real, and what
+     * is cut is now counted and reported, because a shape that is quietly
+     * missing a third of a database is worse than one that refuses.
+     */
+    const all = (await client.query<{ name: string; est: number }>(`
       SELECT c.relname AS name, c.reltuples::bigint AS est
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relkind IN ('r','p')
-      ORDER BY c.relname`)).rows.slice(0, opts.maxTables ?? 150);
+      ORDER BY c.relname`)).rows;
+    const ceiling = opts.maxTables ?? MAX_TABLES;
+    const tables = all.slice(0, ceiling);
+    const truncated = Math.max(0, all.length - tables.length);
     const cols = (await client.query<{ table: string; name: string; type: string; nullable: string }>(`
       SELECT table_name AS "table", column_name AS name, data_type AS type, is_nullable AS nullable
       FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`)).rows;
@@ -55,7 +70,7 @@ export async function introspectDataShape(connectionString: string, source: Data
     }
     for (const t of out) for (const fk of t.foreignKeys) { const target = out.find((x) => x.name === fk.refTable); if (target && target !== t) target.inbound++; }
     await client.query("ROLLBACK").catch(() => {});
-    return { at, source, tables: out, totals: { tables: out.length, rows: out.reduce((n, t) => n + t.rows, 0), emptyTables: out.filter((t) => t.rows === 0).length }, compare: null };
+    return { at, source, tables: out, totals: { tables: out.length, rows: out.reduce((n, t) => n + t.rows, 0), emptyTables: out.filter((t) => t.rows === 0).length }, compare: null, ...(truncated ? { truncated } : {}) };
   } catch (err) {
     return { at, source, tables: [], totals: { tables: 0, rows: 0, emptyTables: 0 }, compare: null, error: String((err as Error)?.message ?? err).slice(0, 200) };
   } finally {

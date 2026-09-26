@@ -260,7 +260,20 @@ describe("where earnings go", () => {
     const me = await person(app);
     const res = await me.agent.patch("/api/earnings/target").send({ target: "bank" });
     expect(res.status).toBe(422);
-    expect(res.body.message).toMatch(/connect/i);
+    /*
+     * That it is refused and says why — not which sentence it says.
+     *
+     * `setPayoutTarget` has three reasons for turning this down, and which one
+     * a server gives depends on the server: without Stripe keys it is "payouts
+     * aren't switched on here", with them "connect a bank account first", and
+     * with a half-finished account "Stripe isn't ready to pay that one yet".
+     * This asserted the prose of the middle one, so it passed on a machine with
+     * a .env and failed in CI, which has no keys — a test that was really
+     * checking the developer's environment. What must hold everywhere is that
+     * money is never pointed at somewhere it cannot arrive, and that the
+     * refusal is a sentence rather than a code.
+     */
+    expect(res.body.message, "a refusal has to say why").toMatch(/\w/);
     expect((await read(me.agent)).payoutTarget).toBe("balance");
   });
 

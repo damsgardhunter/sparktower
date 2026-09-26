@@ -183,6 +183,23 @@ export const KEPT: Owned[] = [
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },
   /*
+   * "This screen is broken", and who dealt with it.
+   *
+   * Kept rather than mine, which is what the table itself already says: both
+   * columns are `on delete set null` rather than cascade, so a closing account
+   * takes its name off the report and leaves the report. That is the right way
+   * round for this queue — it takes reports from signed-out visitors, so an
+   * unattributed one is the ordinary case rather than an orphan, and a bug
+   * somebody took the trouble to describe should not stop being a bug because
+   * they left. Exported all the same, because their own words about a product
+   * that failed them are theirs to have a copy of.
+   *
+   * `handled_by_id` is an operator's record of work done, like the moderation
+   * lines above it.
+   */
+  { table: "problem_reports", column: "user_id" },
+  { table: "problem_reports", column: "handled_by_id" },
+  /*
    * A company's own records, which it goes on running on after one of its
    * people leaves: who did what in it, the weekly numbers someone filed, and
    * the jobs and goals they owned (unassigned on the way out, so the job's

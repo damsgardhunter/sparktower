@@ -22,6 +22,19 @@ export interface DataShape {
   totals: { tables: number; rows: number; emptyTables: number };
   /** Tables the code declares that the database doesn't have, and the reverse. */
   compare: { inCodeNotInDb: string[]; inDbNotInCode: string[] } | null;
+  /**
+   * How many tables were left out because the schema is bigger than the read's
+   * ceiling, and absent when none were.
+   *
+   * It exists because the truncation used to be silent. Tables are read in
+   * alphabetical order and cut at the ceiling, so a schema over it does not
+   * lose an arbitrary few — it loses the end of the alphabet, every table from
+   * `u` on. This repository's own schema crossed 150 and the shape stopped
+   * containing `users`, which is how it was found: a test asked for a row count
+   * and got undefined. Anyone reading a customer's schema would have been
+   * shown a third of it missing with nothing saying so.
+   */
+  truncated?: number;
   error?: string;
 }
 
