@@ -23,6 +23,7 @@ const PUBLIC_WRITES: Record<string, string> = {
   "POST /api/auth/login": "the password it checks",
   "POST /api/logout": "the session it destroys; refuses cross-site requests",
   "POST /api/auth/verify-email": "the emailed link, by hash, spent once",
+  "POST /api/problem-reports": "nothing — somebody saying a screen is broken, which is most worth hearing from the person who cannot sign in to say it; a message and a path with its query dropped, twelve per address every thirty minutes",
   "POST /api/client-errors": "nothing — a browser reporting that one of its own screens threw, which is most worth hearing when it happened before anybody could sign in; redacted, stored nowhere, ten per address every ten minutes",
   "POST /api/auth/forgot-password": "nothing — it sends mail to an address it already holds; limited per address and per account",
   "POST /api/auth/reset-password": "the emailed token, by hash, unexpired, spent once; limited per address",

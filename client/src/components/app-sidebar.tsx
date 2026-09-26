@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy, MessageSquareWarning } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -103,6 +103,20 @@ export function AppSidebar() {
   const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
     queryKey: ["/api/admin/safety/status"],
     enabled: isReviewer,
+    refetchInterval: 5 * 60_000,
+  });
+
+  /*
+   * How many problem reports nobody has read. Badged, because a queue with no
+   * count on it is a queue somebody opens once and then forgets exists — and
+   * the whole point of taking reports is reading them.
+   *
+   * Five minutes, like the safety poll beside it: a bug report is not urgent
+   * to the minute, and this runs on every admin's sidebar on every screen.
+   */
+  const { data: problems } = useQuery<{ new: number }>({
+    queryKey: ["/api/admin/problem-reports/unread"],
+    enabled: isAdmin,
     refetchInterval: 5 * 60_000,
   });
 
@@ -201,6 +215,30 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/problems"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      {/* What people said is broken, as opposed to who reported whom. */}
+                      <Link href="/admin/problems" data-testid="link-admin-problems">
+                        <MessageSquareWarning className="h-4 w-4" />
+                        <span className="flex-1">Problems</span>
+                        {problems && problems.new > 0 && (
+                          <Badge
+                            variant="destructive"
+                            className="no-default-hover-elevate no-default-active-elevate text-xs"
+                            data-testid="badge-problems"
+                          >
+                            {problems.new}
+                          </Badge>
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {isAdmin && (
                   <SidebarMenuItem>
                     <SidebarMenuButton

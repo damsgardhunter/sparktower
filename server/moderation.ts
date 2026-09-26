@@ -55,7 +55,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup", "reportAnon", "render", "clientError"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup", "reportAnon", "render", "clientError", "problemReport"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -135,6 +135,15 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   sprint: [hitSource("sprint")],
   render: [hitSource("render")],
   clientError: [hitSource("clientError")],
+  /*
+   * Counted from the limiter's own hits, keyed on the address, because this
+   * one takes reports from people who are not signed in — and a
+   * content-counted limit cannot count those: its question is "how many rows
+   * did this author write lately", and an author id nobody has matches
+   * nothing. See the rule in `rateLimit` below, which refuses rather than
+   * silently allowing everything.
+   */
+  problemReport: [hitSource("problemReport")],
   checkout: [hitSource("checkout")],
   external: [hitSource("external")],
 };

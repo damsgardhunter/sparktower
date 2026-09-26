@@ -2117,6 +2117,37 @@ export const exploreSeen = pgTable("explore_seen", {
   index("explore_seen_recent_idx").on(t.userId, t.seenMs),
 ]);
 
+/**
+ * "Is there a problem? Report it" — a sentence from somebody whose screen is
+ * broken, and where that report stands afterwards.
+ *
+ * Kept apart from `contentReports`, which is about people and posts and ends
+ * in moderation. This is about the product and ends in a fix, and the two
+ * queues are read by different people for different reasons.
+ *
+ * `userId` is nullable and clears on delete: the signed-out pages take reports
+ * too, and a bug does not stop existing because the account that found it did.
+ */
+export const problemReports = pgTable("problem_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  message: text("message").notNull(),
+  /** The path they were on, without its query or fragment. See shared/problem-reports.ts. */
+  path: text("path"),
+  userAgent: text("user_agent"),
+  /** One of PROBLEM_STATUSES. */
+  status: text("status").default("new").notNull(),
+  /** What whoever read it wants the next person to know. */
+  note: text("note"),
+  handledById: varchar("handled_by_id").references(() => users.id, { onDelete: "set null" }),
+  handledAt: timestamp("handled_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("problem_reports_status_idx").on(t.status, t.createdAt),
+]);
+
+export type ProblemReport = typeof problemReports.$inferSelect;
+
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**

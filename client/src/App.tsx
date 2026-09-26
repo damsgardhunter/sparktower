@@ -13,6 +13,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
+import { ReportProblemFooter } from "@/components/report-problem";
 import Home from "@/pages/home";
 import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
@@ -58,6 +59,7 @@ import { isPathDisabled } from "@shared/surfaces";
 import PostDetail from "@/pages/post-detail";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
+import AdminProblems from "@/pages/admin-problems";
 import AdminSafety from "@/pages/admin-safety";
 import AdminSecurity from "@/pages/admin-security";
 import AdminConsole from "@/pages/admin-console";
@@ -135,7 +137,9 @@ function Router() {
 
   if (!isAuthenticated) {
     return (
-      <Switch>
+      <div className="flex min-h-screen flex-col">
+        <div className="flex-1 min-h-0">
+        <Switch>
         <Route path="/" component={LandingPage} />
         {/* Google sign-in, for an account with 2FA on, lands here for the code (server/mfa.ts). */}
         <Route path="/mfa" component={MfaVerifyPage} />
@@ -162,7 +166,15 @@ function Router() {
         <Route>
           <Redirect to="/" />
         </Route>
-      </Switch>
+        </Switch>
+        </div>
+        {/*
+          * Signed out and still able to report, which is the case that matters
+          * most: somebody who cannot sign in is by definition not signed in,
+          * and "I cannot sign in" is the report you least want to lose.
+          */}
+        <ReportProblemFooter />
+      </div>
     );
   }
 
@@ -201,6 +213,7 @@ function Router() {
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
           <main className="flex-1 overflow-hidden"><NotFound /></main>
+          <ReportProblemFooter />
         </div>
       </div>
     );
@@ -355,6 +368,8 @@ function Router() {
             <Route path="/posts/:id" component={PostDetail} />
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
+            {/* What people said is broken, as opposed to who reported whom. */}
+            <Route path="/admin/problems" component={AdminProblems} />
             <Route path="/admin/safety" component={AdminSafety} />
             <Route path="/admin/security" component={AdminSecurity} />
             {/* The customer console. Its own API answers 404 to anyone who shouldn't know it exists, and the page draws that as a 404 too. */}
@@ -370,6 +385,8 @@ function Router() {
           </Switch>
           </ErrorBoundary>
         </main>
+        {/* Every screen ends with a way to say it is broken. */}
+        <ReportProblemFooter />
       </div>
     </div>
   );

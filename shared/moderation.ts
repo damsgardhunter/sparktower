@@ -248,6 +248,19 @@ export const RATE_LIMITS = {
     message: "That's a lot of error reports. The first ones were enough.",
   },
   /**
+   * Telling us something is broken.
+   *
+   * Its own budget rather than clientError's, which the error boundary spends:
+   * a screen crashing in a loop must not be the reason somebody cannot report
+   * that it is. Generous, because the failure mode worth avoiding is a person
+   * with a real problem being told to stop talking — a handful of duplicates
+   * costs a moment's reading.
+   */
+  problemReport: {
+    max: 12, windowMinutes: 30,
+    message: "That's a few reports in a short while. We've got them — give us a moment with the first.",
+  },
+  /**
    * Drawing an image on demand: the merch preview and the print file.
    *
    * Both are reads, so the global write floor never sees them, and both are
