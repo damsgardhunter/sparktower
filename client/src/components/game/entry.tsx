@@ -32,6 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Play, Trophy, Clock, CalendarCheck } from "lucide-react";
 import { TOTAL_SECONDS } from "@shared/sprints/game";
 import { PastGames, type PastGame } from "./past-games";
+import { YourIdeaStaysYours } from "./your-idea";
 
 /** What `/api/games/active` says about your allowance. */
 interface Daily {
@@ -164,6 +165,13 @@ export function GameEntry() {
             <Trophy className="mr-1.5 h-4 w-4" /> Leaderboards
           </Button>
         </div>
+
+        {/*
+          * Before the button, not after it. The question "what happens to what
+          * I write" is one somebody has while deciding whether to start, and an
+          * answer they find afterwards is an answer that arrived too late.
+          */}
+        <YourIdeaStaysYours />
 
         {/*
           * When it opens again, exactly. A limit whose end nobody can see reads
