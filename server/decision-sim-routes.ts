@@ -53,7 +53,7 @@ import { getUserEntitlements, modelFor, requireCredits } from "./entitlements";
 import { hasBuildPass } from "./wallet";
 import { getOpenAI, openAiConfigured } from "./openai-client";
 import { parseModelJson, respondToAiError } from "./ai-json";
-import { CHARGEABLE, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
+import { CHARGEABLE, OUTCOME_PRICE_CENTS, formatMoney, NO_CHARGE } from "@shared/plans";
 import { asRunSubcategory, metricsForProject, todayYmd, type CheckinLike } from "@shared/company-rhythm";
 import { readWeeklyRevenue, readUnits } from "@shared/what-would-it-take";
 import {
@@ -541,7 +541,18 @@ export function registerDecisionSimRoutes(app: Express): void {
      */
     const bought = await alreadyBought(project.id);
     const ent = bought
-      ? await getUserEntitlements(userId)
+/*
+       * Bought already, so nothing is charged — but it still goes through
+       * `requireCredits`.
+       *
+       * `getUserEntitlements` alone skips `enforceRateLimit`, which is the
+       * first thing requireCredits does. So a project that had paid once got
+       * unlimited model calls with no burst limit on them at all: the free
+       * part is the design, and the *uncapped* part was an accident of how
+       * the free part was written. `NO_CHARGE` returns the entitlement
+       * without taking anything and keeps the limiter in front of it.
+       */
+      ? await requireCredits(res, userId, NO_CHARGE, "simulating a decision", { projectId: project.id })
       : await requireCredits(res, userId, CHARGEABLE, "simulating a decision", { outcome: "simulations", projectId: project.id });
     if (!ent) return;
 
@@ -744,7 +755,18 @@ export function registerDecisionSimRoutes(app: Express): void {
     // The same purchase as the scenarios: one price for the project, then both.
     const bought = await alreadyBought(project.id);
     const ent = bought
-      ? await getUserEntitlements(userId)
+/*
+       * Bought already, so nothing is charged — but it still goes through
+       * `requireCredits`.
+       *
+       * `getUserEntitlements` alone skips `enforceRateLimit`, which is the
+       * first thing requireCredits does. So a project that had paid once got
+       * unlimited model calls with no burst limit on them at all: the free
+       * part is the design, and the *uncapped* part was an accident of how
+       * the free part was written. `NO_CHARGE` returns the entitlement
+       * without taking anything and keeps the limiter in front of it.
+       */
+      ? await requireCredits(res, userId, NO_CHARGE, "simulating a decision", { projectId: project.id })
       : await requireCredits(res, userId, CHARGEABLE, "valuing this business ten years out", { outcome: "simulations", projectId: project.id });
     if (!ent) return;
 

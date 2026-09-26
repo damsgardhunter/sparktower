@@ -207,8 +207,8 @@ export const seatsRequired = (
 });
 
 /** The most seats one checkout can carry, so a typo is not a four-figure charge. */
-/* The same fifty as SEASON_SEATS_MAX below, written out because it is declared after this. */
-export const SEATS_PER_PURCHASE_MAX = 50;
+/* The same five hundred as SEASON_SEATS_MAX below, written out because it is declared after this. */
+export const SEATS_PER_PURCHASE_MAX = 500;
 
 /**
  * Seats a company buys for a private season: five to a table, and nobody has
@@ -220,12 +220,13 @@ export const SEASON_SEATS_MIN = 5;
 /**
  * The most people one season can seat.
  *
- * Five hundred was a workshop's number, from when this was a thing a company
- * ran for its staff. A market built from somebody's own project is a different
- * shape: a founder and the people they actually want at the table. Fifty is
- * more than anybody has asked for and still a number a person could fill.
+ * Five hundred, which is a hundred tables of five, or five hundred founders
+ * each running their own company in the same market. The market grows to meet
+ * them — see `marketFor` in world.ts — so a season with four hundred people in
+ * it is a bigger market rather than four hundred people fighting over one
+ * market's worth of customers.
  */
-export const SEASON_SEATS_MAX = 50;
+export const SEASON_SEATS_MAX = 500;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 

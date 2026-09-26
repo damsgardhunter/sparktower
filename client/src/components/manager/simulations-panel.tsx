@@ -523,8 +523,8 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
  * because the four balances do not substitute for each other and picking the
  * wrong one buys a seat that cannot be spent.
  */
-/** The ceiling the server enforces (SEASON_SEATS_MAX): a table of fifty. */
-const MAX_SEATS = 50;
+/** The ceiling the server enforces (SEASON_SEATS_MAX). */
+const MAX_SEATS = 500;
 
 function BuySeats({ companyId, projectId, held, prices, seasons }: {
   companyId: string;
@@ -559,7 +559,8 @@ function BuySeats({ companyId, projectId, held, prices, seasons }: {
           <p className="text-sm font-medium">Bring someone else to the table</p>
           <p className="text-sm text-muted-foreground">
             A seat is one person for the life of a season, and it stays with this project for every season
-            after it. You hold {held[kind] ?? 0}.
+            after it. You hold {held[kind] ?? 0}, and a season seats up to {MAX_SEATS.toLocaleString()} —
+            the market grows to fit however many of you turn up.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -19,7 +19,7 @@
 import { describe, it, expect } from "vitest";
 import { marketScale, marketPotential, REFERENCE_POTENTIAL, MARKET_SCALE_MIN } from "@shared/simulation/world";
 import { atScale } from "@shared/simulation/market";
-import { startingCompany, STARTING_CASH } from "@shared/simulation/season";
+import { COMPANIES_A_MARKET_IS_WRITTEN_FOR, marketFor, startingCompany, STARTING_CASH } from "@shared/simulation/season";
 import { fixedCosts } from "@shared/simulation/decisions";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { buildCustomMarket } from "@shared/simulation/custom-market";
@@ -376,5 +376,58 @@ describe("putting the price up", () => {
   /* And cutting the price is never punished as though it were a rise. */
   it("never punishes a price cut", () => {
     expect(held(20, 40)).toBeGreaterThanOrEqual(held(20, 20));
+  });
+});
+
+/**
+ * A market grows to fit the people in it.
+ *
+ * A season can seat five hundred — a hundred tables of five, or five hundred
+ * founders each running their own company — and the customers never moved. A
+ * market of 38,800 split between a hundred companies is 388 each before
+ * anybody has decided anything, which is not a hard market; it is a market
+ * where nothing anybody does is visible.
+ */
+describe("a market with a crowd in it", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const size = (n: typeof niche) => n.segments.reduce((s, x) => s + x.size, 0);
+
+  it("leaves a small field exactly as written", () => {
+    for (const field of [0, 1, 2, COMPANIES_A_MARKET_IS_WRITTEN_FOR]) {
+      expect(size(marketFor(niche, field)), `${field} companies`).toBe(size(niche));
+    }
+  });
+
+  it("grows with the field, and keeps growing", () => {
+    expect(size(marketFor(niche, 20))).toBeGreaterThan(size(marketFor(niche, 8)));
+    expect(size(marketFor(niche, 100))).toBeGreaterThan(size(marketFor(niche, 20)));
+  });
+
+  /*
+   * By the square root, not one for one. A crowded market should still be
+   * harder to enter than an empty one — scaling linearly would make the number
+   * of rivals free, which is the opposite of what a competitor is.
+   */
+  it("still leaves each company worse off in a crowd", () => {
+    const each = (field: number) => size(marketFor(niche, field)) / field;
+    expect(each(100)).toBeLessThan(each(20));
+    expect(each(20)).toBeLessThan(each(4));
+  });
+
+  it("gives a field four times the size twice the customers", () => {
+    const four = size(marketFor(niche, 4));
+    expect(size(marketFor(niche, 16)) / four).toBeCloseTo(2, 1);
+  });
+
+  /* The incumbents hold shares of the bigger market, so it is not emptier. */
+  it("seeds the incumbents from the grown market", () => {
+    const grown = marketFor(niche, 100);
+    const held = seedIncumbents(grown).reduce(
+      (sum, c) => sum + Object.values(c.customers).reduce((a, b) => a + b, 0), 0);
+    const small = seedIncumbents(niche).reduce(
+      (sum, c) => sum + Object.values(c.customers).reduce((a, b) => a + b, 0), 0);
+    expect(held).toBeGreaterThan(small);
+    expect(held / size(grown), "and hold about the same share of it")
+      .toBeCloseTo(small / size(niche), 2);
   });
 });

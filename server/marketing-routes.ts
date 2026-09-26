@@ -29,7 +29,7 @@ import { marketingSchemes, projectMembers, projects, type Project } from "@share
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { requireCredits, getUserEntitlements, modelFor } from "./entitlements";
-import { CHARGEABLE } from "@shared/plans";
+import { CHARGEABLE, NO_CHARGE } from "@shared/plans";
 import { getOpenAI, openAiConfigured } from "./openai-client";
 import { parseModelJson } from "./ai-json";
 import { storage } from "./storage";
@@ -166,7 +166,18 @@ export function registerMarketingRoutes(app: Express): void {
 
     const bought = await alreadyBought(project.id);
     const ent = bought
-      ? await getUserEntitlements(userId)
+/*
+       * Bought already, so nothing is charged — but it still goes through
+       * `requireCredits`.
+       *
+       * `getUserEntitlements` alone skips `enforceRateLimit`, which is the
+       * first thing requireCredits does. So a project that had paid once got
+       * unlimited model calls with no burst limit on them at all: the free
+       * part is the design, and the *uncapped* part was an accident of how
+       * the free part was written. `NO_CHARGE` returns the entitlement
+       * without taking anything and keeps the limiter in front of it.
+       */
+      ? await requireCredits(res, userId, NO_CHARGE, "reading your marketing", { projectId: project.id })
       : await requireCredits(res, userId, CHARGEABLE, "reading a marketing scheme", { outcome: "marketing", projectId: project.id });
     if (!ent) return;
 

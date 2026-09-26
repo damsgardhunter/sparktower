@@ -4621,7 +4621,21 @@ ${projectContext}`;
     }
   });
 
-  app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
+  /*
+   * A storyboard, which was two model calls behind no gate at all.
+   *
+   * `requireImages` sat behind `useAiImages`, so a request that asked for no
+   * pictures — which the repo's own sweep test sends — reached both
+   * `chat.completions.create` calls having paid nothing, taken nothing off the
+   * allowance, and passed no limiter: the route carried no `rateLimit` either,
+   * so it also escaped the AI burst limit and the platform's daily spend
+   * brake. The `deductCredits` at the end had no hold in front of it, which
+   * makes it a bare `chargeCredits(1)` whose failure is discarded — once the
+   * month's allowance is gone the route was free and uncapped.
+   *
+   * The images keep their own gate. This one is for the writing.
+   */
+  app.post("/api/projects/:id/generate-video", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
 
@@ -4641,6 +4655,19 @@ ${projectContext}`;
         ? await requireImages(res, userId, { scope: "project", scopeId: project.id, wanted: STORYBOARD_SCENES, label: "A storyboard" })
         : null;
       if (useAiImages && !permit) return;
+
+      /*
+       * The writing is metered even when no pictures are asked for.
+       *
+       * Two model calls happen below whatever `useAiImages` says, so the gate
+       * cannot be the image gate. A small action: it is one storyboard over
+       * one project, the same size as the other writing on the desk. The hold
+       * this places is settled by the `deductCredits` further down, and
+       * released untouched if the route fails before it — which is what makes
+       * a crashed generation free rather than charged.
+       */
+      const wordsEnt = await requireCredits(res, userId, CREDIT_COSTS.videoGeneration, "A storyboard", { projectId: project.id, action: "videoGeneration" });
+      if (!wordsEnt) return;
 
       // The brief (one-liner, mission, problem, target user, scope, ...) is the
       // richest description of the project, so it grounds every generation step.

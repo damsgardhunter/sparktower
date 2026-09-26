@@ -387,6 +387,45 @@ export function startingCompany(input: {
   };
 }
 
+/**
+ * How many companies a market's segment sizes were written for.
+ *
+ * The seven were balanced against a handful of teams, and a public season tops
+ * out at eight tables. Nothing ever scaled with the number of people playing,
+ * because nothing ever needed to.
+ */
+export const COMPANIES_A_MARKET_IS_WRITTEN_FOR = 4;
+
+/**
+ * The market, grown to fit the people in it.
+ *
+ * A season can seat five hundred — a hundred tables of five, or five hundred
+ * founders each running their own company — and the customers did not move. A
+ * market of 38,800 split between a hundred companies is 388 each before
+ * anybody has done anything, which is not a hard market; it is a market where
+ * nothing anybody does is visible.
+ *
+ * So the segments grow with the field. Not linearly: a company entering a
+ * crowded market should still find it harder than entering an empty one, and
+ * scaling one-for-one would make the number of rivals free. The square root
+ * keeps some of that pressure — a field four times the size gets twice the
+ * customers, so each company has half as many to go round, and crowding still
+ * costs something without costing everything.
+ *
+ * Incumbents and the fragmented tail are seeded from these sizes, so they grow
+ * with it: the market gets bigger, not emptier. And nothing below the
+ * reference shrinks, because a season of two should not be a market of two.
+ */
+export function marketFor(niche: Niche, companies: number): Niche {
+  const field = Math.max(COMPANIES_A_MARKET_IS_WRITTEN_FOR, Math.round(companies));
+  const grow = Math.sqrt(field / COMPANIES_A_MARKET_IS_WRITTEN_FOR);
+  if (grow <= 1) return niche;
+  return {
+    ...niche,
+    segments: niche.segments.map((s) => ({ ...s, size: Math.round(s.size * grow) })),
+  };
+}
+
 /** The world at the start of year one: the incumbents holding the market, and everyone who turned up. */
 export function buildWorld(input: {
   seasonId: string;
@@ -395,8 +434,14 @@ export function buildWorld(input: {
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
 }): World {
-  const { seasonId, niche, teams, cadence } = input;
+  const { seasonId, teams, cadence } = input;
   const periods = periodsPerYear(cadence);
+  /*
+   * Grown to the size of the field before anything is seeded from it, so the
+   * incumbents and the tail hold their shares of the bigger market rather than
+   * their shares of the written one.
+   */
+  const niche = marketFor(input.niche, teams.length);
   return {
     seasonId,
     niche,
