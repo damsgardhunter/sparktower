@@ -21,7 +21,7 @@
  * nothing, and reported to the person waiting.
  */
 import OpenAI from "openai";
-import { aiStubbed, stubCompletion } from "./ai-stub";
+import { aiStubbed, stubCompletion, stubImageBase64 } from "./ai-stub";
 
 /** Replit's AI gateway wants a /v1 suffix; a direct OpenAI key wants no baseURL at all. */
 function baseUrl(): string | undefined {
@@ -70,8 +70,8 @@ export function getOpenAI(): OpenAI {
 let stub: OpenAI | null = null;
 
 /**
- * An object shaped like the two surfaces this server calls — `chat.completions`
- * and `responses` — and nothing else. Anything reaching for a third throws by
+ * An object shaped like the three surfaces this server calls —
+ * `chat.completions`, `responses` and `images` — and nothing else. Anything reaching for a third throws by
  * name rather than returning undefined, so a feature the stub doesn't cover
  * says so instead of failing three frames later.
  */
@@ -96,6 +96,24 @@ function stubClient(): OpenAI {
         model: body?.model ?? "ai-stub",
         status: "completed",
         output_text: stubCompletion(String(body?.instructions ?? ""), String(body?.input ?? "")),
+      }),
+    },
+    /*
+     * The pictures, both surfaces. `edit` takes references and ignores them,
+     * which is the one thing the stub cannot fake — whether the cover really
+     * was drawn around the logo is a question only the real model answers. What
+     * it can prove is everything around the drawing: that the reference was
+     * read, that two objects were stored, that the dollar was taken once and
+     * refunded when the model gave nothing back.
+     */
+    images: {
+      generate: async (body: any) => ({
+        model: body?.model ?? "ai-stub",
+        data: [{ b64_json: stubImageBase64(body?.size) }],
+      }),
+      edit: async (body: any) => ({
+        model: body?.model ?? "ai-stub",
+        data: [{ b64_json: stubImageBase64(body?.size) }],
       }),
     },
   };

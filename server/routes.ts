@@ -47,6 +47,7 @@ import { registerInvestmentRoutes } from "./investment-routes";
 import { recordExploreAction } from "./explore-actions";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { registerProjectVisualRoutes } from "./project-visuals";
+import { registerBrandKitRoutes } from "./brand-kit";
 import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
@@ -512,6 +513,7 @@ export async function registerRoutes(
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
   registerProjectVisualRoutes(app);
+  registerBrandKitRoutes(app);
   registerPostImageRoutes(app);
 
   // User Profile

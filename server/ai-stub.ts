@@ -27,6 +27,7 @@
  * a screenshot. It exists so the flows around the model — money, progress,
  * persistence, notifications — can be exercised end to end.
  */
+import { deflateSync } from "node:zlib";
 
 /** On only when asked for, and never in production, whatever the variable says. */
 export function aiStubbed(): boolean {
@@ -220,4 +221,79 @@ export function stubCompletion(system: string, user: string): string {
     for (const k of ["cannotSimulate"]) if (k in filled) filled[k] = "";
   }
   return JSON.stringify(filled);
+}
+
+// ---------------------------------------------------------------------------
+// Pictures
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake image, for the same reason as the fake sentences above.
+ *
+ * Images are the only thing in this product that costs real money on every
+ * press, which makes them the thing most worth being able to exercise without
+ * paying — and, until this existed, the one surface the stub could not reach:
+ * the stub client throws by name on anything it does not cover, so every route
+ * that draws something was untestable except against the real model. A logo, a
+ * cover, five profile visuals, a badge, a post image, a storyboard: all of them
+ * real money, none of them checkable for free.
+ *
+ * What comes back is a flat grey square with nothing in it. Deliberately
+ * nothing: a stub that returned a plausible logo would end up in a screenshot
+ * and be mistaken for what the product actually draws. It is a real PNG, built
+ * here rather than pasted in as base64, so the magic-byte and dimension checks
+ * every image route runs see the size they asked for.
+ */
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return ~c >>> 0;
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([head, body, crc]);
+}
+
+/** "1536x1024" as the image endpoints spell it, or a square when it can't be read. */
+function dimensions(size: unknown): { width: number; height: number } {
+  const match = /^(\d{2,5})x(\d{2,5})$/.exec(String(size ?? ""));
+  if (!match) return { width: 512, height: 512 };
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** A grey PNG of the size that was asked for, base64-encoded as the API returns it. */
+export function stubImageBase64(size: unknown): string {
+  const { width, height } = dimensions(size);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  // 8 bits per sample, colour type 2 (truecolour), no interlacing.
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+
+  // One filter byte per row, then three bytes a pixel, all the same grey.
+  const row = Buffer.alloc(1 + width * 3, 0x9a);
+  row[0] = 0;
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw, { level: 1 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]).toString("base64");
 }

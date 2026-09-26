@@ -61,6 +61,7 @@ import { BackingSetup } from "@/components/backing-setup";
 import { InvestmentInbox } from "@/components/investment-inbox";
 import { ImageUploadField } from "@/components/image-upload-field";
 import { ProfileVisualsButton } from "@/components/profile-visuals-button";
+import { BrandKitCard } from "@/components/brand-kit-card";
 import { type NovaHandoff } from "@shared/nova-handoff";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -1484,6 +1485,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
             hint="Wide banner across the top of your public page."
             testId="upload-project-cover"
           />
+          {isOwner && <BrandKitCard project={project} />}
           {isOwner && <ProfileVisualsButton project={project} />}
         </CardContent>
       </Card>

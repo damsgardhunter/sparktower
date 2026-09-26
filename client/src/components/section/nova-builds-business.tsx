@@ -255,7 +255,17 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
         {start.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
         {`Have Nova build it — ${formatMoney(OUTCOME_PRICE_CENTS.business)} once`}
       </Button>
-      <p className="text-xs text-muted-foreground">One payment for this project. No subscription, and nothing expires.</p>
+      {/*
+        * What the price covers, named. The pass makes every priced outcome on
+        * this project free afterwards — the route that sells it says so — and
+        * that was true without ever being said on the screen where the money is
+        * asked for. Somebody weighing $14.99 is weighing it against the four or
+        * five things they would otherwise buy one at a time.
+        */}
+      <p className="text-xs text-muted-foreground">
+        One payment for this project, and everything priced on it afterwards is included — the roadmap, the documents,
+        the codebase audit, the simulations and a placeholder logo and cover. No subscription, and nothing expires.
+      </p>
     </div>
   );
 }
