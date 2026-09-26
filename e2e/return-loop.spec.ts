@@ -77,7 +77,8 @@ test("a return shows what's new since you looked, continues exploring, and actin
   await fresh.close();
 
   // Back on Discover in the first browser: the banner names her, and her card carries the news.
-  await page.goto("/discover");
+  /* Searched, not browsed — see the note in discover-actions.spec.ts. */
+  await page.goto("/discover?q=Bea+Builder");
   await expect(page.getByTestId("return-banner")).toBeVisible();
   await expect(page.getByTestId("return-banner-detail")).toContainText("Bea Builder: 1 new post");
   await expect(page.getByTestId(`badge-update-${beaId}`)).toHaveText("1 new post");
@@ -87,12 +88,14 @@ test("a return shows what's new since you looked, continues exploring, and actin
   await expect(page.getByTestId("return-banner")).toHaveCount(0);
 
   // Acting brings the nudge, and the nudge leads somewhere real.
-  await page.goto("/discover");
+  await page.goto("/discover?q=Plant+Swap");
   await page.getByTestId(`button-follow-${projectId}`).click();
   const more = page.getByTestId("toast-more-like-this");
   await expect(more).toBeVisible();
   await more.click();
-  await expect(page).toHaveURL(/\/discover\?category=saas/);
+  /* The query travels with the filter now, so the category is asserted where it
+   * sits rather than as the whole query string. */
+  await expect(page).toHaveURL(/\/discover\?.*category=saas/);
 
   await beaContext.close();
 });

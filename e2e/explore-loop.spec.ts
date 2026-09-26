@@ -77,7 +77,9 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   // Browsing projects used to be its own page; it's the default state here now.
   await page.goto("/discover");
   await expect(page.getByTestId("discover-search")).toBeVisible();
-  await page.goto("/discover");
+  /* Searched, not browsed — see the note in discover-actions.spec.ts. The funnel
+   * still records the open either way: the page reports it on mount. */
+  await page.goto("/discover?q=Explore+Target");
   const card = page.getByTestId(`card-project-${projectId}`);
   await expect(card).toBeVisible();
 
