@@ -18,6 +18,7 @@ import {
 } from "@shared/schema";
 import { openai } from "./replit_integrations/image/client";
 import { IMAGE_MODEL } from "./aiModels";
+import { ModelResponseError } from "./ai-json";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { badgeLevelForAmount, badgeLevel, BADGE_LEVELS, MAX_SHOWCASE_BADGES, FOUNDER_LEVEL } from "@shared/backing";
 
@@ -156,7 +157,19 @@ export async function renderBadgeImage(
     : await openai.images.generate(common);
 
   const b64 = response.data?.[0]?.b64_json;
-  if (!b64) throw new Error("The image model returned nothing");
+  /*
+   * The typed error, not a plain one.
+   *
+   * A reply with no picture in it is the image model's version of unreadable
+   * JSON, and every other model route says so with a 502 and
+   * `model_unreadable` — the difference between "it had a bad day, try again"
+   * and "this feature is broken", which is the difference between retrying and
+   * giving up. A plain Error fell through `respondToAiError` to a generic 500,
+   * which is what test/integration/ai-metering-sweep.test.ts objected to: it
+   * calls every AI route with a model that answers with nothing and holds each
+   * one to the same shape.
+   */
+  if (!b64) throw new ModelResponseError("badge image");
   return Buffer.from(b64, "base64");
 }
 

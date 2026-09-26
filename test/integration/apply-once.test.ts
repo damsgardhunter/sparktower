@@ -29,7 +29,7 @@ vi.mock("openai", () => {
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { verifyEmail } = await import("../helpers/verify-email");
 const { db } = await import("../../server/db");
-const { users, projectKanbanTasks } = await import("@shared/schema");
+const { users, projectKanbanTasks, pathSyncState } = await import("@shared/schema");
 const { and, eq } = await import("drizzle-orm");
 
 afterAll(async () => { await closeTestApp(); });
@@ -153,9 +153,26 @@ describe("the path's tree, read by two tabs at once", () => {
     await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, gone.id));
 
     // The home screen only reads: it must not put it back, and must not double it.
+    // (True both before and after the debounce — this route never reconciled.)
     await me.agent.get("/api/me/next-steps").expect(200);
     const afterRead = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, p.id));
     expect(afterRead.some((t) => (t.tags ?? []).includes("backbone:SHIP.M1.5"))).toBe(false);
+
+    /*
+     * A minute later, which is what the debounce means.
+     *
+     * `syncPathTree` used to reconcile on every read of `/path`; it now records
+     * the reconcile against its inputs and skips one inside
+     * PATH_SYNC_DEBOUNCE_MS (server/phase-trees.ts), because that read is what
+     * every open dashboard polls every fifteen seconds and it took a write lock
+     * to find nothing. So a board that loses a milestone heals within the
+     * minute rather than on the next read, and clearing the bookkeeping row is
+     * how this test says "the minute passed" without waiting for it.
+     *
+     * The property being tested is unchanged and is the concurrency one: six
+     * tabs arriving together put it back exactly once. Only the trigger moved.
+     */
+    await db.delete(pathSyncState).where(eq(pathSyncState.projectId, p.id));
 
     // Six tabs asking for the path at once put it back exactly once.
     await Promise.all(Array.from({ length: 6 }, () => me.agent.get(`/api/projects/${p.id}/path`)));
