@@ -40,6 +40,7 @@
  * Afterwards every journal entry has a row, `db:verify` passes, and
  * `db:migrate` works normally again for everything that comes next.
  */
+import { pathToFileURL } from "node:url";
 import { readFileSync } from "fs";
 import path from "path";
 import pg from "pg";
@@ -163,7 +164,22 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => { console.error(err); process.exit(1); },
-);
+/*
+ * Run it, but only when it was actually run.
+ *
+ * `unguardedStatements` is exported for test/unit/catch-up-guard.test.ts,
+ * which holds the merged migrations to being re-appliable. Importing it used
+ * to start the catch-up: `main()` was called at module scope, so the test run
+ * opened a connection, did the work, and called `process.exit(0)` in the
+ * middle of the suite. Vitest reports that as "process.exit unexpectedly
+ * called with 0" and fails the job — 3,133 tests passing and a red check,
+ * which is the worst shape a failure can have, because nothing in it points at
+ * what is wrong.
+ */
+const runDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (runDirectly) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => { console.error(err); process.exit(1); },
+  );
+}
