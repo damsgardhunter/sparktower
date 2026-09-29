@@ -28,7 +28,7 @@
  * produces nothing. One seat pulling hard while the others idle moves very
  * little, which is the whole design.
  */
-import { expectationPenalty, expectationsFor } from "./criteria";
+import { expectationPenalty, expectationsFor, topPriceCeiling } from "./criteria";
 import { hasTier, priceFor } from "./responsibilities";
 import { featureAppeal } from "./product";
 import { DEAL_CHASERS_LEAVE, promoAppeal } from "./world";
@@ -130,7 +130,7 @@ export function priceLicence(company: Company, segment: Segment): number {
   return 1 + PRICE_LICENCE_MAX * Math.max(0, standing - 0.5) * 2;
 }
 
-export function appealFor(company: Company, segment: Segment, year?: number): number {
+export function appealFor(company: Company, segment: Segment, year?: number, marketCeiling?: number): number {
   // Price, relative to what this segment thinks is normal. Cheaper is better,
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
@@ -193,7 +193,7 @@ export function appealFor(company: Company, segment: Segment, year?: number): nu
    * without one, and a defender reading the market should see preference, not
    * this year's rules, which it is not the one being judged by.
    */
-  const expected = year === undefined ? 1 : expectationPenalty(company, segment, year);
+  const expected = year === undefined ? 1 : expectationPenalty(company, segment, year, marketCeiling);
 
   return Math.max(0, Math.min(1, appeal * trust * expected));
 }
@@ -416,13 +416,16 @@ export function allocate(
   /** Appeal per segment, kept so the spill pass uses the same preferences the year was decided on. */
   const appealBySegment: Record<string, Record<string, number>> = {};
 
+  /** The last price anybody in this market will pay. See `topPriceCeiling`. */
+  const marketCeiling = topPriceCeiling(niche.segments, year);
+
   for (const segment of niche.segments) {
     flows[segment.id] = {};
     fresh[segment.id] = {};
     const demand = segmentDemand(segment, year, economy, periods);
     const appeal: Record<string, number> = {};
     // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year, marketCeiling) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -501,9 +504,20 @@ export function allocate(
        * a year. The further over, the more leave: a few per cent over costs a
        * few per cent, double the ceiling costs most of them.
        */
-      // Tiers only, for the reason given in `expectationPenalty`.
-      const ceiling = expectationsFor(segment, year).priceCeiling;
-      const over = hasTier(c, segment.id) ? Math.max(0, priceFor(c, segment.id) / Math.max(1, ceiling) - 1) : 0;
+      /*
+       * A tier is judged against what these people will pay; a list price
+       * against the last ceiling in the market, for the reason given in
+       * `expectationPenalty`. Judging a list price per segment would make
+       * every company that prices above its cheapest segment a gouger, which
+       * is most of them; judging it against nothing at all — which is what
+       * this did — made a price of any size cost nothing, and the customers a
+       * company held stopped falling however far it went.
+       */
+      const askedOf = priceFor(c, segment.id);
+      const ceiling = hasTier(c, segment.id)
+        ? expectationsFor(segment, year).priceCeiling
+        : marketCeiling;
+      const over = Math.max(0, askedOf / Math.max(1, ceiling) - 1);
       const gouged = Math.min(0.85, over * 0.6);
       // Every rate here is an annual one — a third of a segment a year is the
       // outer limit — so a quarter moves a quarter of it. Without this a
