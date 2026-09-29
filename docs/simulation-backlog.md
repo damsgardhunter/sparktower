@@ -466,6 +466,29 @@ human is never handed the 2.0% death sentence. Bots have no such floor.
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
 
+## The half of this file that runs
+
+`test/unit/known-imbalances.test.ts` states the properties the sections above
+say are missing, as `it.fails` tests. Each carries its measurement in a comment
+and fails on the assertion — none of them are skipped, and none pass by
+throwing.
+
+The point of writing them that way: fix one of these and **its test starts
+failing**, because a `.fails` test that passes is a failure. That is the alarm
+telling you what you changed. Drop the `.fails` and the assertion becomes an
+ordinary guard against the bug returning.
+
+What is in there now:
+
+  - an annual discount that is the right call in every market at every level
+  - price tiers that are never the wrong call
+  - a bot that never proposes a region in a whole season
+  - a bot that opens below the floor a person is given (93 of 200 do)
+  - a region bought outright reaching further than one opened as announced
+
+Anything measured and deliberately left should go in there as well as here, so
+that the backlog cannot quietly stop being true.
+
 ## Built, so nobody rebuilds it
 
 - Every seat's decisions, arriving over the first five years of a season
