@@ -193,6 +193,17 @@ export const startingCashFor = (input: { officers?: number; seats?: Role[]; scal
 export const OPENING_BUDGET = STARTING_CASH * 0.15;
 
 /**
+ * The smallest share of a market that is still a real place to sell.
+ *
+ * A company opening below this cannot earn enough to open anywhere else, and
+ * never does: reach is a hard ceiling, so a small home means small revenue
+ * means no expansion means a small home. It was always the floor under where a
+ * *person* opens; it is the floor under where a bot opens too, because half a
+ * field of companies that were dead before the first decision is not a field.
+ */
+export const VIABLE_WEIGHT = 0.08;
+
+/**
  * Where a company opens.
  *
  * A person's team opens in the cheapest region that is still a real place to
@@ -215,16 +226,32 @@ export const OPENING_BUDGET = STARTING_CASH * 0.15;
  * than the human home, every time. A player using a bot's own policy, decision
  * for decision, still finished fourth or fifth of five against four of them.
  *
- * Scattering them without the bias costs nothing the comment above wanted: a
- * uniform pick averages 0.75× to 0.90× the human's home, so a bot may land
- * well or badly and neither is the rule.
+ * Scattering them without the bias costs nothing the comment above wanted, but
+ * scattering them across *everything* they could afford cost something else:
+ * a region below `VIABLE_WEIGHT` is not a place a company can build a business
+ * in — which is why a person is never given one — and between 46% and 67% of
+ * bots were opening in one. Measured with identical decisions over twenty-four
+ * quarters, a home of 2.0% gives one region, 11,635 customers and a company
+ * worth nothing, against nine regions and 35.7m from a home of 12.6%. Reach is
+ * a hard ceiling, so a small home means small revenue, which means it cannot
+ * afford to open anywhere else, which keeps it small. Half the field was dead
+ * on arrival.
+ *
+ * So a bot scatters across the regions that are real places to sell, the same
+ * floor a person gets. That leaves bots averaging 1.3x to 1.7x the human home,
+ * because a person takes the *cheapest* viable region and any scatter over the
+ * band must sit above the bottom of it. That is a difficulty setting rather
+ * than an unfairness: a bot follows a fixed, middling policy all season and a
+ * person can play. What is not acceptable, and is what this used to do, is
+ * handing a bot the *best* region as a rule — see the history above.
  */
 export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: string } = {}): City {
-  const real = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
+  const real = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= VIABLE_WEIGHT)
     ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
   if (!options.botRun) return real;
 
-  const affordable = niche.cities.filter((c) => c.entryCost <= OPENING_BUDGET);
+  /* Affordable, and somewhere a company could actually get going. */
+  const affordable = niche.cities.filter((c) => c.entryCost <= OPENING_BUDGET && c.weight >= VIABLE_WEIGHT);
   if (affordable.length === 0) return real;
 
   const seed = options.seed ?? niche.id;

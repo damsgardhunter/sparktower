@@ -28,7 +28,7 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { defaultDraft } from "@shared/simulation/levers";
 import { botDecision } from "@shared/simulation/bots";
-import { openingRegion, OPENING_BUDGET } from "@shared/simulation/season";
+import { OPENING_BUDGET } from "@shared/simulation/season";
 import { ROLES, type Role, type TeamDecisions, type World } from "@shared/simulation/types";
 
 const held = (c: any): number =>
@@ -135,27 +135,6 @@ describe("bots, once they have opened", () => {
     expect(proposals.filter(Boolean).length, "a bot never proposes a region, in a whole season").toBeGreaterThan(0);
   });
 
-  it.fails("should not open somewhere the game itself calls not a real place", () => {
-    /*
-     * A person opens in "the cheapest region that is still somewhere" — the
-     * cheapest with `weight >= 0.08`. That floor exists because a region below
-     * it is not a place a company can build a business in, and the code says
-     * so. Bots scatter across everything they can afford, with no floor.
-     *
-     * What that costs, with identical policy over twenty-four quarters:
-     * a home of 2.0% gives one region, 11,635 customers and a company worth
-     * nothing; 9.0% gives five regions and 11.2m; 12.6% gives nine and 35.7m.
-     * Reach is a hard ceiling, so a small home means small revenue, which
-     * means it cannot afford to open anywhere else, which keeps it small.
-     *
-     * The scatter is worth keeping — it is why five bots do not all crowd into
-     * one region. The absence of a floor under it is not.
-     */
-    const floor = openingRegion(niche).weight;
-    const homes = Array.from({ length: 200 }, (_, i) => openingRegion(niche, { botRun: true, seed: `v${i}` }));
-    const doomed = homes.filter((h) => h.weight < 0.08);
-    expect(doomed.length, `${doomed.length} of ${homes.length} bots open below the floor a person gets (${(floor * 100).toFixed(1)}%)`).toBe(0);
-  });
 });
 
 describe("the two doors into a new region", () => {

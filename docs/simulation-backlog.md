@@ -463,6 +463,38 @@ human is never handed the 2.0% death sentence. Bots have no such floor.
     does not survive the other four axes — year four, one region, a vote, and
     a year's delay is a lot to pay for 30% off.
 
+17. ~~Bots opened where no company could build a business.~~ **Done.** A person
+    is given the cheapest region that is still a real place to sell — the
+    cheapest above `VIABLE_WEIGHT`, which is 8% of the market. Bots scattered
+    across everything they could afford with no such floor, so **46% to 67% of
+    them, depending on the market, opened somewhere they could never grow
+    from**: one region for twenty-four quarters, 11,635 customers, a company
+    worth nothing. Half a field of corpses is not a field.
+
+    They now scatter across the viable regions only. Five bots run through a
+    full season, identical policy:
+
+        before                          after
+        edinburgh  2.0%  1 region   0   manchester 15.3%  9 regions  11.2m
+        leeds      9.0%  5 regions 11.2m  leeds      9.0%  5 regions  12.7m
+        glasgow   12.6%  9 regions 35.7m  birmingham 13.5%  6 regions  12.4m
+                                          glasgow   12.6%  8 regions   9.1m
+                                          leeds      9.0%  5 regions   6.2m
+
+    The second column is the more interesting one: founder value is no longer
+    monotonic in the size of the home. The bot opening at 9.0% finishes ahead
+    of the one at 15.3%. What looked like "where a company opens decides its
+    season" was really "opening below the viability floor decides its season";
+    above the floor, the decisions decide it.
+
+    The cost, stated plainly: bots now average 1.3x to 1.7x the human home,
+    because a person takes the *cheapest* viable region and any scatter across
+    the band sits above the bottom of it. That is a difficulty setting rather
+    than an unfairness — a bot follows a fixed, middling policy all season and
+    a person can play — and it is a different thing from what was removed
+    earlier, which handed a bot the *best* region as a rule. The guard in
+    `season.test.ts` now asserts the absence of that rule rather than a ratio.
+
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
 
@@ -483,8 +515,10 @@ What is in there now:
   - an annual discount that is the right call in every market at every level
   - price tiers that are never the wrong call
   - a bot that never proposes a region in a whole season
-  - a bot that opens below the floor a person is given (93 of 200 do)
   - a region bought outright reaching further than one opened as announced
+
+One has already come out of that file, which is the cycle working: bots opening
+below the floor a person is given. See below.
 
 Anything measured and deliberately left should go in there as well as here, so
 that the backlog cannot quietly stop being true.

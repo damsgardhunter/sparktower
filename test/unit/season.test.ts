@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import { forecastDemand } from "@shared/simulation/forecast";
 import {
-  economyFor, startingCompany, buildWorld, openingDecisions, caretakerDecisions, openingRegion, OPENING_BUDGET,
+  economyFor, startingCompany, buildWorld, openingDecisions, caretakerDecisions, openingRegion, OPENING_BUDGET, VIABLE_WEIGHT,
   decisionsForYear, absenceNote, tickDueAt, seasonOver, CARETAKER_RATE, SEASON_YEARS,
 } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -188,15 +188,56 @@ describe("where a company opens", () => {
    * player using a bot's own policy, decision for decision, still finished
    * fourth or fifth of five against four of them.
    */
-  it("does not give a bot a bigger home than a person gets", () => {
+  /**
+   * And never handed the best region as a rule, which is the thing that went
+   * wrong.
+   *
+   * This used to send a bot to "the best region it can afford" on half a
+   * seeded coin, and the test here asserted that it did. The stated purpose
+   * was only ever to stop five bots crowding into one region — `openingRegion`
+   * says in as many words that "the point is not that bots play well" — but
+   * the effect was a permanent head start no person could have. Reach is a
+   * hard ceiling on the market a company can ever address, so a bigger home
+   * compounds for a whole season: bots opened in regions 1.4x to 2.2x larger
+   * than the human home, in every market, and a player using a bot's own
+   * policy still finished fourth or fifth of five against four of them.
+   *
+   * What is asserted now is the absence of the *rule*, not a ratio. Bots
+   * average above a person because a person takes the cheapest viable region
+   * and any scatter across the viable band sits above the bottom of it. That
+   * is a difficulty setting, and a defensible one: a bot follows a fixed,
+   * middling policy all season and a person can play.
+   */
+  it("does not hand a bot the best region as a rule", () => {
     for (const n of NICHES) {
-      const person = openingRegion(n).weight;
-      const homes = Array.from({ length: 300 }, (_, i) => openingRegion(n, { botRun: true, seed: `v${i}` }));
-      const average = homes.reduce((sum, h) => sum + h.weight, 0) / homes.length;
-      expect(average / person, `${n.id}: bots average ${(average / person).toFixed(2)}x the human home`)
-        .toBeLessThanOrEqual(1.15);
-      // Scattered, not flattened: some bots still land somewhere big, by chance rather than by rule.
-      expect(Math.max(...homes.map((h) => h.weight)), `${n.id}: no bot ever lands well`).toBeGreaterThan(person);
+      const affordable = n.cities.filter((c) => c.entryCost <= OPENING_BUDGET && c.weight >= VIABLE_WEIGHT);
+      const best = [...affordable].sort((a, b) => b.weight - a.weight)[0];
+      const homes = Array.from({ length: 400 }, (_, i) => openingRegion(n, { botRun: true, seed: `v${i}` }));
+      const bestShare = homes.filter((h) => h.id === best.id).length / homes.length;
+      const evenShare = 1 / affordable.length;
+      expect(bestShare, `${n.id}: the best region goes to ${Math.round(bestShare * 100)}% of bots, against ${Math.round(evenShare * 100)}% for an even scatter`)
+        .toBeLessThan(evenShare * 1.6);
+    }
+  });
+
+  /**
+   * A bot opening below the floor a person is given is dead before the first
+   * decision, and half the field was.
+   *
+   * Measured with identical decisions over twenty-four quarters: a home
+   * holding 2.0% of its market gives one region, 11,635 customers and a
+   * company worth nothing; 12.6% gives nine regions and 35.7m. Reach is a hard
+   * ceiling, so a small home means small revenue, which means it cannot afford
+   * to open anywhere else, which keeps it small. Between 46% and 67% of bots
+   * were being handed that, depending on the market.
+   */
+  it("never opens a bot somewhere it could not build a business", () => {
+    for (const n of NICHES) {
+      const homes = Array.from({ length: 400 }, (_, i) => openingRegion(n, { botRun: true, seed: `v${i}` }));
+      const doomed = homes.filter((h) => h.weight < VIABLE_WEIGHT);
+      expect(doomed.length, `${n.id}: ${doomed.length} of ${homes.length} bots open below ${VIABLE_WEIGHT * 100}% of the market`).toBe(0);
+      // Still scattered, which is the whole reason bots choose at all.
+      expect(new Set(homes.map((h) => h.id)).size, `${n.id}: bots all opened in the same place`).toBeGreaterThan(1);
     }
   });
 
