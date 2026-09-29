@@ -112,10 +112,20 @@ export function coverPrompt(project: Project, style: LogoStyleDef): string {
     `A wide banner image for the public page of a business called "${project.title}".`,
     "The supplied image is that business's logo, drawn moments ago.",
     "Take its exact palette, and place the logo itself in the composition — unchanged in shape and proportion, not redrawn, not restyled, not reinterpreted.",
-    "Everything around it is a setting the logo sits in: shapes, texture and light that extend the same palette.",
+    /*
+     * The three lines below are the fix for what this produced without them:
+     * the edit endpoint handed the reference straight back on a wider canvas,
+     * so twenty covers were the logo centred on white — indistinguishable from
+     * having no cover at all once the page puts a title over the middle. The
+     * logo staying unchanged is the point of the feature; it being the *whole*
+     * picture is the failure.
+     */
+    "Place it small and off-centre. It must not be the centre of the banner and must not fill it.",
+    "The rest of the frame is a designed setting this business belongs in — its materials, surfaces, tools and light — carrying the same palette to every edge.",
+    "A banner that is the logo on a plain or empty background is a failed banner.",
     brief ? `What the business is:\n${brief}` : "",
     `Keep it consistent with a ${style.label.toLowerCase()} — the banner and the mark have to look like one piece of work.`,
-    "Wide landscape composition, uncluttered, plenty of quiet space; the page puts a title over the middle of it.",
+    "Wide landscape composition. Keep the middle calm enough for a title to sit over it, but the frame itself must carry colour and texture to its edges.",
     style.lettering
       ? `The only text is the name in the logo, spelled exactly "${project.title}". No tagline, no other words.`
       : "No text, letters, words or numbers anywhere in the image.",
@@ -169,21 +179,33 @@ export async function drawBrandKit(
     quality: IMAGE_QUALITY,
   } as any), project.ownerId);
 
-  let coverUrl: string | null = null;
+  return { logoUrl, coverUrl: await drawCover(project, style, logoUrl) };
+}
+
+/**
+ * The cover alone, from a logo that already exists.
+ *
+ * Split out so a cover can be redrawn without paying for a logo that was
+ * already right — which is exactly what happened when the cover prompt was
+ * fixed and twenty good logos would otherwise have been thrown away to get
+ * twenty new banners.
+ */
+export async function drawCover(
+  project: Project, style: LogoStyleDef, logoUrl: string,
+): Promise<string | null> {
   const reference = await readReference(logoUrl, "logo");
-  if (reference) {
-    coverUrl = await draw(openai.images.edit({
-      model: IMAGE_MODEL,
-      prompt: coverPrompt(project, style),
-      image: [reference],
-      size: "1536x1024",
-      quality: IMAGE_QUALITY,
-    } as any), project.ownerId).catch((err) => {
-      console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
-      return null;
-    });
-  }
-  return { logoUrl, coverUrl };
+  if (!reference) return null;
+  return draw(openai.images.edit({
+    model: IMAGE_MODEL,
+    prompt: coverPrompt(project, style),
+    image: [reference],
+    size: "1536x1024",
+    quality: IMAGE_QUALITY,
+  } as any), project.ownerId).catch((err) => {
+    // Kept, not failed: see the file comment. The logo is the purchase.
+    console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
+    return null;
+  });
 }
 
 export function registerBrandKitRoutes(app: Express) {

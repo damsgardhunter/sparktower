@@ -22,6 +22,8 @@ import { users, projects } from "@shared/schema";
 import { DEMO_BUILDERS } from "./seed/demo-builders";
 
 const apply = process.argv.includes("--apply");
+/** Redraw only the banner, reusing the logo that is already there. */
+const coversOnly = process.argv.includes("--covers-only");
 const limitArg = process.argv.indexOf("--limit");
 const LIMIT = limitArg > -1 ? Number(process.argv[limitArg + 1]) : Infinity;
 
@@ -40,7 +42,9 @@ async function main(): Promise<number> {
     .where(like(users.email, "%@demo.sparktower.invalid"))
     .orderBy(projects.createdAt);
 
-  const todo = rows.filter((r) => !r.logoUrl || !r.coverUrl);
+  const todo = coversOnly
+    ? rows.filter((r) => r.logoUrl)
+    : rows.filter((r) => !r.logoUrl || !r.coverUrl);
   console.log(`demo projects: ${rows.length}`);
   console.log(`already drawn: ${rows.length - todo.length}`);
   console.log(`to draw:       ${Math.min(todo.length, LIMIT)}`);
@@ -51,7 +55,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const { drawBrandKit } = await import("../server/brand-kit");
+  const { drawBrandKit, drawCover } = await import("../server/brand-kit");
   const { logoStyle } = await import("@shared/brand-kit");
 
   let done = 0, failed = 0, noCover = 0;
@@ -60,7 +64,14 @@ async function main(): Promise<number> {
     process.stdout.write(`  ${r.owner} — ${r.title} … `);
     try {
       const [project] = await db.select().from(projects).where(eq(projects.id, r.id));
-      const { logoUrl, coverUrl } = await drawBrandKit(project, logoStyle(STYLES.get(r.title)));
+      const style = logoStyle(STYLES.get(r.title));
+      let logoUrl = r.logoUrl!;
+      let coverUrl: string | null;
+      if (coversOnly) {
+        coverUrl = await drawCover(project, style, logoUrl);
+      } else {
+        ({ logoUrl, coverUrl } = await drawBrandKit(project, style));
+      }
       await db.update(projects)
         .set({ logoUrl, ...(coverUrl ? { coverUrl } : {}) })
         .where(eq(projects.id, r.id));
