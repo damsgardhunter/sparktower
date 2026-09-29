@@ -36,7 +36,9 @@
  * CFO choosing a cheaper loan with a covenant over an expensive one without.
  */
 import type { Company, Economy, Niche, Role } from "./types";
-import { saturate } from "./market";
+import { ROLES } from "./types";
+import { salaryIn } from "./workforce";
+import { saturate, atScale } from "./market";
 
 /** Price and how the market hears about you. */
 export interface MarketingDecision {
@@ -70,6 +72,13 @@ export interface MarketingDecision {
   segmentFocus?: Record<string, number>;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
+  /**
+   * The segment to go looking inside for a niche of your own, or "" for none.
+   * One a year at most, and it costs a year's marketing. From year five.
+   */
+  openNiche?: string;
 }
 
 /** Money: where it comes from and what it costs. */
@@ -116,6 +125,8 @@ export interface FinanceDecision {
   buyback?: number;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
 }
 
 /** The product itself. */
@@ -147,6 +158,8 @@ export interface TechDecision {
   featureMode?: "build" | "copy";
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
 }
 
 /** Making and serving what is sold. */
@@ -217,12 +230,22 @@ export interface ExecutiveDecision {
   pace?: "ship" | "balanced" | "right";
   /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year five. */
   deals?: Record<string, "accept" | "decline" | "vote">;
+  /** Vote on the region operations put to the table, keyed by its id. From year four. */
+  expandVote?: Record<string, "yes" | "no">;
   /** How to answer last year's shock. From year two, and only when there is one. */
   shockAnswer?: string;
 }
 
 /** One year, from all five seats. A missing seat is a real state, not an error. */
 export interface TeamDecisions {
+  /**
+   * False when every seat was empty: nobody filed anything at all.
+   *
+   * Set by `decisionsForYear`, read by `resolveYear` to know the difference
+   * between a company running on a caretaker's plan and one nobody is running
+   * — which is the difference between a bad season and a closed business.
+   */
+  steered?: boolean;
   companyId: string;
   cmo?: MarketingDecision;
   cfo?: FinanceDecision;
@@ -266,7 +289,7 @@ export function interlock(company: Company, d: TeamDecisions, niche: Niche): Int
    * coupling vanish in exactly the year a team is most likely to over-promise.
    */
   const reachable = niche.segments.reduce((sum, s) => sum + s.size, 0);
-  const impliedDemand = held + saturate(marketingSpend, 400_000) * reachable * 0.09;
+  const impliedDemand = held + saturate(marketingSpend, atScale(400_000, company.scale)) * reachable * 0.09;
   /*
    * Reported, and no longer used to discount the marketing itself.
    *
@@ -290,7 +313,7 @@ export function interlock(company: Company, d: TeamDecisions, niche: Niche): Int
    * product nobody buys, and the CTO's year reads as wasted unless the CMO
    * spent alongside them.
    */
-  const awareness = saturate((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 0.7, 250_000);
+  const awareness = saturate((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 0.7, atScale(250_000, company.scale));
   const known = 0.35 + 0.65 * Math.max(awareness, company.brand / 140);
   const techSpend = (d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0);
   if (techSpend > 120_000 && known < 0.55) {
@@ -407,6 +430,8 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     regionFocus: cleanNumbers(d.cmo.regionFocus, 0, 100),
     segmentFocus: cleanNumbers(d.cmo.segmentFocus, 0, 100),
     dealVotes: cleanVotes(d.cmo.dealVotes),
+    openNiche: typeof d.cmo.openNiche === "string" ? d.cmo.openNiche.slice(0, 64) : "",
+    expandVote: cleanVotes(d.cmo.expandVote),
   };
 
   if (d.cto) out.cto = {
@@ -420,6 +445,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     featureBet: typeof d.cto.featureBet === "string" ? d.cto.featureBet.slice(0, 64) : "",
     featureMode: d.cto.featureMode === "copy" ? "copy" : "build",
     dealVotes: cleanVotes(d.cto.dealVotes),
+    expandVote: cleanVotes(d.cto.expandVote),
   };
 
   if (d.coo) out.coo = {
@@ -458,6 +484,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     refinance: Math.max(0, clean(d.cfo.refinance)),
     buyback: Math.max(0, clean(d.cfo.buyback)),
     dealVotes: cleanVotes(d.cfo.dealVotes),
+    expandVote: cleanVotes(d.cfo.expandVote),
   };
 
   if (d.ceo) out.ceo = {
@@ -473,6 +500,7 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     replaceBid: Math.max(0, clean(d.ceo.replaceBid)),
     pace: d.ceo.pace === "ship" || d.ceo.pace === "right" ? d.ceo.pace : "balanced",
     deals: cleanAnswers(d.ceo.deals),
+    expandVote: cleanVotes(d.ceo.expandVote),
     shockAnswer: typeof d.ceo.shockAnswer === "string" && /^(statement|silence|blame_(cmo|cfo|cto|coo))$/.test(d.ceo.shockAnswer) ? d.ceo.shockAnswer : "",
   };
 
@@ -555,6 +583,44 @@ export const FOCUS_NOTES: Record<Focus, string> = {
  * nothing for its copy to be checked against — two bare literals in a function
  * body cannot be imported by the test that proves the two sides agree.
  */
+/**
+ * How many executive salaries a company pays.
+ *
+ * The count of filled seats, unless the company says otherwise. A solo
+ * founder's company holds all five desks so that every lever works and no
+ * decision goes unmade, and pays for one person, because that is how many
+ * there are. Anything charging for chairs rather than for people reads this.
+ */
+export const officersOf = (company: { seats?: Role[]; officers?: number }): number =>
+  Math.max(1, company.officers ?? (company.seats ?? []).length);
+
+/**
+ * A year of this company's running costs — the unit distress is measured in.
+ *
+ * Three places wanted this number and two of them wrote a flat 1,100,000: the
+ * salary bill of a company in one of the seven catalogue markets, which are
+ * all sized around that. A market Nova wrote for a startup runs at a
+ * hundredth of it and a solo founder employs one person, so a company with
+ * $308,000 of headroom and a profit was measured against a corporation's
+ * payroll and told, every period, that it had less than a year of costs in
+ * reach. It never had a way to stop being told that: nothing it could earn
+ * would clear a bar set for a business a hundred times its size.
+ *
+ * Officers and scale, the same two facts the fixed-cost sum uses, because it
+ * is the same salary bill seen from a different screen.
+ *
+ * Expressed as the old figure moved, not rebuilt from executive salaries. It
+ * was never only executives — it is a year of everything a company of five
+ * running at catalogue scale pays out — so recomputing it as `officers *
+ * EXECUTIVE` came to 700,000 and quietly moved the threshold for the seven
+ * markets as well, which the tests on them caught. A full table at full scale
+ * gets exactly the number it always got.
+ */
+export const REFERENCE_YEAR_OF_COSTS = 1_100_000;
+
+export const yearOfCostsFor = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
+  REFERENCE_YEAR_OF_COSTS * (officersOf(company) / ROLES.length) * (Number(company.scale) || 1);
+
 export const SALARY = 85_000;
 export const EXECUTIVE = 140_000;
 
@@ -602,13 +668,113 @@ export function nextTechDebt(input: {
   return Math.max(0, Math.min(100, current + added - cleared - 0.5));
 }
 
-export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1): number {
+/**
+ * What it costs to keep a plant of this size ready, full or not.
+ *
+ * The cost base used to be five executive salaries and whoever operations had
+ * hired — about £320,000 against a full plant worth £1.5–2.4m, so a company
+ * only had to fill a *sixth* of what it built to cover its costs. Measured
+ * across 140 seasons, that one number was why failure was nearly impossible:
+ * a company that got traction could not then lose it, and every lever that
+ * squeezed a working business changed nothing, because no amount of squeezing
+ * reaches a business with that much headroom.
+ *
+ * Room costs money. Rent, licences, the systems, the people who keep it
+ * running — a share of what that room earns when it is full, paid whether it
+ * is full or not. It is what makes a bad year a bad year, and it is why the
+ * operations seat's judgement about how much to build is the decision the
+ * season turns on.
+ *
+ * Measured at the market's own reference price, not the company's, so a team
+ * cannot make its overhead disappear by discounting.
+ *
+ * ## Written, measured, and not yet wired in
+ *
+ * This is the lever that works. At 0.55 it lands the failure rate on exactly
+ * six seasons in twenty, which is the target, and it is the only one of seven
+ * things tried that moved the number at all — starting cash, incumbent
+ * strength, the leave-rate cap, opening plant, idle cost and contribution
+ * margin between them moved it by half a death.
+ *
+ * It is not wired in because at that strength it does not only kill weak
+ * companies, it suppresses strong ones: a competent team's share in MMOs
+ * falls from 5% to 2.4% and a good plan stops growing before the season ends.
+ * Fourteen guard tests fail and two of them are guarding principles rather
+ * than thresholds, which is the difference between a balance that needs
+ * re-calibrating and one that is wrong.
+ *
+ * What it needs before it goes in:
+ *
+ *   - Incumbents pay it too. They run on a simplified model and have never
+ *     paid `fixedCosts` at all, which was ignorable at £320,000 and is not at
+ *     £1.2m — charging it to players alone is a tax on being the newcomer.
+ *     Wiring that up on its own did not fix the share collapse, so there is
+ *     more to it than symmetry.
+ *   - A lower setting paired with the second half of the plan: harder opening
+ *     segments in the soft markets. Overhead alone at 0.55 is a blunt
+ *     instrument; overhead at ~0.35 plus a fickle opening segment in podcasts,
+ *     project management and MMOs should reach the same number without
+ *     flattening everybody.
+ *   - The guard tests re-set against the new economics *afterwards*, never to
+ *     make a red suite green.
+ */
+export const PLANT_OVERHEAD = 0.0;
+
+export function plantOverhead(capacity: number, niche: Niche): number {
+  const opening = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
+  const perUnit = Math.max(0, (opening?.referencePrice ?? 0) - niche.baseUnitCost);
+  return Math.max(0, capacity) * perUnit * PLANT_OVERHEAD;
+}
+
+/**
+ * What running a company of this size actually costs, over the payroll.
+ *
+ * The cost base was five executive salaries and whoever operations had hired
+ * — about £320,000 against a full plant worth £1.5–2.4m, so a company only
+ * had to fill a *sixth* of what it built to cover its costs. That one number
+ * is why failure was nearly impossible: a company that got traction could not
+ * then lose it, and every lever that squeezed a working business changed
+ * nothing, because no amount of squeezing reaches a business with that much
+ * headroom.
+ *
+ * A business is not five salaries. It is premises, systems, insurance,
+ * accountants, the people nobody counts — and none of it stops when a year
+ * goes badly.
+ *
+ * Deliberately *not* charged on the size of the plant, which was tried first
+ * and measured: an overhead proportional to capacity punishes exactly the
+ * strategies that build capacity, and the volume plays — growing and
+ * competing on price — fell from 7.8% and 4.2% of a market to 0.4% each. A
+ * cost base that rises with the company rather than with its room leaves
+ * every way of playing intact and still makes a bad year a bad year.
+ */
+
+export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1, niche?: Pick<Niche, "workforce">): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
-  const salaries = headcount * SALARY * economy.costIndex;
+  /*
+   * At this market's own rate. A kitchen's people cost £65,000 and a
+   * studio's £128,000, which is the difference between the two businesses
+   * as much as anything in their segments — and it is why "should we hire"
+   * is a different question in each. See `workforce.ts`.
+   */
+  const perHead = niche ? salaryIn(niche) : SALARY;
+  const salaries = headcount * perHead * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
-  const executives = company.seats.length * EXECUTIVE;
-  return (salaries + executives) * footprint;
+  // `officersOf` rather than `seats.length`, because one founder holding five
+  // desks is five levers and one salary. See Company.officers.
+  const executives = officersOf(company) * EXECUTIVE;
+  /*
+   * At the scale of the market this company is in.
+   *
+   * These salaries are right for a market worth £400m, which is what all
+   * seven of the hand-written ones are worth. A market Nova wrote for one
+   * business can be a two-hundredth of that, and a five-person company paying
+   * London executive salaries in a market worth £1.65m a year is not a hard
+   * game — it is an impossible one, and it was: fourteen years of losses
+   * every single time. A smaller business pays smaller salaries.
+   */
+  return (salaries + executives) * footprint * (company.scale ?? 1);
 }
 
 /**

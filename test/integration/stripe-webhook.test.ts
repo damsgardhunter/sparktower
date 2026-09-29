@@ -25,7 +25,7 @@ import request from "supertest";
 import Stripe from "stripe";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../../server/db";
-import { users, projects, donations, stripeEvents, projectBackings } from "@shared/schema";
+import { users, projects, donations, stripeEvents, projectBackings, companies } from "@shared/schema";
 
 const WEBHOOK_SECRET = fakeWebhookSecret("signature-verification");
 const stripe = new Stripe(FAKE_STRIPE_TEST_KEY, {
@@ -508,4 +508,129 @@ describe("a webhook that arrives before a signing secret is configured", () => {
     expect(res.status).toBe(500);
     expect(await db.select().from(stripeEvents)).toHaveLength(0);
   });
+});
+
+/**
+ * Seats on the simulation, credited to the right balance.
+ *
+ * Two seats are sold at two prices and they do not substitute for each other,
+ * so crediting the wrong one takes a company's money and gives it something it
+ * cannot spend. The balance is chosen from the session's own metadata rather
+ * than worked back from the amount, because the price can change and a
+ * historical session should still land where it was sold.
+ */
+describe("simulation seats", () => {
+  const seatEvent = (over: Record<string, unknown> = {}, session: Record<string, unknown> = {}) => ({
+    id: `evt_seats_${Math.random().toString(36).slice(2, 10)}`,
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: `cs_seats_${Math.random().toString(36).slice(2, 10)}`,
+        payment_status: "paid",
+        amount_total: 1500,
+        metadata: { kind: "simulation_seats", seats: "5", seatKind: "play", ...over },
+        ...session,
+      },
+    },
+  });
+
+  const balances = async (id: string) => {
+    const [row] = await db.select({
+      play: companies.simPlaySeatsPaid, nova: companies.simNovaSeatsPaid,
+    }).from(companies).where(eq(companies.id, id));
+    return row;
+  };
+
+  async function aCompany() {
+    const { user } = await aPaidUser();
+    const [company] = await db.insert(companies).values({
+      createdBy: user.id, name: `Seats ${Math.random().toString(36).slice(2, 8)}`,
+      slug: `seats-${Math.random().toString(36).slice(2, 10)}`, createdAt: new Date(),
+    } as any).returning();
+    return { user, company };
+  }
+
+  /**
+   * A payment method that settles later still buys what it paid for.
+   *
+   * Stripe sends a delayed payment as two events: `completed` while it is
+   * still `unpaid`, then `async_payment_succeeded` once the money lands. A
+   * blanket `if (settledLater) return;` sat above the seats, the game plays
+   * and the donations — so the first event was skipped for being unpaid and
+   * the second was skipped for being the wrong type. The customer paid and
+   * received nothing at all, and nothing anywhere said so.
+   */
+  it("credits seats when the payment settles after the checkout closed", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    const sessionId = `cs_delayed_${Math.random().toString(36).slice(2, 10)}`;
+
+    // One: the checkout closes, and the money has not arrived.
+    const opened = seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "unpaid" });
+    expect((await deliver(app, opened)).status).toBe(200);
+    expect(await balances(company.id), "nothing yet, because nothing is paid").toEqual({ play: 0, nova: 0 });
+
+    // Two: it settles.
+    const settled = {
+      ...seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "paid" }),
+      type: "checkout.session.async_payment_succeeded",
+    };
+    expect((await deliver(app, settled)).status).toBe(200);
+    expect(await balances(company.id), "paid, so the seats arrive").toEqual({ play: 5, nova: 0 });
+  }, 60_000);
+
+  /* And the same session twice still credits once. */
+  it("credits a delayed payment once, however many times it is delivered", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    const sessionId = `cs_twice_${Math.random().toString(36).slice(2, 10)}`;
+    const settled = () => ({
+      ...seatEvent({ companyId: company.id, userId: user.id }, { id: sessionId, payment_status: "paid" }),
+      type: "checkout.session.async_payment_succeeded",
+    });
+
+    expect((await deliver(app, settled())).status).toBe(200);
+    expect((await deliver(app, settled())).status).toBe(200);
+    expect(await balances(company.id)).toEqual({ play: 5, nova: 0 });
+  }, 60_000);
+
+  it("credits play seats and Nova seats to their own balances", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+
+    expect((await deliver(app, seatEvent({ companyId: company.id, userId: user.id }))).status).toBe(200);
+    expect(await balances(company.id)).toEqual({ play: 5, nova: 0 });
+
+    expect((await deliver(app, seatEvent({ companyId: company.id, userId: user.id, seatKind: "nova", seats: "2" }))).status).toBe(200);
+    expect(await balances(company.id), "each lands on its own balance").toEqual({ play: 5, nova: 2 });
+  }, 120_000);
+
+  it("treats a session from before the two tiers as the Nova seat it was sold as", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    // No `seatKind` at all: every seat sold before the split was a $5 Nova seat.
+    const event = seatEvent({ companyId: company.id, userId: user.id });
+    delete (event.data.object.metadata as any).seatKind;
+
+    expect((await deliver(app, event)).status).toBe(200);
+    expect(await balances(company.id)).toEqual({ play: 0, nova: 5 });
+  }, 120_000);
+
+  it("credits once however many times the same session is delivered", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    const event = seatEvent({ companyId: company.id, userId: user.id });
+
+    await deliver(app, event);
+    // A new event id carrying the same session: Stripe does this, and it must not pay twice.
+    await deliver(app, { ...event, id: `evt_seats_again_${Math.random().toString(36).slice(2, 8)}` });
+    expect(await balances(company.id)).toEqual({ play: 5, nova: 0 });
+  }, 120_000);
+
+  it("credits nothing for a session that was never paid", async () => {
+    const app = await getTestApp();
+    const { user, company } = await aCompany();
+    await deliver(app, seatEvent({ companyId: company.id, userId: user.id }, { payment_status: "unpaid" }));
+    expect(await balances(company.id)).toEqual({ play: 0, nova: 0 });
+  }, 120_000);
 });

@@ -6,8 +6,13 @@ SparkTower is an AI-powered platform designed for entrepreneurs and freelancers,
 ## User Preferences
 I want iterative development.
 Ask before making major changes.
-Do not make changes to the folder `shared/`.
 Do not make changes to the file `server/seed-stripe.ts`.
+
+`shared/` used to be off-limits here. It isn't any more — the types and the
+copy that both halves of the app read live there, and the rule was forcing
+server-side workarounds for things that were plainly shared concerns. Change it
+deliberately: a type in `shared/` is a contract the client and the server both
+compile against, so a change to one means checking both.
 
 ## System Architecture
 **Frontend:** Built with React, TypeScript, Vite, Wouter, TanStack Query, Shadcn UI, Tailwind CSS, and Framer Motion. Features a green primary color, 0rem border-radius, Space Grotesk font, and full dark/light mode support. Landing page has a cinematic hero section with a Tesla Coil tower video (`@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4`) filling the viewport on a white background, with staggered fade-in animations for headline (2s), subtext (2.6s), CTA buttons (3.2s), and header (3.8s).

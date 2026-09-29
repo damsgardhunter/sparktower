@@ -1,10 +1,16 @@
 /**
  * Creates or updates the Stripe products and prices for every paid tier.
  *
- * Idempotent: re-running reconciles names, descriptions, and metadata, and
- * creates a new price only when the amount actually changed (Stripe prices are
- * immutable). Old prices are deactivated rather than deleted so existing
- * subscriptions keep working until customers migrate.
+ * There are none. Nothing is sold as a subscription any more: the only thing
+ * Checkout sells is a balance top-up, and those are created inline with
+ * `price_data` from TOP_UP_CENTS (see POST /api/nova/top-up), so there is no
+ * catalog to keep in sync and nothing for this script to seed.
+ *
+ * It is kept, and kept working, rather than deleted, because products and
+ * prices from the subscription era are still live in Stripe with subscriptions
+ * attached to them. Running it now reconciles an empty list and says so, which
+ * is the honest answer; deleting the script would leave `npm run stripe:seed`
+ * broken in anyone's notes and take the wind-down story with it.
  *
  *   npm run stripe:seed
  */
@@ -13,6 +19,12 @@ import { STRIPE_PLANS } from "@shared/plans";
 
 async function seed() {
   const stripe = await getUncachableStripeClient();
+
+  if (STRIPE_PLANS.length === 0) {
+    console.log("Nothing to seed: SparkTower sells outcomes in dollars, not subscriptions.");
+    console.log("Top-ups are priced inline at checkout — see TOP_UP_CENTS in shared/plans.ts.");
+    return;
+  }
 
   for (const plan of STRIPE_PLANS) {
     // Look products up by tier metadata, not name — names are editable copy.

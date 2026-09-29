@@ -120,7 +120,7 @@ export function CheckoutReturn() {
     (async () => {
       try { await apiRequest("POST", "/api/stripe/sync-subscription"); } catch { /* the webhook sets the plan either way */ }
       await queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
-      toast({ title: "You're upgraded", description: "Your new credits are ready — keep generating." });
+      toast({ title: "You're upgraded", description: "Your plan is active." });
     })();
   }, [location, toast]);
   return null;

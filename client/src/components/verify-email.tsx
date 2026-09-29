@@ -28,6 +28,38 @@ function useResend() {
   });
 }
 
+/** True while this account's address is unconfirmed, so a screen can say so before it offers something that will be refused. */
+export function useEmailUnconfirmed(): boolean {
+  const { user } = useAuth();
+  return !!user && !(user as any).emailVerifiedAt;
+}
+
+/**
+ * The refusal, said where the action is, instead of after it.
+ *
+ * Anything that reaches another person is refused until the address is
+ * confirmed (server/email-verification.ts). The publish dialog used to offer
+ * the whole form — title, tags, a preview — and only then answer 403, with the
+ * explanation in a toast that cleared itself after four seconds and a dialog
+ * that sat there looking exactly as it had before. Somebody could fill it in
+ * three times and never catch the sentence telling them why.
+ */
+export function ConfirmEmailFirst({ what, className = "" }: { what: string; className?: string }) {
+  const { user } = useAuth();
+  const resend = useResend();
+  return (
+    <div className={`rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2 ${className}`} data-testid="confirm-email-first">
+      <p className="text-sm flex items-start gap-2">
+        <MailWarning className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+        <span>Confirm your email before you can {what}. We sent a link to {user?.email ?? "your address"}.</span>
+      </p>
+      <Button size="sm" variant="outline" disabled={resend.isPending} onClick={() => resend.mutate()} data-testid="button-resend-verification-inline">
+        {resend.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Send the link again"}
+      </Button>
+    </div>
+  );
+}
+
 export function VerifyEmailNotice() {
   const { user } = useAuth();
   const resend = useResend();
@@ -35,7 +67,7 @@ export function VerifyEmailNotice() {
   return (
     <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-sm bg-amber-100 text-amber-950 dark:bg-amber-950/60 dark:text-amber-100 border-b border-amber-300/60" data-testid="verify-email-notice">
       <MailWarning className="h-4 w-4 shrink-0" />
-      <span className="flex-1">Confirm your email to post, comment, message and invite people. We sent a link to {user.email}.</span>
+      <span className="flex-1">Confirm your email to publish, post, comment, message and invite people. We sent a link to {user.email}.</span>
       <Button size="sm" variant="outline" className="h-7 bg-transparent" disabled={resend.isPending} onClick={() => resend.mutate()} data-testid="button-resend-verification">
         {resend.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Send it again"}
       </Button>

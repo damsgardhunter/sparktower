@@ -1,5 +1,5 @@
 /**
- * Sprints & simulations, on a phone.
+ * Simulations, on a phone.
  *
  * Two things live here: a half-hour game two people play to invent a startup,
  * and a fortnight-long market simulation five people run a company in.
@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Btn, Card, Empty, Loading, Screen } from "../../src/components/ui";
-import { Group, MenuRow, PageIntro, isSwitchedOff } from "../../src/components/MoreKit";
+import { Callout, Group, MenuRow, PageIntro, isSwitchedOff } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { useVentures } from "../../src/components/sim/useSim";
 import { liveVentures, ventureRoute, ventureTitle } from "../../src/components/sim/lobby";
@@ -31,7 +31,16 @@ export default function Sprints() {
   /* A game you walked away from is the first thing this screen should offer. */
   const { data: active, isLoading, isRefetching, refetch, error } = useQuery({
     queryKey: ["games-active"],
-    queryFn: () => api<{ games: { id: string }[] }>("/api/games/active"),
+    /*
+     * The allowance comes back with the active game, on one request. The
+     * button below is written from it, so that "Play now" is never offered on
+     * a day the server is about to refuse — finding out after deciding to
+     * spend half an hour is the version of this that annoys people.
+     */
+    queryFn: () => api<{
+      games: { id: string }[];
+      daily?: { canStart: boolean; opensIn: string | null };
+    }>("/api/games/active"),
   });
 
   const { data: ventures } = useVentures();
@@ -47,6 +56,8 @@ export default function Sprints() {
       // Already playing: take them there rather than refusing.
       const existing = err?.body?.gameId;
       if (existing) return router.push(`/game/${existing}` as any);
+      // Today's game went on another device: refetch so the button stops offering it.
+      if (err?.body?.code === "played_today") qc.invalidateQueries({ queryKey: ["games-active"] });
       show(err?.body?.message ?? "Couldn't start a game.");
     },
   });
@@ -65,6 +76,8 @@ export default function Sprints() {
   }
 
   const inProgress = active?.games?.[0];
+  /* A game in progress is never a refusal: it is yours to go back to. */
+  const locked = !inProgress && active?.daily ? !active.daily.canStart : false;
 
   return (
     <View style={{ flex: 1 }}>
@@ -73,8 +86,23 @@ export default function Sprints() {
           <PageIntro
             icon="planet"
             title="Ten Years From Now"
-            body="Invent a startup with someone in five rounds — the idea, the customer, the money, the product, and how you spend your first million. Then find out what an AI thinks it's worth in a decade."
+            body="Five rounds with a stranger to invent a startup. An AI says what it's worth in ten years."
           />
+
+          {/*
+            * The rule, before it bites. A limit somebody meets for the first
+            * time as an error reads as the app being broken; read in advance
+            * it is what makes the score at the end worth having.
+            */}
+          <Callout
+            tone={locked ? "warn" : "info"}
+            icon={locked ? "time-outline" : "calendar-outline"}
+            title={locked ? "You've had today's game" : "One game a day"}
+            body={locked
+              ? `The next one opens ${active?.daily?.opensIn ?? "shortly"}.`
+              : "So the number at the end, and your place on the boards, mean something."}
+          />
+
           <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
             {inProgress ? (
               <Btn
@@ -86,10 +114,10 @@ export default function Sprints() {
               />
             ) : (
               <Btn
-                label={start.isPending ? "Starting…" : "Play now"}
-                icon="play"
+                label={start.isPending ? "Starting…" : locked ? "Played today" : "Play now"}
+                icon={locked ? "time-outline" : "play"}
                 style={{ flex: 1 }}
-                disabled={start.isPending}
+                disabled={start.isPending || locked}
                 onPress={() => start.mutate()}
                 testID="button-start-game"
               />

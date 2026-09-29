@@ -306,6 +306,18 @@ export async function artifactPageMeta(req: Request, res: Response, next: NextFu
           publishedAt: artifact.publishedAt ? new Date(artifact.publishedAt).toISOString() : null,
         },
       } satisfies PageMeta;
+    } else {
+      /*
+       * No public artifact at this id — taken down, never published, or a
+       * typo in a link somebody pasted. The page still renders and says so,
+       * but the *response* said 200, which is a lie told to everything that
+       * reads status codes rather than pixels: a crawler indexes the empty
+       * shell as a real page, a link checker reports the dead link as fine,
+       * and an unfurler shows the site's generic preview for something that
+       * isn't there. The status is set here and the shell is still served,
+       * so a person following the link sees the page's own explanation.
+       */
+      res.locals.pageStatus = 404;
     }
   } catch { /* the page still loads; it just previews generically */ }
   next();

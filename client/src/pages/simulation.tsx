@@ -43,6 +43,7 @@ import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
 import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown } from "lucide-react";
 import { lookOf } from "@/components/sim/market-look";
+import { SeasonStanding } from "@/components/sim/season-standing";
 
 interface NicheView {
   id: string;
@@ -65,6 +66,9 @@ interface Room {
   name: string | null;
   product: string | null;
   niche: { id: string; name?: string } | null;
+  /** Which year the next tick resolves, and how many the season runs. Null before it starts. */
+  year: number | null;
+  totalYears: number | null;
   lobbySize: number;
   openRoles: Role[];
   seats: Seat[];
@@ -170,10 +174,10 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
   if (isLoading) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:py-8">
       <header className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <h1 className="text-2xl font-bold tracking-tight">Pick a market</h1>
+        <div className="rounded-[calc(1rem-1px)] bg-background p-5 sm:p-6">
+          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Pick a market</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Five of you run one company for fourteen days — a day is a year. Nine tenths of every market below already
             belongs to somebody, and they will not hand it over. Which market you choose decides what winning looks
@@ -196,13 +200,20 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
             <look.Icon className={`h-4 w-4 shrink-0 ${look.ink}`} />
             <p className={`text-xs font-medium ${look.ink}`}>{look.shape}</p>
           </div>
-          <CardContent className="p-5 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="font-semibold text-lg">{niche.name}</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">{niche.premise}</p>
+          <CardContent className="space-y-4 p-4 sm:p-5">
+            {/*
+              * Stacked on a phone, side by side from `sm` up. Squeezed into one
+              * row on a narrow screen the premise — the one line that tells two
+              * markets apart — was wrapping to four lines beside a button that
+              * had shrunk to the word "Join".
+              */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold">{niche.name}</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">{niche.premise}</p>
               </div>
               <Button
+                className="w-full shrink-0 sm:w-auto"
                 onClick={() => join.mutate(niche.id)}
                 disabled={join.isPending}
                 data-testid={`button-join-${niche.id}`}
@@ -386,24 +397,30 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
   const started = room.phase === "running";
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 space-y-5">
+    <div className="mx-auto max-w-3xl space-y-5 px-4 py-6 sm:py-8">
       <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+        <div className="rounded-[calc(1rem-1px)] bg-background p-5 sm:p-6">
+          {/*
+            * The clock above the title on a phone, beside it from `sm` up. In
+            * one row at 360px the countdown took a third of the width and the
+            * phase title — the sentence saying what to do next — wrapped to
+            * three lines under it.
+            */}
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="min-w-0">
               <p className="text-xs uppercase tracking-widest text-muted-foreground">{room.niche?.name ?? "Market"}</p>
-              <h1 className="text-2xl font-bold tracking-tight mt-1" data-testid="text-phase-title">{copy.title}</h1>
-              <p className="text-sm text-muted-foreground mt-1.5 max-w-lg">{copy.body}</p>
+              <h1 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl" data-testid="text-phase-title">{copy.title}</h1>
+              <p className="mt-1.5 max-w-lg text-sm text-muted-foreground">{copy.body}</p>
             </div>
             {room.phase !== "running" && room.phase !== "retired" && (
-              <div className="text-right shrink-0">
+              <div className="shrink-0 sm:text-right">
                 <p
                   className={`text-3xl font-bold tabular-nums ${clock === "now" ? "text-destructive" : clock === "soon" ? "text-amber-600" : ""}`}
                   data-testid="text-countdown"
                 >
                   {countdown(secondsLeft)}
                 </p>
-                <p className="text-[11px] text-muted-foreground flex items-center gap-1 justify-end mt-0.5">
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground sm:justify-end">
                   <Clock className="h-3 w-3" /> left
                 </p>
               </div>
@@ -428,7 +445,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
 
       {/* Who is here. The same list through every phase — these are the people you're doing this with. */}
       <Card className="rounded-2xl nova-ring-soft">
-        <CardContent className="p-5">
+        <CardContent className="p-4 sm:p-5">
           <h2 className="font-semibold flex items-center gap-2 text-sm">
             <Users className="h-4 w-4" /> In the room ({room.seats.length}/{room.lobbySize})
           </h2>
@@ -468,8 +485,8 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
 
       {room.phase === "claiming" && (
         <Card>
-          <CardContent className="p-5">
-            <h2 className="font-semibold text-sm">Seats still open</h2>
+          <CardContent className="p-4 sm:p-5">
+            <h2 className="text-sm font-semibold">Seats still open</h2>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {room.openRoles.map((role) => (
                 <button
@@ -501,18 +518,33 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       {room.phase === "running" && (
         /* The company, running: the one thing on this page to do next, so it carries the ring and the glow. */
         <Card className="rounded-2xl nova-ring nova-glow" data-testid="card-running-company">
-          <CardContent className="p-5 space-y-3">
-            <h2 className="flex items-center gap-3 text-lg font-extrabold">
+          <CardContent className="space-y-4 p-4 sm:p-5">
+            <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl nova-chip"><Sparkles className="h-5 w-5" /></span>
-              {room.name}
-            </h2>
-            {room.product && <p className="text-sm text-muted-foreground">{room.product}</p>}
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-extrabold leading-tight">{room.name}</h2>
+                {room.product && <p className="truncate text-sm text-muted-foreground">{room.product}</p>}
+              </div>
+            </div>
+
+            {/*
+              * Which year it is and where the company stands, on the screen
+              * people actually land on. This used to be one click away on the
+              * standings page, and one click away was far enough that most
+              * teams never saw it.
+              */}
+            <SeasonStanding ventureId={ventureId} />
+
             <p className="text-sm text-muted-foreground">{copy.body}</p>
-            <div className="flex gap-2 pt-1">
+
+            {/* Stacked and full width on a phone; a row from `sm` up. */}
+            <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:flex-wrap">
               <Button size="sm" className="nova-chip border-0 hover:opacity-90" onClick={() => navigate(`/simulation/${ventureId}`)} data-testid="button-open-desk">
                 Open your desk <ArrowRight className="h-4 w-4 ml-1" />
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>
+              <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${ventureId}/standings`)} data-testid="button-open-standings">
+                The whole table
+              </Button>
               {/* The page opens on your running room, so without this there was no way to the market list short of leaving the page. */}
               <Button variant="ghost" size="sm" onClick={onLeave} data-testid="button-pick-another-market">Pick another market</Button>
             </div>

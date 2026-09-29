@@ -35,9 +35,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { errorText } from "@/lib/api-error";
+import { errorText, isYearClosing } from "@/lib/api-error";
 import { Loader2, Store, Gavel, Package, Info } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
+import { DeskCurrency, DeskPeriod, lastsFor, useMoney, usePeriod } from "@/components/sim/desk-currency";
 
 interface Effect { brand?: number; quality?: number; service?: number; capacity?: number; unitCost?: number }
 interface Listing {
@@ -48,8 +49,18 @@ interface Holding {
   id: string; name: string; kind: string; effect: Effect; expiresIn: number | null;
   bookValue: number; willingSale: number; forcedSale: number;
 }
+/** Where this company stands on each axis a lot can move. */
+interface You {
+  quality: number; brand: number; service: number; capacity: number; unitCost: number;
+}
+
 interface Market {
   year: number;
+  you?: You | null;
+  /** What one decision is called here, and how many make a year. */
+  period?: { one: string; many: string; of: string };
+  periods?: number;
+  currency?: string;
   yourRole: string;
   funds: number;
   listings: Listing[];
@@ -57,18 +68,36 @@ interface Market {
   selling: { id: string; name: string; reserve: number; status: string }[];
 }
 
-const compact = (n: number) =>
-  n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+
 
 /** What an asset does, in the words a player would use rather than as a field dump. */
-function describe(effect: Effect): string[] {
+/**
+ * What a lot would do, said against the company that might buy it.
+ *
+ * "+6 quality" and "+4,038 capacity" are what the asset adds to somebody. The
+ * decision is what they make *this* company, and answering that meant holding
+ * two numbers from two screens in your head — a founder said so. Where the
+ * company's own standing is known the line reads "quality 54 → 60", and where
+ * it is not it falls back to the bare addition rather than inventing one.
+ *
+ * Capacity deliberately counts what the company's existing assets already
+ * add, because that is what "your room" means everywhere else on the desk; a
+ * number here that disagreed with the one there would be worse than no number.
+ */
+function describe(effect: Effect, you?: You | null): string[] {
   const parts: string[] = [];
-  if (effect.brand) parts.push(`+${effect.brand} brand`);
-  if (effect.quality) parts.push(`+${effect.quality} quality`);
-  if (effect.service) parts.push(`+${effect.service} service`);
-  if (effect.capacity) parts.push(`+${effect.capacity.toLocaleString()} capacity`);
+  const move = (label: string, add: number, from: number | undefined) =>
+    from === undefined
+      ? `+${add.toLocaleString()} ${label}`
+      : `${label} ${Math.round(from).toLocaleString()} → ${Math.round(from + add).toLocaleString()}`;
+
+  if (effect.brand) parts.push(move("brand", effect.brand, you?.brand));
+  if (effect.quality) parts.push(move("quality", effect.quality, you?.quality));
+  if (effect.service) parts.push(move("service", effect.service, you?.service));
+  if (effect.capacity) parts.push(move("room", effect.capacity, you?.capacity));
   if (effect.unitCost && effect.unitCost !== 1) {
-    parts.push(`${Math.round((1 - effect.unitCost) * 100)}% off every unit`);
+    const off = `${Math.round((1 - effect.unitCost) * 100)}% off every unit`;
+    parts.push(you?.unitCost ? `${off} — ${you.unitCost} → ${Math.round(you.unitCost * effect.unitCost * 100) / 100}` : off);
   }
   return parts;
 }
@@ -90,17 +119,35 @@ export default function SimulationMarketPage() {
     refetchOnMount: "always",
   });
 
+  /*
+   * Above the early return, because these are hooks.
+   *
+   * They used to sit below it, so the first render — the loading one — called
+   * two fewer hooks than every render after it. React matches hooks by call
+   * order, and a component whose hook count changes between renders is the one
+   * thing the rules exist to prevent: it works until something makes the
+   * spinner render and the loaded render share a mount, and then it throws
+   * "rendered more hooks than during the previous render" somewhere else
+   * entirely. Both take an optional argument and fall back to the context, so
+   * moving them costs nothing while the payload is still in flight.
+   */
+  const period = usePeriod(market?.period ? { ...market.period, perYear: market.periods } : undefined);
+  const { compact } = useMoney(market?.currency as any);
+
   if (isLoading || !market) {
     return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
   }
 
   const isCeo = market.yourRole === "ceo";
+  const Period = period.one.charAt(0).toUpperCase() + period.one.slice(1);
 
   return (
+    <DeskCurrency.Provider value={(market.currency as any) ?? "USD"}>
+    <DeskPeriod.Provider value={period}>
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
       <SimHeader icon={Store} title="The market" onBack={() => navigate(`/simulation/${id}`)}>
         <p className="text-sm text-muted-foreground mt-1">
-          Year {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the year resolves.
+          {Period} {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the {period.one} resolves.
           The highest offer over the reserve takes it and pays what they bid.
         </p>
         {!isCeo && (
@@ -119,7 +166,7 @@ export default function SimulationMarketPage() {
       {market.listings.length === 0 ? (
         <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">Nothing is for sale this year.</CardContent></Card>
       ) : (
-        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} isCeo={isCeo} />)
+        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} isCeo={isCeo} you={market.you} />)
       )}
 
       <Card className="rounded-2xl nova-ring-soft">
@@ -151,10 +198,18 @@ export default function SimulationMarketPage() {
         </CardContent>
       </Card>
     </div>
+    </DeskPeriod.Provider>
+    </DeskCurrency.Provider>
   );
 }
 
-function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; ventureId: string; funds: number; isCeo: boolean }) {
+function ListingCard({ listing, ventureId, funds, isCeo, you }: {
+  listing: Listing; ventureId: string; funds: number; isCeo: boolean;
+  /** This company's own standing, so the lot can say what it would make it. */
+  you?: You | null;
+}) {
+  const { compact } = useMoney();
+  const period = usePeriod();
   const { toast } = useToast();
   const [amount, setAmount] = useState<string>(String(listing.yourBid ?? listing.reserve));
 
@@ -164,7 +219,8 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
       toast({ title: "Bid placed", description: "Nobody else can see it. You can change it until the year resolves." });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
     },
-    onError: (err: any) => toast({ title: "Couldn't bid", description: err?.body?.message ?? "Try again.", variant: "destructive" }),
+    onError: (err) => refusal(err, "Couldn't bid", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   const withdraw = useMutation({
@@ -175,10 +231,8 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
      * ended, and the button just stopped doing anything. Say why, and refetch
      * so the card shows what actually happened to the bid.
      */
-    onError: (err) => {
-      toast({ title: "Couldn't withdraw the bid", description: errorText(err), variant: "destructive" });
-      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
-    },
+    onError: (err) => refusal(err, "Couldn't withdraw the bid", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   const n = Number(amount);
@@ -204,11 +258,11 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
         </div>
 
         <div className="flex flex-wrap gap-1.5 mt-3">
-          {describe(listing.effect).map((part) => (
+          {describe(listing.effect, you).map((part) => (
             <span key={part} className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5">{part}</span>
           ))}
           <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5">
-            {listing.expiresIn ? `${listing.expiresIn} years` : "never expires"}
+            {listing.expiresIn ? lastsFor(listing.expiresIn, period) : "never expires"}
           </span>
         </div>
 
@@ -257,13 +311,38 @@ function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; v
   );
 }
 
+/**
+ * A refusal, said the way it deserves.
+ *
+ * `year_closing` is not a failure: the request was fine and arrived during
+ * the seconds a year is being resolved. The server marks it specially so a
+ * screen can say "a moment" instead of going red, and every screen that
+ * forgets to check turns that care back into an error message.
+ */
+function refusal(err: unknown, title: string, toast: (o: any) => void, refetch: () => void) {
+  if (isYearClosing(err)) {
+    toast({ title: "That year just closed", description: "Next year is opening now — the market is catching up." });
+  } else {
+    toast({ title, description: errorText(err, "Try again."), variant: "destructive" });
+  }
+  refetch();
+}
+
 function HoldingRow({ holding, ventureId, listed }: {
-  holding: Holding; ventureId: string; listed: { name: string }[];
+  holding: Holding; ventureId: string; listed: { id: string; name: string; status: string }[];
 }) {
+  const { compact } = useMoney();
+  const period = usePeriod();
   const { toast } = useToast();
   const [reserve, setReserve] = useState(String(holding.willingSale));
   const [selling, setSelling] = useState(false);
-  const alreadyUp = listed.some((l) => l.name === holding.name);
+  /*
+   * The listing this holding is, if it is up. Kept whole rather than reduced
+   * to a yes/no, because taking it down needs its id — which the screen was
+   * already being sent and was throwing away, which is why the web could put
+   * something up for sale and never take it down again while the phone could.
+   */
+  const up = listed.find((l) => l.name === holding.name) ?? null;
 
   const list = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/listings`, { assetId: holding.id, reserve: Number(reserve) }),
@@ -272,11 +351,18 @@ function HoldingRow({ holding, ventureId, listed }: {
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
       setSelling(false);
     },
-    onError: (err: any) => toast({
-      title: "Couldn't list it",
-      description: err?.body?.message ?? "Try again.",
-      variant: "destructive",
-    }),
+    onError: (err) => refusal(err, "Couldn't list it", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
+  });
+
+  const withdraw = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/listings/${up!.id}`),
+    onSuccess: () => {
+      toast({ title: "Taken off the market", description: "Nobody can bid on it now." });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
+    },
+    onError: (err) => refusal(err, "Couldn't withdraw it", toast, () =>
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] })),
   });
 
   return (
@@ -290,7 +376,7 @@ function HoldingRow({ holding, ventureId, listed }: {
             ))}
           </div>
           <p className="text-[11px] text-muted-foreground mt-1">
-            {holding.expiresIn ? `${holding.expiresIn} years left` : "Yours permanently"} · cost {compact(holding.bookValue)}
+            {holding.expiresIn ? `${lastsFor(holding.expiresIn, period)} left` : "Yours permanently"} · cost {compact(holding.bookValue)}
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -300,8 +386,17 @@ function HoldingRow({ holding, ventureId, listed }: {
         </div>
       </div>
 
-      {alreadyUp ? (
-        <p className="text-xs text-muted-foreground mt-2">Already up for sale.</p>
+      {up ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">Up for sale.</p>
+          <Button
+            size="sm" variant="ghost" onClick={() => withdraw.mutate()} disabled={withdraw.isPending}
+            data-testid={`button-withdraw-${holding.id}`}
+          >
+            {withdraw.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+            Take it down
+          </Button>
+        </div>
       ) : selling ? (
         <div className="mt-2 flex flex-wrap gap-2 items-center">
           <Input type="number" value={reserve} onChange={(e) => setReserve(e.target.value)} className="w-36 tabular-nums" data-testid={`input-reserve-${holding.id}`} />

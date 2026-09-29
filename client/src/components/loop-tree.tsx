@@ -142,7 +142,13 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
   });
   const audit = useMutation({
     mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/path/loops/audit`, {}).then((r) => r.json()),
-    onSuccess: (r: any) => { refreshPath(projectId); toast({ title: `Nova scored your loops ${r.audit?.overallScore ?? ""}/100`, description: r.creditsCharged ? `${r.creditsCharged} credits` : undefined }); },
+    /*
+     * No "1 credits" under the score. A loop audit is a small action, which
+     * means it comes out of the month's allowance and costs no money at all —
+     * the sidebar already shows what is left of that, and quoting a credit is
+     * the one thing shared/plans.ts says never to do.
+     */
+    onSuccess: (r: any) => { refreshPath(projectId); toast({ title: `Nova scored your loops ${r.audit?.overallScore ?? ""}/100` }); },
     onError: fail,
   });
   const write = useMutation({

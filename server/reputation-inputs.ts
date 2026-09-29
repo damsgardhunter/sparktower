@@ -266,17 +266,26 @@ export async function simFacts(userId: string): Promise<SimFacts> {
       r.report as report,
       ly.year as years_played,
       se.total_years as total_years,
+      se.niche_id as market_id,
+      extract(epoch from r.created_at) * 1000 as played_at,
       (select count(*) from sim_reports f where f.season_id = ly.season_id and f.year = ly.year)::int as field
     from last_year ly
     join sim_reports r on r.venture_id = ly.venture_id and r.year = ly.year
     join sim_seasons se on se.id = ly.season_id
   `);
 
-  const rows = (result.rows ?? result) as { report: any; years_played: number; total_years: number; field: number }[];
+  const rows = (result.rows ?? result) as { report: any; years_played: number; total_years: number; field: number; market_id: string; played_at: number }[];
   return {
     seasons: rows.map((row) => {
       const report = row.report ?? {};
       return {
+        /*
+         * The market, not the season. A replay copies the market and keeps its
+         * id, so every run of one world shares this — which is how `simScore`
+         * counts eleven goes at a memorised market as the one result it is.
+         */
+        marketId: String(row.market_id ?? ""),
+        playedAt: num(row.played_at),
         rank: num(report.rank) || 99,
         field: Math.max(2, num(row.field)),
         yearsPlayed: num(row.years_played),

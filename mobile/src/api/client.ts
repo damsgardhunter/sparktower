@@ -152,6 +152,21 @@ export function setSessionExpiredHandler(fn: () => void) {
 }
 
 /**
+ * Called when the server says something costs money.
+ *
+ * Handled here rather than screen by screen, for the same reason a session
+ * expiring is: any of a dozen things can be the one that needs paying for —
+ * a code audit, a document, a roadmap, a simulation, an image — and a 402
+ * that only some of them know what to do with is a dead end in the others.
+ * The refusal still throws, so a screen that wants to say something specific
+ * still can; this is what makes sure *something* always offers the way out.
+ */
+let onPaymentRequired: ((body: any) => void) | null = null;
+export function setPaymentRequiredHandler(fn: ((body: any) => void) | null) {
+  onPaymentRequired = fn;
+}
+
+/**
  * A single in-flight refresh shared by all callers.
  *
  * Without this, a screen firing five queries at once on a stale token would
@@ -280,6 +295,9 @@ export async function api<T = any>(path: string, options: RequestOptions = {}): 
   }
 
   if (!res.ok) {
+    // Announced before it is thrown, so the paywall is up whether or not the
+    // caller does anything with the error.
+    if (res.status === 402 && parsed?.code === "payment_required") onPaymentRequired?.(parsed);
     throw new ApiError(
       res.status,
       parsed?.message || `Request failed (${res.status})`,
@@ -383,6 +401,33 @@ export async function loginWithGoogle(idToken: string): Promise<Session | MfaCha
   const session = await api<Session | MfaChallenge>("/api/auth/mobile/google", {
     method: "POST",
     body: { idToken, device: deviceLabel(), attribution },
+  });
+  if (!isMfaChallenge(session)) await saveSession(session);
+  await clearAttribution();
+  return session;
+}
+
+/**
+ * Sign in with Apple.
+ *
+ * `fullName` is sent every time and is almost always empty: Apple hands the
+ * name over on the first authorization and never again, so the one sign-in
+ * that has it is the one that needs it. The server takes it only to fill a
+ * blank, never to overwrite a name somebody has since chosen.
+ */
+export async function loginWithApple(
+  identityToken: string,
+  fullName?: { givenName?: string | null; familyName?: string | null } | null,
+): Promise<Session | MfaChallenge> {
+  const attribution = await pendingAttribution();
+  const session = await api<Session | MfaChallenge>("/api/auth/mobile/apple", {
+    method: "POST",
+    body: {
+      identityToken,
+      device: deviceLabel(),
+      attribution,
+      fullName: fullName ? { givenName: fullName.givenName ?? "", familyName: fullName.familyName ?? "" } : null,
+    },
   });
   if (!isMfaChallenge(session)) await saveSession(session);
   await clearAttribution();

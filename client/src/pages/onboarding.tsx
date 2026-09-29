@@ -149,6 +149,28 @@ export default function Onboarding() {
 
   const prev = () => setStep((s) => Math.max(s - 1, 0));
 
+  /**
+   * Finish now with whatever is filled in.
+   *
+   * Eight steps stand between signing up and making anything, and six of them
+   * — skills, interests, experience, co-founder preferences, a résumé, links —
+   * are about being found by other people, which is not what somebody who came
+   * here to build a business is trying to do in their first two minutes. The
+   * profile is still worth having, so this doesn't remove the steps; it lets
+   * them be answered later, from the profile page, by somebody who now has a
+   * reason to care about them.
+   *
+   * Basic Info is validated first because the rest of the app displays it: a
+   * profile with no name is a worse outcome than a wizard with eight steps.
+   */
+  const skipRest = async () => {
+    if (!(await form.trigger(["displayName", "bio", "location"]))) {
+      setStep(0);
+      return;
+    }
+    await form.handleSubmit(onSubmit)();
+  };
+
   // Applied once, and only into a field the user hasn't touched.
   useEffect(() => {
     if (seeded?.displayName && !form.getValues("displayName")) {
@@ -204,6 +226,19 @@ export default function Onboarding() {
             <div className="flex justify-between mt-2 text-sm text-muted-foreground">
               <span>Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
               <span>{Math.round(progress)}%</span>
+            </div>
+            <div className="mt-3 text-center">
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto p-0 text-xs text-muted-foreground"
+                disabled={isSubmitting}
+                onClick={skipRest}
+                data-testid="button-skip-onboarding"
+              >
+                {step === 0 ? "Just my name for now — finish the rest later" : "Skip the rest — finish your profile later"}
+              </Button>
             </div>
           </div>
         </div>

@@ -143,6 +143,18 @@ export interface Shortfall {
   by: number;
 }
 
+/**
+ * The most any segment in this market will pay before it stops listening.
+ *
+ * The bound on what a single list price can be defended as. A company selling
+ * one price into segments whose going rates differ fifteenfold is always over
+ * somebody's ceiling and that is an ordinary positioning choice — but a price
+ * above *every* ceiling in the market is not aimed at anyone, and nothing in
+ * the model used to say so. See the note in `expectationPenalty`.
+ */
+export const topPriceCeiling = (segments: Segment[], year: number): number =>
+  segments.reduce((top, s) => Math.max(top, expectationsFor(s, year).priceCeiling), 0);
+
 /** Where a company falls short of what this segment expects this year. */
 export function shortfalls(company: Pick<Company, "quality" | "brand" | "service" | "price" | "tiers">, segment: Segment, year: number): Shortfall[] {
   const { floors, priceCeiling } = expectationsFor(segment, year);
@@ -165,7 +177,18 @@ export function shortfalls(company: Pick<Company, "quality" | "brand" | "service
  * out, but not driven to zero, because a segment where nobody meets the
  * standard still buys from somebody.
  */
-export function expectationPenalty(company: Pick<Company, "quality" | "brand" | "service" | "price" | "tiers">, segment: Segment, year: number): number {
+export function expectationPenalty(
+  company: Pick<Company, "quality" | "brand" | "service" | "price" | "tiers">,
+  segment: Segment,
+  year: number,
+  /**
+   * The highest ceiling in this market (`topPriceCeiling`). Given by the
+   * allocator, which knows the whole niche; omitted by the callers that ask
+   * about one segment in isolation, and then a list price goes unjudged here
+   * exactly as it always did.
+   */
+  marketCeiling?: number,
+): number {
   const weights = { quality: segment.qualityFocus, service: segment.serviceFocus };
   let factor = 1;
   let priced = 1;
@@ -179,13 +202,58 @@ export function expectationPenalty(company: Pick<Company, "quality" | "brand" | 
        * a premium tier could be set anywhere. A little over costs a little;
        * well over rules the company out.
        *
-       * Tiers only. One list price has to sit somewhere across segments whose
-       * going rates differ fifteenfold in some markets, and the price curve
-       * already judges it; a tier is a price chosen for these people alone.
+       * A tier is a price chosen for these people alone, so it is judged
+       * against what these people will pay. A list price is not: it has to sit
+       * somewhere across segments whose going rates differ fifteenfold in some
+       * markets, so being over one segment's ceiling is an ordinary
+       * positioning choice and the price curve in `appealFor` already judges
+       * it.
+       *
+       * What that argument does not cover, and what this used to let through,
+       * is a list price above *every* ceiling in the market. That is not a
+       * compromise between segments — it is a price nobody in the market will
+       * pay, and it was free: `hasTier` was false, so this skipped, and the
+       * only thing left judging it was a price curve whose weight is the
+       * segment's own price sensitivity. A price-blind segment therefore went
+       * on buying at any number at all. Swept from $50 to $20,000, a company
+       * held 475 customers, then 62 — and then 62 at every price above that,
+       * for ever, with revenue rising in a straight line. Charging more was a
+       * free action.
+       *
+       * So a list price is judged too, once it is past the last ceiling in the
+       * market, and against that ceiling rather than this segment's.
        */
-      if (!hasTier(company, segment.id)) continue;
-      const ceiling = priceFor(company, segment.id) - s.by;
-      priced = Math.max(0.1, 1 - (s.by / Math.max(1, ceiling)) * 1.5);
+      const tiered = hasTier(company, segment.id);
+      const asked = priceFor(company, segment.id);
+      if (tiered) {
+        const ceilingHere = asked - s.by;
+        priced = Math.max(0.1, 1 - (s.by / Math.max(1, ceilingHere)) * 1.5);
+        continue;
+      }
+      if (!marketCeiling || asked <= marketCeiling) continue;
+      /*
+       * Decaying to nothing, with no floor under it.
+       *
+       * Every other shortfall here stops at a floor, and that is right for
+       * them: a segment where nobody meets the standard still buys from
+       * somebody, so quality and service can rule a company out without
+       * driving it to zero. Price is not like that. Past what you can afford
+       * you do not buy a worse one — you do not buy.
+       *
+       * With a floor the whole penalty bottomed out about twice the ceiling
+       * and stopped responding, so a company's appeal at three times the last
+       * ceiling and at a hundred times it were the same number. It kept a
+       * fixed slice of every year's newcomers at any price at all, and since
+       * revenue is customers times price, revenue went up for ever. Measured
+       * in dating apps: 60,480 customers at the ceiling, 13,327 at twice it,
+       * and 13,327 at every price above that.
+       *
+       * Quadratic in how far over it is, so a little over costs a little and
+       * far over costs everything, without a cliff that would make one pound
+       * the difference between a business and none.
+       */
+      const times = (asked - marketCeiling) / Math.max(1, marketCeiling);
+      priced = 1 / Math.pow(1 + times * 2, 2);
       continue;
     }
     factor *= Math.max(0.45, 1 - s.by * 0.02 * weights[s.axis as "quality" | "service"]);

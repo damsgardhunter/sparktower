@@ -12,30 +12,30 @@
  * audit trail as every other write Nova makes.
  */
 import type { Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { packFor, NOVA_PACK_VERSION, type NovaPromptPack } from "@shared/nova-prompt-packs";
 import { applyProjectOperations, buildOperableProjectState, stripIdFragments, collectProjectIds } from "./project-operations";
 import { parseModelJson } from "./ai-json";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 
-let _openai: OpenAI | null = null;
-const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    _openai = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
-    });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 export interface FirstPlanStep { title: string; done: string; why?: string }
 export interface FirstPlan { summary: string; steps: FirstPlanStep[] }
 
-const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/*
+ * Tidied before it is cut: these strings reach a `<p>`, not a Markdown
+ * renderer, so a heading's hashes are read as punctuation. server/prose-style.ts.
+ */
+const str = (v: unknown, max: number) => (typeof v === "string" ? tidyProse(v).slice(0, max) : "");
 
 /** The answers a builder gave to the pack's questions, as text Nova can read. */
 export function renderAnswers(pack: NovaPromptPack, answers: Record<string, string> | undefined): string {
@@ -54,6 +54,7 @@ ${pack.shape}
 
 Between four and seven steps. Each step is something a person starts and finishes, with an observable "done". No step is a category ("marketing", "design"); no step is "plan the plan".
 
+${PROSE_STYLE_RULE}
 Respond ONLY with valid JSON (no markdown, no code fences):
 {"summary":"two sentences on what this plan gets them to","steps":[{"title":"the step","done":"the observable thing that proves it's finished","why":"one line, only when the order isn't obvious"}]}`,
     user: `PROJECT\n${str(project.title, 200) || "(untitled)"} — ${str(project.description, 1000) || "(no description)"}\n\nWHAT THEY TOLD ME\n${renderAnswers(pack, answers)}\n\nWHAT'S ALREADY THERE\n${state.slice(0, 6000)}`,
@@ -121,6 +122,6 @@ export async function firstPlanFor(
     questions: pack.questions,
     plan,
     saved,
-    creditsCharged: CREDIT_COSTS.novaAssist,
+    creditsCharged: CHARGEABLE,
   });
 }

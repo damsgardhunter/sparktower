@@ -22,6 +22,7 @@ import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 import { marketListings } from "@shared/simulation/assets";
 import { nicheById } from "@shared/simulation/niches";
 import type { World } from "@shared/simulation/types";
+import { INCUMBENT_BID_MAX } from "@shared/simulation/assets";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -114,6 +115,17 @@ const companyIn = async (seasonId: string, ventureId: string) => {
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
   return (season.world as World).companies.find((c) => c.id === ventureId)!;
 };
+
+/*
+ * Bid above what a rival will go to.
+ *
+ * The incumbents bid for lots now — a tenth of a chance each, up to
+ * INCUMBENT_BID_MAX over the reserve — so a bid *at* the reserve is no longer
+ * certain to win, which is the point of them. These tests are about what
+ * happens to the winner and the seller, not about whether the rivals turned
+ * up, so they bid past the rivals' ceiling and stop depending on the dice.
+ */
+const OUTBIDS_RIVALS = INCUMBENT_BID_MAX + 0.25;
 
 describe("everyone gets something of their own", () => {
   it("sets a challenge for every seat on day one", async () => {
@@ -305,7 +317,7 @@ describe("the marketplace", () => {
     const { ventureId, seasonId } = await runningCompany(app);
 
     const listing = marketListings({ seasonId, year: 1, niche })[0];
-    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: listing.reserve });
+    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: Math.round(listing.reserve * OUTBIDS_RIVALS) });
 
     const before = await companyIn(seasonId, ventureId);
     await makeDue(seasonId);
@@ -328,7 +340,7 @@ describe("the marketplace", () => {
      */
     const paid = ((report.report as any).cashBridge?.lines ?? [])
       .find((l: any) => l.label === "The marketplace");
-    expect(paid?.amount, "the bid, taken out of the year's cash").toBeCloseTo(-listing.reserve, -3);
+    expect(paid?.amount, "the bid, taken out of the year's cash").toBeCloseTo(-Math.round(listing.reserve * OUTBIDS_RIVALS), -3);
 
     const market = (report.report as any).market ?? [];
     expect(market, "a win should come back typed, not buried in prose").toContainEqual(
@@ -364,7 +376,7 @@ describe("the marketplace", () => {
     const app = await getTestApp();
     const { ventureId, seasonId } = await runningCompany(app);
     const listing = marketListings({ seasonId, year: 1, niche })[0];
-    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: listing.reserve });
+    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: Math.round(listing.reserve * OUTBIDS_RIVALS) });
 
     await makeDue(seasonId);
     await tickSeason(seasonId);
@@ -443,7 +455,7 @@ describe("the year's report and the year that was saved", () => {
 
     // And a bid that certainly wins.
     const listing = marketListings({ seasonId, year: 1, niche })[0];
-    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: listing.reserve });
+    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: Math.round(listing.reserve * OUTBIDS_RIVALS) });
 
     await makeDue(seasonId);
     expect(await tickSeason(seasonId)).toBe(1);
@@ -531,7 +543,7 @@ describe("the way back", () => {
     const seller = world.companies.find((c) => c.id === ventureId)!;
     world.companies.push({ ...seller, id: rivalRow.id, name: "Rival", cash: 20_000_000, debt: 0, assets: [], bankruptSince: undefined, covenant: undefined });
     await db.update(simSeasons).set({ world }).where(eq(simSeasons.id, seasonId));
-    await db.insert(simBids).values({ ventureId: rivalRow.id, listingId: lot.id, year: 2, amount: lot.reserve });
+    await db.insert(simBids).values({ ventureId: rivalRow.id, listingId: lot.id, year: 2, amount: Math.round(lot.reserve * OUTBIDS_RIVALS) });
 
     await makeDue(seasonId);
     expect(await tickSeason(seasonId)).toBe(2);
@@ -539,7 +551,10 @@ describe("the way back", () => {
     const rival = await companyIn(seasonId, rivalRow.id);
     expect(rival.assets.map((a) => a.id), "the bidder owns it now").toContain(asset.id);
     const [sold] = await db.select().from(simListings).where(eq(simListings.id, lot.id));
-    expect(sold).toMatchObject({ status: "sold", buyerId: rivalRow.id, soldFor: lot.reserve });
+    expect(sold).toMatchObject({
+      status: "sold", buyerId: rivalRow.id,
+      soldFor: Math.round(lot.reserve * OUTBIDS_RIVALS),
+    });
 
     const [report] = await db.select().from(simReportsTable)
       .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 2)));

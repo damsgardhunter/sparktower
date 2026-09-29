@@ -24,8 +24,8 @@ vi.mock("openai", () => {
 
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { db } = await import("../../server/db");
-const { users, projects } = await import("@shared/schema");
-const { eq } = await import("drizzle-orm");
+const { users, projects, aiImageRuns } = await import("@shared/schema");
+const { eq, sql } = await import("drizzle-orm");
 const { ObjectStorageService } = await import("../../server/replit_integrations/object_storage");
 afterAll(async () => { await closeTestApp(); });
 
@@ -43,19 +43,24 @@ describe("post images", () => {
     const app = await getTestApp();
     const me = await person(app, "Poster", "203.0.113.201");
     const other = await person(app, "Other", "203.0.113.202");
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, me.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, me.id));
 
     // Too short to draw.
     expect((await me.agent.post("/api/feed/image").send({ content: "hi" })).status).toBe(400);
 
-    // No project: the post alone, generated — and charged once it comes back.
+    // No project: the post alone, generated. The first is the account's free go.
     const start = await credits(me.agent);
     calls.length = 0;
     const plain = await me.agent.post("/api/feed/image").send({ content: "We just crossed 1,000 people on the waitlist this morning.", postType: "milestone" });
     expect(plain.status, JSON.stringify(plain.body)).toBe(200);
-    expect(plain.body).toMatchObject({ usedLogo: false, creditsCharged: 2 });
+    expect(plain.body).toMatchObject({ usedLogo: false, free: true });
     expect(plain.body.url).toMatch(/^\/objects\//);
-    expect(await credits(me.agent)).toBe(start + 2);
+    /*
+     * Not a small Nova action any more. Pictures cost real money on every
+     * press, so they have their own rule — a free first go, then the image
+     * pass — and the month's allowance is left alone (server/images.ts).
+     */
+    expect(await credits(me.agent), "a picture is not a small action").toBe(start);
     expect(calls).toHaveLength(1);
     expect(calls[0].kind).toBe("generate");
     expect(calls[0].prompt).toMatch(/THE POST IS THE MAIN SUBJECT/);
@@ -78,17 +83,26 @@ describe("post images", () => {
 
     // Someone else's project: refused before any model call.
     calls.length = 0;
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, other.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, other.id));
     expect((await other.agent.post("/api/feed/image").send({ content: "Borrowing a logo that isn't mine for this.", projectId: project.id })).status).toBe(403);
     expect(calls).toHaveLength(0);
 
-    // An empty answer from the model: 502, nothing charged.
+    /*
+     * An empty answer from the model: 502, nothing charged. Under a pass,
+     * because the free go for this account is long spent by now — and the
+     * failure has to be free for somebody who has paid, which is the case
+     * worth checking.
+     */
+    await db.update(users).set({ imagePassUntil: new Date(Date.now() + 60 * 60_000) }).where(eq(users.id, me.id));
     const before = await credits(me.agent);
     expect(typeof before).toBe("number");
     fail = true;
     const empty = await me.agent.post("/api/feed/image").send({ content: "This one the model will return nothing for." });
     fail = false;
-    expect(empty.status).toBe(502);
+    expect(empty.status, JSON.stringify(empty.body).slice(0, 200)).toBe(502);
     expect(await credits(me.agent)).toBe(before);
+    // …and it didn't count against the hour either: no picture was made.
+    const [runs] = await db.select({ n: sql<number>`coalesce(sum(images), 0)::int` }).from(aiImageRuns).where(eq(aiImageRuns.userId, me.id));
+    expect(runs.n, "a failed draw is not an image").toBe(2);
   });
 });

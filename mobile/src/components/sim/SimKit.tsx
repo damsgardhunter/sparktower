@@ -321,3 +321,63 @@ export function VentureResumeRow({ venture, roleTitle, onPress }: {
     </Pressable>
   );
 }
+
+/**
+ * Which year the season is on, and where your company stands in it.
+ *
+ * ## The card this replaces said "Year one has begun"
+ *
+ * Literally that, in a fixed string, for all fourteen of them. A team nine
+ * years into a season opened the room and was told the season had just
+ * started — which is not a small copy problem, because this screen is the one
+ * people land on and the year is the single fact that orients everything else.
+ *
+ * Everything here is worked out by the pure readers in `standings.ts`, the
+ * same ones the standings screen uses. Two screens computing "4th of 9" from
+ * the same rows in two places is two screens that will eventually disagree
+ * about it, and the one people check is not the one they would believe.
+ *
+ * The bar is the fortnight, not the score. How far through a season a company
+ * is changes what a rank means — 6th in year two is a start, and 6th in year
+ * thirteen is how it ended.
+ */
+export function SeasonProgress({ year, totalYears, standing, movement }: {
+  year: number;
+  totalYears: number;
+  /** "4th of 9 in the market, 2nd of the 5 teams." */
+  standing: string | null;
+  /** "Share up 1.2 points and you climbed a place to 3rd." */
+  movement: string | null;
+}) {
+  const through = totalYears > 0 ? Math.min(1, Math.max(0, year / totalYears)) : 0;
+  const left = Math.max(0, totalYears - year);
+
+  return (
+    <View style={{ gap: spacing.sm }} testID="sim-season-progress">
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.xs }}>
+        <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+          Year {year} of {totalYears}
+        </Text>
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
+          {left === 0 ? "the last one" : `${left} to go`}
+        </Text>
+      </View>
+
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, overflow: "hidden" }}>
+        <View style={{ width: `${through * 100}%`, height: "100%", borderRadius: 3, backgroundColor: colors.primary }} />
+      </View>
+
+      {standing && (
+        <Text style={{ color: colors.text, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }} testID="sim-standing-line">
+          {standing}
+        </Text>
+      )}
+      {/* Null in year one, where there is nothing to have moved from. */}
+      {movement && (
+        <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 18, fontFamily: fontFamily.regular }} testID="sim-movement-line">
+          {movement}
+        </Text>
+      )}
+    </View>
+  );
+}

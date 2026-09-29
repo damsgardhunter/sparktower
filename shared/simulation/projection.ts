@@ -85,6 +85,17 @@ export interface ProjectionPair {
   drafted: Projection;
   /** Which seats have filed and which are being covered by last year's plan. */
   absent: Role[];
+  /**
+   * This period's demand under the draft.
+   *
+   * The desk's forecast card was drawn from a demand curve worked out on the
+   * server from filings alone, refreshed on an eight-second poll. So the
+   * headline said "at $0 per seat" and the curve underneath it never moved
+   * while somebody changed the price — the one decision it is most obviously
+   * about. Returned here because this endpoint is the one that already knows
+   * what the draft is.
+   */
+  demand: Forecast | null;
 }
 
 function run(input: {
@@ -93,7 +104,7 @@ function run(input: {
   submitted: Partial<Record<Role, any>>;
   previous?: TeamDecisions;
   economy: Economy;
-}): { projection: Projection; absent: Role[] } {
+}): { projection: Projection; absent: Role[]; decisions: TeamDecisions } {
   const { world, company, submitted, previous, economy } = input;
   const { decisions, absent } = decisionsForYear({ company, niche: world.niche, submitted, previous });
 
@@ -132,6 +143,7 @@ function run(input: {
     .reduce((sum, l) => sum + l.amount, 0) ?? 0;
 
   return {
+    decisions,
     absent,
     projection: {
       year: world.year,
@@ -183,16 +195,55 @@ export function projectYear(input: {
   economy: Economy;
   filed: Partial<Record<Role, any>>;
   previous?: TeamDecisions;
-  draft?: { role: Role; decision: any };
+  /**
+   * The viewer's unfiled draft. `roles` is which desks it covers — one
+   * normally, all five for a founder holding the whole table, whose single
+   * form is five desks' worth of levers and whose projection was previously
+   * built from the chief executive's fields alone.
+   */
+  draft?: {
+    role: Role;
+    decision: any;
+    /** Which desks the draft covers, when it covers more than the seat's own. */
+    roles?: Role[];
+    /** That draft split per desk, cleaned against each one's own lever list. */
+    byRole?: Partial<Record<Role, any>>;
+  };
 }): ProjectionPair | null {
   const { world, companyId, economy, filed, previous, draft } = input;
   const company = world.companies.find((c) => c.id === companyId);
   if (!company) return null;
 
   const asFiled = run({ world, company, submitted: filed, previous, economy });
+  /*
+   * Every desk the draft covers, not just the seat's own.
+   *
+   * `{ ...filed, [draft.role]: draft.decision }` is right for one seat at a
+   * five-person table and wrong for a founder holding all five: their price,
+   * their capacity and their spend all arrived under `roles` and only the
+   * chief executive's half of it was ever applied. So the projection answered
+   * the same number however the form was changed, which reads as a screen
+   * that has stopped listening.
+   */
+  const covered = draft?.roles ?? (draft ? [draft.role] : []);
   const drafted = draft
-    ? run({ world, company, submitted: { ...filed, [draft.role]: draft.decision }, previous, economy })
+    ? run({
+        world, company, previous, economy,
+        submitted: covered.reduce(
+          (acc, r) => ({ ...acc, [r]: draft.byRole?.[r] ?? (r === draft.role ? draft.decision : (filed as any)[r]) }),
+          { ...filed },
+        ),
+      })
     : asFiled;
 
-  return { filed: asFiled.projection, drafted: drafted.projection, absent: drafted.absent };
+  /* What this period's demand looks like with the draft applied, not just what was filed. */
+  const demand = forecastDemand({
+    world: { ...world, year: world.year },
+    companyId,
+    year: world.year,
+    economy,
+    draft: drafted.decisions,
+  });
+
+  return { filed: asFiled.projection, drafted: drafted.projection, absent: drafted.absent, demand };
 }

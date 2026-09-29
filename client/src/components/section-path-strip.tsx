@@ -76,8 +76,17 @@ function Strip({ projectId, data, flash, fetching, error, updatedAt, onOpen }: {
         <span className="text-base font-semibold tabular-nums leading-none" data-testid="strip-progress">{pct}%</span>
         <span className="text-[10px] text-muted-foreground tabular-nums mt-1">{done}/{total}</span>
       </div>
-      <div ref={scroller} className="relative flex-1 min-w-0 overflow-x-auto [scrollbar-width:thin]">
-        <div className="flex min-w-max h-full">
+      {/*
+        * The phases scroll sideways, and used to give no sign of it: the last
+        * one visible was simply sliced down the middle of a word against the
+        * border, which reads as a broken layout rather than as "there is more
+        * along here". A fade at the edge is the whole fix — it sits above the
+        * scroller, ignores the pointer, and is painted in the card's own
+        * background so it works in both themes.
+        */}
+      <div className="relative flex-1 min-w-0">
+        <div ref={scroller} className="overflow-x-auto [scrollbar-width:thin]">
+          <div className="flex min-w-max h-full">
           {data.phases.map((phase) => {
             const [head, tail] = phase.title.split(" — ");
             const isCurrent = phase.id === data.current.id;
@@ -106,7 +115,9 @@ function Strip({ projectId, data, flash, fetching, error, updatedAt, onOpen }: {
               </div>
             );
           })}
+          </div>
         </div>
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-background to-transparent" aria-hidden />
       </div>
       <div className="hidden sm:flex flex-col justify-center items-start gap-1 px-3 shrink-0 border-l border-border">
         <SyncDot updatedAt={updatedAt} fetching={fetching} error={error} />

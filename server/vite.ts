@@ -1,5 +1,6 @@
 import { type Express } from "express";
 import { injectPageMeta, type PageMeta } from "@shared/path-artifacts";
+import { pageStatus } from "./page-status";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
@@ -57,7 +58,10 @@ export async function setupVite(server: Server, app: Express) {
       );
       const meta = res.locals.pageMeta as PageMeta | undefined;
       const page = await vite.transformIndexHtml(url, meta ? injectPageMeta(template, meta) : template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      // A route may have decided this page is a 404 (an artifact that isn't
+      // public, say). The shell is still served — the page says so itself —
+      // but the status has to be the truth for anything reading status codes.
+      res.status(pageStatus(res)).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
       next(e);

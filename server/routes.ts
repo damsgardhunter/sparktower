@@ -10,8 +10,9 @@ import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
 import { notTakenDown } from "./visibility";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites, projectBackings } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { apiRateLimit, FLOOR_MOUNTS } from "./api-rate-limit";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
 import { registerWebHandoffRoutes } from "./web-handoff";
@@ -46,11 +47,15 @@ import { registerInvestmentRoutes } from "./investment-routes";
 import { recordExploreAction } from "./explore-actions";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { registerProjectVisualRoutes } from "./project-visuals";
+import { registerBrandKitRoutes } from "./brand-kit";
 import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
 import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
 import { registerAnalyticsRoutes } from "./analytics-routes";
+import { registerAiSpendRoutes } from "./ai-spend-routes";
+import { registerProjectSimulationRoutes } from "./project-simulation-routes";
+import { registerAppleIapRoutes } from "./apple-iap";
 import { captureAttribution } from "./attribution";
 import { registerNovaAssistRoutes } from "./nova-assist-routes";
 import { registerMcpRoutes } from "./mcp-routes";
@@ -69,6 +74,9 @@ import { registerPasswordResetRoutes } from "./password-reset";
 import { recordView, countViews } from "./views";
 import { publicProject, isOnTeam } from "./project-visibility";
 import { registerAdminSecurityRoutes } from "./admin-security-routes";
+import { registerAdminConsoleRoutes } from "./admin-console-routes";
+import { registerClientErrorRoutes } from "./client-error-routes";
+import { registerProblemReportRoutes } from "./problem-report-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
@@ -80,16 +88,29 @@ import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
-import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { getUncachableStripeClient, getStripePublishableKey, isStripeConfigured } from "./stripeClient";
+import { earningsFor, setPayoutTarget } from "./earnings";
+import { platformRevenue } from "./platform-revenue";
 import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
 import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
 import {
   TIER_IDS, PLAN_PRESENTATION, ENTITLEMENTS, COMPARISON_ROWS, CREDIT_COSTS,
   FAIR_USE_NOTICE, FAIR_USE_MONTHLY_CAP, normalizeTier, roadmapRebuildCost,
+  PRICE_LIST, PRICING_ROWS, PRICING_NOTICE, TOP_UP_CENTS, OUTCOME_PRICE_CENTS,
+  CHARGEABLE, NO_CHARGE,
+  OUTCOME_COPY, formatMoney, ACTIONS_PER_PACK,
   type TierId,
+  PAY_ENDPOINTS,
 } from "@shared/plans";
+import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
+import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
+import { requireImages, buyImagePass, imagePassActive } from "./images";
+
+/** How many scenes a storyboard has, and therefore how many pictures it draws. */
+const STORYBOARD_SCENES = 5;
+import { novaBuildPasses, novaBuildRuns, simulationScenarios, tenYearOutlooks, marketingSchemes } from "@shared/schema";
 import {
-  getUserEntitlements, requireFeature, requireLevel, requireCredits,
+  getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired,
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
@@ -98,13 +119,16 @@ import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
 import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
-import { isOwner as isPlatformOwner } from "./platform-roles";
+import { isOwner as isPlatformOwner, requireOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, unmarkMilestones, PATH_MARK_LIMIT, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
   setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState, renderPathForAudit,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
+import { produceWorkForTask, readSurroundings } from "./nova-work";
+import { collectPathWriting, exportGoal, exportPages, exportMarkdown, exportFileName } from "./path-export";
+import { renderDocumentPdf } from "./document-pdf";
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
@@ -122,6 +146,8 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
 import { notifyWatchersOfNewProject } from "./scouting-alerts";
+import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
+import { connectFailure } from "./stripe-connect-errors";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -357,6 +383,35 @@ export async function registerRoutes(
   // No-op when there's no Bearer header, so cookie sessions are unaffected.
   app.use(attachBearerUser);
   /*
+   * The floor under everything, mounted here because this is the first point
+   * at which `req.user` is populated for both a cookie session and a bearer
+   * token — and the allowance depends on which caller this is. Above it, every
+   * signed-in request would be counted as anonymous and given the tighter
+   * ceiling meant for callers with no account behind them.
+   *
+   * See server/api-rate-limit.ts for why this exists alongside the per-action
+   * limits in server/moderation.ts rather than instead of them.
+   */
+  /*
+   * Scoped to /api, not mounted bare.
+   *
+   * `app.use(floor)` counts every request the server handles, and this process
+   * also serves the client: every JS module, stylesheet and image, plus Vite's
+   * dev requests. One page load is hundreds of those, so a browser burned a
+   * minute's allowance opening a single screen, and the e2e capital-path
+   * journey hung for five minutes waiting on data that was being refused.
+   * Static bytes are not what this is protecting.
+   */
+  /*
+   * One set of limiters, mounted on each public prefix that does real work —
+   * see FLOOR_MOUNTS for what is on the list and what is deliberately not.
+   * The same instances across all of them on purpose: a caller has one
+   * allowance, not one per prefix they happen to hit.
+   */
+  for (const floor of apiRateLimit()) {
+    for (const mount of FLOOR_MOUNTS) app.use(mount, floor);
+  }
+  /*
    * A suspended account can read but not write, anywhere. Mounted globally
    * because a suspension that only covers the routes someone remembered to
    * decorate is not a suspension.
@@ -388,6 +443,9 @@ export async function registerRoutes(
   app.use(captureWrites);
   registerAnalyticsIngest(app);
   registerAnalyticsRoutes(app);
+  registerAiSpendRoutes(app);
+  registerProjectSimulationRoutes(app);
+  registerAppleIapRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   // The app's way into web pages it doesn't have yet, signed in (server/web-handoff.ts).
@@ -408,6 +466,9 @@ export async function registerRoutes(
   await seedCommunities().catch((err) => console.error("[communities] seed failed (non-fatal):", err));
   registerArtifactRoutes(app);
   registerAdminSecurityRoutes(app);
+  registerAdminConsoleRoutes(app);
+  registerClientErrorRoutes(app);
+  registerProblemReportRoutes(app);
   registerPromotionRoutes(app);
   registerAdminContestRoutes(app);
   registerInviteRoutes(app);
@@ -454,6 +515,7 @@ export async function registerRoutes(
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
   registerProjectVisualRoutes(app);
+  registerBrandKitRoutes(app);
   registerPostImageRoutes(app);
 
   // User Profile
@@ -631,7 +693,11 @@ After each user message, respond conversationally AND include a JSON block in yo
 Format: Respond with your conversational message, then on a new line include:
 <project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "run_company", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, run→restaurant|service|retail|agency|software|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
-Only include fields you have enough info to fill. Start empty if needed.`;
+Only include fields you have enough info to fill. Start empty if needed.
+
+WHAT THAT BLOCK ACTUALLY DOES — never contradict it:
+The <project_update> block is not a suggestion for the user to copy out. It fills the project form on the right-hand side of their screen as you write it: the title, description, category, roles, tech stack, team size and timeline all update in place, in front of them. So you CAN set a project up, and you must never say otherwise. Do not say you lack access, lack permission, cannot create or publish a project, or that they will have to paste it in themselves — all of that is false, and it tells somebody watching you fill the form in that it did not work.
+When asked to set the project up, do it: put the values in the block and say plainly what you have filled in and what is left, e.g. "Filled in the form on the right — title, description, category and stack. Pick your goal on the next step and press Create." The one thing you do not do is press Create; that stays theirs, which is a choice about consent, not a limit on you.`;
 
       const messages = [
         { role: "system" as const, content: systemPrompt },
@@ -769,8 +835,22 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
       void notifyWatchersOfNewProject(project.id);
-      // The founder badge: a profile says "I built this" the moment the project exists.
-      void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
+      /*
+       * The founder badge: a profile says "I built this" the moment the
+       * project exists.
+       *
+       * Awaited, because that promise is not kept by an insert the response
+       * can outrun. Fired and forgotten, the badge landed some milliseconds
+       * after the 200 — so anything reading straight back, a test or a client
+       * that navigates to the new project, saw no badge and there was nothing
+       * to wait for. It failed intermittently and looked like flakiness.
+       *
+       * Cheap enough to wait for: two selects and an insert per missing
+       * project, and explicitly no model call — the artwork is drawn later,
+       * when the creator asks for it. Still caught rather than thrown, because
+       * a decoration must never fail the creation it decorates.
+       */
+      await ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
         authorId: ownerId,
         projectId: project.id,
@@ -877,7 +957,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
-      const { resumeUrl, answers, message } = req.body;
+      const { resumeUrl, answers, message, role } = req.body;
       const project = await storage.getProject(projectId);
       // A private project isn't there to anyone off its team — the same 404 as one that doesn't exist.
       if (!project || project.isPrivate) return res.status(404).json({ message: "Project not found" });
@@ -886,7 +966,19 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
       const existing = await storage.getUserApplications(userId);
       if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
-      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      /*
+       * The role is checked against what the project actually lists rather
+       * than stored as sent. It arrives from a click on a role card, but it
+       * is still a string in a request body, and "which role did they apply
+       * for" is read back to the owner as fact — an unchecked one would let
+       * anybody write their own job title into someone else's inbox. Anything
+       * that doesn't match a listed role is dropped, leaving a general
+       * application, which is what a project with no roles listed gets anyway.
+       */
+      const listedRole = typeof role === "string"
+        ? (project.rolesNeeded || []).find((r) => r.toLowerCase() === role.trim().toLowerCase()) ?? null
+        : null;
+      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message, role: listedRole });
       /*
        * The owner hears about it. An application used to land in a table that
        * only the manage page's Team tab read, and nothing pointed there — so
@@ -1401,7 +1493,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         })),
         cyclesBroken,
         startHere: sequenced[0] || null,
-        creditsCharged: CREDIT_COSTS.taskSequencing,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Task sequence error:", error);
@@ -1562,7 +1654,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
             }
           : null,
         operations,
-        creditsCharged: CREDIT_COSTS.taskAssist,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Task assist error:", error);
@@ -2335,6 +2427,68 @@ ${PLAIN_LANGUAGE_RULES}`;
     }
   });
 
+  /**
+   * Delete a project, for good.
+   *
+   * ## Why this refuses rather than cascades
+   *
+   * Almost everything a project owns is a foreign key with ON DELETE CASCADE,
+   * which is right for tasks, files, documents, seasons and the rest: they are
+   * parts of the project and mean nothing without it. `project_backings`
+   * cascades too, and that one is different. Those rows are money — somebody
+   * else's, sometimes still in escrow and refundable — and deleting a project
+   * would take the record of it with them. No refund, no reconciliation
+   * against Stripe, and nothing left to say the pledge ever happened.
+   *
+   * So a project that has taken money cannot be deleted. Not soft-deleted, not
+   * deleted-with-a-warning: refused, with what is holding it and what to do
+   * about it. The owner can refund or release those pledges and then delete.
+   *
+   * "Has taken money" is any backing that is not `failed` — `pending` included,
+   * because a checkout somebody is midway through is about to become a charge.
+   *
+   * ## Everything else really goes
+   *
+   * There is no archive here. An owner asking to delete their own project has
+   * asked for it to be gone, and a product that quietly keeps it is lying.
+   */
+  app.delete("/api/projects/:id", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== (req.user as any).id) {
+        return res.status(403).json({ code: "not_yours", message: "Only the person who owns this project can delete it." });
+      }
+
+      const money = await db
+        .select({ status: projectBackings.status, amountCents: projectBackings.amountCents })
+        .from(projectBackings)
+        .where(and(
+          eq(projectBackings.projectId, project.id),
+          sql`${projectBackings.status} <> 'failed'`,
+        ));
+
+      if (money.length > 0) {
+        const refundable = money.filter((b) => b.status === "held").length;
+        return res.status(409).json({
+          code: "has_backing",
+          message: refundable > 0
+            ? `This project has ${money.length} ${money.length === 1 ? "pledge" : "pledges"}, ${refundable} of which ${refundable === 1 ? "is" : "are"} still refundable. It can't be deleted while it holds money that isn't yours — refund or release ${refundable === 1 ? "it" : "them"} first.`
+            : `This project has ${money.length} ${money.length === 1 ? "pledge" : "pledges"} against it. Deleting it would delete the record of money people actually paid, so it can't be deleted.`,
+          pledges: money.length,
+          refundable,
+        });
+      }
+
+      await db.delete(projects).where(eq(projects.id, project.id));
+      console.log(`[projects] ${req.user.id} deleted project ${project.id}`);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("Project delete error:", error);
+      res.status(500).json({ message: "Couldn't delete that project." });
+    }
+  });
+
   app.patch("/api/projects/:id", isAuthenticated, async (req: any, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
@@ -2481,10 +2635,6 @@ ${sectionContext}`;
 
 YOUR ROLE: You are the user's dedicated project advisor. You guide them through building their project from the ground up — from defining their vision to launching their product.
 
-COACHING DEPTH: ${coachingDirectiveFor(ent)}
-
-${projectContext}
-
 USING THE CODEBASE AUDIT:
 - An audit is the only evidence in this project of what has actually been built. The tasks and milestones are what the builder *intends*; the audit is what the code *shows*.
 - When they ask "where am I", "what's left", or "what should I do next", answer from the audit if there is one — and name it as the source.
@@ -2510,14 +2660,14 @@ READABILITY (this is a narrow chat panel):
 - Say what you did in plain words ("Rewrote three tasks so none mentions the old onboarding flow"), not what you are "going to" do.
 
 GUIDED ONBOARDING FLOW (for new projects):
-1. Welcome them warmly, acknowledge their project "${project.title}"
+1. Welcome them warmly, acknowledging their project by name (it is in PROJECT CONTEXT, below)
 2. Help define their ONE-LINER positioning (who they help, what they do, how)
 3. Help articulate their MISSION (why this exists, what it's working toward)
 4. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
 5. Work through their PROBLEM STATEMENT and SUCCESS METRICS
 6. Help define their SCOPE (MVP features vs nice-to-have)
 7. Create initial TASKS to get started
-8. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
+8. Create MILESTONES/ROADMAP for their journey, if this plan has them (see YOUR PLAN, below)
 9. Ask what they want to FOCUS ON FIRST
 
 CONTEXT-AWARE ASSISTANCE (based on current tab):
@@ -2529,7 +2679,7 @@ CONTEXT-AWARE ASSISTANCE (based on current tab):
   it — don't just print the text in chat and leave the field empty.
 - Kanban tab: Help create/prioritize tasks, suggest what to work on next, and
   reword or re-prioritise existing ones via edit_project
-- Milestones tab: ${isPremium ? "Help create milestones and roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped" : "Explain milestones, suggest upgrading for AI roadmap creation"}
+- Milestones tab: if this plan has milestones, help create them and the roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped. If it does not, explain what milestones are and say the Builder plan unlocks them.
 - Team tab: Advise on roles needed, team structure
 - Research tab: Help plan user interviews, design experiments
 - Strategy tab: Help with pricing strategy, legal document templates
@@ -2561,7 +2711,7 @@ Available actions:
 3. create_tasks: Create kanban tasks
    <nova_action>{"type": "create_tasks", "data": {"tasks": [{"title": "...", "description": "...", "priority": "high|medium|low"}]}}</nova_action>
 
-4. create_milestones: Create project milestones (${canCreateMilestones ? "AVAILABLE" : "NOT AVAILABLE on this plan. Mention that the Builder plan unlocks AI roadmaps and milestones."})
+4. create_milestones: Create project milestones (only on a plan that has them — see YOUR PLAN, below)
    <nova_action>{"type": "create_milestones", "data": {"milestones": [{"title": "...", "description": "...", "targetDate": "YYYY-MM-DD"}]}}</nova_action>
 
 5. complete_onboarding: Mark onboarding as complete
@@ -2580,7 +2730,7 @@ Available actions:
    re-date, or re-sequence something they can already see.
    <nova_action>{"type": "edit_project", "data": {"operations": [ ... ]}}</nova_action>
 ${OPERATION_SCHEMA_INSTRUCTIONS}
-   Milestone and roadmap operations require the Builder plan${canCreateMilestones ? " — this user has it" : " — this user does NOT have it, so say so instead of trying"}.
+   Milestone and roadmap operations require the Builder plan — see YOUR PLAN, below, for whether this user has it.
 
 RULES:
 - NEVER write an id in your visible reply. Ids exist so you can put them inside
@@ -2601,16 +2751,47 @@ RULES:
       // "Nova project memory" — how far back Nova can see. This is the tier
       // difference between Basic / Expanded / Full memory.
       const priorMessages = history.slice(0, -1).slice(-memoryLimitFor(ent));
+
+      /*
+       * Where the project's current state goes, and why it is not in the
+       * system prompt.
+       *
+       * A prompt is cached by exact prefix. The board changes — often inside
+       * a single conversation, because Nova itself edits it — so holding that
+       * state at the top made every message after it uncacheable: the whole
+       * instruction block *and* every turn of the history, re-bought on every
+       * reply. Carried on the live turn instead, the static instructions and
+       * the entire conversation behind them are a stable prefix, and only the
+       * part that actually moved is charged at full price.
+       *
+       * It reads better to the model this way too: the state of the board is
+       * a fact about right now, which is where the question is.
+       */
+      const liveContext = `YOUR PLAN: ${isPremium ? "Premium" : "Free"} (${ent.tier}). Milestones and roadmaps are ${canCreateMilestones ? "AVAILABLE — this user has them" : "NOT AVAILABLE on this plan; say so plainly rather than trying, and mention that the Builder plan unlocks AI roadmaps and milestones"}.
+
+COACHING DEPTH: ${coachingDirectiveFor(ent)}
+${projectContext}`;
+
       const messages = [
         { role: "system" as const, content: systemPrompt },
         ...priorMessages.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        { role: "user" as const, content: message }
+        { role: "user" as const, content: `${liveContext}\n\n---\n\n${message}` }
       ];
 
       const response = await openai.chat.completions.create({
         model: modelFor(ent),
         messages,
         temperature: 0.7,
+        /*
+         * A ceiling on the answer, which this call did not have.
+         *
+         * The prompt tells Nova to stay under 150 words in a narrow chat
+         * panel, and almost every reply does. A ceiling is for the reply that
+         * does not — a loop, a pasted file read back, a model having a bad
+         * day — which is paid for by the token and read by nobody. Set far
+         * above any honest answer, including one carrying several actions.
+         */
+        max_completion_tokens: 2000,
       });
 
       // An empty answer is a failed call: 502, nothing charged. It used to be
@@ -2841,7 +3022,7 @@ RULES:
     const response = await openai.chat.completions.create({
       model: "gpt-5.2",
       messages: [
-        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.` },
+        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.\n${PROSE_STYLE_RULE}` },
         ...history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }))
       ],
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
@@ -2851,7 +3032,9 @@ RULES:
     // charged. It used to be stored as "I'm sorry, I couldn't…" and charged.
     const aiContent = response.choices[0].message.content?.trim();
     if (!aiContent) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
-    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
+    // Tidied before it is stored: the chat log is read back as plain text, so
+    // storing the hashes would make every later read of this reply carry them.
+    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", tidyProse(aiContent));
     
     await storage.deductCredits(userId, CREDIT_COSTS.novaChat);
     res.json(aiMessage);
@@ -3105,7 +3288,7 @@ RULES:
       let read = "";
       let loops: { created: string[]; updated: string[]; found: { title: string; steps: string; state: string; evidence: string }[] } = { created: [], updated: [], found: [] };
       if (req.body?.read !== false) {
-        const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress");
+        const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress", { projectId });
         if (!ent) return;
         const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
         const ship = project.goal === "ship_mvp";
@@ -3202,23 +3385,24 @@ RULES:
       if (!ctx) return res.status(400).json({ message: "That task isn't on this project's path.", code: "not_on_path" });
       const kind = workKindFor(ctx.actor, ctx.milestone?.work);
       if (kind === "intake") return res.status(400).json({ message: "This step is answered by choosing — tap your answers.", code: "invalid_input" });
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone");
+      /*
+       * Refused here and not only in the button. A step with its own surface
+       * is finished by that surface doing its thing — the roadmap built, the
+       * jobs set up, the goals filed — and the generic generator would write a
+       * plausible paragraph over it and close it, leaving the step ticked and
+       * the work not done. The button is not the only way to reach this route.
+       */
+      if (ctx.milestone?.doneOn) {
+        return res.status(400).json({
+          message: `This step is finished by using ${ctx.milestone.doneOn.label}, not by Nova writing an answer here.`,
+          code: "done_on_surface", surface: ctx.milestone.doneOn.surface, label: ctx.milestone.doneOn.label,
+        });
+      }
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone", { projectId });
       if (!ent) return;
-      const [state, artifacts] = await Promise.all([
-        buildOperableProjectState(projectId, { includeIds: false, includeAudit: true }),
-        collectArtifacts(projectId),
-      ]);
-      const all = await storage.getProjectKanbanTasks(projectId);
-      const loops = all.filter((t) => t.tags?.includes("kind:loop") && !t.tags.some((x) => x.startsWith("archived:")))
-        .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status, type: loopTypeOf(t.tags) }));
-      const full = await storage.getProject(projectId);
-      // A loop's task carries its name and (maybe) its steps; what the kind asks for rides along so Nova writes that kind.
-      const loopKind = ctx.task.tags?.includes("kind:loop") ? LOOP_TYPE_INFO[loopTypeOf(ctx.task.tags)] : null;
-      const payload = await produceWork(ent, kind,
-        loopKind
-          ? { title: `${loopKind.label}: ${ctx.task.title}`, description: `Write this ${loopKind.label.toLowerCase()} as 3–5 steps in the product's own words. ${loopKind.asks} It closes when: ${loopKind.closes} For example: ${loopKind.example} Give each option a 2–5 word name as its title.${ctx.task.description?.trim() ? `\n\nWhat's written so far: ${ctx.task.description.trim()}` : ""}`, tier: ctx.tier }
-          : { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
-        { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts, loops, rejectedLoops: full?.rejectedLoops ?? [] });
+      // Assembled in server/nova-work.ts, which the whole-business build uses too — the
+      // two had drifted, and the paid one was the one missing the loops.
+      const payload = await produceWorkForTask(ent, ctx, await readSurroundings(projectId));
       const row = await saveWork(projectId, ctx.task.id, payload);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json({ id: row.id, kind: row.kind, payload: row.payload, chosenIndex: null, createdAt: row.createdAt });
@@ -3226,6 +3410,66 @@ RULES:
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path work error:", error);
       res.status(500).json({ message: "Nova couldn't finish that. Try again in a moment." });
+    }
+  });
+
+  /**
+   * The path's writing, as one thing somebody can send.
+   *
+   * Free, and deliberately: every word in it is already on the path, and a
+   * second copy of what you have is not a product. `?format=md` for Markdown,
+   * anything else for a PDF; `?goal=` picks the section, defaulting to the
+   * project's own. See server/path-export.ts.
+   */
+  app.get("/api/projects/:id/path/export", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const goal = await exportGoal(projectId, req.query.goal);
+      if (!goal) return res.status(404).json({ message: "Project not found" });
+      const written = await collectPathWriting(projectId, goal);
+      if (!written) return res.status(404).json({ message: "That section isn't on this project." });
+      if (!written.steps) {
+        return res.status(409).json({
+          message: "There's nothing written on this path yet — finish a step and it goes in here.",
+          code: "nothing_written",
+        });
+      }
+
+      if (String(req.query.format) === "md") {
+        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${exportFileName(written, "md")}"`);
+        return res.send(exportMarkdown(written));
+      }
+
+      const { pages, settings } = exportPages(written);
+      const { buffer } = await renderDocumentPdf({ title: written.title, pages, settings, projectTitle: written.projectTitle });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${exportFileName(written, "pdf")}"`);
+      res.send(buffer);
+    } catch (error) {
+      console.error("Path export error:", error);
+      res.status(500).json({ message: "Couldn't put that together." });
+    }
+  });
+
+  /** What an export would contain, so a screen can offer it honestly (or not at all). */
+  app.get("/api/projects/:id/path/export/summary", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const goal = await exportGoal(projectId, req.query.goal);
+      const written = goal ? await collectPathWriting(projectId, goal) : null;
+      res.json({
+        steps: written?.steps ?? 0,
+        phases: written?.phases.length ?? 0,
+        goalLabel: written?.goalLabel ?? null,
+      });
+    } catch (error) {
+      console.error("Path export summary error:", error);
+      res.status(500).json({ message: "Couldn't read that." });
     }
   });
 
@@ -3258,8 +3502,9 @@ RULES:
   /** Tapped answers to a step's questions. Free: no model runs. */
   app.post("/api/projects/:id/path/intake", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const result = await saveIntake(req.params.id, String(req.body?.taskId ?? ""), req.body?.answers);
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const result = await saveIntake(req.params.id, String(req.body?.taskId ?? ""), req.body?.answers, userId);
       res.json({ answers: result.answers, summary: result.summary, workId: result.work.id, route: result.route });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
@@ -3309,7 +3554,7 @@ RULES:
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const result = await chooseWork(req.params.id, req.params.workId, {
         index: req.body?.index, text: typeof req.body?.text === "string" ? req.body.text : undefined, done: req.body?.done,
-      });
+      }, userId);
       res.json(result);
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
@@ -3340,7 +3585,7 @@ RULES:
          * source task and becomes the thing the steps are built from.
          */
         if (req.body?.draft === true) {
-          const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
+          const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer", { projectId });
           if (!ent) return;
           const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
           const kind = loopTaskId ? LOOP_TYPE_INFO[loopTypeOf(src.source!.tags)] : null;
@@ -3356,7 +3601,7 @@ RULES:
         });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps", { projectId });
       if (!ent) return;
       // What they confirmed is the artifact; keep it on the source task so
       // the rest of the path (injections, the next expansion) can read it.
@@ -3424,7 +3669,7 @@ RULES:
         return res.status(400).json({ message: asked ? "Those loops are already written. Rewrite one yourself, or clear it first." : "Every loop is already written.", code: "nothing_to_write" });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova writing your loops");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova writing your loops", { projectId });
       if (!ent) return;
       const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
       let drafts: Awaited<ReturnType<typeof draftLoops>>;
@@ -3452,7 +3697,7 @@ RULES:
         return answerUnreadable(res, new ModelResponseError("loops"), "loops");
       }
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
-      res.json({ ...result, creditsCharged: CREDIT_COSTS.taskAssist });
+      res.json({ ...result, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Loop write error:", error);
@@ -3492,7 +3737,7 @@ RULES:
         return res.status(400).json({ message: `Write every loop first — still to do: ${still.join(", ")}.`, code: "loops_incomplete", missing: read.coverage.missing, unwritten: read.coverage.unwritten });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops", { projectId, action: "loopAudit" });
       if (!ent) return;
       const brief = [formatProjectBriefForPrompt(project), project.novaNotes ? `THE BUILDER'S STANDING NOTES (these outrank the brief)\n${project.novaNotes}` : ""].filter(Boolean).join("\n\n");
       let result: Awaited<ReturnType<typeof auditLoopsAgainstCompetition>>;
@@ -3506,7 +3751,7 @@ RULES:
       if (!audit.loops.length) return answerUnreadable(res, new ModelResponseError("loop audit"), "loop audit");
       const saved = await saveLoopAudit(projectId, read.sourceTask.id, { ...audit, model: result.model });
       await storage.deductCredits(userId, CREDIT_COSTS.loopAudit);
-      res.json({ ...saved, creditsCharged: CREDIT_COSTS.loopAudit });
+      res.json({ ...saved, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Loop audit error:", error);
@@ -3622,7 +3867,7 @@ RULES:
       if (artifacts.length === 0) {
         return res.status(400).json({ message: "Nothing to ground a task in yet. Finish a milestone with a written answer, or post an update about the project, and Nova will have something to work from.", code: "no_artifacts" });
       }
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions", { projectId });
       if (!ent) return;
       const proposals = await proposeInjections(ent, phase.title, phase.milestones.map((m) => m.title), artifacts, phase.injectRoom);
       const result = await createInjections(projectId, phaseId, proposals, artifacts, status.goal);
@@ -3991,15 +4236,13 @@ RULES:
       );
 
       /*
-       * Hold back everyone from the last two runs so this run shows new people.
-       * If that leaves fewer than a full page, show them anyway: on a small or
-       * young community an empty Discover teaches less than a repeat, and the
-       * batch number still moves so the rotation resumes as people join.
+       * Who was shown in the last couple of runs. Held back at *selection*,
+       * below, rather than cut from the pool here — see the note by
+       * `topMatches` for why that distinction turned out to matter.
        */
       const { latestBatch, recentlyShown } = await storage.getMatchBatchState(userId, MATCH_STALE_HOURS);
       const held = new Set(recentlyShown);
-      const unseen = eligible.filter((p) => !held.has(p.id));
-      const otherProfiles = unseen.length >= matchLimit ? unseen : eligible;
+      const otherProfiles = eligible;
       const batch = latestBatch + 1;
 
       if (otherProfiles.length === 0) {
@@ -4058,7 +4301,30 @@ RULES:
       }
 
       scoredMatches.sort((a, b) => b.score - a.score);
-      const topMatches = scoredMatches.slice(0, matchLimit);
+
+      /*
+       * New faces first, and repeats only to fill the page.
+       *
+       * The rotation used to be all-or-nothing: if holding everyone back left
+       * fewer than a full page, it gave up and showed the whole pool. That
+       * reads as a sensible fallback and is, in practice, off nearly always —
+       * a page is twenty (every tier matches at "priority" now that the
+       * entitlements are free for everybody), and a community with twenty
+       * unseen matchable people in it is a large one. Below that threshold the
+       * branch never fired, so the rotation this whole batch mechanism exists
+       * for did nothing at all: Tuesday's Discover was Monday's Discover, for
+       * everyone, which is the exact complaint it was written to answer.
+       *
+       * Sorting fresh ahead of repeats does what the fallback was trying to:
+       * it rotates as far as the pool allows, tops the page up rather than
+       * abandoning the idea, and still cannot return an empty screen. A pool
+       * genuinely smaller than a page repeats because it must — you cannot
+       * rotate eight people through twenty slots — and that is a true answer
+       * rather than a disabled feature.
+       */
+      const fresh = scoredMatches.filter((m) => !held.has(m.id));
+      const repeats = scoredMatches.filter((m) => held.has(m.id));
+      const topMatches = [...fresh, ...repeats].slice(0, matchLimit);
 
       if (topMatches.length === 0) {
         return [];
@@ -4357,16 +4623,53 @@ RULES:
     }
   });
 
-  app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
+  /*
+   * A storyboard, which was two model calls behind no gate at all.
+   *
+   * `requireImages` sat behind `useAiImages`, so a request that asked for no
+   * pictures — which the repo's own sweep test sends — reached both
+   * `chat.completions.create` calls having paid nothing, taken nothing off the
+   * allowance, and passed no limiter: the route carried no `rateLimit` either,
+   * so it also escaped the AI burst limit and the platform's daily spend
+   * brake. The `deductCredits` at the end had no hold in front of it, which
+   * makes it a bare `chargeCredits(1)` whose failure is discarded — once the
+   * month's allowance is gone the route was free and uncapped.
+   *
+   * The images keep their own gate. This one is for the writing.
+   */
+  app.post("/api/projects/:id/generate-video", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.videoGeneration, "generating a video"))) return;
 
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
       const { prompt, style = "professional", useAiImages = true } = req.body;
+
+      /*
+       * Five scenes, so five pictures — which is what this asks for and what
+       * it used to get for one small action. Membership is checked first now:
+       * the price question comes after "is this yours", or a stranger learns
+       * what the balance is by being refused for the wrong reason.
+       */
+      const permit = useAiImages
+        ? await requireImages(res, userId, { scope: "project", scopeId: project.id, wanted: STORYBOARD_SCENES, label: "A storyboard" })
+        : null;
+      if (useAiImages && !permit) return;
+
+      /*
+       * The writing is metered even when no pictures are asked for.
+       *
+       * Two model calls happen below whatever `useAiImages` says, so the gate
+       * cannot be the image gate. A small action: it is one storyboard over
+       * one project, the same size as the other writing on the desk. The hold
+       * this places is settled by the `deductCredits` further down, and
+       * released untouched if the route fails before it — which is what makes
+       * a crashed generation free rather than charged.
+       */
+      const wordsEnt = await requireCredits(res, userId, CREDIT_COSTS.videoGeneration, "A storyboard", { projectId: project.id, action: "videoGeneration" });
+      if (!wordsEnt) return;
 
       // The brief (one-liner, mission, problem, target user, scope, ...) is the
       // richest description of the project, so it grounds every generation step.
@@ -4454,7 +4757,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
         const rawContent = scenesResponse.choices[0].message.content || "[]";
         const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
         const parsed = parseModelJson(rawContent);
-        scenes = parsed.slice(0, 5).map((s: any) => {
+        scenes = parsed.slice(0, STORYBOARD_SCENES).map((s: any) => {
           let svgContent = s.svg || "";
           if (svgContent && !svgContent.includes("xmlns")) {
             svgContent = svgContent.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
@@ -4502,6 +4805,8 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
           })
         );
         scenes = rendered;
+        // What was actually drawn — a scene that fell back to its SVG is not a picture.
+        await permit?.record(rendered.filter((sc) => sc.imageUrl?.startsWith("data:")).length || 1);
         if (imageErrors.length > 0) {
           console.error(`AI image generation failed for ${imageErrors.length}/${scenes.length} scenes:`, imageErrors[0]);
         }
@@ -4584,7 +4889,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
 
       res.json({
         storyboardId: saved.id,
-        creditsCharged: scenesFromModel ? CREDIT_COSTS.videoGeneration : 0,
+        creditsCharged: scenesFromModel ? CHARGEABLE : 0,
         storyboard,
         // Scene images are served from an owner-checked route, never inlined
         // as data URIs and never added to the project's media gallery.
@@ -4947,7 +5252,8 @@ Respond ONLY with the JSON, in the same shape as before.`,
 
       const ent = await requireFeature(res, userId, "aiRoadmap", "The Nova AI Roadmap Builder");
       if (!ent) return;
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.roadmapGeneration, "roadmap generation"))) return;
+      // "Build my path and roadmap" — a priced outcome, paid from the balance.
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Building your path and roadmap", { outcome: "roadmap", projectId }))) return;
 
       const { goal, startingPoint, targetDate } = req.body as {
         goal?: string; startingPoint?: string; targetDate?: string;
@@ -5001,7 +5307,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
         parsed.phases
       );
 
-      await storage.deductCredits(userId, CREDIT_COSTS.roadmapGeneration);
+      await storage.deductCredits(userId, CHARGEABLE);
       await storage.logActivity({
         projectId, userId, action: "generated an AI roadmap",
         entityType: "roadmap", entityId: created.id, metadata: { goal: goal.trim(), phases: created.phases.length },
@@ -5018,7 +5324,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
         });
       }
 
-      res.json({ roadmap: created, creditsCharged: CREDIT_COSTS.roadmapGeneration });
+      res.json({ roadmap: created, creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.roadmap });
     } catch (error) {
       console.error("Roadmap generation error:", error);
       respondToAiError(res, error, "Failed to generate roadmap");
@@ -5113,7 +5419,7 @@ Additionally, each phase may include "status": one of "upcoming", "in-progress",
       });
 
       const fresh = await storage.getProjectRoadmap(projectId);
-      res.json({ roadmap: fresh, creditsCharged: CREDIT_COSTS.roadmapUpdate });
+      res.json({ roadmap: fresh, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Roadmap update error:", error);
       respondToAiError(res, error, "Failed to update roadmap");
@@ -5210,7 +5516,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       res.json({
         reasoning: String(parsed.reasoning || ""),
         actions,
-        creditsCharged: CREDIT_COSTS.nextActions,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Next actions error:", error);
@@ -5282,7 +5588,9 @@ ${PLAIN_LANGUAGE_RULES}`,
         milestones: milestones.length,
         tasks: tasks.length,
       });
-      if (!(await requireCredits(res, userId, cost, "a roadmap rebuild"))) return;
+      // A rebuild re-plans everything, so it is the roadmap purchase again — `cost` is now only a size hint.
+      void cost;
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Rebuilding your roadmap", { outcome: "roadmap", projectId, action: "roadmapRebuild" }))) return;
 
       const { whatChanged, newGoal, startingPoint: newStartingPoint } = req.body as {
         whatChanged?: string; newGoal?: string; startingPoint?: string;
@@ -5374,7 +5682,7 @@ Additionally include:
         tasksUpdated++;
       }
 
-      await storage.deductCredits(userId, cost);
+      await storage.deductCredits(userId, CHARGEABLE);
       await storage.logActivity({
         projectId, userId, action: "rebuilt the AI roadmap",
         entityType: "roadmap", entityId: existing.id,
@@ -5387,7 +5695,7 @@ Additionally include:
         changeSummary: String(parsed.changeSummary || ""),
         milestonesUpdated,
         tasksUpdated,
-        creditsCharged: cost,
+        creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.roadmap,
       });
     } catch (error) {
       console.error("Roadmap rebuild error:", error);
@@ -5685,7 +5993,7 @@ Produce 3-6 findings.`,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.healthCheck);
-      res.json({ check, creditsCharged: CREDIT_COSTS.healthCheck });
+      res.json({ check, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Health check error:", error);
       res.status(500).json({ message: "Failed to run health check" });
@@ -5786,7 +6094,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         changes,
         skipped,
         note: String(parsed.note || "").slice(0, 800),
-        creditsCharged: CREDIT_COSTS.healthFix,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Health fix error:", error);
@@ -6576,6 +6884,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
+      /*
+       * Said plainly, before the SDK is asked. Without keys the create call
+       * fails somewhere inside Stripe's client and arrives as a refusal that
+       * reads like the person's fault rather than the server's.
+       */
+      if (!isStripeConfigured()) {
+        return res.status(503).json({
+          message: "Bank payouts aren't switched on for this server. Your earnings stay in your balance.",
+          code: "stripe_not_configured",
+        });
+      }
 
       if (user.stripeConnectAccountId) {
         return res.json({ accountId: user.stripeConnectAccountId });
@@ -6596,7 +6915,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ accountId: account.id });
     } catch (error) {
       console.error("Connect account error:", error);
-      res.status(500).json({ message: "Failed to create connect account" });
+      const { status, body } = connectFailure(error, "Couldn't start the bank setup");
+      res.status(status).json(body);
     }
   });
 
@@ -6611,15 +6931,23 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const stripe = await getUncachableStripeClient();
       const link = await stripe.accountLinks.create({
         account: user.stripeConnectAccountId,
-        refresh_url: `${req.protocol}://${req.get("host")}/profile`,
-        return_url: `${req.protocol}://${req.get("host")}/profile?connect=success`,
+        /*
+         * Back to the earnings page, which is where they were and where the
+         * answer is. It used to return to /profile, from the days when the
+         * only way in was a project's backing setup — leaving somebody who
+         * had just finished Stripe's form on a page that said nothing about
+         * whether it had worked.
+         */
+        refresh_url: `${req.protocol}://${req.get("host")}/earnings`,
+        return_url: `${req.protocol}://${req.get("host")}/earnings?connected=1`,
         type: "account_onboarding",
       });
 
       res.json({ url: link.url });
     } catch (error) {
       console.error("Connect onboarding error:", error);
-      res.status(500).json({ message: "Failed to get onboarding link" });
+      const { status, body } = connectFailure(error, "Couldn't open the bank setup");
+      res.status(status).json(body);
     }
   });
 
@@ -6636,7 +6964,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ url: link.url });
     } catch (error) {
       console.error("Connect dashboard error:", error);
-      res.status(500).json({ message: "Failed to get dashboard link" });
+      const { status, body } = connectFailure(error, "Couldn't open your Stripe dashboard");
+      res.status(status).json(body);
     }
   });
 
@@ -6653,6 +6982,56 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Payouts error:", error);
       res.status(500).json({ message: "Failed to get payout info" });
+    }
+  });
+
+  /**
+   * What a person has earned, and whether it can reach them.
+   *
+   * `/api/payouts` above answers only for donations, and nothing in the client
+   * ever called it. This answers across every way money is owed here — backings
+   * held or released on their projects, challenge prizes they have won — and
+   * says which of it is actually theirs to spend.
+   */
+  app.get("/api/earnings", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Earnings error:", error);
+      res.status(500).json({ message: "Failed to read earnings" });
+    }
+  });
+
+  /**
+   * Where this person's future earnings should land: their balance here, or
+   * their bank. Refused for "bank" without an account Stripe will actually
+   * pay — see setPayoutTarget, which says why.
+   */
+  app.patch("/api/earnings/target", isAuthenticated, async (req: any, res) => {
+    try {
+      const target = req.body?.target;
+      if (target !== "balance" && target !== "bank") {
+        return res.status(400).json({ message: "Pick either your balance or your bank." });
+      }
+      const done = await setPayoutTarget((req.user as any).id, target);
+      if (!done.ok) return res.status(422).json({ message: done.reason });
+      res.json(await earningsFor((req.user as any).id));
+    } catch (error) {
+      console.error("Payout target error:", error);
+      res.status(500).json({ message: "Failed to change where your earnings go" });
+    }
+  });
+
+  /**
+   * SparkTower's own cash position. Owner only, and 404 to everybody else —
+   * the same gate the analytics console uses, for the same reason.
+   */
+  app.get("/api/admin/revenue", isAuthenticated, requireOwner, async (_req, res) => {
+    try {
+      res.json(await platformRevenue());
+    } catch (error) {
+      console.error("Platform revenue error:", error);
+      res.status(500).json({ message: "Failed to read revenue" });
     }
   });
 
@@ -6717,6 +7096,13 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         lowCreditsAt: sub.creditsLimit === Infinity ? null : lowCreditsAt(sub.creditsLimit),
         // A subscription payment that failed (until one goes through), or was refunded in full.
         billingIssue: await billingIssueFor(userId),
+        /*
+         * The money, alongside the legacy credit shape above. Both are served
+         * for now: this is what the new dialogs read, and the fields above are
+         * what the current client still draws while it is rebuilt.
+         */
+        wallet: await walletOf(userId),
+        prices: PRICE_LIST,
       });
     } catch (error) {
       console.error("Error fetching subscription:", error);
@@ -6761,9 +7147,247 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       comparison: COMPARISON_ROWS,
       fairUseNotice: FAIR_USE_NOTICE,
       creditCosts: CREDIT_COSTS,
+      // The pricing page proper: one free column and a short list of prices.
+      pricing: PRICE_LIST,
+      pricingRows: PRICING_ROWS,
+      pricingNotice: PRICING_NOTICE,
       // Signals to the pricing page that paid plans can't be purchased yet.
       stripeConfigured: priceIdByTier.size > 0,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // The wallet: money in, money out, and what it buys
+  // -------------------------------------------------------------------------
+
+  /**
+   * Everything a paywall dialog needs before it is shown, so it never has to
+   * guess: the balance, the month's allowance, the day pass, and the whole
+   * price list. The same `wallet` object appears inside every 402, so a dialog
+   * opened cold and a dialog opened by a refusal render from the same shape.
+   */
+  app.get("/api/nova/wallet", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      res.json({
+        wallet: await walletOf(userId),
+        prices: PRICE_LIST,
+        notice: PRICING_NOTICE,
+        recent: await recentLedger(userId, 20),
+        /** Projects whose priced outcomes are already paid for. See server/wallet.ts. */
+        buildPasses: await buildPassProjects(userId),
+      });
+    } catch (error) {
+      console.error("Wallet read error:", error);
+      res.status(500).json({ message: "Couldn't read your balance." });
+    }
+  });
+
+  /**
+   * The $1 day pass, bought from the balance in one tap — which is the whole
+   * reason a balance exists rather than a redirect to Stripe every time
+   * somebody runs out mid-sentence.
+   */
+  /*
+   * More Nova actions, bought a pack at a time.
+   *
+   * This route was `/api/nova/day-pass` and sold twenty-four hours of
+   * unlimited small actions for a dollar. The path stays for a moment longer
+   * than the pass does — see PAY_ENDPOINTS — because a client already loaded
+   * in somebody's browser will keep posting to whatever it was built with.
+   */
+  app.post(PAY_ENDPOINTS.actionPack, isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const bought = await buyActionPack(userId);
+      if (!bought) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message: `${ACTIONS_PER_PACK} more Nova actions is ${formatMoney(OUTCOME_PRICE_CENTS.actionPack)} and your balance is ${wallet.balanceDisplay}. Add a few dollars and they're yours straight away.`,
+          label: OUTCOME_COPY.actionPack.name, outcome: "actionPack", cents: OUTCOME_PRICE_CENTS.actionPack, wallet,
+        }));
+      }
+      res.json({ actionsBought: bought.actions, wallet: bought.wallet });
+    } catch (error) {
+      console.error("Action pack error:", error);
+      res.status(500).json({ message: "Couldn't add those Nova actions." });
+    }
+  });
+
+  /**
+   * Top up the balance through Stripe Checkout.
+   *
+   * The only thing Checkout sells now. Amounts come from TOP_UP_CENTS and are
+   * checked against it here, so a client can't name its own price — the same
+   * reason the old subscription checkout only accepted our own price IDs. The
+   * balance moves when the webhook confirms payment, never on the way out.
+   *
+   * `price_data` inline rather than a seeded price: six round amounts that
+   * never change are not worth a product catalog to keep in sync, and this way
+   * a fresh deployment can take money without a seed step.
+   */
+  /** A day of unlimited image generation. Separate from the ordinary pass; see server/images.ts. */
+  app.post("/api/nova/image-pass", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      // Already running: not an error, and not a second charge.
+      if (await imagePassActive(userId)) {
+        return res.status(200).json({ alreadyActive: true, wallet: await walletOf(userId) });
+      }
+      const bought = await buyImagePass(userId);
+      if (!bought) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message:
+            `A day of images is ${formatMoney(OUTCOME_PRICE_CENTS.imagePass)} and your balance is ${wallet.balanceDisplay}. ` +
+            `Add a few dollars and it starts straight away.`,
+          label: OUTCOME_COPY.imagePass.name, outcome: "imagePass", cents: OUTCOME_PRICE_CENTS.imagePass, wallet,
+        }));
+      }
+      res.json({ imagePassUntil: bought.until.toISOString(), wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Image pass error:", error);
+      res.status(500).json({ message: "Couldn't start your image pass." });
+    }
+  });
+
+  app.post("/api/nova/top-up", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const amountCents = Number(req.body?.amountCents);
+      if (!TOP_UP_CENTS.includes(amountCents)) {
+        return res.status(400).json({
+          message: "Pick one of the top-up amounts.",
+          code: "invalid_amount", optionsCents: TOP_UP_CENTS,
+        });
+      }
+      const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const customerId = await ensureStripeCustomer(stripe, user);
+
+      const urls = checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, req.body?.returnTo, "topup");
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [{
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: amountCents,
+            product_data: { name: `SparkTower balance — ${formatMoney(amountCents)}` },
+          },
+        }],
+        success_url: urls.success,
+        cancel_url: urls.cancel,
+        // Read back by the webhook. `userId` is what ties the payment to an
+        // account; the customer id would do it too, but metadata survives a
+        // customer being merged or replaced.
+        metadata: { type: "topup", userId, amountCents: String(amountCents) },
+      });
+      res.json({ url: session.url, amountCents });
+    } catch (error) {
+      console.error("Top-up checkout error:", error);
+      res.status(500).json({ message: "Couldn't start that top-up." });
+    }
+  });
+
+  /**
+   * "Nova builds the whole business" — bought once, for one project.
+   *
+   * What the money buys is a pass on that project (nova_build_passes): from
+   * here on every priced outcome on it — the roadmap, the documents, the audit
+   * — is already paid for, because building out every section *is* those
+   * things, dozens of model calls arriving over minutes. Charging per call
+   * against a purchase already made would mean threading a receipt through
+   * every route and getting it wrong somewhere.
+   *
+   * Buying it twice for one project is refused rather than charged again.
+   */
+  app.post("/api/nova/build-my-business", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = String(req.body?.projectId ?? "");
+      const project = projectId ? await storage.getProject(projectId) : null;
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project's owner can buy this." });
+
+      if (await hasBuildPass(userId, projectId)) {
+        /*
+         * Already paid for. Not an error to be shown as one: a build that was
+         * interrupted — a restart, a step that threw — has to be startable
+         * again, and the pass is the receipt that makes the second run free.
+         * Refusing outright would leave someone who paid for the build with a half-built
+         * path and no button.
+         */
+        if (await buildInFlight(projectId)) {
+          return res.status(409).json({
+            message: "Nova is building this one right now.",
+            code: "build_running", projectId,
+          });
+        }
+        startBusinessBuild(projectId, userId);
+        return res.status(200).json({ projectId, paidCents: 0, started: true, alreadyPaid: true, wallet: await walletOf(userId) });
+      }
+
+      const cents = OUTCOME_PRICE_CENTS.business;
+      const taken = await spend(userId, cents, { outcome: "business", note: OUTCOME_COPY.business.name, projectId });
+      if (!taken) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message: `Nova building the whole business is ${formatMoney(cents)}, and your balance is ${wallet.balanceDisplay}.`,
+          label: OUTCOME_COPY.business.name, outcome: "business", cents, wallet,
+        }));
+      }
+      /*
+       * What was actually taken, not what it lists at.
+       *
+       * `spend` hands back a record of nothing on a development account (see
+       * the note there), so writing the list price into the pass, the receipt
+       * and the refund had all three claiming $14.99 against a balance that
+       * never moved — and the refund would have been the worst of them, since
+       * it puts money on an account that never spent any.
+       */
+      const tookCents = taken.amountCents;
+      try {
+        await db.insert(novaBuildPasses).values({ userId, projectId, paidCents: tookCents });
+      } catch (err) {
+        // The pass didn't stick, so the money doesn't either.
+        const { refund } = await import("./wallet");
+        if (tookCents > 0) {
+          await refund(userId, tookCents, { outcome: "business", projectId, note: "Refunded — the build pass couldn't be recorded" });
+        }
+        throw err;
+      }
+      /*
+       * Paid, so the build starts now — and is not awaited. It is forty model
+       * calls; a purchase request that hangs for four minutes is a purchase
+       * people abandon and then dispute. They watch the run instead
+       * (GET /api/projects/:id/nova-build).
+       */
+      startBusinessBuild(projectId, userId);
+      res.status(201).json({ projectId, paidCents: tookCents, started: true, wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Build-my-business error:", error);
+      res.status(500).json({ message: "Couldn't start that build." });
+    }
+  });
+
+  /**
+   * Where a build has got to. Cheap enough to poll every few seconds, and it
+   * is the only place the work is visible — the build outlives the request
+   * that started it and any tab that was open at the time.
+   */
+  app.get("/api/projects/:id/nova-build", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      res.json(await buildRunStatus(req.params.id, userId));
+    } catch (error) {
+      console.error("Nova build status error:", error);
+      res.status(500).json({ message: "Couldn't read the build status." });
+    }
   });
 
   app.post("/api/checkout", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
@@ -6772,11 +7396,24 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const { priceId, returnTo } = req.body;
       if (!priceId) return res.status(400).json({ message: "priceId is required" });
 
-      // Only allow prices belonging to one of our own tiers, so an arbitrary
-      // price ID can't be substituted by the client.
+      /*
+       * Nothing is sold as a subscription any more. This route stays because
+       * people already on one reach it from the billing screen to change or
+       * settle what they have, and because a 404 here would read as a bug
+       * rather than as a decision — but it will not start a new subscription
+       * for anybody, and it says where the money goes instead.
+       *
+       * Only prices belonging to one of our own tiers get this far, so an
+       * arbitrary price id can't be substituted by the client. With the
+       * catalog empty (STRIPE_PLANS), in practice nothing does.
+       */
       const allowedPriceIds = new Set((await getPriceIdsByTier()).values());
       if (!allowedPriceIds.has(priceId)) {
-        return res.status(400).json({ message: "Invalid price" });
+        return res.status(400).json({
+          message: "There are no plans to buy. Everything is free; Nova's bigger jobs are paid for one at a time.",
+          code: "no_subscriptions",
+          endpoints: PAY_ENDPOINTS,
+        });
       }
 
       const stripe = await getUncachableStripeClient();
@@ -6912,6 +7549,45 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
+  /**
+   * Dev-only: put money in the wallet without Stripe.
+   *
+   * Everything priced in this product is bought out of the balance, and the
+   * only way to fill it is a Stripe Checkout session. That makes the paid
+   * paths — the whole-business build above, the day pass, the documents — untestable
+   * locally without either real Stripe credentials or somebody writing
+   * `balance_cents` by hand in psql, which skips the ledger and leaves the two
+   * disagreeing. This credits it the way the webhook does, ledger row and all,
+   * so a development balance is a real balance.
+   *
+   * Gated exactly like the tier override, and it refuses a live Stripe key:
+   * a machine that can take real payments has no business minting credit.
+   */
+  app.post("/api/dev/credit-wallet", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    if (process.env.STRIPE_SECRET_KEY?.startsWith("sk_live")) {
+      return res.status(403).json({ message: "Refusing to mint credit on a server with live Stripe keys." });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const cents = Math.round(Number(req.body?.amountCents ?? 5000));
+      if (!Number.isFinite(cents) || cents <= 0 || cents > 100_000) {
+        return res.status(400).json({ message: "amountCents must be between 1 and 100000." });
+      }
+      const { creditTopUp } = await import("./wallet");
+      // A unique id per call, in the column the real top-up dedupes on, so a
+      // development credit can never collide with a Stripe session id.
+      await creditTopUp(userId, cents, `dev-${randomUUID()}`, "Development credit (no payment taken)");
+      console.log(`[dev] credited ${cents}¢ to ${userId}`);
+      res.json({ wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Dev credit-wallet error:", error);
+      res.status(500).json({ message: "Failed to credit the wallet." });
+    }
+  });
+
   /** Dev-only: reset this month's credit usage so limits can be re-tested. */
   app.post("/api/dev/reset-credits", isAuthenticated, async (req: any, res) => {
     if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
@@ -6925,6 +7601,79 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Dev reset-credits error:", error);
       res.status(500).json({ message: "Failed to reset credits" });
+    }
+  });
+
+  /**
+   * The one switch: never charged, allowance never moves.
+   *
+   * What the tier dropdown could not do. Every tier is free since the product
+   * stopped selling subscriptions, so switching between four of them changed
+   * nothing a developer cared about — the month's twenty-five small actions
+   * still ran out halfway through testing a flow, and the whole-business card
+   * could only be bought once per project.
+   *
+   * See the note in server/entitlements.ts for why this is honoured only
+   * outside production as well as only settable outside it.
+   */
+  app.post("/api/dev/unlimited", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const on = req.body?.on !== false;
+      await db.update(users).set({ devUnlimited: on }).where(eq(users.id, userId));
+      res.json({ devUnlimited: on, wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Dev unlimited error:", error);
+      res.status(500).json({ message: "Couldn't change that" });
+    }
+  });
+
+  /**
+   * Forget what this project has paid for, so the paywalls come back.
+   *
+   * Every priced surface decides it has been bought by looking for a row: the
+   * whole-business card by a build pass, the simulator by any scenario or
+   * outlook, the marketing reader by any scheme. Testing the *purchase* —
+   * which is the part with the money in it and the part most worth
+   * exercising — was therefore a one-shot per project, and the way to do it
+   * twice was to make another project.
+   *
+   * Deletes the rows rather than flipping a flag, because the flag is the rows.
+   * Destructive on purpose and dev-only: it throws away simulations and
+   * schemes that took model calls to produce.
+   */
+  app.post("/api/dev/forget-purchases", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const projectId = String(req.body?.projectId ?? "");
+      const project = projectId ? await storage.getProject(projectId) : null;
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Not your project" });
+
+      const forgotten = {
+        buildPasses: (await db.delete(novaBuildPasses)
+          .where(and(eq(novaBuildPasses.userId, userId), eq(novaBuildPasses.projectId, projectId)))
+          .returning({ id: novaBuildPasses.id })).length,
+        scenarios: (await db.delete(simulationScenarios)
+          .where(eq(simulationScenarios.projectId, projectId)).returning({ id: simulationScenarios.id })).length,
+        outlooks: (await db.delete(tenYearOutlooks)
+          .where(eq(tenYearOutlooks.projectId, projectId)).returning({ id: tenYearOutlooks.id })).length,
+        schemes: (await db.delete(marketingSchemes)
+          .where(eq(marketingSchemes.projectId, projectId)).returning({ id: marketingSchemes.id })).length,
+        /* The build runs too, or the card reports the last one instead of offering. */
+        builds: (await db.delete(novaBuildRuns)
+          .where(eq(novaBuildRuns.projectId, projectId)).returning({ id: novaBuildRuns.id })).length,
+      };
+      res.json({ forgotten });
+    } catch (error) {
+      console.error("Dev forget-purchases error:", error);
+      res.status(500).json({ message: "Couldn't forget those" });
     }
   });
 

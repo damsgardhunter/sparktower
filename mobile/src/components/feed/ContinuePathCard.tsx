@@ -29,7 +29,11 @@ export interface NextStepItem {
   track?: { goal: string; label: string; short: string; primary: boolean };
   phase: string;
   progress: { done: number; total: number };
-  next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
+  next: {
+    id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null;
+    /** A step finished by using a screen rather than by a button (BackboneMilestone.doneOn). */
+    doneOn?: { surface: PathSurface; label: string };
+  } | null;
   daysSinceActivity: number;
   projectedAt: string | null;
   lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
@@ -37,6 +41,13 @@ export interface NextStepItem {
   /** Set instead of `next` when the project has no path to take a step on. */
   needsPath?: { kind: "start" | "adopt"; existingTasks: number; existingDone: number };
 }
+
+/*
+ * The screens that finish a step by being used. Restated with the rest, and
+ * the mirror test fails when @shared/phase-trees/types gains a fourth: the
+ * person who adds it will not be opening this file.
+ */
+export type PathSurface = "wwit" | "recurring-jobs" | "quarter-goals";
 
 const ACTOR_SHORT: Record<string, string> = {
   "nova-builds": "Nova builds it",
@@ -128,7 +139,17 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
         const weeklyDue = !!item.weekly?.due && item.weekly.steps.length > 1;
         const est = item.next ? estimate(item.next.estimateMinutes) : null;
         const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
-        const href = item.track ? `/manage/${item.project.id}?section=${item.track.goal}` : `/manage/${item.project.id}`;
+        /*
+         * The step's own screen when it has one, the section otherwise. This
+         * card is not on the dashboard, so it cannot scroll to a card there —
+         * it asks for it in the address and the dashboard opens it on arrival.
+         */
+        const doneOn = item.next?.doneOn ?? null;
+        const params = [
+          item.track ? `section=${item.track.goal}` : null,
+          doneOn ? `surface=${doneOn.surface}` : null,
+        ].filter(Boolean).join("&");
+        const href = params ? `/manage/${item.project.id}?${params}` : `/manage/${item.project.id}`;
         return (
           <View key={`${item.project.id}:${item.track?.goal ?? ""}`} style={[s.item, idx > 0 && s.itemRule]} testID={`continue-path-${idSuffix}`}>
             <View style={s.itemTop}>
@@ -151,7 +172,7 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
                 style={({ pressed }) => [s.continue, pressed && { opacity: 0.85 }]}
                 testID={`button-continue-path-${idSuffix}`}
               >
-                <Text style={s.continueText}>Continue</Text>
+                <Text style={s.continueText}>{doneOn ? `Open ${doneOn.label}` : "Continue"}</Text>
                 <Ionicons name="arrow-forward" size={13} color={colors.primaryText} />
               </Pressable>
             </View>
@@ -162,6 +183,8 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
                 <Text style={{ color: colors.textTertiary }}>  Next: </Text>
                 <Text style={{ fontFamily: fontFamily.medium }}>{item.next.step ?? item.next.title}</Text>
                 <Text style={s.nextMeta}>  · {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{est ? ` · ${est}` : ""}</Text>
+                {/* So nobody waits for a button that was never coming. */}
+                {doneOn ? <Text style={s.nextMeta}>  · ticks itself once it's done in {doneOn.label}</Text> : null}
               </Text>
             ) : item.needsPath ? (
               <StartPath item={item} idSuffix={idSuffix} onNotice={onNotice} />

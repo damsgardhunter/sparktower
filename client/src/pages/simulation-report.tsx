@@ -184,8 +184,12 @@ function Accounts({ r }: { r: CompanyReport }) {
     { label: "Salaries", seat: "the table", amount: p.salaries, help: "Five seats, the staff, and more of both the wider you sell." },
     { label: "Marketing", seat: "marketing", amount: p.marketing },
     { label: "Product", seat: "technology", amount: p.product, help: "Features, reliability, research and paying down debt." },
-    { label: "Support and efficiency", seat: "operations", amount: p.operations },
+    { label: "Support and efficiency", seat: "operations", amount: p.operations, help: "Support, efficiency, recruiting, training, and the plant: automating it, a second shift, stock held ahead." },
+    { label: "Capacity", seat: "operations", amount: p.capacity ?? 0, help: "Room built and room leased this year." },
     { label: "Idle capacity", seat: "operations", amount: p.idleCapacity, help: "Room that was paid for and never used." },
+    { label: "Incidents", seat: "the table", amount: p.incidents ?? 0, help: "What last year's breach, lawsuit or recall cost to clean up, after any insurer paid." },
+    { label: "Partner share", seat: "the table", amount: p.partners ?? 0, help: "The cut of revenue owed on a distribution deal the table signed." },
+    { label: "Insurance", seat: "finance", amount: p.insurance ?? 0, help: "The premium on whatever the company chose to cover." },
     { label: "Interest", seat: "finance", amount: p.interest },
   ];
   const scale = Math.max(p.revenue, ...lines.map((l) => l.amount), 1);
@@ -197,6 +201,25 @@ function Accounts({ r }: { r: CompanyReport }) {
         {lines.map((l) => (
           <Row key={l.label} label={l.label} note={l.seat} help={l.help} amount={-l.amount} scale={scale} testId={`row-pnl-${l.label.toLowerCase().replace(/[^a-z]+/g, "-")}`} />
         ))}
+        {/*
+          * Planning is the odd one out: it is not a cost but the effect of the
+          * marketing seat's forecast, which saves money when it was close and
+          * costs it when it was wide. On its own row with its own sign, so the
+          * column above can be read as costs and still add up to the profit.
+          */}
+        {(p.planning ?? 0) !== 0 && (
+          <Row
+            label="Planning"
+            note="marketing"
+            help={(p.planning ?? 0) > 0
+              ? "The forecast was close enough to buy at the right volumes."
+              : "The forecast was wide, and the year was bought at the wrong volumes."}
+            amount={p.planning ?? 0}
+            scale={scale}
+            positive={(p.planning ?? 0) > 0}
+            testId="row-pnl-planning"
+          />
+        )}
         <div className="border-t border-border pt-2">
           <Row label="Profit before tax" amount={p.operatingProfit} scale={scale} strong />
         </div>

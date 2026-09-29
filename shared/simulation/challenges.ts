@@ -132,6 +132,17 @@ export function discretionarySpend(decisions?: TeamDecisions): number {
 const round = (n: number, to: number) => Math.max(to, Math.round(n / to) * to);
 
 /**
+ * The factor this company's money is written at, defensively.
+ *
+ * `scale` arrived with the custom markets, so a company stored before it
+ * existed comes back without one and is a full-size company. Read in one place
+ * because every absolute in this file — rewards and the floors under a couple
+ * of goals — has to agree about it.
+ */
+const scaleOf = (company: Company): number =>
+  typeof company.scale === "number" && Number.isFinite(company.scale) && company.scale > 0 ? company.scale : 1;
+
+/**
  * A challenge for this seat, this year, in this company's actual position.
  *
  * Deterministic from the venture, role and year, so it survives a re-run of
@@ -207,7 +218,7 @@ function rescueChallenge(input: { company: Company; role: Role; year: number; se
     ],
     cmo: [
       { id: "customers", label: "Do not lose customers this year", goal: Math.round(Object.values(company.customers).reduce((s, n) => s + n, 0) * 0.95), compare: "at_least", metric: "customers" },
-      { id: "spend", label: "Do it without spending your way there", goal: Math.round(Math.max(300_000, company.cash * 0.4)), compare: "at_most", metric: "spend" },
+      { id: "spend", label: "Do it without spending your way there", goal: Math.round(Math.max(300_000 * scaleOf(company), company.cash * 0.4)), compare: "at_most", metric: "spend" },
     ],
     coo: [
       { id: "cost", label: "Get the cost of a unit down", goal: Math.round(company.unitCost * 0.94 * 100) / 100, compare: "at_most", metric: "unit_cost" },
@@ -294,7 +305,17 @@ const BUILDERS: Record<Role, Builder[]> = {
   ],
   cfo: [
     ({ company, year, seed }) => {
-      const goal = round(Math.max(company.cash * 1.15, 1_000_000), 100_000);
+      /*
+       * The floor scales, or the objective stops being one.
+       *
+       * "End the year with a million in the bank" is a stretch for a company
+       * holding six; for one holding sixty thousand it is not a stretch, it is
+       * a different game. The rounding step goes with it, so a startup's
+       * target lands on a number it could actually reach rather than being
+       * rounded up to the nearest hundred thousand it will never see.
+       */
+      const scale = scaleOf(company);
+      const goal = round(Math.max(company.cash * 1.15, 1_000_000 * scale), Math.max(1_000, 100_000 * scale));
       return {
         id: id(seed), role: "cfo", year,
         title: "Fund the year without the bank",
@@ -540,13 +561,34 @@ export function checkChallenge(input: {
 const fmt = (n: number): string =>
   Math.abs(n) >= 10_000 ? Math.round(n).toLocaleString() : Math.abs(n) >= 10 ? String(Math.round(n)) : n.toFixed(2);
 
-/** Apply what a completed challenge gives the company. */
+/**
+ * Apply what a completed challenge gives the company.
+ *
+ * The money rewards are written for the market the seven were balanced at —
+ * 600,000 in cash is a year of margin to a company with six million in the
+ * bank. Every one of them is an absolute, so in a market a hundredth that
+ * size they are not a reward, they are the entire business arriving by post:
+ * a season played at startup scale paid 150,000 into a company whose sales
+ * that year were 9,399, lost money every single year, and finished with more
+ * than a million in the bank. The P&L said one thing and the balance said the
+ * opposite, which is the clearest sign a number has escaped its scale.
+ *
+ * So the two that are money scale with the company, by the same factor
+ * `season.ts` sizes its opening bank with. The two that are not — reputation
+ * in points, capacity as a percentage — are already relative and are left
+ * alone.
+ */
 export function applyReward(company: Company, reward: Reward | null): Company {
   if (!reward) return company;
+  /*
+   * Defensive: `scale` arrived with the custom markets, so a company stored
+   * before it existed comes back without one and is a full-size company.
+   */
+  const scale = scaleOf(company);
   switch (reward.kind) {
     case "reputation": return { ...company, reputation: Math.max(0, Math.min(100, company.reputation + reward.amount)) };
-    case "cash": return { ...company, cash: company.cash + reward.amount };
-    case "credit": return { ...company, creditLimit: company.creditLimit + reward.amount };
+    case "cash": return { ...company, cash: company.cash + reward.amount * scale };
+    case "credit": return { ...company, creditLimit: company.creditLimit + reward.amount * scale };
     case "capacity": return { ...company, capacity: Math.round(company.capacity * (1 + reward.amount)) };
   }
 }

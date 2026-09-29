@@ -1,0 +1,22 @@
+-- A season's own table size, and whether Nova fills the empty chairs.
+--
+-- Both existed as constants and neither could vary. LOBBY_SIZE was 5
+-- everywhere, and every room with a human in it was topped up to five bots
+-- sixty seconds after the last person arrived — which is right for the public
+-- market, where somebody who pressed play is owed a game rather than a waiting
+-- room, and wrong for both of the cases below.
+--
+-- `seat_count = 1` is a solo founder: one person holding every lever and
+-- drawing one executive salary instead of five. At $140,000 a chair, a
+-- startup rehearsing its own business was being charged $700,000 a year for
+-- four officers it does not employ and did not ask for.
+--
+-- `bot_fill = false` is a season whose seats were bought for named people.
+-- Filling their chairs a minute before they arrive is how a team of four turns
+-- up to find Nova already playing three of them.
+--
+-- Defaults preserve today's behaviour exactly, so every existing season keeps
+-- the five seats and the bot fill it was created with.
+ALTER TABLE "sim_seasons" ADD COLUMN IF NOT EXISTS "seat_count" integer DEFAULT 5 NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "sim_seasons" ADD COLUMN IF NOT EXISTS "bot_fill" boolean DEFAULT true NOT NULL;

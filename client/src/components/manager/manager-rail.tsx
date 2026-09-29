@@ -4,6 +4,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { RAIL_TABS, NOVA_GRADIENT, type TabId } from "./tabs";
+import { LiveDot } from "@/components/nova";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { useAuditStatus, auditStageLabel } from "@/lib/audit-status";
 
@@ -64,18 +65,12 @@ export function ManagerRail({ projectId, active, onSelect }: {
               <span className="lg:flex-1 lg:text-left">{t.label}</span>
               {t.id === "codebase" && reading && (
                 <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-medium text-foreground/80" title={`${auditStageLabel(reading.stage)}…`} data-testid="rail-codebase-reading">
-                  <span className="relative flex h-2 w-2">
-                    <span className={`absolute inline-flex h-full w-full rounded-full ${NOVA_GRADIENT} opacity-60 animate-ping`} />
-                    <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
-                  </span>
+                  <LiveDot />
                   Reading…
                 </span>
               )}
               {t.id === "codebase" && reading && (
-                <span className="lg:hidden absolute top-1.5 right-2 flex h-2 w-2" aria-label="Reading the code">
-                  <span className={`absolute inline-flex h-full w-full rounded-full ${NOVA_GRADIENT} opacity-60 animate-ping`} />
-                  <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
-                </span>
+                <LiveDot className="lg:hidden absolute top-1.5 right-2" aria-label="Reading the code" />
               )}
               {t.id === "codebase" && !reading && lastAudit && (
                 <span className="hidden lg:inline-flex items-center gap-1 text-[10px] text-muted-foreground" title="Last code audit" data-testid="rail-codebase-live">

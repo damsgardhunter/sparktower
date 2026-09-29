@@ -20,23 +20,26 @@
  * advances on a conditional update that names the year it expects to find. Run
  * the same tick twice and the second one does nothing.
  */
-import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import { surfaceEnabled } from "./surfaces";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
+import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { nicheById } from "@shared/simulation/niches";
+import { nicheForScope, type Scope } from "@shared/simulation/geography";
 import { resolveYear } from "@shared/simulation/resolve";
-import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
+import { ROLE_TITLES, ROLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import {
   buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver, DAY_MS,
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
 import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
-import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
+import type { BotSkill } from "@shared/simulation/bots";
+import { incumbentBids, marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
 import { applyAcquisition } from "@shared/simulation/mergers";
@@ -44,9 +47,33 @@ import { closeYear, stretchChallenge, whoWasRight } from "@shared/simulation/peo
 import { takings } from "@shared/simulation/responsibilities";
 import { applySeatMoves } from "./simulation-people";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
+import { rawMarketOf } from "./simulation-scope";
 
 /** What the market did to one company in one year. */
 type MarketOutcome = { kind: "won" | "lost" | "sold" | "unsold"; text: string };
+
+/**
+ * What happened at one lot, once the year is over.
+ *
+ * Bids are sealed while they can still be changed, and the rows are deleted
+ * the moment they settle — so a team could lose a third of its cash at
+ * auction and find no record of it anywhere afterwards but one line of prose.
+ * This is the record: what was up, who bid, who took it and for how much.
+ * Written after the auction has run, when there is nothing left to leak.
+ */
+export type AuctionRow = {
+  listingId: string;
+  name: string;
+  kind: string;
+  reserve: number;
+  /** How many companies put money on it. */
+  bidders: number;
+  winner: string | null;
+  winnerId: string | null;
+  price: number | null;
+  /** Filled in per company as the reports are written. */
+  yourBid?: number | null;
+};
 
 /** Distinct from the backing jobs' lock ids so the two never wait on each other. */
 const LOCK_SIM_TICK = 918_2711;
@@ -59,6 +86,18 @@ const LOCK_SIM_TICK = 918_2711;
  * closes the app first.
  */
 const FIRST_YEAR_DELAY_MS = 2 * 60_000;
+
+/**
+ * The same pause for a founder playing on their own: none worth speaking of.
+ *
+ * The two minutes above buy five people time to stop arguing and read the
+ * market together. One person has nobody to wait for, and what the delay
+ * actually bought them was a screen that said the season had started followed
+ * by two minutes in which nothing happened — the single loudest complaint
+ * about the whole flow. Ten seconds so the desk's next poll lands on a world
+ * that already exists rather than racing it.
+ */
+const SOLO_FIRST_YEAR_DELAY_MS = 10_000;
 
 async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null> {
   const client = await pool.connect();
@@ -76,16 +115,25 @@ async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null
 }
 
 /**
- * How long one simulated year lasts in this season.
+ * How much real time one decision gets in this season.
  *
- * A day, unless a company running a private training season asked for
- * minutes (`yearMinutes`, see sim_seasons in shared/schema.ts): a workshop
- * that meets for an afternoon cannot wait a day between years. Public seasons
- * never set it, so they are unchanged. Every place that schedules a year goes
- * through this, so the two clocks cannot drift apart.
+ * A day, unless a company running a private training season asked for minutes
+ * (`periodMinutes`, see sim_seasons in shared/schema.ts): a workshop that
+ * meets for an afternoon cannot wait a day between decisions. Public seasons
+ * never set it, so they are unchanged.
+ *
+ * A *period* is one decision — a year, a quarter or a month of simulated time
+ * depending on the season's cadence — and how long it lasts in the real world
+ * is deliberately unrelated to how much simulated time it covers. A monthly
+ * season still gets a day per decision by default; what it does not get is
+ * fourteen simulated years, because that would be a hundred and sixty-eight
+ * days of play. See `DEFAULT_YEARS` in `cadence.ts`.
+ *
+ * Every place that schedules a tick goes through this, so the two clocks
+ * cannot drift apart.
  */
-export const yearMsOf = (season: { yearMinutes: number | null }): number =>
-  season.yearMinutes ? season.yearMinutes * 60_000 : DAY_MS;
+export const periodMsOf = (season: { periodMinutes: number | null }): number =>
+  season.periodMinutes ? season.periodMinutes * 60_000 : DAY_MS;
 
 /**
  * Push every stalled lobby forward.
@@ -177,7 +225,21 @@ export async function startReadySeasons(): Promise<string[]> {
   const candidates = await db
     .select({ id: simSeasons.id })
     .from(simSeasons)
-    .where(and(inArray(simSeasons.status, ["forming", "abandoned"]), isNull(simSeasons.companyId)))
+    /*
+     * Public seasons, and any table of one.
+     *
+     * A company's season waits for its organiser because the organiser knows
+     * when the room is full and the clock does not. A solo founder has nobody
+     * to wait for, and waiting for them was this exact bug: the season had a
+     * companyId — every project season does, because a company is how seats
+     * and markets are stored — so nothing in the product would ever start it,
+     * and it sat on "Waiting for year one" indefinitely. Which is the failure
+     * the comment above already describes, arrived at from the other side.
+     */
+    .where(and(
+      inArray(simSeasons.status, ["forming", "abandoned"]),
+      or(isNull(simSeasons.companyId), lte(simSeasons.seatCount, 1)),
+    ))
     .limit(50);
 
   const started: string[] = [];
@@ -228,6 +290,13 @@ export type StartOutcome =
  * the race before this existed are swept by `retireOrphanedRooms`.
  */
 export async function startSeason(seasonId: string): Promise<StartOutcome> {
+  /*
+   * The season's bot difficulty, read inside the transaction and used after
+   * it: the season row is not in scope once the commit has happened, and the
+   * bots are filed out there so a failure to file cannot roll back a started
+   * season.
+   */
+  let botSkill: BotSkill = "filler";
   const result = await db.transaction(async (tx): Promise<{ outcome: StartOutcome; world?: World; niche?: NonNullable<ReturnType<typeof nicheById>> }> => {
     const [peek] = await tx.select({ nicheId: simSeasons.nicheId, companyId: simSeasons.companyId })
       .from(simSeasons).where(eq(simSeasons.id, seasonId));
@@ -265,14 +334,25 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       console.warn(`[sim] season ${season.id} was abandoned with ${playing.length} company(s) still running; starting it anyway`);
     }
 
-    const niche = nicheById(season.nicheId);
-    if (!niche) {
+    const market = rawMarketOf(season);
+    if (!market) {
       console.error(`[sim] season ${season.id} names a market that no longer exists: ${season.nicheId}`);
       if (season.status !== "abandoned") {
         await tx.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
       }
       return { outcome: { outcome: "abandoned" } };
     }
+
+    /*
+     * The market as this season plays it.
+     *
+     * A season can be the market's own regions (every public one), the whole
+     * map, or one continent of it. Scoping it here and once means the world
+     * carries its own map from then on — the engine, the desks and the bots
+     * all read `world.niche` and none of them has to know a season was scoped
+     * at all.
+     */
+    const niche = nicheForScope(market, (season.scope ?? "home") as Scope);
 
     /*
      * Who is in each chair, and whether they are a person.
@@ -291,16 +371,33 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     const world = buildWorld({
       seasonId: season.id,
       niche,
-      teams: playing.map((v) => ({
-        id: v.id,
-        name: v.name ?? "Unnamed",
-        seats: seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role),
-        botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
-      })),
+      cadence: season.cadence as Cadence,
+      teams: playing.map((v) => {
+        const held = seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role);
+        /*
+         * A solo founder holds every desk and is one person.
+         *
+         * Both halves matter. All five seats, so every lever works and the
+         * absence penalty — "those parts of the year ran on last year's plan
+         * at about 60%" — never fires against somebody who is present and
+         * deciding. One officer, so the company pays one executive salary
+         * rather than the $700,000 of chairs it does not employ.
+         */
+        const soloSeat = (season.seatCount ?? 5) <= 1;
+        return {
+          id: v.id,
+          name: v.name ?? "Unnamed",
+          seats: soloSeat ? [...ROLES] : held,
+          officers: soloSeat ? 1 : undefined,
+          botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
+        };
+      }),
     });
 
-    const startsAt = new Date(Date.now() + FIRST_YEAR_DELAY_MS);
-    const nextTickAt = tickDueAt(startsAt, 1, yearMsOf(season));
+    const startsAt = new Date(Date.now() + (
+      (season.seatCount ?? 5) <= 1 ? SOLO_FIRST_YEAR_DELAY_MS : FIRST_YEAR_DELAY_MS
+    ));
+    const nextTickAt = tickDueAt(startsAt, 1, periodMsOf(season));
     // Conditional on the status still being the one that was read, so two
     // processes starting the same season at the same moment cannot both seed a
     // world. (The season lock already serialises them; this keeps the rule
@@ -312,6 +409,8 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       .returning({ id: simSeasons.id });
     if (claimed.length === 0) return { outcome: { outcome: "not_forming" } };
 
+    // The season row is not in scope after the commit, and the bots are filed there.
+    botSkill = (season.botSkill as BotSkill) ?? "filler";
     return { outcome: { outcome: "started", startsAt, nextTickAt, teams: playing.length }, world, niche };
   });
 
@@ -320,7 +419,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     // nothing of their own to aim at. After the commit: these read the seats
     // through their own connections.
     await setChallenges({ world: result.world, year: 1 });
-    await fileBotDecisionsFor(result.world, 1, result.niche, seasonId);
+    await fileBotDecisionsFor(result.world, 1, result.niche, seasonId, botSkill);
     console.log(`[sim] season ${seasonId} (${result.niche.name}) starts with ${result.outcome.teams} team(s)`);
   }
   return result.outcome;
@@ -420,7 +519,11 @@ export const yearClosing = (season: { nextTickAt: Date | null }, now = new Date(
  *
  * The periodic pass leaves it unset on purpose: its job is "whatever is due".
  */
-export async function tickSeason(seasonId: string, now = new Date(), opts: { onlyYear?: number } = {}): Promise<number | null> {
+export async function tickSeason(
+  seasonId: string,
+  now = new Date(),
+  opts: { onlyYear?: number } = {},
+): Promise<number | null> {
   const key = `sim_tick:${seasonId}`;
   const client = await pool.connect();
   let broken: Error | undefined;
@@ -446,11 +549,32 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
   if (!season || season.status !== "running" || !season.world) return null;
   if (!season.nextTickAt || season.nextTickAt > now) return null;
-  // Asked for a particular year: if the season has moved past it, somebody else resolved it.
-  if (onlyYear !== undefined && season.year !== onlyYear) return null;
+  /*
+   * "Resolve year four", not "resolve whatever year you find".
+   *
+   * Only a caller who is asking about a particular year passes this, and only
+   * one of them can be right. Two requests to end the same year early both get
+   * past the conditional update before it — it tests `year` and doesn't change
+   * it, so it is not the compare-and-swap it looks like — and then queue on
+   * this function's lock. Without the year, the second one arrives to find
+   * next_tick_at already in the past (the first request set it) and the season
+   * on the following year, and dutifully resolves *that* one: a double-click
+   * moved the room two years, and the second was resolved by somebody who was
+   * asking about the first.
+   *
+   * The minute's pass passes nothing and still resolves whatever is due, which
+   * is its job.
+   */
+  if (onlyYear != null && season.year !== onlyYear) return null;
 
-  const niche = nicheById(season.nicheId);
-  if (!niche) return null;
+  const market = rawMarketOf(season);
+  if (!market) return null;
+  /*
+   * Scoped the same way it was when the world was built, for the same reason
+   * the market itself is re-attached below: the map a season plays on is the
+   * season's, and the balance inside it is the code's.
+   */
+  const niche = nicheForScope(market, (season.scope ?? "home") as Scope);
 
   const year = season.year;
   const stored = season.world as World;
@@ -619,6 +743,8 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
     niche,
     seasonId,
     world,
+    // A season can ask for rivals that are actually trying. See `BotSkill`.
+    skill: (season.botSkill as BotSkill) ?? "filler",
   }).catch((err) => console.error(`[sim] bot decisions for season ${seasonId} failed:`, err));
 
   /*
@@ -688,7 +814,7 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
     if (overruled) overrules.set(team.id, overruled);
   }
 
-  const economy = economyFor(seasonId, year);
+  const economy = economyFor(seasonId, year, periodsPerYear(season.cadence as Cadence));
   const { world: nextWorld, reports } = resolveYear(world, decisions, economy);
 
   // Name the empty chairs, so a thin year has an explanation attached to it.
@@ -778,10 +904,21 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
   }
 
   // The marketplace settles, and things change hands.
-  const { notes: marketNotes, writes: marketWrites } = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
+  const { notes: marketNotes, writes: marketWrites, auctions, bidsBy } = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
   for (const [ventureId, outcomes] of marketNotes) {
     const report = reports.find((r) => r.companyId === ventureId);
     if (report) report.market = outcomes;
+  }
+  /*
+   * And the year's auctions as a record rather than as prose, each company's
+   * own bid beside the result. Every team gets the same rows: the seal is on
+   * a bid that can still be changed, and this is written once it cannot.
+   */
+  if (auctions.length > 0) {
+    for (const report of reports) {
+      const mine = bidsBy.get(report.companyId);
+      report.auctions = auctions.map((row) => ({ ...row, yourBid: mine?.get(row.listingId) ?? null }));
+    }
   }
 
   /*
@@ -852,10 +989,14 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
     report.bankrupt = !!company.bankruptSince;
   }
 
-  const finished = seasonOver(year + 1, season.totalYears);
-  const yearMs = yearMsOf(season);
+  /*
+   * `year` counts *periods*, so the finish line is counted in periods too — a
+   * four-year quarterly season is sixteen decisions, not four.
+   */
+  const finished = seasonOver(year + 1, totalPeriods(season.totalYears, season.cadence as Cadence));
+  const periodMs = periodMsOf(season);
   let startsAt = season.startsAt;
-  let nextTickAt = startsAt && !finished ? tickDueAt(startsAt, year + 1, yearMs) : null;
+  let nextTickAt = startsAt && !finished ? tickDueAt(startsAt, year + 1, periodMs) : null;
   /*
    * Never schedule the next year in the past.
    *
@@ -873,8 +1014,8 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
    * The years that were missed are not made up; they were never played.
    */
   if (startsAt && nextTickAt && nextTickAt.getTime() <= now.getTime()) {
-    startsAt = new Date(now.getTime() - year * yearMs);
-    nextTickAt = tickDueAt(startsAt, year + 1, yearMs);
+    startsAt = new Date(now.getTime() - year * periodMs);
+    nextTickAt = tickDueAt(startsAt, year + 1, periodMs);
   }
 
   let saved = false;
@@ -930,14 +1071,19 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
     }
 
     /*
-     * Each venture keeps a copy of its own company for the screens, written in
-     * the same transaction as the world it came from. Derived, never the
-     * source: the season's world is what the next tick reads.
+     * Each venture's phase, written in the same transaction as the world it
+     * came from.
+     *
+     * This used to write a copy of the company here too, "for the screens" —
+     * a whole engine Company per venture per tick, which nothing has ever
+     * read. Every screen reads the season's world, which is the source. A
+     * derived copy nobody reads is not a cache, it is a second truth waiting
+     * to disagree with the first.
      */
     for (const company of nextWorld.companies) {
       if (company.kind !== "player") continue;
       await tx.update(simVentures)
-        .set({ state: company, phase: finished ? "retired" : "running" })
+        .set({ phase: finished ? "retired" : "running" })
         .where(eq(simVentures.id, company.id));
     }
   });
@@ -950,7 +1096,7 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
 
   // Next year's objectives, set against where each company now stands.
   if (!finished) await setChallenges({ world: nextWorld, year: year + 1 });
-  if (!finished) await fileBotDecisionsFor(nextWorld, year + 1, niche, seasonId);
+  if (!finished) await fileBotDecisionsFor(nextWorld, year + 1, niche, seasonId, (season.botSkill as BotSkill) ?? "filler");
 
   return year;
 }
@@ -977,9 +1123,9 @@ async function resolveSeasonYear(seasonId: string, now: Date, onlyYear?: number)
  * Never fatal: a season must start, and a year must open, even if the bots'
  * filing fails. The resolution-time call catches anything missed here.
  */
-async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string): Promise<void> {
+async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string, skill?: BotSkill): Promise<void> {
   const teams = world.companies.filter((c) => c.kind === "player");
-  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world })
+  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world, skill })
     .catch((err) => console.error(`[sim] bot decisions for season ${seasonId} year ${year} failed:`, err));
 }
 
@@ -1111,9 +1257,12 @@ async function settleMarket(input: {
   niche: NonNullable<ReturnType<typeof nicheById>>;
   world: World;
   releasedByTeam: Map<string, CompanyAsset[]>;
-}): Promise<{ notes: Map<string, MarketOutcome[]>; writes: MarketWrites }> {
+}): Promise<{ notes: Map<string, MarketOutcome[]>; writes: MarketWrites; auctions: AuctionRow[]; bidsBy: Map<string, Map<string, number>> }> {
   const { seasonId, year, niche, world, releasedByTeam } = input;
   const notes = new Map<string, MarketOutcome[]>();
+  const auctions: AuctionRow[] = [];
+  /** What each company offered, by listing, kept for the record written below. */
+  const bidsBy = new Map<string, Map<string, number>>();
   const writes: MarketWrites = { listings: [], fireSales: [], spentBids: null };
   const add = (id: string, kind: MarketOutcome["kind"], text: string) =>
     notes.set(id, [...(notes.get(id) ?? []), { kind, text }]);
@@ -1132,7 +1281,7 @@ async function settleMarket(input: {
   const forced = new Set(open.filter((row) => row.forced).map((row) => row.id));
 
   const listings: Listing[] = [
-    ...marketListings({ seasonId, year, niche }),
+    ...marketListings({ seasonId, year, niche, periods: world.periodsPerYear ?? 1 }),
     ...open.map((row) => ({
       id: row.id,
       asset: row.asset as CompanyAsset,
@@ -1165,14 +1314,52 @@ async function settleMarket(input: {
 
     const funds: Record<string, number> = {};
     for (const company of world.companies) {
-      if (company.kind === "player") funds[company.id] = biddableFunds(company);
+      /*
+       * Incumbents too, now that they bid. Same rule as everyone else — cash
+       * plus what is still borrowable — so a rival who turns up for a lot it
+       * cannot afford loses it at settlement like anybody would.
+       */
+      funds[company.id] = biddableFunds(company);
     }
 
-    const bids: Bid[] = bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount }));
+    /*
+     * The rivals' bids, held in memory rather than written to `sim_bids`.
+     *
+     * That table's `venture_id` is a foreign key to a room, and an incumbent
+     * has no room — it is a company in the world and nothing else. Nothing is
+     * lost by not storing them: they are deterministic from the season, the
+     * period and the lot, so a re-run of this tick deals exactly the same
+     * auction, which is the property the stored bids exist to give.
+     */
+    const bids: Bid[] = [
+      ...bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount })),
+      ...incumbentBids({
+        seasonId, year, listings,
+        incumbents: world.companies.filter((c) => c.kind === "incumbent"),
+      }),
+    ];
     const awards = resolveBids(listings, bids, funds);
+
+    for (const b of bidRows) {
+      /* Only what a room actually filed: `bidsBy` is read back per venture. */
+      const mine = bidsBy.get(b.ventureId) ?? new Map<string, number>();
+      mine.set(b.listingId, b.amount);
+      bidsBy.set(b.ventureId, mine);
+    }
 
     for (const award of awards) {
       const listing = listings.find((l) => l.id === award.listingId)!;
+      const nameOf = (id: string | null) => world.companies.find((c) => c.id === id)?.name ?? null;
+      auctions.push({
+        listingId: listing.id,
+        name: listing.asset.name,
+        kind: listing.asset.kind,
+        reserve: listing.reserve,
+        bidders: bids.filter((b) => b.listingId === listing.id).length,
+        winner: award.winnerId ? nameOf(award.winnerId) : null,
+        winnerId: award.winnerId ?? null,
+        price: award.winnerId ? award.price : null,
+      });
       const isForced = forced.has(listing.id);
       /*
        * Who, if anyone, is paid. A fire sale's seller was paid in full, at the
@@ -1270,7 +1457,22 @@ async function settleMarket(input: {
       }
       if (listing.sellerId) {
         if (payee) add(payee, "sold", `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
-        writes.listings.push({ id: listing.id, set: { status: "sold", buyerId: award.winnerId, soldFor: award.price } });
+        /*
+         * `buyer_id` points at a room, and an incumbent does not have one.
+         *
+         * Now that the rivals bid, they can win a lot a team put up for sale —
+         * including a fire sale, which is exactly when somebody's things are
+         * most worth having. Writing their company id into a column that is a
+         * foreign key to `sim_ventures` fails the whole tick, taking the year
+         * down with it. Null is the honest value: the listing sold, and it did
+         * not sell to a team in this season. Who bought it is in the auction
+         * record either way.
+         */
+        const toATeam = world.companies.some((c) => c.id === award.winnerId && c.kind === "player");
+        writes.listings.push({
+          id: listing.id,
+          set: { status: "sold", buyerId: toATeam ? award.winnerId : null, soldFor: award.price },
+        });
       }
     }
 
@@ -1304,7 +1506,7 @@ async function settleMarket(input: {
     }
   }
 
-  return { notes, writes };
+  return { notes, writes, auctions, bidsBy };
 }
 
 /** Resolve every season that is due. */

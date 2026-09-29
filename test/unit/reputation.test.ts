@@ -16,7 +16,15 @@ import {
 
 const execution = (over: Partial<ExecutionFacts> = {}): ExecutionFacts => ({ ...EMPTY_FACTS.execution, ...over });
 const contribution = (over: Partial<ContributionFacts> = {}): ContributionFacts => ({ ...EMPTY_FACTS.contribution, ...over });
+/*
+ * A different market each time unless one is named. Most of these tests are
+ * about how a season is scored rather than which world it was in, and giving
+ * them all the same market would silently collapse them into one result now
+ * that a market is the unit of evidence.
+ */
+let seasonN = 0;
 const season = (over: Partial<SimFacts["seasons"][number]> = {}) => ({
+  marketId: `market_${++seasonN}`, playedAt: seasonN,
   rank: 5, field: 9, yearsPlayed: 14, totalYears: 14, marketShare: 0.1, profitable: false, bankrupt: false, ...over,
 });
 
@@ -172,5 +180,61 @@ describe("the index itself", () => {
   it("does not report a rate it hasn't the numbers for", () => {
     const r = reputationFrom({ ...EMPTY_FACTS, execution: execution({ milestonesCompleted: 2, milestonesWithDates: 1, milestonesOnTime: 1 }) });
     expect((r.details.execution as any).milestoneOnTimeRate).toBeNull();
+  });
+});
+
+/**
+ * What replaying a market can and cannot do to the index.
+ *
+ * Replaying a market you already own became free, and gives back the *same*
+ * world — same rivals, same shares, same arithmetic. Both halves of the old
+ * score assumed the opposite: the best run counted double, and playing more
+ * seasons raised a confidence multiplier. Together they meant somebody could
+ * grind one memorised market until a run went well and be paid twice for it.
+ */
+describe("a market played again", () => {
+  const run = (marketId: string, playedAt: number, over: Partial<SimFacts["seasons"][number]> = {}) => ({
+    ...season(over), marketId, playedAt,
+  });
+
+  it("does not pay for a fluke you have since stopped repeating", () => {
+    const honest = simScore({ seasons: [run("kerb", 1, { rank: 6, field: 9 })] })!;
+    const ground = simScore({ seasons: [
+      run("kerb", 1, { rank: 6, field: 9 }),
+      run("kerb", 2, { rank: 1, field: 9, profitable: true, marketShare: 0.3 }),  // the lucky afternoon
+      run("kerb", 3, { rank: 6, field: 9 }),                                      // ...and back to form
+    ] })!;
+    expect(ground, "the last run is how you play; the fluke was a day").toBeCloseTo(honest, 6);
+  });
+
+  it("pays for practice that actually made you better", () => {
+    const first = simScore({ seasons: [run("kerb", 1, { rank: 8, field: 9 })] })!;
+    const learned = simScore({ seasons: [
+      run("kerb", 1, { rank: 8, field: 9 }),
+      run("kerb", 2, { rank: 5, field: 9 }),
+      run("kerb", 3, { rank: 2, field: 9, profitable: true, marketShare: 0.25 }),
+    ] })!;
+    expect(learned, "getting better at a world is the thing this is for").toBeGreaterThan(first);
+  });
+
+  it("does not let eleven goes at one world outweigh four different ones", () => {
+    const ground = simScore({ seasons: Array.from({ length: 11 }, (_, i) =>
+      run("kerb", i + 1, { rank: 3, field: 9, profitable: true, marketShare: 0.15 })) })!;
+    const breadth = simScore({ seasons: [
+      run("kerb", 1, { rank: 3, field: 9, profitable: true, marketShare: 0.15 }),
+      run("larder", 2, { rank: 3, field: 9, profitable: true, marketShare: 0.15 }),
+      run("bakehouse", 3, { rank: 3, field: 9, profitable: true, marketShare: 0.15 }),
+      run("vet", 4, { rank: 3, field: 9, profitable: true, marketShare: 0.15 }),
+    ] })!;
+    expect(breadth, "four worlds is four results; one world is one, however often").toBeGreaterThan(ground);
+  });
+
+  it("still counts a builder's best market double, across markets", () => {
+    const bad = simScore({ seasons: [run("a", 1, { rank: 9, field: 9 })] })!;
+    const recovered = simScore({ seasons: [
+      run("a", 1, { rank: 9, field: 9 }),
+      run("b", 2, { rank: 1, field: 9, profitable: true, marketShare: 0.3 }),
+    ] })!;
+    expect(recovered, "a bad first market must not follow somebody around").toBeGreaterThan(bad + 20);
   });
 });

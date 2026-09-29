@@ -112,7 +112,7 @@ export default function More() {
         )}
 
         <Group title="Build">
-          {on("sprints") && <MenuRow icon="people" title="Sprints & simulations" subtitle="Trial sprints, matchmaking, and the market simulation" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
+          {on("sprints") && <MenuRow icon="people" title="Simulations" subtitle="Invent a company in half an hour, or run one for a fortnight" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {/*
             * "Practice sprint" used to sit here, pointing at /sprint/practice.
             * There is no app/sprint/ directory any more — the screen was never

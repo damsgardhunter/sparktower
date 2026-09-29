@@ -32,6 +32,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
 import { getUncachableStripeClient } from "./stripeClient";
+import { creditEarningsIn } from "./wallet";
 import { runRefundSweep } from "./backing-jobs";
 import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
@@ -41,6 +42,8 @@ import {
   badgeLogoUrl,
   ensureCreatorBadges,
 } from "./backer-badges";
+import { requireImages } from "./images";
+import { respondToAiError } from "./ai-json";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import {
   DEFAULT_MERCH_CONFIG, DEFAULT_TIER_TEMPLATE, DIGITAL_REWARD_KEYS, MERCH_PRODUCT_KEYS,
@@ -49,6 +52,7 @@ import {
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
+import { isOnTeam } from "./project-visibility";
 import { campaignDecided, pledgeReceived, pledgesReleased } from "./backing-notices";
 import { openPii, sealPii } from "./pii";
 import { ensureStripeCustomer } from "./stripe-customer";
@@ -523,6 +527,28 @@ export function registerBackingRoutes(app: Express) {
       if (!project) return res.status(404).json({ message: "Project not found" });
 
       const campaign = await ensureCampaign(projectId);
+
+      /*
+       * Metered, which it was not.
+       *
+       * `renderBadgeImage` reaches `openai.images.edit` on every press, and
+       * this route had no gate in front of it — no image pass, no allowance,
+       * nothing but the shared AI burst limit. `CHARGE_FOR` has said for a
+       * long time that generating a picture is the image pass's business; the
+       * badge preview was the one picture nobody paid for.
+       *
+       * The same permit every other image route takes: the first run on a
+       * project is free, and after that it is the pass. Scoped to the project
+       * because that is what a badge belongs to.
+       */
+      // metering: requireImages both checks and takes — the first preview on a
+      // project is free and every one after it comes off the image pass — so
+      // there is nothing left for this body to deduct.
+      const permit = await requireImages(res, req.user.id, {
+        scope: "project", scopeId: projectId, wanted: 1, label: "A badge preview",
+      });
+      if (!permit) return;
+
       // Same resolution the real badge uses, so a preview can't disagree.
       const logo = await projectLogoBuffer(badgeLogoUrl(project.logoUrl, campaign.merchConfig));
 
@@ -543,7 +569,13 @@ export function registerBackingRoutes(app: Express) {
       res.json({ level, imageUrl: objectPath, usedLogo: !!logo });
     } catch (error: any) {
       console.error("Badge preview error:", error);
-      res.status(502).json({ message: error?.message || "Couldn't make that preview" });
+      /*
+       * Answered the way every other model route answers, so an unreadable
+       * reply is `model_unreadable` rather than a generic failure — the
+       * difference between "the picture model had a bad day" and "this feature
+       * is broken", which is the difference between retrying and giving up.
+       */
+      return respondToAiError(res, error, "that preview");
     }
   });
 
@@ -559,7 +591,7 @@ export function registerBackingRoutes(app: Express) {
    * Rendered by the same function that produces the print file, so what's on
    * screen is what goes on the shirt.
    */
-  app.get("/api/projects/:id/merch/preview.png", async (req, res) => {
+  app.get("/api/projects/:id/merch/preview.png", rateLimit("render"), async (req: any, res) => {
     try {
       const face = String(req.query.face || "front");
       if (!["front", "back", "creator"].includes(face)) {
@@ -571,10 +603,28 @@ export function registerBackingRoutes(app: Express) {
         campaign: projectBackingCampaigns,
         title: projects.title,
         logoUrl: projects.logoUrl,
+        ownerId: projects.ownerId,
+        isPrivate: projects.isPrivate,
       }).from(projects)
         .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projects.id))
         .where(eq(projects.id, req.params.id));
       if (!row) return res.status(404).json({ message: "Project not found" });
+
+      /*
+       * A private project is private, including its name and its logo.
+       *
+       * This route read the projects table by id with no condition on it at
+       * all, so anybody holding a project id — and an id is in every URL its
+       * owner has ever pasted to a collaborator — could have this render a
+       * private project's branding into a PNG. Private projects are the one
+       * thing this product tells somebody is not visible.
+       *
+       * The same silence the rest of the product gives: a stranger is told the
+       * project is not there, not that it is and they may not look.
+       */
+      if (row.isPrivate && !(await isOnTeam(req.user?.id, { id: req.params.id, ownerId: row.ownerId }))) {
+        return res.status(404).json({ message: "Project not found" });
+      }
 
       const config = effectiveMerchConfig(row.campaign?.merchConfig, row.logoUrl);
 
@@ -601,7 +651,7 @@ export function registerBackingRoutes(app: Express) {
    * campaign's current config — a creator who swaps their logo after someone
    * ordered must not change what that person already bought.
    */
-  app.get("/api/merch-orders/:orderId/print/:face.png", async (req, res) => {
+  app.get("/api/merch-orders/:orderId/print/:face.png", rateLimit("render"), async (req, res) => {
     try {
       const face = String(req.params.face);
       if (!["front", "back", "creator"].includes(face)) {
@@ -616,7 +666,7 @@ export function registerBackingRoutes(app: Express) {
       }).from(projectMerchOrders)
         .innerJoin(projects, eq(projects.id, projectMerchOrders.projectId))
         .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projectMerchOrders.projectId))
-        .where(eq(projectMerchOrders.id, req.params.orderId));
+        .where(eq(projectMerchOrders.id, String(req.params.orderId)));
       if (!row) return res.status(404).json({ message: "Not found" });
 
       const snapshot = (row.order.items as { artwork?: Record<string, unknown> }[])?.[0]?.artwork;
@@ -1003,24 +1053,44 @@ export function registerBackingRoutes(app: Express) {
       const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
       if (!project) return res.status(404).json({ message: "Project not found" });
       const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
-      if (!owner?.stripeConnectAccountId) {
-        return res.status(422).json({ message: "The creator has no connected Stripe account." });
-      }
+      if (!owner) return res.status(404).json({ message: "Project owner not found" });
+      /*
+       * Where this creator's money is going.
+       *
+       * It used to be Stripe or nothing: no connected account meant a 422 and
+       * pledges that sat in escrow indefinitely, because Stripe's identity
+       * checks are a wall some creators never get over — and the backers'
+       * money stayed stuck behind it. Paying into the SparkTower balance needs
+       * no bank and no onboarding, so the dead end is now a choice.
+       *
+       * A connected account still means what it always meant. `payoutTarget`
+       * is an override rather than a setting with a default: null is "hasn't
+       * said", and only an explicit "balance" diverts money away from an
+       * account somebody went through Stripe's identity checks to open.
+       * Reading an absent choice as "balance" would have redirected every
+       * existing creator's payouts in silence.
+       */
+      const toBank = !!owner.stripeConnectAccountId && owner.payoutTarget !== "balance";
 
       // A pledge under a chargeback isn't the platform's to pay out until the dispute is won.
       const pending = await db.select().from(projectBackings)
         .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)));
       if (pending.length === 0) return res.json({ released: 0, totalCents: 0 });
 
-      const stripe = await getUncachableStripeClient();
+      const stripe = toBank ? await getUncachableStripeClient() : null;
       const released: string[] = [];
       /** Who to tell, once the money is actually gone. */
       const releasedBackers: { backerId: string; amountCents: number }[] = [];
       const failed: { id: string; error: string }[] = [];
       let totalCents = 0;
 
-      // What has already gone out for this project, by pledge — asked once, up front.
-      const paidOut = await transfersByBacking(stripe, projectId);
+      /*
+       * What has already gone out for this project, by pledge — asked once, up
+       * front. Only Stripe needs asking: a balance settlement is made
+       * exact-once by the ledger's unique source key instead, so there is
+       * nothing to reconcile and no reason to reach for Stripe at all.
+       */
+      const paidOut = stripe ? await transfersByBacking(stripe, projectId) : new Map<string, string>();
 
       // One transfer per backing rather than one lump sum: a single failure
       // then costs one pledge instead of the whole batch, and each transfer
@@ -1048,6 +1118,23 @@ export function registerBackingRoutes(app: Express) {
               .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)))
               .for("update");
             if (!row) return "gone" as const;
+
+            /*
+             * Settled into the balance, the pledge carries no transfer id,
+             * because there is no transfer. The ledger line keyed
+             * "backing:<id>" is the record, and its unique index is what makes
+             * a retried release credit the creator once rather than twice.
+             */
+            if (!stripe) {
+              await creditEarningsIn(tx, project.ownerId, amount, `backing:${backing.id}`,
+                `Backing on ${project.title}`);
+              await tx.update(projectBackings).set({
+                status: "released",
+                releasedAt: new Date(),
+                resolvedAt: new Date(),
+              }).where(eq(projectBackings.id, backing.id));
+              return "released" as const;
+            }
 
             const transferId = paidOut.get(backing.id) ?? (await stripe.transfers.create({
               amount,
@@ -1303,11 +1390,28 @@ export function registerBackingRoutes(app: Express) {
         return res.status(403).json({ message: "That isn't your badge" });
       }
 
+      /*
+       * The badge is free — free to earn, free to keep, free to show. Its art
+       * is a picture like any other, so the first go is free and the rest want
+       * the pass. Until now this route had no check of any kind on it: anyone
+       * with a badge could regenerate its art on a loop for nothing.
+       */
+      const permit = await requireImages(res, req.user.id, {
+        scope: "badge", scopeId: badge.id, wanted: 1, label: "Redrawing this badge",
+      });
+      if (!permit) return;
+
+      // metering: priced as a picture, not in credits — requireImages gives the
+      // first go per badge free and asks for the image pass after that, and the
+      // permit records the run once the art exists. See server/images.ts.
       const imageUrl = await generateBadgeArt(badge.id);
-      res.json({ imageUrl, status: "ready" });
+      await permit.record(1);
+      res.json({ imageUrl, status: "ready", free: permit.free });
     } catch (error: any) {
       console.error("Badge generation error:", error);
-      res.status(502).json({ message: error?.message || "Couldn't make that badge" });
+      // The same answer every AI route gives an unreadable one, so a client can
+      // tell "try again" from "we're broken".
+      respondToAiError(res, error, "Couldn't make that badge");
     }
   });
 

@@ -1,8 +1,13 @@
 /**
- * The money path's first steps in a real browser: Nova's welcome on a new
- * restaurant asks where you stand, answered by tapping bubbles; saving closes
- * it onto the path; the raise question takes "I don't know"; and the next step is
- * Nova building the plan. Stops before Nova runs — there's no model here.
+ * The money path's first steps in a real browser: a new restaurant opens on
+ * "where you stand", answered by tapping bubbles; saving moves the path on; the
+ * raise question takes "I don't know"; and the next step is Nova building the
+ * plan. Stops before Nova runs — there's no model here.
+ *
+ * These questions used to be asked in a full-screen Nova welcome that opened
+ * over the project, rendering a second copy of the very form the dashboard was
+ * already showing behind it. The overlay is gone and the step is answered
+ * where it lives, so this drives the path's own card.
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
@@ -24,12 +29,14 @@ test("a founder answers the money questions by tapping, and Nova's plan is next"
   expect(project.ok()).toBeTruthy();
   const projectId = (await project.json()).id as string;
 
-  // Nova opens with money: the welcome asks where you stand, as bubbles.
+  // The path opens with money: the first step asks where you stand, as bubbles.
   await page.goto(`/projects/${projectId}/manage`);
-  const welcome = page.getByTestId("nova-money-first");
+  const welcome = page.getByTestId("next-action");
   await expect(welcome).toBeVisible();
   await expect(welcome).toContainText("$0");
   await expect(welcome.getByTestId("intake-form")).toBeVisible();
+  // One copy of the form, on the step it belongs to.
+  await expect(page.getByTestId("intake-form")).toHaveCount(1);
 
   // Save stays off until every required question has an answer.
   const save = welcome.getByTestId("button-intake-save");
@@ -51,7 +58,7 @@ test("a founder answers the money questions by tapping, and Nova's plan is next"
   await expect(save).toBeEnabled();
   await save.click();
 
-  // Answering finishes Nova's setup: the welcome closes onto the path.
+  // Nothing ever covers the project: the answers land on the path in place.
   await expect(page.getByTestId("nova-onboarding-overlay")).toHaveCount(0);
 
   // The next step is the raise, and "I don't know" is an answer.

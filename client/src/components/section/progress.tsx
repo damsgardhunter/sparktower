@@ -13,6 +13,36 @@ import { Loader2, Sparkles, MessageSquare } from "lucide-react";
 const PACE_LABEL: Record<string, string> = { active: "On pace", nudge: "Quiet week", decaying: "Slipping", dormant: "Paused" };
 const PACE_TONE: Record<string, string> = { active: "text-emerald-600", nudge: "text-amber-600", decaying: "text-amber-700", dormant: "text-muted-foreground" };
 
+/**
+ * Progress as one line, for the top of the screen.
+ *
+ * The four-tile grid below is the full read and stays, one click away. This is
+ * what belongs above it: the bar, the count, the phase and the pace, in the
+ * width of a sentence — because "how far along am I" is a glance, and it was
+ * taking a quarter of the first screen away from the step the page is for.
+ */
+export function ProgressStrip({ data }: { data: PathStatus }) {
+  const { mainLine, current, pace } = data;
+  const pct = mainLine.total ? Math.round((mainLine.done / mainLine.total) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground" data-testid="path-progress-strip">
+      <span className="font-semibold tabular-nums text-foreground text-sm">{pct}%</span>
+      <div className="h-1.5 w-28 sm:w-40 rounded-full bg-muted overflow-hidden shrink-0">
+        <div className="h-full bg-primary transition-all duration-700" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="tabular-nums">{mainLine.done}/{mainLine.total} milestones</span>
+      <span aria-hidden>·</span>
+      <span className="truncate max-w-[14rem]" title={current.title}>{current.title.split(" — ")[0]} · step {current.step} of {current.of}</span>
+      {pace?.multiplier != null && (
+        <>
+          <span aria-hidden>·</span>
+          <span className={`tabular-nums ${PACE_TONE[pace.state] ?? ""}`} data-testid="pace-multiplier-strip">{pace.multiplier}× pace</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ProgressStats({ data }: { data: PathStatus }) {
   const { mainLine, current, pace, plan } = data;
   const pct = mainLine.total ? Math.round((mainLine.done / mainLine.total) * 100) : 0;

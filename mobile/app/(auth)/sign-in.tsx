@@ -32,7 +32,7 @@ export default function SignIn() {
   // Arriving with ?signup=1 opens straight onto sign up, as on the web.
   const arrivedToSignUp = params.signup === "1";
   const router = useRouter();
-  const { signIn, signUp, signInWithGoogle, googleAvailable, mfaPending, verifyMfa, cancelMfa } = useAuth();
+  const { signIn, signUp, signInWithGoogle, signInWithApple, googleAvailable, appleAvailable, mfaPending, verifyMfa, cancelMfa } = useAuth();
   const [code, setCode] = useState("");
   const [tab, setTab] = useState<Tab>(arrivedToSignUp ? "signup" : "login");
   const [showAuth, setShowAuth] = useState(arrivedToSignUp);
@@ -107,6 +107,18 @@ export default function SignIn() {
     } catch (err: any) {
       setError(err?.message || "That code isn't right.");
       setCode("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apple = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await signInWithApple();
+    } catch (err: any) {
+      setError(err?.message || "Apple sign-in failed.");
     } finally {
       setBusy(false);
     }
@@ -213,6 +225,23 @@ export default function SignIn() {
                 </Pressable>
                 {!googleAvailable && (
                   <Text style={styles.hint}>Google sign-in needs client IDs in this build. Email works now.</Text>
+                )}
+
+                {/*
+                  * Apple, on iPhones that can. Shown only where it works —
+                  * `appleAvailable` is Apple's own check, so this never
+                  * appears on Android or on a build without the entitlement.
+                  * Signing in with Apple never makes a second account: the
+                  * server matches on Apple's stable identifier first and then
+                  * on the address, so a password account with the same email
+                  * is joined rather than duplicated.
+                  */}
+                {appleAvailable && (
+                  <Pressable onPress={apple} disabled={busy} testID="button-apple-auth"
+                    style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                    <Icon name="logo-apple" size={18} color={colors.text} />
+                    <Text style={styles.secondaryButtonText}>Continue with Apple</Text>
+                  </Pressable>
                 )}
 
                 <View style={styles.dividerRow}>

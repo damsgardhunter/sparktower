@@ -40,6 +40,14 @@ async function sql(text: string, params: unknown[]) {
 }
 
 test("a founder builds a capital profile, picks a route, and takes an investment application", async ({ browser }) => {
+  /*
+   * A long journey: four intake steps, a route choice, a reload and the
+   * investors tab. It ran inside the 60s default only because it used to stop
+   * at the third assertion — the Fundability card it looked for had moved
+   * inside a collapsed block and was never found. Now that it runs to the end,
+   * it needs the budget the other full-journey specs take.
+   */
+  test.setTimeout(300_000);
   const founder = await personIn(browser, "203.0.113.192", "Dana");
   const investor = await personIn(browser, "203.0.113.193", "Ivan");
   // A résumé Nova already read, with an owner role on it.
@@ -83,6 +91,16 @@ test("a founder builds a capital profile, picks a route, and takes an investment
   await page.getByTestId("intake-debt-500_1500").click();
   await page.getByTestId("intake-assets-home_equity").click();
   await page.getByTestId("button-intake-save").click();
+  /*
+   * Open Fundability before looking inside it.
+   *
+   * The path panel became a stack of collapsible Blocks, and this one is
+   * `defaultOpen={false}` (client/src/components/path-panel.tsx) — so the card
+   * is not hidden, it is not rendered at all, and the assertion below failed
+   * with "element(s) not found" rather than anything about the score. It stays
+   * open for the score read further down.
+   */
+  await page.getByTestId("block-fundability").click();
   await expect(page.getByTestId("capital-profile-card")).toBeVisible();
   await page.getByTestId("intake-industry_years-5_10").click();
   await page.getByTestId("intake-level-manager").click();
@@ -133,6 +151,8 @@ test("a founder builds a capital profile, picks a route, and takes an investment
   await page.getByTestId("button-intake-save").click();
   await expect(page.getByText("Route chosen — your roadmap is ready").first()).toBeVisible();
   await expect(page.getByText("Acquisition criteria").first()).toBeVisible();
+  /* The reload above closed Fundability again; the route badges live inside it. */
+  await page.getByTestId("block-fundability").click();
   await expect(page.getByTestId("route-fit-seller")).toContainText("your route");
 
   // 6. Open investment applications from the Investors tab.

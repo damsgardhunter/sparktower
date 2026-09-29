@@ -15,11 +15,13 @@ import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
 import { startRetentionJobs } from "./retention";
 import { startRhythmJobs } from "./company-rhythm-jobs";
+import { startSimulationNudges } from "./simulation-nudges";
 import { startReputationJobs } from "./reputation-jobs";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
+import { warnIfStubbed } from "./ai-stub";
 import { warnIfEmailUnconfigured } from "./email";
 import { warnIfSenderMisaligned, emailLinkHostIsTrusted } from "./public-url";
 import { publicUrlFact } from "./deployment-info";
@@ -120,6 +122,7 @@ let appReady = false;
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
   warnIfSharedTokenSecret();
+  warnIfStubbed();
   await warnIfMigrationsPending();
   // Email isn't an integration any more: without it, nobody who signs up can use the site (server/email.ts).
   warnIfEmailUnconfigured();
@@ -174,6 +177,10 @@ let appReady = false;
   startRetentionJobs();
   // Due-job and check-in-day reminders for companies on the Run path (server/company-rhythm-jobs.ts).
   startRhythmJobs();
+  // The two findings the simulator can post: a projection old enough to mark
+  // against what happened, and a scheme worth testing that never was
+  // (server/simulation-nudges.ts).
+  startSimulationNudges();
   // Builder indexes, on the hour (server/reputation-jobs.ts).
   startReputationJobs();
 

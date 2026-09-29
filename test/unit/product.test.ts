@@ -23,6 +23,15 @@ const team = (over: Partial<Company> = {}): Company => ({
   cash: 20_000_000,
   customers: { swipers: 200_000, recently_single: 120_000, long_haulers: 40_000 },
   capacity: 900_000,
+  /*
+   * Selling everywhere, because this company holds a third of the market and
+   * `startingCompany` opens in one region. Reach is a ceiling now — what a
+   * company cannot reach it cannot win — so a national customer base behind a
+   * single-region footprint is a shape the market will not let exist, and a
+   * fixture in that shape tests the ceiling rather than the feature bet it is
+   * about.
+   */
+  cities: niche.cities.map((c) => c.id),
   ...over,
 });
 const world = (c: Company, year = 5, seasonId = "prod"): World => ({

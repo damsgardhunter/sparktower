@@ -39,6 +39,7 @@
  */
 import type { Company, Economy, Niche, IncumbentPosture } from "./types";
 import { appealFor, saturate } from "./market";
+import { between } from "./random";
 
 /** How an incumbent's year comes out, before the market is resolved. */
 export interface IncumbentMoves {
@@ -211,8 +212,36 @@ const clamp = (n: number): number => Math.max(0, Math.min(100, n));
  * innovator holds the quality-led customers; a coaster is fat on the ones who
  * have not looked around in years and is the obvious first target.
  */
-export function seedIncumbents(niche: Niche): Company[] {
+/**
+ * How much an incumbent's strength varies between one season and the next.
+ *
+ * Five points on each axis and a sixth of the share. Enough that the same
+ * market is a different problem twice, not so much that a market stops being
+ * itself.
+ */
+export const INCUMBENT_SPREAD = 5;
+export const INCUMBENT_SHARE_SPREAD = 0.16;
+
+/**
+ * The incumbents, as this particular season found them.
+ *
+ * They used to be a fixed picture: every season in a market opened against
+ * exactly the same four companies at exactly the same strength, so the
+ * opening was a fixed puzzle with a fixed answer and the only thing that
+ * varied between seasons was the weather. Measured over twenty seasons,
+ * podcasts, project management and MMOs never once killed a company.
+ *
+ * Drawn from the season now, so entering a market means finding out what is
+ * already in it.
+ */
+export function seedIncumbents(niche: Niche, seasonId = ""): Company[] {
   return niche.incumbents.map((seed) => {
+    const vary = (axis: string, value: number) =>
+      Math.max(5, Math.min(99, value + between(`${seasonId}:${seed.id}:${axis}`, -INCUMBENT_SPREAD, INCUMBENT_SPREAD)));
+    const quality = vary("quality", seed.quality);
+    const brand = vary("brand", seed.brand);
+    const service = vary("service", seed.service);
+    const startingShare = Math.max(0.02, seed.startingShare * between(`${seasonId}:${seed.id}:share`, 1 - INCUMBENT_SHARE_SPREAD, 1 + INCUMBENT_SHARE_SPREAD));
     const customers: Record<string, number> = {};
     for (const segment of niche.segments) {
       // Weight their hold by how well the segment suits their posture, then
@@ -222,7 +251,7 @@ export function seedIncumbents(niche: Niche): Company[] {
         : seed.posture === "brawler" ? 0.6 + segment.priceSensitivity * 0.8
         : seed.posture === "fortress" ? 0.6 + segment.loyalty * 0.8
         : 0.6 + (1 - segment.loyalty) * 0.5;
-      customers[segment.id] = Math.round(segment.size * seed.startingShare * fit);
+      customers[segment.id] = Math.round(segment.size * startingShare * fit);
     }
     const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
     const price = niche.segments[0].referencePrice * seed.priceIndex;
@@ -235,10 +264,10 @@ export function seedIncumbents(niche: Niche): Company[] {
       cash: held * price * 0.35,
       debt: 0,
       creditLimit: held * price * 0.5,
-      reputation: 55 + seed.quality * 0.25,
-      quality: seed.quality,
-      brand: seed.brand,
-      service: seed.service,
+      reputation: 55 + quality * 0.25,
+      quality,
+      brand,
+      service,
       capacity: Math.round(held * 1.15),
       unitCost: niche.baseUnitCost * (seed.posture === "brawler" ? 0.88 : 1),
       price,
@@ -250,6 +279,74 @@ export function seedIncumbents(niche: Niche): Company[] {
       seats: [],
     };
   });
+}
+
+/**
+ * How much of a market is genuinely unspoken for once it has been seated.
+ *
+ * The seven hand-written markets seat rivals holding 90%, so a tenth of the
+ * customers belong to nobody and that tenth is what a new company is playing
+ * for. Everything below that is the same tenth.
+ */
+export const TRULY_OPEN_SHARE = 0.1;
+
+/**
+ * The rest of the market: everybody too small to name.
+ *
+ * The world used to contain the named rivals and nothing else, so every
+ * customer they did not hold belonged to no one at all. In the seven
+ * catalogue markets that is a tenth and barely matters. In a market Nova
+ * wrote it can be half — a founder's own season came back 23/12/9/6, with
+ * nineteen thousand customers sitting in the middle of the board waiting to be
+ * collected by whoever could build room fastest. They took 6.6% of the market
+ * in their first quarter and 22% in their second, more than the largest
+ * incumbent, and were never once limited by demand.
+ *
+ * Real markets do not have that hole in them. What is not held by the four
+ * companies worth naming is held by fifty that are not, and taking those
+ * customers is still taking them from somebody. So the remainder is seated as
+ * one company standing for all of them: no posture worth modelling, no
+ * strategy, middling on every axis, and holding everything except the tenth
+ * that is genuinely there to win.
+ *
+ * Deliberately weak rather than absent. It does not defend cleverly, it will
+ * lose customers steadily to anyone doing anything well, and that is the
+ * point — a fragmented tail is the easiest share in the market to take, and it
+ * should still have to be taken.
+ */
+export function seedFragmentedTail(niche: Niche, seasonId = ""): Company | null {
+  const named = niche.incumbents.reduce((sum, i) => sum + i.startingShare, 0);
+  const share = 1 - named - TRULY_OPEN_SHARE;
+  /* Nothing to seat: the named rivals already hold all but the open tenth. */
+  if (share <= 0.02) return null;
+
+  const customers: Record<string, number> = {};
+  for (const segment of niche.segments) customers[segment.id] = Math.round(segment.size * share);
+  const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
+  const price = niche.segments[0].referencePrice;
+
+  return {
+    id: "the_rest",
+    name: "Everybody else",
+    kind: "incumbent" as const,
+    posture: "coaster",
+    cash: held * price * 0.2,
+    debt: 0,
+    creditLimit: held * price * 0.25,
+    reputation: 50,
+    /* Middling on every axis: this is the share that goes to whoever is better. */
+    quality: 42,
+    brand: 35,
+    service: 42,
+    capacity: Math.round(held * 1.05),
+    unitCost: niche.baseUnitCost,
+    price,
+    customers,
+    assets: [],
+    cities: [],
+    founderShare: 1,
+    seats: [],
+  };
 }
 
 /** Kept for the tests that check spend scales with pressure rather than jumping. */

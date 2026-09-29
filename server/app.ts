@@ -28,6 +28,7 @@ import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
 import { migrationState } from "./migration-state";
+import { isPoolTimeout } from "./db";
 
 /**
  * Where an error happened, as a shape rather than as a URL.
@@ -87,6 +88,9 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
    * exactly what someone picking an account to attack would like to know.
    */
   "paymentFailedAt", "paymentFailureMessage", "subscriptionRefundedAt", "subscriptionEventAt",
+  // What's in somebody's wallet, and whether they're paying their way through
+  // the month. Nobody else's business either, and on the same embedded rows.
+  "balanceCents", "dayPassUntil",
   "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
 ]);
 
@@ -431,6 +435,21 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
       console.error("[ai] unreadable model response:", err.raw?.slice(0, 200) ?? "(empty)");
       return res.status(502).json({ message: err.message, code: err.code });
     }
+    /*
+     * The pool had nothing free in time. That is capacity, not a fault: it is
+     * retryable, it should read as busy rather than broken in a log, and a
+     * monitor watching 5xx should see it as its own thing.
+     */
+    if (isPoolTimeout(err)) {
+      console.error(`[db] no connection free within the wait on ${req.method} ${routePattern(req)} — the pool is exhausted`);
+      reportError(err, { route: routePattern(req), method: req.method, userId: (req as any).user?.id, status: 503 });
+      res.setHeader("Retry-After", "5");
+      return res.status(503).json({
+        message: "The site is busy right now. Try that again in a moment.",
+        code: "database_busy",
+      });
+    }
+
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
     console.error("Internal Server Error:", err);

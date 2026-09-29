@@ -57,7 +57,23 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
 
   // Connect from Discover, with a note. The card changes at once.
   const note = "Saw your habit tracker — I'm building something similar.";
-  await page.goto("/discover");
+  /*
+   * Searched for rather than browsed.
+   *
+   * A plain /discover is a browse, and a browse leads with "People who may
+   * interest you" — a strip fed by /api/matches, which is deliberately
+   * `staleTime: 0` and regenerates on a stale read (match-strip.tsx). Anyone in
+   * the strip is filtered out of the People grid below it, so as the suite grows
+   * and newer accounts crowd into the match list, this fixture's card moves
+   * between the two lists and then out of both. The click resolved the button
+   * and then spent sixty seconds being told it had detached from the DOM.
+   *
+   * A query turns browse mode off (isBrowsing, use-discover-filters.ts), so the
+   * strip is not rendered and the results are the search's — which is what makes
+   * this deterministic however many accounts exist. Nothing about what is being
+   * tested changes: these assertions are about what the card's buttons do.
+   */
+  await page.goto("/discover?q=Bea+Builder");
   await page.getByTestId(`button-connect-${beaId}`).click();
   await page.getByTestId("input-connect-note").fill(note);
   await page.getByTestId("button-send-connect").click();
@@ -83,7 +99,7 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
 
   // Follow on a project card in Discover's results: instant, and still there
   // after a reload.
-  await page.goto("/discover");
+  await page.goto("/discover?q=Habit+Tracker");
   await page.getByTestId(`button-follow-${projectId}`).click();
   await expect(page.getByTestId(`button-follow-${projectId}`)).toHaveText(/Following/);
   await page.reload();

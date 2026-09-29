@@ -125,20 +125,37 @@ export function nextPhase(input: {
   /** Seconds remaining; negative once the deadline has passed. */
   secondsLeft: number;
   named: boolean;
+  /** How many people this season seats at a table. Five unless the season says otherwise. */
+  seatCount?: number;
 }): { phase: Phase; assign: boolean; reason: string } | null {
   const { phase, seats, secondsLeft, named } = input;
+  const seatCount = input.seatCount ?? LOBBY_SIZE;
   const expired = secondsLeft <= 0;
+  /*
+   * A table for one is a founder on their own, and every clock below exists to
+   * give other people time to arrive. There is nobody else coming, so none of
+   * them should run: a solo season that waits sixty seconds for bots, three
+   * minutes for seats nobody else can claim and two more for a name is five
+   * minutes of a person watching a screen for no reason at all.
+   */
+  const solo = seatCount <= 1;
 
   if (phase === "filling") {
-    if (seats.length >= LOBBY_SIZE) return { phase: "claiming", assign: false, reason: "The room filled up." };
+    if (seats.length >= seatCount) return { phase: "claiming", assign: false, reason: "The room filled up." };
     // Three is enough to play. Below that there isn't a company, and the
     // people waiting are better served by being told so than by waiting on.
+    // A solo season is exempt: one is the whole table, handled above.
     if (expired && seats.length >= 3) return { phase: "claiming", assign: false, reason: "Time's up, and there are enough of you to start." };
     if (expired) return { phase: "retired", assign: false, reason: "Not enough people joined in time." };
     return null;
   }
 
   if (phase === "claiming") {
+    /*
+     * Nobody to argue with about who sits where. The one seat takes every
+     * lever, so there is nothing to claim and no reason to hold the room.
+     */
+    if (solo) return { phase: "naming", assign: true, reason: "You're the whole company, so every desk is yours." };
     if (allSeated(seats)) return { phase: "naming", assign: false, reason: "Every seat is taken." };
     /*
      * Everybody who was going to choose has chosen. The rest of the room is
@@ -154,6 +171,14 @@ export function nextPhase(input: {
 
   if (phase === "naming") {
     if (named) return { phase: "running", assign: false, reason: "The company has a name. Year one begins." };
+    /*
+     * A solo season is named after the project it was built from before
+     * anybody sees this screen, so there is nothing to wait for. Holding a
+     * founder for two minutes to confirm the name of their own business is
+     * the clearest case of a clock that exists only because five people used
+     * to need one.
+     */
+    if (solo) return { phase: "running", assign: false, reason: "It's your company and it already has your name on it." };
     // A bot in the chief executive's seat is never going to name anything.
     // Start on a placeholder now rather than two minutes from now; whoever is
     // actually here can still rename it in year one.

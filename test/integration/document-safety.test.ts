@@ -50,8 +50,8 @@ async function person(app: any, first: string) {
     .send({ email: `docsafe-${first}-${Date.now()}-${n}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.121.${10 + (n % 200)}`);
-  // Documents are a paid feature; the tier is not what any of this is about.
-  await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, res.body.id));
+  // A document costs $3; what it costs is not what any of this is about.
+  await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, res.body.id));
   return { agent, id: res.body.id as string };
 }
 

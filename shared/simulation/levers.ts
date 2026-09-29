@@ -80,6 +80,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "targetCities", label: "Where you sell", kind: "cities",
       help: "Only people in a city you have opened can choose you, however good you are. Opening one costs money once and costs more to run for ever — spread faster than you can sell and you pay for reach you are not using." },
     { id: "forecast", label: "The forecast", kind: "count", min: 0, step: 1_000,
@@ -104,6 +108,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "The share of this year's marketing aimed at each region you sell in. A region pushed harder than its size is worth up to 40% more there, and one left short is worth up to 40% less — so this is concentration, not extra reach. Regions you leave out share what is left, evenly by size. Who lives where differs: pushing into a region full of the people you are for is worth more than pushing into the biggest one." },
     { id: "segmentFocus", label: "Who the marketing is for", kind: "allocation", min: 0, max: 100, step: 5,
       help: "The share of the year's marketing aimed at each kind of customer. A segment pushed harder than its size is worth up to 25% more, one left short up to 25% less. A campaign aimed at everybody is aimed at nobody — and one aimed at a segment you have priced out of reach is money spent twice on the same mistake." },
+    { id: "openNiche", label: "Go and find a niche", kind: "choice", options: [],
+      help: "Pick a kind of customer and go looking inside it for the people who want what you are already good at. They pay a little more, they are harder to shift once they choose, and for a while nobody else is even describing them as a group. It costs a year of marketing to find them and you only own them while you are the only one who fits — the better you are at something in particular, the more of them there turn out to be." },
     { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
       help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
@@ -120,6 +126,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "securitySpend", label: "Security", kind: "money", min: 0, step: 25_000,
       help: "Lowers the chance of a breach and how bad one is. Builds up over years and wears off a fifth a year. Nobody thanks you for the breach that didn't happen." },
     { id: "dataSpend", label: "Data and analytics", kind: "money", min: 0, step: 25_000,
@@ -150,8 +160,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
     { id: "programme", label: "Improvement programme", kind: "choice", options: [],
       help: "One a year, paying out a third of its effect in each of the next three years. Slow, cumulative and permanent — and the year you start one, it does nothing at all." },
-    { id: "expand", label: "Open the announced region", kind: "choice", options: [],
-      help: "The region announced for next year, opened at 70% of the usual cost. It opens next year, and in its first year you reach only as far as the brand does." },
+    { id: "expand", label: "Put the announced region to the table", kind: "choice", options: [],
+      help: "The region announced for next year, at 70% of the usual cost. You put it up and it counts as your vote for; the other four vote too, and a majority of the votes cast opens it. It opens next year, and in its first year you reach only as far as the brand does." },
     { id: "automationTarget", label: "Automate the plant", kind: "percent", min: 0, max: 100, step: 5,
       help: "How automated it should be next year. Every point takes a little off what each one costs to make — a quarter off at the top — and puts it onto what building more room costs, and onto how slowly the product can change. Paid for when ordered; it runs from next year. Taking it out again is immediate." },
     { id: "shiftCapacity", label: "Second shift", kind: "count", min: 0, step: 10_000,
@@ -194,6 +204,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "yes", label: "For", help: "Take it." },
       { value: "no", label: "Against", help: "Turn it down." },
     ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "insurance", label: "Insure against", kind: "choice", options: [
       { value: "none", label: "Nothing", help: "Carry the risk. Most years, the cheapest answer." },
       { value: "breach", label: "Breaches", help: "The insurer pays 80% of a breach's clean-up. Never the reputation." },
@@ -234,6 +248,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "decline", label: "Turn it down", help: "Nothing happens." },
       { value: "vote", label: "Put it to the table", help: "The other four vote. A majority of those who vote decides it; a tie or silence turns it down." },
     ], options: [], help: "What arrives from outside: a partner, a campaign, sometimes a buyer. Accept, decline, or let the table decide." },
+    { id: "expandVote", label: "Your vote on opening the region", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Open it." },
+      { value: "no", label: "Against", help: "Stay where you are this year." },
+    ], options: [], help: "Only counts on a region operations has put up. Opening one is years of rent and a first year reaching almost nobody, so the whole table decides it: a majority of the votes cast carries it, and a tie or silence leaves the region shut." },
     { id: "shockAnswer", label: "Answer the shock", kind: "choice", options: [],
       help: "What the company says about what happened. A statement wins back about half the reputation it cost; silence wins back nothing and reads as evasive; blaming a seat wins back the most and costs them dearly." },
     { id: "budget", label: "Split the budget", kind: "allocation", min: 0, max: 100, step: 5,
@@ -292,6 +310,34 @@ function standing(role: Role, company: Company, draft: Record<string, any>): Rec
   if (role === "ceo") fill("pace", "balanced");
   return draft;
 }
+
+/**
+ * The levers that only mean anything when other people hold the other desks.
+ *
+ * A solo founder is handed all five desks, which is right — every decision the
+ * company makes is theirs. But several of those levers are not decisions about
+ * the business at all. They are decisions about *colleagues*: splitting the
+ * budget between three seats, setting each seat's target, a bonus pot shared
+ * by the seats that hit theirs, overruling a seat, replacing one, and which
+ * seat finance holds money back from.
+ *
+ * Asked of one person they are absurd — a founder splitting a budget four ways
+ * between themselves and setting their own targets — and asking is worse than
+ * absurd, because it tells somebody rehearsing their own business that they
+ * have got something wrong by not having staff.
+ *
+ * `rehire` goes for a different reason: a seat dissolved in a solo company
+ * saves no salary (`officers` is one however many chairs there are), so there
+ * is never anything to bring back.
+ *
+ * Deliberately not the whole "people" half of the chief executive's desk.
+ * Engineer pay stays — a solo founder still pays whoever writes the code — and
+ * so does headcount, which is staff beyond the table rather than the table
+ * itself.
+ */
+export const LEVERS_FOR_A_TABLE: ReadonlySet<string> = new Set([
+  "budget", "targets", "bonusPool", "overrule", "replaceSeat", "holdBackSeat", "rehire",
+]);
 
 export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
   if (previous) {
@@ -355,8 +401,26 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   for (const field of LEVER_FIELDS[role]) {
     const value = payload[field.id];
 
+    /*
+     * Compared as text, because the same answer arrives as both types.
+     *
+     * `terms` offers "0", "30", "60", "90" as strings — a `<select>` deals in
+     * strings — and `cleanDecision` stores it back as the number the engine
+     * wants. So the value a filing returns is 0 where the option is "0", and
+     * strict equality reads that as an answer nobody offered: "Payment terms:
+     * Pick one", on a payment term the person had already picked and never
+     * touched since.
+     *
+     * It bit a solo founder first and hardest, because their filing carries
+     * all five desks and is validated against all five, so one stale number on
+     * the finance desk refused every decision they made — the price, the
+     * capacity, all of it. The finance seat at a full table had the same bug
+     * waiting for the first person to file without touching payment terms.
+     */
+    const offered = (v: unknown) => field.options!.some((o) => String(o.value) === String(v));
+
     if (field.kind === "choice" && field.id === "focus") {
-      if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      if (!offered(value)) errors[field.id] = "Pick one.";
       continue;
     }
 
@@ -364,7 +428,7 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
       // A choice with no options is one the season has nothing to offer for —
       // an empty seat list, say — and is skipped rather than refused.
       if ((field.options?.length ?? 0) === 0) continue;
-      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+      if (value !== undefined && value !== null && value !== "" && !offered(value)) {
         errors[field.id] = "Pick one.";
       }
       continue;
@@ -472,6 +536,8 @@ export function cleanDecision(
      * dropped, so it cannot be filed early by a client that shows it anyway.
      */
     year?: number;
+    /** How many decisions make a year, since `year` counts decisions. */
+    periods?: number;
     /** The market's segments: price tiers can only be set for ones that exist. */
     segmentIds?: readonly string[];
   } = {},
@@ -479,7 +545,7 @@ export function cleanDecision(
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
-    if (context.year !== undefined && !isUnlocked(role, field.id, context.year)) continue;
+    if (context.year !== undefined && !isUnlocked(role, field.id, context.year, context.periods ?? 1)) continue;
     const raw = source[field.id];
     switch (field.kind) {
       case "choice":
@@ -701,6 +767,14 @@ export function commitment(
     { role: "cto", spend: ((decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) + (decisions.cto?.researchSpend ?? 0) + (decisions.cto?.securitySpend ?? 0) + (decisions.cto?.dataSpend ?? 0) + betSpend(decisions, niche, prices)) * payEffect(decisions.cto?.engineerPay).cost },
     { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) + (decisions.coo?.recruitingSpend ?? 0) + (decisions.coo?.trainingSpend ?? 0)
       + oneOff(!!decisions.coo?.programme && !(company.programmes ?? []).some((p) => p.id === decisions.coo!.programme), niche, prices, "programme", programmeCost)
+      /*
+       * Opening the announced region is counted the moment operations puts
+       * it up, before the table has voted. It is an exposure rather than a
+       * commitment — the table may vote it down and the money stays — but
+       * the meter exists to stop a company filing a year it cannot pay
+       * for, and overstating what a year might cost is the safe side of
+       * that. The mobile mirror counts it the same way.
+       */
       + oneOff(!!decisions.coo?.expand, niche, prices, "expansion", () => 0)
       + plantSpend(company, decisions, niche, prices)
       + capacitySpend(company, decisions, niche, prices) },
@@ -746,6 +820,13 @@ export function commitment(
     decisions.coo?.headcount ?? 0,
     { costIndex: economy.costIndex } as any,
     niche ? reachOf(company, niche) : 1,
+    /*
+     * The market, so ordinary salaries are this market's salaries. Without it
+     * `fixedCosts` falls back to the generic SALARY, and the preview differs
+     * from the year it is previewing by whatever `salaryIn` would have said —
+     * which on a Nova-written startup market is most of it.
+     */
+    niche ?? undefined,
   );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   /*
@@ -871,7 +952,76 @@ export const filedRoles = (decisions: TeamDecisions): Role[] =>
  * read. The ones here are the ones whose engine word is genuinely the wrong
  * word on the ground.
  */
-export function speak(field: LeverField, voice: NicheVoice): LeverField {
+/**
+ * "year" on a desk that decides four times a year.
+ *
+ * Every word of lever copy was written when a season was fourteen years and
+ * one decision was one of them. The engine has counted periods for a long time
+ * and a season can now be run monthly or quarterly, but the copy never moved:
+ * somebody deciding quarterly was told to plan "this year", four times a year.
+ *
+ * Substituted rather than rewritten per cadence because in lever copy "year"
+ * means the decision, and it means it consistently — the engine charges
+ * salaries, interest and fixed costs per period (`* per` in resolve.ts), so a
+ * salary really is paid every quarter in a quarterly season. Where a word
+ * genuinely means a calendar year it does not live here: asset lives, the
+ * credit rating's horizon and the segments' compound growth are all written
+ * elsewhere and left alone.
+ */
+function inPeriods(text: string | undefined, period: { one: string; many: string } | undefined): string | undefined {
+  if (!text || !period || period.one === "year") return text;
+  return text
+    .replace(/\bYears\b/g, period.many.charAt(0).toUpperCase() + period.many.slice(1))
+    .replace(/\byears\b/g, period.many)
+    .replace(/\bYear\b/g, period.one.charAt(0).toUpperCase() + period.one.slice(1))
+    .replace(/\byear\b/g, period.one);
+}
+
+export function speak(
+  field: LeverField, voice: NicheVoice,
+  period?: { one: string; many: string; perYear?: number },
+): LeverField {
+  const said = speakIn(field, voice);
+  if (!period || period.one === "year") return withBuildLag(said, period);
+  const swapped = {
+    ...said,
+    label: inPeriods(said.label, period) ?? said.label,
+    help: inPeriods(said.help, period) ?? said.help,
+    options: said.options?.map((o) => ({ ...o, label: inPeriods(o.label, period) ?? o.label, help: inPeriods(o.help, period) ?? o.help })),
+    choices: said.choices?.map((c) => ({ ...c, label: inPeriods(c.label, period) ?? c.label, help: inPeriods(c.help, period) ?? c.help })),
+  };
+  /* After the swap, never before: this sentence needs both words to survive. */
+  return withBuildLag(swapped, period);
+}
+
+/**
+ * Room takes time to open, and the lever never said so.
+ *
+ * `capacityBuild` caps what you can serve now at what you already had, and
+ * adds only `(wanted - current) / periods` for next time — so asking for ten
+ * thousand seats in a quarterly season opens about a quarter of the increase a
+ * quarter later, and none of it this one. That is deliberate: building is slow
+ * and cutting is immediate, which is the trade the lever exists to offer. But
+ * it was invisible, so the screen read as broken arithmetic — somebody asks
+ * for ten thousand, sees fifteen hundred, and concludes the number is a lie.
+ *
+ * Written after the "year"/"quarter" substitution rather than before it,
+ * because this sentence is the one place on the desk where both words appear
+ * meaning different things: building takes a *year* however often the table
+ * decides, and what opens each *quarter* is a quarter of it. Substituting into
+ * it would turn "takes a year" into "takes a quarter", which is exactly the
+ * thing it is here to correct.
+ */
+function withBuildLag(field: LeverField, period?: { one: string; many: string; perYear?: number }): LeverField {
+  if (field.id !== "capacityTarget") return field;
+  const per = period?.perYear ?? 1;
+  const lag = per > 1
+    ? ` Building takes a year: about a ${per === 4 ? "quarter" : per === 12 ? "twelfth" : `1/${per}`} of any increase opens each ${period!.one}, and none of it in the one you ask. Cutting is immediate.`
+    : " Building takes a year: what you add opens next year, not this one. Cutting is immediate.";
+  return { ...field, help: `${field.help ?? ""}${lag}` };
+}
+
+function speakIn(field: LeverField, voice: NicheVoice): LeverField {
   const many = voice.customers;
   const one = voice.customer;
   const cap = voice.capacityShort;

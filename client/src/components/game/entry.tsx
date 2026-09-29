@@ -1,11 +1,26 @@
 /**
  * The way into Ten Years From Now.
  *
- * Written as its own card rather than another button in the header, for the
- * reason the simulation entry beside it exists: the last two things built into
- * this page were finished and unreachable, because the only route to them was
- * knowing the address and typing it. A feature nobody can find is a feature
- * nobody has.
+ * ## One button, and it always says what will actually happen
+ *
+ * There are four states this card can be in — a game in progress, a game
+ * available, the day's game already used, and the feature unreachable — and
+ * the whole design of it is that the button never lies about which one you are
+ * in. A "Play now" that the server refuses is worse than a disabled button
+ * saying why, because the person has already decided to spend half an hour by
+ * the time they find out.
+ *
+ * So the allowance rides along with the active game on one request
+ * (`/api/games/active`), and the button, the badge and the line underneath are
+ * all written from the same answer.
+ *
+ * ## The limit is stated up front, not on refusal
+ *
+ * "One game a day" appears on the card before anyone has played, whether or
+ * not it currently applies. A limit somebody meets for the first time as an
+ * error reads as the product breaking; the same limit read in advance is a
+ * rule, and it makes the score at the end mean more rather than less — which
+ * is the actual reason for it (see GAME_COOLDOWN_MS).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -14,13 +29,24 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Play, Trophy } from "lucide-react";
+import { Loader2, Play, Trophy, Clock, CalendarCheck } from "lucide-react";
 import { TOTAL_SECONDS } from "@shared/sprints/game";
+import { PastGames, type PastGame } from "./past-games";
+import { YourIdeaStaysYours } from "./your-idea";
+
+/** What `/api/games/active` says about your allowance. */
+interface Daily {
+  perDay: number;
+  startedToday: number;
+  canStart: boolean;
+  unlocksAt: string | null;
+  /** "in about 9 hours", or null when one is available now. */
+  opensIn: string | null;
+}
 
 export function GameEntry() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-
   const qc = useQueryClient();
 
   /*
@@ -32,8 +58,9 @@ export function GameEntry() {
    * invalidation from the game screen. That is the whole of the bug where the
    * card kept saying "Back to your game" about a game that had ended.
    */
-  const { data: active } = useQuery<any>({ queryKey: ["/api/games", "active"] });
+  const { data: active } = useQuery<{ games: { id: string }[]; daily: Daily }>({ queryKey: ["/api/games", "active"] });
   const inProgress = active?.games?.[0];
+  const daily = active?.daily;
 
   /*
    * And the ones already finished.
@@ -41,10 +68,9 @@ export function GameEntry() {
    * A verdict used to be reachable from exactly one URL — the one you still
    * had open — because the active-game route deliberately returns only
    * playable rounds. Half an hour of play with an AI's judgement at the end of
-   * it, lost by pressing back. The list is small and only shown when there is
-   * something in it.
+   * it, lost by pressing back.
    */
-  const { data: past } = useQuery<any>({ queryKey: ["/api/games", "history"] });
+  const { data: past } = useQuery<{ games: PastGame[] }>({ queryKey: ["/api/games", "history"] });
   const finished: PastGame[] = past?.games ?? [];
 
   const start = useMutation({
@@ -65,6 +91,14 @@ export function GameEntry() {
             void qc.invalidateQueries({ queryKey: ["/api/games", "active"] });
             return navigate(`/sprints/game/${body.gameId}`);
           }
+          /*
+           * The day's game is gone — most likely because it was used on
+           * another device since this card was drawn. Refetch so the button
+           * stops offering something that will be refused again.
+           */
+          if (body.code === "played_today") {
+            void qc.invalidateQueries({ queryKey: ["/api/games", "active"] });
+          }
           return toast({ title: body.message ?? "Couldn't start", variant: "destructive" });
         } catch { /* fall through */ }
       }
@@ -73,86 +107,96 @@ export function GameEntry() {
   });
 
   const minutes = Math.round(TOTAL_SECONDS / 60);
+  /* A game in progress is never a refusal: it is yours to go back to. */
+  const locked = !inProgress && daily ? !daily.canStart : false;
 
   return (
-    <Card className="mb-8 overflow-hidden border-primary/25 bg-gradient-to-br from-primary/5 to-transparent">
-      <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+    /*
+      * The soft ring rather than the full one: this and the market card are a
+      * pair of equals, and the loud gradient is for the one thing on a screen
+      * that should draw the eye.
+      */
+    <Card className="nova-ring-soft overflow-hidden">
+      <CardContent className="space-y-4 p-4 sm:p-5">
+        {/*
+          * The copy gets the whole width and the buttons go underneath.
+          *
+          * They used to sit in the same row, `shrink-0`, so on a two-column
+          * grid they claimed most of the card and left the paragraph a
+          * hundred-pixel gutter running twelve lines down beside an empty
+          * half. Nothing about the sentence fixed that; the row did.
+          */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="nova-chip flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+              <Play className="h-4 w-4" />
+            </span>
             <h3 className="text-lg font-semibold">Ten Years From Now</h3>
             <Badge variant="secondary">~{minutes} min</Badge>
+            {/* Stated before it bites, not as an error afterwards. */}
+            <Badge variant="outline" className="gap-1 font-normal" data-testid="badge-once-a-day">
+              <CalendarCheck className="h-3 w-3" /> One a day
+            </Badge>
           </div>
-          <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-            Invent a startup with someone in five rounds — the idea, the customer, the money, the
-            product, and how you spend your first million. Then find out what an AI thinks it's
-            worth in a decade.
+          <p className="text-sm text-muted-foreground">
+            Five rounds with a stranger to invent a startup. An AI says what it's worth in ten years.
           </p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/sprints/boards")} data-testid="button-game-boards">
-            <Trophy className="mr-1.5 h-4 w-4" /> Leaderboards
-          </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
           {inProgress ? (
-            <Button onClick={() => navigate(`/sprints/game/${inProgress.id}`)} data-testid="button-resume-game">
+            <Button className="w-full sm:w-auto" onClick={() => navigate(`/sprints/game/${inProgress.id}`)} data-testid="button-resume-game">
               Back to your game
             </Button>
           ) : (
-            <Button onClick={() => start.mutate()} disabled={start.isPending} data-testid="button-start-game">
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => start.mutate()}
+              disabled={start.isPending || locked}
+              data-testid="button-start-game"
+            >
               {start.isPending
                 ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                : <Play className="mr-1.5 h-4 w-4" />}
-              Play now
+                : locked ? <Clock className="mr-1.5 h-4 w-4" /> : <Play className="mr-1.5 h-4 w-4" />}
+              {locked ? "Played today" : "Play now"}
             </Button>
           )}
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => navigate("/sprints/boards")} data-testid="button-game-boards">
+            <Trophy className="mr-1.5 h-4 w-4" /> Leaderboards
+          </Button>
         </div>
 
+        {/*
+          * Before the button, not after it. The question "what happens to what
+          * I write" is one somebody has while deciding whether to start, and an
+          * answer they find afterwards is an answer that arrived too late.
+          */}
+        <YourIdeaStaysYours />
+
+        {/*
+          * When it opens again, exactly. A limit whose end nobody can see reads
+          * as the product being broken rather than as a rule.
+          */}
+        {locked && (
+          <p className="flex items-start gap-2 rounded-lg border border-border bg-background/60 p-3 text-sm" data-testid="text-play-again">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <span>
+              Today's game is played. The next opens{" "}
+              <span className="font-medium">{daily?.opensIn ?? "shortly"}</span>.{" "}
+              <span className="text-muted-foreground">One a day keeps the boards worth topping.</span>
+            </span>
+          </p>
+        )}
+
         {finished.length > 0 && (
-          <div className="mt-4 w-full border-t border-border/60 pt-3" data-testid="game-history">
-            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="border-t border-border/60 pt-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Your past games
             </p>
-            <ul className="space-y-0.5">
-              {finished.slice(0, 5).map((game) => (
-                <li key={game.id}>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/sprints/game/${game.id}`)}
-                    className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/60"
-                    data-testid={`button-past-game-${game.id}`}
-                  >
-                    <span className="min-w-0 flex-1 truncate font-medium">{game.name || "Unnamed startup"}</span>
-                    {game.outcome === "abandoned" ? (
-                      /* Named rather than scored: an abandoned game has no
-                         verdict and never will, and showing a blank where the
-                         number goes reads as a loading state that never ends. */
-                      <span className="text-xs text-muted-foreground">
-                        {game.youLeft ? "You left" : "Your partner left"}
-                      </span>
-                    ) : game.verdict ? (
-                      <span className="text-xs text-muted-foreground" data-testid={`text-past-score-${game.id}`}>
-                        {game.verdict.overall}/1000
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Being scored…</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <PastGames games={finished.slice(0, 5)} />
           </div>
         )}
       </CardContent>
     </Card>
   );
-}
-
-/** One row of `GET /api/games/history`. */
-interface PastGame {
-  id: string;
-  name: string | null;
-  outcome: "verdict" | "abandoned";
-  youLeft: boolean;
-  endedAt: string | null;
-  verdict: { overall: number; tenYear: number | null; peak: number | null; fromModel: boolean } | null;
 }

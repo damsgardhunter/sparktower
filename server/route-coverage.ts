@@ -252,9 +252,11 @@ function unreadableAnswerOf(body: string, catches: (readonly [number, number])[]
 
 export function analyzeMetering(body: string): MeteringFacts | null {
   const checks = [...body.matchAll(/\b(?:requireCredits\s*\(\s*res\s*,\s*[^,]+,|reserveOptionalAi\s*\(\s*[^,]+,)\s*([^,)]+)/g)];
+  // An image guard is a check with no cost expression: its price is the pass, not a number here.
+  const imageChecks = [...body.matchAll(/\brequireImages\s*\(\s*res\s*,/g)];
   const charges = [...body.matchAll(/\bdeductCredits\s*\(\s*[^,]+,\s*([^)]+)\)/g)];
   const models = [...body.matchAll(new RegExp(MODEL_CALL.source, "g"))].map((m) => m.index!);
-  if (!checks.length && !charges.length && !models.length) return null;
+  if (!checks.length && !imageChecks.length && !charges.length && !models.length) return null;
   const firstModel = models.length ? Math.min(...models) : -1;
   // Where the answer gets read: the first parse after the model call (or, when
   // the model runs in a helper, after the credit check).
@@ -322,7 +324,14 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
       const write = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
       // Metered means checked before the work: a bare deductCredits is a charge
       // with no check (and no burst limit), which is exactly what isn't metered.
-      const credits = /\brequireCredits\s*\(|\breserveOptionalAi\s*\(/.test(body);
+      /*
+       * `requireImages` counts as metering too. Pictures are priced by their
+       * own rule — a free first go per project, then the image pass, capped by
+       * the hour (server/images.ts) — and a route guarded by it is metered in
+       * every sense this audit cares about: it refuses, it records, and it
+       * cannot be reached for free in a loop.
+       */
+      const credits = /\brequireCredits\s*\(|\breserveOptionalAi\s*\(|\brequireImages\s*\(/.test(body);
       const cost = credits || /\bdeductCredits\s*\(/.test(body) || MODEL_CALL.test(body);
       rows.push({
         method, path, file: file.path, mounted, write, cost,

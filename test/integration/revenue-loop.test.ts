@@ -1,10 +1,21 @@
 /**
- * The revenue loop: hit the AI credits limit. Generating on the path spends
- * credits; running low shows in the subscription the client reads; running out
- * refuses the generate — before any model call — with what the client needs to
- * offer "Upgrade to keep generating"; paying (a tier set from Stripe) refills
- * the allowance so the same generate goes through; and a paid renewal refills
- * it again. E2E: e2e/revenue-loop.spec.ts.
+ * The revenue loop, now that there is nothing to subscribe to.
+ *
+ * Generating on the path spends one small Nova action; running low shows in
+ * what the client reads; running out refuses the generate — before any model
+ * call — with everything a dialog needs to offer the way on; topping up and
+ * buying a pack of Nova actions lets the same generate through; and the pack is
+ * unlimited for its window rather than a bigger bucket.
+ *
+ * What this file used to test was the other loop: run out of credits, upgrade
+ * to Builder, get 750 a month. There is no Builder. The subscription machinery
+ * it exercised (applyTier, invoice-paid refills, a refund taking the plan away)
+ * is still in server/billing-credits.ts to wind down the subscriptions that
+ * exist, and the last test here holds it to the one promise that still matters:
+ * whatever an old subscription event says, it never changes what anybody can
+ * do, because nothing is sold any more.
+ *
+ * E2E: e2e/revenue-loop.spec.ts.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
@@ -13,28 +24,28 @@ import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
+import { MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS } from "@shared/plans";
 
 const WEBHOOK_SECRET = fakeWebhookSecret("revenue-loop");
-const stripe = new Stripe(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
 
 vi.mock("../../server/stripeClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/stripeClient")>();
   const StripeCtor = (await import("stripe")).default;
   const client: any = new StripeCtor(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
-  // What Stripe would answer for a Builder subscription, without the network.
   client.subscriptions.retrieve = async (id: string) => ({ id, status: "active", items: { data: [{ price: { id: "price_builder_test" } }] } });
-  // No other subscriptions on the customer: the plan is settled from the one the event carries.
   client.subscriptions.list = async () => ({ data: [] });
   client.prices.retrieve = async () => ({ id: "price_builder_test", metadata: { tier: "builder" } });
+  client.customers.create = async () => ({ id: `cus_revenue_${Date.now()}` });
+  client.checkout = { sessions: { list: async () => ({ data: [] }), expire: async (id: string) => ({ id }), create: async () => ({ id: "cs_revenue", url: "https://checkout.stripe.test/cs_revenue" }) } };
   return {
     ...actual,
     getUncachableStripeClient: async () => client,
-    // The signature check the sync library does, and nothing that needs the network.
     getStripeSync: async () => ({ processWebhook: async (payload: Buffer, signature: string) => { client.webhooks.constructEvent(payload, signature, WEBHOOK_SECRET); } }),
   };
 });
 
-// Nova's model is never reached in these tests: a refused generate stops before it, and the allowed one is answered here.
+// Nova's model is never reached: a refused generate stops before it, and an
+// allowed one only has to get past the money to prove the point.
 vi.mock("../../server/phase-trees-nova", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/phase-trees-nova")>();
   return { ...actual, draftLoops: vi.fn(async () => { throw new Error("model unavailable in tests"); }) };
@@ -54,142 +65,97 @@ async function builder(app: any) {
   return { agent, id: res.body.id as string };
 }
 const setUsed = (id: string, creditsUsed: number) => db.update(users).set({ creditsUsed, creditsResetAt: new Date() }).where(eq(users.id, id));
-const usedOf = async (id: string) => (await db.select({ u: users.creditsUsed, t: users.subscriptionTier }).from(users).where(eq(users.id, id)))[0];
+const rowOf = async (id: string) =>
+  (await db.select({ u: users.creditsUsed, t: users.subscriptionTier, b: users.balanceCents }).from(users).where(eq(users.id, id)))[0];
 
-describe("hitting the AI credits limit", () => {
+describe("running out of the month's free Nova", () => {
   let app: any;
   beforeEach(async () => { app = await getTestApp(); });
 
-  it("warns when low, refuses at zero with an upgrade, and a paid upgrade lets generating go on", async () => {
+  it("warns when low, refuses at zero with more actions to offer, and the pack lets generating go on", async () => {
     const me = await builder(app);
-    const project = (await me.agent.post("/api/projects").send({ title: "Paying Path", description: "A project that runs out of AI credits on its path.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const project = (await me.agent.post("/api/projects").send({ title: "Paying Path", description: "A project that runs out of free Nova actions on its path.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const tasks = (await me.agent.get(`/api/projects/${project.id}/kanban`)).body;
     const step = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.3")) ?? tasks.find((t: any) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:")));
 
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ tier: "free", creditsLimit: 20, creditsRemaining: 20, creditState: "ok", lowCreditsAt: 4 });
-    await setUsed(me.id, 17);
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ creditsRemaining: 3, creditState: "low" });
+    expect((await me.agent.get("/api/subscription")).body).toMatchObject({
+      creditsLimit: MONTHLY_SMALL_ACTIONS, creditsRemaining: MONTHLY_SMALL_ACTIONS, creditState: "ok",
+    });
+    await setUsed(me.id, MONTHLY_SMALL_ACTIONS - 2);
+    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ creditsRemaining: 2, creditState: "low" });
 
-    // Out: the path generate is refused before the model, with what the upgrade prompt needs.
-    await setUsed(me.id, 20);
+    // Out: the path generate is refused before the model, with everything the
+    // dialog needs — the price, the balance, and the one thing to do about it.
+    await setUsed(me.id, MONTHLY_SMALL_ACTIONS);
     expect((await me.agent.get("/api/subscription")).body.creditState).toBe("out");
     const refused = await me.agent.post(`/api/projects/${project.id}/path/work`).send({ taskId: step.id });
-    expect(refused.status).toBe(403);
-    expect(refused.body).toMatchObject({ code: "insufficient_credits", creditState: "out", upgradeUrl: "/pricing", cost: 4, creditsRemaining: 0, tier: "free" });
+    expect(refused.status).toBe(402);
+    expect(refused.body).toMatchObject({
+      code: "payment_required", outcome: "actionPack",
+      price: { cents: OUTCOME_PRICE_CENTS.actionPack, display: "$5" },
+      remedy: "top_up",
+      endpoints: { actionPack: "/api/nova/day-pass", topUp: "/api/nova/top-up" },
+    });
     const loops = await me.agent.post(`/api/projects/${project.id}/path/loops/write`).send({});
-    expect(loops.body.code).toBe("insufficient_credits");
-    expect((await usedOf(me.id)).u).toBe(20);
+    expect(loops.body.code).toBe("payment_required");
+    // Nothing was taken on the way to being refused.
+    expect((await rowOf(me.id)).u).toBe(MONTHLY_SMALL_ACTIONS);
 
-    // Plans above theirs are what's offered.
-    const plans = (await request(app).get("/api/plans")).body.plans.map((p: any) => p.tier);
-    expect(plans).toEqual(expect.arrayContaining(["starter", "builder", "pro"]));
+    // Money on the account, and the pass is one tap rather than a redirect.
+    await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, me.id));
+    const nudged = await me.agent.post(`/api/projects/${project.id}/path/work`).send({ taskId: step.id });
+    expect(nudged.body.remedy, "with money there, the dialog offers the actions itself").toBe("buy_pass");
 
-    // Paying for Builder (as the webhook or the post-checkout sync sets it): the allowance is full, and generating goes on.
-    expect(await applyTier(me.id, "builder", "sub_revenue_1")).toEqual({ refilled: true });
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ tier: "builder", creditsRemaining: 750, creditState: "ok" });
+    const pack = await me.agent.post("/api/nova/day-pass").send({});
+    expect(pack.status, JSON.stringify(pack.body)).toBe(200);
+    expect(pack.body.wallet.balanceCents).toBe(500 - OUTCOME_PRICE_CENTS.actionPack);
+
+    // And generating goes on, out of the pack — the month's free allowance is
+    // still spent and stays spent, because the two are different promises.
     const again = await me.agent.post(`/api/projects/${project.id}/path/loops/write`).send({});
-    expect(again.body.code).not.toBe("insufficient_credits");
-    // A same-tier update (a renewal's subscription event) doesn't hand out a second refill.
-    await setUsed(me.id, 700);
-    expect(await applyTier(me.id, "builder", "sub_revenue_1")).toEqual({ refilled: false });
-    expect((await usedOf(me.id)).u).toBe(700);
+    expect(again.body.code).not.toBe("payment_required");
+    expect((await rowOf(me.id)).u).toBe(MONTHLY_SMALL_ACTIONS);
   });
 
-  it("refills the allowance when a renewal invoice is paid — and not for other invoices", async () => {
+  it("offers a top-up when there isn't even a dollar there, and takes nothing until Stripe says it was paid", async () => {
     const me = await builder(app);
-    const customer = `cus_revenue_${Date.now()}`;
-    await db.update(users).set({ stripeCustomerId: customer, subscriptionTier: "starter", creditsUsed: 200, creditsResetAt: new Date() }).where(eq(users.id, me.id));
-    const send = async (billing_reason: string) => {
-      const body = JSON.stringify({ id: `evt_${Math.random().toString(36).slice(2)}`, object: "event", type: "invoice.paid", data: { object: { id: "in_1", object: "invoice", customer, billing_reason } } });
-      return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")
-        .set("stripe-signature", stripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET })).send(body);
-    };
-    expect((await send("manual")).status).toBe(200);
-    expect((await usedOf(me.id)).u).toBe(200);
-    expect((await me.agent.get("/api/subscription")).body.creditState).toBe("out");
-    expect((await send("subscription_cycle")).status).toBe(200);
-    expect(await usedOf(me.id)).toEqual({ u: 0, t: "starter" });
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ creditsRemaining: 200, creditState: "ok" });
+    await setUsed(me.id, MONTHLY_SMALL_ACTIONS);
+
+    const wallet = (await me.agent.get("/api/nova/wallet")).body;
+    expect(wallet.wallet).toMatchObject({ balanceCents: 0, allowanceRemaining: 0, dayPassActive: false });
+    // The price list travels with it, so a dialog never hard-codes a price.
+    expect(wallet.prices.outcomes.find((o: any) => o.id === "actionPack")).toMatchObject({ cents: 500, display: "$5" });
+
+    const started = await me.agent.post("/api/nova/top-up").send({ amountCents: 500 });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body.url).toMatch(/^https:\/\/checkout\.stripe\.test\//);
+    expect((await rowOf(me.id)).b, "the balance follows the payment, not the intent").toBe(0);
   });
 
-  it("switching between paid plans doesn't refill the allowance — only a paid invoice does", async () => {
+  it("never lets an old subscription event change what anybody can do", async () => {
+    const me = await builder(app);
+    await setUsed(me.id, 10);
+
     /*
-     * The switch goes through stripe.subscriptions.update with prorations: the
-     * difference lands on the next invoice, so nothing has been paid. Every
-     * "up" used to refill, so Builder → Pro → Builder → Pro handed out a fresh
-     * month each round for about nothing.
+     * applyTier still runs for subscriptions being wound down, and still
+     * refills the month on a first payment — harmless, and one fewer thing to
+     * unpick while money is still moving. What it must not do any more is
+     * change an entitlement, because entitlements are not for sale.
      */
-    const me = await builder(app);
-    expect(await applyTier(me.id, "builder", "sub_switch_1")).toEqual({ refilled: true });
-    await setUsed(me.id, 700);
-    for (const tier of ["pro", "builder", "pro"]) {
-      expect(await applyTier(me.id, tier, "sub_switch_1"), tier).toEqual({ refilled: false });
-      expect(await usedOf(me.id), tier).toEqual({ u: 700, t: tier });
-    }
-    // The prorated invoice for the switch isn't a new month either; the next cycle's is.
-    const customer = `cus_switch_${Date.now()}`;
-    await db.update(users).set({ stripeCustomerId: customer }).where(eq(users.id, me.id));
-    const invoice = (billing_reason: string) => {
-      const body = JSON.stringify({ id: `evt_${Math.random().toString(36).slice(2)}`, object: "event", type: "invoice.paid", data: { object: { id: "in_sw", object: "invoice", customer, billing_reason, subscription: "sub_switch_1" } } });
-      return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")
-        .set("stripe-signature", stripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET })).send(body);
-    };
-    expect((await invoice("subscription_update")).status).toBe(200);
-    expect((await usedOf(me.id)).u).toBe(700);
-    expect((await invoice("subscription_cycle")).status).toBe(200);
-    expect((await usedOf(me.id)).u).toBe(0);
-  });
+    const { tier: _wasTier, ...free } = (await me.agent.get("/api/subscription")).body.entitlements;
+    await applyTier(me.id, "builder", "sub_revenue_legacy");
+    const afterPaying = (await me.agent.get("/api/subscription")).body;
+    // The tier string on the row moves, because Stripe still says so. Nothing
+    // that string decides moves, because it no longer decides anything.
+    const { tier, ...nowGets } = afterPaying.entitlements;
+    expect(tier).toBe("builder");
+    expect(nowGets).toEqual(free);
+    expect(afterPaying.creditsLimit).toBe(MONTHLY_SMALL_ACTIONS);
 
-  const signed = (type: string, object: Record<string, unknown>) => {
-    const body = JSON.stringify({ id: `evt_${Math.random().toString(36).slice(2)}`, object: "event", type, data: { object } });
-    return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")
-      .set("stripe-signature", stripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET })).send(body);
-  };
-  const subscriber = async (tier = "builder") => {
-    const me = await builder(app);
-    const customer = `cus_billing_${Date.now()}_${n}`;
-    await db.update(users).set({ stripeCustomerId: customer, stripeSubscriptionId: "sub_billing_1", subscriptionTier: tier, creditsUsed: 300, creditsResetAt: new Date() }).where(eq(users.id, me.id));
-    return { ...me, customer };
-  };
-
-  it("a failed subscription payment is kept on the account until a payment goes through", async () => {
-    const me = await subscriber();
-    // A one-off invoice failing isn't a subscription problem.
-    expect((await signed("invoice.payment_failed", { id: "in_x", object: "invoice", customer: me.customer, billing_reason: "manual" })).status).toBe(200);
-    expect((await me.agent.get("/api/subscription")).body.billingIssue).toBeNull();
-
-    expect((await signed("invoice.payment_failed", { id: "in_1", object: "invoice", customer: me.customer, billing_reason: "subscription_cycle", parent: { subscription_details: { subscription: "sub_billing_1" } } })).status).toBe(200);
-    const failing = (await me.agent.get("/api/subscription")).body;
-    expect(failing.billingIssue).toMatchObject({ kind: "payment_failed", message: expect.any(String) });
-    expect(failing.tier).toBe("builder"); // the tier follows the subscription's status event, not this
-
-    expect((await signed("invoice.paid", { id: "in_2", object: "invoice", customer: me.customer, billing_reason: "subscription_cycle", subscription: "sub_billing_1" })).status).toBe(200);
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ billingIssue: null, tier: "builder", creditsUsed: 0 });
-  });
-
-  it("a subscription payment refunded in full takes the plan until an invoice is paid again; a partial refund doesn't", async () => {
-    const me = await subscriber();
-    expect((await signed("charge.refunded", { id: "ch_part", object: "charge", customer: me.customer, invoice: "in_1", refunded: false, amount_refunded: 500 })).status).toBe(200);
-    expect((await usedOf(me.id)).t).toBe("builder");
-
-    expect((await signed("charge.refunded", { id: "ch_full", object: "charge", customer: me.customer, invoice: "in_1", refunded: true, amount_refunded: 1699 })).status).toBe(200);
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ tier: "free", billingIssue: { kind: "refunded" } });
-
-    // A subscription event still saying "active" (a card change, say) doesn't hand it back.
-    expect(await applyTier(me.id, "builder", "sub_billing_1")).toEqual({ refilled: false, heldByRefund: true });
-    expect((await usedOf(me.id)).t).toBe("free");
-
-    // Paying again does: the tier is read from the subscription, and the allowance refills.
-    expect((await signed("invoice.paid", { id: "in_3", object: "invoice", customer: me.customer, billing_reason: "subscription_cycle", subscription: "sub_billing_1" })).status).toBe(200);
-    expect((await me.agent.get("/api/subscription")).body).toMatchObject({ tier: "builder", billingIssue: null, creditsRemaining: 750 });
-  });
-
-  it("a refund for someone with no subscription changes no plan", async () => {
-    const me = await builder(app);
-    const customer = `cus_free_${Date.now()}`;
-    await db.update(users).set({ stripeCustomerId: customer }).where(eq(users.id, me.id));
-    expect((await signed("charge.refunded", { id: "ch_free", object: "charge", customer, invoice: "in_9", refunded: true, amount_refunded: 100 })).status).toBe(200);
-    expect((await usedOf(me.id)).t).toBe("free");
-    expect((await me.agent.get("/api/subscription")).body.billingIssue).toBeNull();
+    // And the plan catalog has nothing to sell: every plan is free.
+    const plans = (await request(app).get("/api/plans")).body;
+    for (const p of plans.plans) expect(p.price).toBe(0);
+    // What it sells instead of a plan: outcomes, and more Nova actions.
+    expect(plans.pricing.outcomes.map((o: any) => o.id)).toContain("actionPack");
   });
 });

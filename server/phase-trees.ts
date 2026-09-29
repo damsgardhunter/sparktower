@@ -15,7 +15,7 @@ import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
+import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks, pathSyncState } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
@@ -27,9 +27,14 @@ import { describeOp } from "@shared/audit-catchup";
 import { afterPathStepDone } from "./path-return";
 import { withProjectLock } from "./project-lock";
 import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal, normaliseGoal } from "@shared/goals";
-import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
+import {
+  capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES,
+  capitalAnswersFromMoneyPosition, mergeCapitalAnswers, type CapitalAnswers,
+} from "@shared/capital";
+import { MONEY_POSITION_MILESTONE } from "@shared/phase-trees/systemize";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
+import { tidyProse } from "./prose-style";
 
 /** Tags let the actor and tier ride on the existing task row. */
 export const tagsFor = (m: ResolvedMilestone) => [
@@ -116,6 +121,44 @@ async function goalFor(projectId: string, opts: { backboneId?: string | null; go
 }
 
 /**
+ * Whether a milestone is finished, read off the board's rows.
+ *
+ * The one rule, in one place, because it was written twice and the two copies
+ * disagreed. `pathStatus` has always counted a milestone done when its own row
+ * is done *or* when every child under it is; `listTracks` looked only at the
+ * milestone's own row. So a milestone finished by its children — a core-loop
+ * milestone whose five loops are all written — counted on the page and not on
+ * the section button above it, and the two numbers sat on screen together:
+ * "Ship 23/24" in the tab, "24/24 milestones" in the bar directly beneath. A
+ * founder who had finished the whole path was told by the nav that they had
+ * not, and no amount of further work would ever close it.
+ *
+ * Pass every row on the section, children included — a caller that filters to
+ * rows carrying a `backbone:` tag throws away exactly the evidence this needs.
+ */
+export function milestoneDoneReader(
+  rows: { status: string; tags: string[] | null }[],
+  loopSources: Set<string>,
+): (id: string) => boolean {
+  const own = new Map<string, string>();
+  const children = new Map<string, typeof rows>();
+  for (const t of rows) {
+    const b = backboneIdOf(t.tags); if (b) own.set(b, t.status);
+    const p = parentOf(t.tags); if (p) children.set(p, [...(children.get(p) ?? []), t]);
+  }
+  return (id: string) => {
+    const kids = children.get(id);
+    // Loops and steps: a source milestone is done when all five kinds of loop
+    // are there and every loop is written.
+    if (loopSources.has(id) && kids?.some((k) => isLoop(k.tags))) {
+      return kids.every((k) => k.status === "done")
+        && loopCoverage(kids.filter((k) => isLoop(k.tags)).map((k) => ({ type: loopTypeOf(k.tags), written: true }))).complete;
+    }
+    return own.get(id) === "done" || (!!kids?.length && kids.every((k) => k.status === "done"));
+  };
+}
+
+/**
  * Every section, started or not: for the manager's three section buttons.
  * Progress is read without syncing anything, so it's cheap to poll.
  */
@@ -128,14 +171,24 @@ export async function listTracks(projectId: string) {
   for (const g of PROJECT_GOALS) {
     const state = await trackState(projectId, g.id);
     if (!state) { out.push({ goal: g.id, label: g.label, short: g.short, started: false as const, primary: false }); continue; }
-    const main = mainLineMilestones(resolveTree(g.id, state.subcategory, state.capitalRoute));
-    const live = rows.filter((r) => !isArchivedPath(r.tags) && backboneIdOf(r.tags) && trackOfTask(r.tags, primaryGoal) === g.id);
-    const done = new Set(live.filter((r) => r.status === "done").map((r) => backboneIdOf(r.tags)));
-    const present = new Set(live.map((r) => backboneIdOf(r.tags)));
+    const phases = resolveTree(g.id, state.subcategory, state.capitalRoute);
+    const main = mainLineMilestones(phases);
+    /*
+     * Children are kept, not filtered out: `milestoneDoneReader` needs them to
+     * see a milestone its loops or steps finished. Only rows belonging to some
+     * milestone of this section are relevant, which is either a `backbone:`
+     * tag or a `parent:` one.
+     */
+    const live = rows.filter((r) =>
+      !isArchivedPath(r.tags)
+      && (backboneIdOf(r.tags) || parentOf(r.tags))
+      && trackOfTask(r.tags, primaryGoal) === g.id);
+    const isDone = milestoneDoneReader(live, new Set(loopSourcesOf(phases)));
+    const present = new Set(live.map((r) => backboneIdOf(r.tags)).filter(Boolean));
     out.push({
       goal: g.id, label: g.label, short: g.short, started: true as const, primary: state.primary, subcategory: state.subcategory,
-      done: main.filter((m) => done.has(m.id)).length, total: main.length,
-      next: main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null,
+      done: main.filter((m) => isDone(m.id)).length, total: main.length,
+      next: main.find((m) => present.has(m.id) && !isDone(m.id))?.title ?? null,
     });
   }
   return { primary: primaryGoal, tracks: out };
@@ -161,7 +214,8 @@ export async function startTrack(projectId: string, goal: ProjectGoal, subcatego
     restored++;
   }
   const built = restored ? { created: false, phases: 0, milestones: 0 } : await instantiatePathTree(projectId, goal, subcategory, { keepRoadmap: true });
-  if (restored) await syncPathTree(projectId, goal, subcategory, null);
+  // Forced: the restore just changed what the board should hold.
+  if (restored) await syncPathTree(projectId, goal, subcategory, null, { force: true });
   await refreshPace(projectId, undefined, goal);
   return { started: true, goal, subcategory, restored, ...built };
 }
@@ -245,18 +299,108 @@ const loopSourcesOf = (phases: { optional?: boolean; milestones: ResolvedMilesto
  *
  * A project with no path yet is left for adoption.
  */
-export async function syncPathTree(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
+/** How long a reconcile stays good for. A GET inside this window does nothing. */
+export const PATH_SYNC_DEBOUNCE_MS = Number(process.env.PATH_SYNC_DEBOUNCE_MS ?? 60_000);
+
+/**
+ * Everything the reconcile's result depends on.
+ *
+ * Stored beside the timestamp so a change to any of it re-runs the work
+ * without anyone having to remember to ask. The route is the one that moves in
+ * practice: answering a route question rewrites which phases the path shows.
+ */
+export const pathSyncKey = (goal: ProjectGoal, subcategory: string, route?: string | null) =>
+  `${goal}|${subcategory}|${route ?? ""}`;
+
+/** Whether a recorded reconcile still stands for these inputs. */
+export function pathSyncIsFresh(
+  row: { syncedAt: Date | null; syncedKey: string | null } | undefined,
+  key: string,
+  now = Date.now(),
+): boolean {
+  if (!row?.syncedAt || row.syncedKey !== key) return false;
+  const age = now - row.syncedAt.getTime();
+  // A clock that went backwards reads as stale rather than as fresh forever.
+  return age >= 0 && age < PATH_SYNC_DEBOUNCE_MS;
+}
+
+const NOTHING_TO_DO = { added: [] as string[], archived: [] as string[], restored: [] as string[] };
+
+/**
+ * Brings a section's board into line with its tree, at most once a minute.
+ *
+ * ## Why it is serialized
+ *
+ * Everything in the body is read-modify-write across a set of rows — read the
+ * tasks, work out which milestones have none, insert them — and it runs from
+ * plain GETs (the dashboard, the home screen's card). Two requests in flight
+ * at once both read the same "missing" set and both insert it, and from then
+ * on a lookup by backbone id picks one of the twins at random: finishing the
+ * milestone leaves a phantom copy open on the board. With the lock, the second
+ * caller re-reads after the first commits and finds nothing missing.
+ *
+ * ## Why it is debounced
+ *
+ * Because that lock was being taken by a poll. `/api/projects/:id/path` is
+ * read every fifteen seconds by every open dashboard, and it called this every
+ * time — so a write-locked reconcile ran thirteen times a second at two
+ * hundred concurrent users, and everyone looking at the same project queued
+ * behind each other rather than reading concurrently. It found nothing to do
+ * almost every time: the tree only changes when its definition changes, or
+ * when the project's goal, subcategory or route does.
+ *
+ * So a reconcile is recorded, and a later call with the same inputs inside the
+ * window returns without taking the lock or touching a task. What a reader
+ * sees is unaffected — the milestones it lists are read after this, from the
+ * board as it stands. This only governs how often the board is *healed*.
+ *
+ * `force` is for the callers that know something changed and cannot wait for
+ * the window: restoring a section, and answering a route question.
+ */
+export async function syncPathTree(
+  projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null,
+  opts: { force?: boolean } = {},
+) {
+  const key = pathSyncKey(goal, subcategory, route);
+  if (!opts.force) {
+    /*
+     * Fails open. This read is bookkeeping about the reconcile, not part of
+     * it, and it must never be the reason a dashboard cannot load: an e2e
+     * database missing the table turned every path read into a 500 the first
+     * time this shipped. If it cannot be answered, the reconcile simply runs,
+     * which is what happened before there was a window at all.
+     */
+    const [row] = await db.select({ syncedAt: pathSyncState.syncedAt, syncedKey: pathSyncState.syncedKey })
+      .from(pathSyncState)
+      .where(and(eq(pathSyncState.projectId, projectId), eq(pathSyncState.goal, goal)))
+      .catch((err) => {
+        console.error("[path-sync] couldn't read the last reconcile, doing it anyway:", (err as any)?.cause?.message ?? err);
+        return [];
+      });
+    if (pathSyncIsFresh(row, key)) return NOTHING_TO_DO;
+  }
+
+  const result = await withProjectLock("path-sync", projectId, () => syncPathTreeInner(projectId, goal, subcategory, route));
+
   /*
-   * Serialized per project. Everything below is read-modify-write across a set
-   * of rows — read the tasks, work out which milestones have none, insert them
-   * — and it runs from plain GETs (the dashboard, the home screen's card). Two
-   * requests in flight at once both read the same "missing" set and both
-   * insert it, and from then on a lookup by backbone id picks one of the twins
-   * at random: finishing the milestone leaves a phantom copy open on the board.
-   * With the lock, the second caller re-reads after the first commits and
-   * finds nothing missing.
+   * Recorded even when the body found nothing — especially then, since that is
+   * the case worth not repeating. A project whose tasks do not exist yet is
+   * not a risk here: they are created by `instantiatePathTree`, which builds
+   * the milestones itself rather than leaving them for this to find.
    */
-  return withProjectLock("path-sync", projectId, () => syncPathTreeInner(projectId, goal, subcategory, route));
+  await db.insert(pathSyncState)
+    .values({ projectId, goal, syncedAt: new Date(), syncedKey: key })
+    .onConflictDoUpdate({
+      target: [pathSyncState.projectId, pathSyncState.goal],
+      set: { syncedAt: new Date(), syncedKey: key },
+    })
+    .catch((err) => {
+      // The cause, not the wrapper: Drizzle's message is the statement, and
+      // the reason it was refused is one level down.
+      console.error("[path-sync] couldn't record the reconcile:", (err as any)?.cause?.message ?? err);
+    });
+
+  return result;
 }
 
 async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
@@ -324,7 +468,8 @@ async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcatego
  * written answer (what Nova reads on every later step), the raw choices as its
  * work so they can be changed, and the milestone done. No model, no credit.
  */
-export async function saveIntake(projectId: string, taskId: string, raw: unknown) {
+/** `by` is who answered — see the note on `chooseWork` for why a completion needs an author. */
+export async function saveIntake(projectId: string, taskId: string, raw: unknown, by?: string | null) {
   const ctx = await pathTaskContext(projectId, taskId);
   if (!ctx) throw Object.assign(new Error("That task isn't on this project's path."), { status: 400, code: "not_on_path" });
   const questions = ctx.milestone?.intake;
@@ -338,14 +483,15 @@ export async function saveIntake(projectId: string, taskId: string, raw: unknown
   if (ctx.milestone?.routeQuestion) {
     route = checked.answers[ctx.milestone.routeQuestion]?.[0] ?? null;
     await setTrackFields(projectId, ctx.project.goal as ProjectGoal, { capitalRoute: route });
-    await syncPathTree(projectId, ctx.project.goal as ProjectGoal, ctx.project.subcategory, route);
+    // Forced: a route answer rewrites which phases the path shows.
+    await syncPathTree(projectId, ctx.project.goal as ProjectGoal, ctx.project.subcategory, route, { force: true });
   }
   const wasDone = ctx.task.status === "done";
   const updated = await storage.updateKanbanTask(ctx.task.id, {
     description: summary,
-    ...(wasDone ? {} : { status: "done", completedAt: new Date(), ...(ctx.task.startedAt ? {} : { startedAt: new Date() }) }),
+    ...(wasDone ? {} : { status: "done", completedAt: new Date(), ...(by ? { completedById: by } : {}), ...(ctx.task.startedAt ? {} : { startedAt: new Date() }) }),
   } as any);
-  if (!wasDone) await onPathTaskDone(updated as any);
+  if (!wasDone) await onPathTaskDone({ ...(updated as any), completedById: (updated as any).completedById ?? by ?? null });
   return { work: row, answers: checked.answers, summary, route };
 }
 
@@ -376,7 +522,22 @@ export async function capitalAnswersFor(projectId: string): Promise<CapitalAnswe
     const work = task ? await latestWork(task.id) : null;
     if (work?.payload.kind === "intake") (out as any)[key] = work.payload.answers;
   }
-  return out;
+
+  /*
+   * What they said in the first minute, under what they have said since.
+   *
+   * The Systemize path opens by asking for cash, credit and industry
+   * experience (SYS.F1.1), and the score reads the fuller set asked later
+   * (FUND.C1.x). Nothing joined the two, so the opening answers scored zero:
+   * the Fundability card read "Not fundable yet — not answered yet" on every
+   * part to somebody who had just answered all six questions. The later
+   * answers still win, question by question — they ask more, and more
+   * precisely — but until they exist, what the builder already told us counts.
+   */
+  const opening = tasks.find((t) => backboneIdOf(t.tags) === MONEY_POSITION_MILESTONE);
+  const openingWork = opening ? await latestWork(opening.id) : null;
+  if (openingWork?.payload.kind !== "intake") return out;
+  return mergeCapitalAnswers(capitalAnswersFromMoneyPosition(openingWork.payload.answers), out);
 }
 
 export async function capitalProfileFor(projectId: string) {
@@ -972,11 +1133,57 @@ export async function pathTaskContext(projectId: string, taskId: string) {
   return { task, project, milestone, actor, tier };
 }
 
+/**
+ * Markdown decoration off a stored packet, on the way out.
+ *
+ * Packets written from now on are tidied before they are saved
+ * (server/prose-style.ts), but a path built before that is full of "## " and
+ * "**Evidence:**", and those are the packets somebody is reading today. This
+ * is derived on read like the run groups above it — the row is never
+ * rewritten, so nothing is lost if the rule changes.
+ *
+ * Code is not prose: a build's files and its run commands are passed straight
+ * through, and `tidyProse` masks backtick spans in what is left.
+ */
+function tidyWorkProse(payload: WorkPayload): WorkPayload {
+  const p = (v: unknown) => tidyProse(v);
+  switch (payload.kind) {
+    case "options":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        intro: p(payload.intro),
+        options: payload.options.map((o) => ({ ...o, title: p(o.title), body: p(o.body), why: o.why ? p(o.why) : o.why })),
+      };
+    case "build":
+      return {
+        ...payload,
+        existing: payload.existing ? p(payload.existing) : payload.existing,
+        summary: p(payload.summary),
+        verify: p(payload.verify),
+        assumptions: payload.assumptions.map(p),
+      };
+    case "template":
+      return { ...payload, intro: p(payload.intro), template: p(payload.template), whatNovaDid: p(payload.whatNovaDid), whatIsLeft: p(payload.whatIsLeft) };
+    case "plan":
+      return {
+        ...payload,
+        summary: p(payload.summary),
+        sections: payload.sections.map((x) => ({ heading: p(x.heading), body: p(x.body) })),
+        assumptions: payload.assumptions.map(p),
+        gaps: payload.gaps.map(p),
+        actions: payload.actions.map((a) => ({ ...a, title: p(a.title), detail: p(a.detail) })),
+      };
+    default:
+      return payload;
+  }
+}
+
 export async function latestWork(taskId: string) {
   const [row] = await db.select().from(pathWork).where(and(eq(pathWork.taskId, taskId), ne(pathWork.kind, "loop-audit"))).orderBy(desc(pathWork.createdAt)).limit(1);
   // Every screen reads packets through here or saveWork, so this is where an
   // older packet gets its run steps as blocks — derived on read, never rewritten.
-  return row ? { ...row, payload: withRunGroups(row.payload as WorkPayload) } : null;
+  return row ? { ...row, payload: tidyWorkProse(withRunGroups(row.payload as WorkPayload)) } : null;
 }
 
 /** Nova's latest competitive read of the loops, kept on the core-loop task. */
@@ -1082,7 +1289,13 @@ export async function saveWork(projectId: string, taskId: string, payload: WorkP
  * build or template. What they chose becomes the task's written answer —
  * the artifact — and the task is done. Their edit wins over Nova's text.
  */
-export async function chooseWork(projectId: string, workId: string, choice: { index?: number; text?: string; done?: boolean }) {
+/**
+ * `by` is who clicked, and it matters beyond an audit trail: a completion with
+ * a person on it is one that person watched happen, and the team notification
+ * uses exactly that to decide whether anybody needs telling. Left out, every
+ * option a solo builder picked notified them about their own click.
+ */
+export async function chooseWork(projectId: string, workId: string, choice: { index?: number; text?: string; done?: boolean }, by?: string | null) {
   const [row] = await db.select().from(pathWork).where(and(eq(pathWork.id, workId), eq(pathWork.projectId, projectId)));
   if (!row) throw Object.assign(new Error("That work isn't on this project."), { status: 404 });
   const payload = row.payload as WorkPayload;
@@ -1109,9 +1322,13 @@ export async function chooseWork(projectId: string, workId: string, choice: { in
   // A loop still wearing its kind's placeholder name takes the name of the option picked.
   if (isLoop(task.tags) && payload.kind === "options" && index != null && payload.options[index]?.title
     && task.title.trim() === LOOP_TYPE_INFO[loopTypeOf(task.tags)].label) updates.title = payload.options[index].title;
-  if (choice.done !== false) { updates.status = "done"; updates.completedAt = new Date(); if (!task.startedAt) updates.startedAt = new Date(); }
+  if (choice.done !== false) {
+    updates.status = "done"; updates.completedAt = new Date();
+    if (by) updates.completedById = by;
+    if (!task.startedAt) updates.startedAt = new Date();
+  }
   const updated = await storage.updateKanbanTask(row.taskId, updates);
-  if (updates.status === "done") await onPathTaskDone(updated as any);
+  if (updates.status === "done") await onPathTaskDone({ ...(updated as any), completedById: (updated as any).completedById ?? by ?? null });
   return { task: updated, answer };
 }
 
@@ -1330,17 +1547,9 @@ export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null
   // Rows come back in whatever order the table holds them; loops and steps read in the order they were placed.
   for (const kids of children.values()) kids.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const loopSources = new Set(loopSourcesOf(phases));
-  const isDone = (id: string) => {
-    const own = taskByBackbone.get(id)?.status === "done";
-    const kids = children.get(id);
-    // Loops and steps: a source milestone is done when all five kinds of loop
-    // are there and every loop is written; a fan-out milestone when every step
-    // of every loop is done.
-    if (loopSources.has(id) && kids?.some((k) => isLoop(k.tags))) {
-      return kids.every((k) => k.status === "done") && loopCoverage(kids.filter((k) => isLoop(k.tags)).map((k) => ({ type: loopTypeOf(k.tags), written: true }))).complete;
-    }
-    return own || (!!kids?.length && kids.every((k) => k.status === "done"));
-  };
+  // The same rule the section buttons read, so the tab and the bar beneath it
+  // can never again show two different numbers for one path.
+  const isDone = milestoneDoneReader(tasks, loopSources);
   const loopsOf = (id: string) => (children.get(id) ?? []).filter((k) => isLoop(k.tags)).map((k) => ({
     taskId: k.id, title: k.title, description: k.description ?? "", status: k.status, type: loopTypeOf(k.tags),
   })).sort(byLoopOrder);

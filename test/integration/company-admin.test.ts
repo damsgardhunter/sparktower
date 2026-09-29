@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { makeVerifiedCompany } from "../helpers/company";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { notifications, userProfiles } from "@shared/schema";
@@ -29,7 +30,7 @@ async function player(app: any, firstName = `A${n + 1}`) {
 
 async function company(app: any) {
   const owner = await player(app, "Olive");
-  const made = await owner.agent.post("/api/companies").send({ name: "Acme Widgets" });
+  const made = await makeVerifiedCompany(owner.agent, "Acme Widgets");
   expect(made.status, JSON.stringify(made.body)).toBe(201);
   return { owner, companyId: made.body.company.id as string };
 }

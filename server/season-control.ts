@@ -39,9 +39,8 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { simSeasons, simSeats, simVentures, users } from "@shared/schema";
-import { DAY_MS } from "@shared/simulation/season";
 import { atLeast } from "./platform-roles";
-import { tickSeason } from "./simulation-tick";
+import { periodMsOf, tickSeason } from "./simulation-tick";
 import { logModeration } from "./moderation";
 
 export type AdvanceAuthority = "developer" | "dev_flag";
@@ -136,9 +135,18 @@ export async function advanceSeasonNow(seasonId: string, userId: string, { now =
     };
   }
 
-  const yearMs = DAY_MS;
+  /*
+   * The season's own period length, not a day.
+   *
+   * This hard-coded a day, which was right while every season was fourteen
+   * years at a day each and wrong the moment one of them was a workshop
+   * running on ten-minute periods — the rewind put the start in the wrong
+   * place and the next tick landed hours out. `periodMsOf` is the one place
+   * that answer lives.
+   */
+  const periodMs = periodMsOf(season);
   const moved = await db.update(simSeasons)
-    .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * yearMs) })
+    .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * periodMs) })
     // Conditional on the year it read, so a tick landing in between is not rewound.
     .where(and(eq(simSeasons.id, season.id), eq(simSeasons.year, season.year), eq(simSeasons.status, "running")))
     .returning({ id: simSeasons.id });

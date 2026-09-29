@@ -16,7 +16,7 @@ import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, modelFor } from "./entitlements";
 import { parseModelJson, respondToAiError } from "./ai-json";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 
 /*
  * The shared client. This built its own from `OPENAI_API_KEY`, which the
@@ -150,7 +150,7 @@ export function registerGameIdeaRoutes(app: Express) {
       }
 
       await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
-      res.json({ style, ideas, creditsCharged: CREDIT_COSTS.sprintIdeaSuggestion });
+      res.json({ style, ideas, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Idea options error:", error);
       respondToAiError(res, error, "Failed to generate ideas");

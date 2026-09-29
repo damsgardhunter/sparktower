@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackInbox, useNewFeedbackCount } from "@/components/feedback-inbox";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/user-avatar";
@@ -61,6 +61,7 @@ import { BackingSetup } from "@/components/backing-setup";
 import { InvestmentInbox } from "@/components/investment-inbox";
 import { ImageUploadField } from "@/components/image-upload-field";
 import { ProfileVisualsButton } from "@/components/profile-visuals-button";
+import { BrandKitCard } from "@/components/brand-kit-card";
 import { type NovaHandoff } from "@shared/nova-handoff";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -713,8 +714,27 @@ export default function ProjectManager() {
   const openStart = () => setStartFor(section);
 
   return (
-    <div className="h-full overflow-y-auto pb-20">
-      <div className="border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-20">
+    /*
+      * `!pt-0` against App's `[&>*]:pt-6`, which gives every page room under
+      * the hanging logo. This page has a sticky header of its own, and
+      * `sticky top-0` pins to the padding box — so that 24px became a window
+      * the page's content scrolled through, above the project's own name.
+      * The room the rule exists for is put back inside, below the bar.
+      */
+    <div className="h-full overflow-y-auto pb-20 !pt-0">
+      {/*
+        * Opaque, not frosted.
+        *
+        * This was `bg-background/80 backdrop-blur-sm`, and the blur never
+        * arrived: `backdrop-filter` is disabled for an element whose ancestors
+        * include a transform, a filter or an opacity — which this app's shell
+        * has — so what a builder actually saw was a translucent strip with the
+        * page's own form fields showing through the project's name at full
+        * sharpness, scrolling behind it. A `supports-[backdrop-filter]` guard
+        * doesn't help either: the browser supports the property, it is this
+        * element's ancestors that refuse it. So the bar is simply solid.
+        */}
+      <div className="border-b border-border bg-background sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation(`/projects/${projectId}`)} data-testid="button-back">
             <ArrowLeft className="h-4 w-4" />
@@ -733,7 +753,7 @@ export default function ProjectManager() {
         * the content. On desktop the rail moves to its own column on the right
         * and stays put while everything else changes.
         */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-4 sm:pt-6 sm:pb-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
         <div className="min-w-0 space-y-3 sm:space-y-4 lg:col-start-1 lg:row-start-1">
           {/*
             * The first thirty seconds of being on a team. Without this, joining
@@ -1269,7 +1289,103 @@ function PublicPageTab({ project, isOwner, onUpdateProject, onViewPublicPage, on
           </CardContent>
         </Card>
       ))}
+
+      {/*
+        * Last, and only for the person who owns it. A delete button somebody
+        * cannot use is a button that only ever says no.
+        */}
+      {isOwner && <DeleteProjectCard project={project} />}
     </div>
+  );
+}
+
+/**
+ * Deleting a project, which is the one thing on this screen that cannot be undone.
+ *
+ * Two guards, and they do different jobs. The name has to be typed, because a
+ * misplaced click should not be able to destroy a year of somebody's work.
+ * And the server refuses outright when the project has taken money — those
+ * pledges cascade with it, and deleting the record of somebody else's payment
+ * is not a thing an owner gets to do by being sure. That refusal is shown here
+ * as what it is rather than as a failure.
+ */
+function DeleteProjectCard({ project }: { project: Project }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [refused, setRefused] = useState<string | null>(null);
+
+  const title = project.title ?? "";
+  const confirmed = typed.trim() === title.trim() && title.trim().length > 0;
+
+  const remove = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/projects/${project.id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({ title: "Project deleted", description: `"${title}" and everything in it is gone.` });
+      navigate("/dashboard");
+    },
+    onError: async (err: any) => {
+      /*
+       * A 409 is the money guard, and it is the useful answer rather than an
+       * error: it says what is holding the project and what to do about it.
+       */
+      const body = err?.body ?? {};
+      if (body?.code === "has_backing") { setRefused(body.message); setOpen(false); return; }
+      toast({ title: "Couldn't delete that", description: errorText(err, "Try again in a moment."), variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle className="text-base text-destructive">Delete this project</CardTitle>
+        <CardDescription>
+          The project, its tasks, files, documents, roadmap and any simulations built from it, gone for good.
+          There is no undo and no archive.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {refused && (
+          <p className="text-sm rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2" data-testid="text-delete-refused">
+            {refused}
+          </p>
+        )}
+        {!open ? (
+          <Button variant="destructive" onClick={() => { setOpen(true); setRefused(null); }} data-testid="button-delete-project">
+            <Trash2 className="h-4 w-4 mr-1.5" /> Delete this project
+          </Button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Type <span className="font-medium text-foreground">{title}</span> to confirm.
+            </p>
+            <Input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={title}
+              aria-label="Type the project's name to confirm deletion"
+              data-testid="input-delete-confirm"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                disabled={!confirmed || remove.isPending}
+                onClick={() => remove.mutate()}
+                data-testid="button-delete-confirm"
+              >
+                {remove.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1.5" />}
+                Delete permanently
+              </Button>
+              <Button variant="ghost" onClick={() => { setOpen(false); setTyped(""); }} data-testid="button-delete-cancel">
+                Keep it
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1369,6 +1485,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
             hint="Wide banner across the top of your public page."
             testId="upload-project-cover"
           />
+          {isOwner && <BrandKitCard project={project} />}
           {isOwner && <ProfileVisualsButton project={project} />}
         </CardContent>
       </Card>
@@ -2816,7 +2933,15 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
                   <div key={app.id} className="flex items-center gap-3 p-2 rounded-md bg-muted/30" data-testid={`application-${app.id}`}>
                     <UserAvatar src={app.profile?.avatarUrl ?? null} name={name} className="h-8 w-8" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{name}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-medium">
+                        <span className="truncate">{name}</span>
+                        {/* Which role they pressed. Older applications have none. */}
+                        {app.role && (
+                          <Badge variant="secondary" className="shrink-0 text-[10px] font-normal" data-testid={`application-role-${app.id}`}>
+                            {app.role}
+                          </Badge>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground truncate">{app.message || "No message"}</p>
                       <p className="text-xs text-tertiary">{new Date(app.createdAt).toLocaleDateString()}</p>
                     </div>

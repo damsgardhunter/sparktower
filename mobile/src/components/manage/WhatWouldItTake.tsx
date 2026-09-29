@@ -21,9 +21,8 @@ import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { useEntitlementsQuery } from "../../hooks/useEntitlements";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
-import { Btn, Card, Cost, Icon, Loading, Meta, Row } from "../ui";
+import { Btn, Card, Icon, Loading, Meta, Row } from "../ui";
 import { Tag, useNotify } from "./bits";
 import { mkey } from "./shared";
 
@@ -50,7 +49,7 @@ interface Stored {
 }
 interface Payload {
   targets: TargetView[];
-  credits: number;
+  price: { cents: number; display: string; unlocked: boolean };
   aiAvailable: boolean;
   grounding: { revenueFrom: string | null; annualRevenue: number | null };
   notReady: string | null;
@@ -79,7 +78,6 @@ const stamp = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: 
 export function WhatWouldItTake({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const { notify, fail } = useNotify();
-  const { creditCosts } = useEntitlementsQuery();
   const key = mkey(projectId, "what-would-it-take");
   const { data, isLoading } = useQuery({
     queryKey: key,
@@ -111,7 +109,6 @@ export function WhatWouldItTake({ projectId }: { projectId: string }) {
   const target = data.targets.find((t) => t.id === chosen) ?? data.targets[0];
   const slot = data.roadmaps[target.id];
   const latest = slot?.latest ?? null;
-  const cost = creditCosts?.whatWouldItTake ?? data.credits;
 
   return (
     <Card style={{ gap: spacing.md }}>
@@ -166,7 +163,8 @@ export function WhatWouldItTake({ projectId }: { projectId: string }) {
               disabled={!data.aiAvailable}
               onPress={() => build.mutate(target.id)}
             />
-            <Cost credits={cost} />
+            {/* Free once this project has one: the price is for the first, not for checking again. */}
+            {!data.price.unlocked && <Meta>{data.price.display}</Meta>}
           </Row>
         )}
       </View>

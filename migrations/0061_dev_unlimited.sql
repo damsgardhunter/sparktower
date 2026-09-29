@@ -1,0 +1,12 @@
+-- One switch for a developer, instead of four tiers that are all free.
+--
+-- The tier dropdown is left over from when this sold subscriptions. Every tier
+-- is free now, so it offered four identical choices and none of them helped
+-- with the thing a developer actually needs: running the same small action
+-- forty times, or opening the "Nova builds the whole business" card again after
+-- buying it once.
+--
+-- Honoured only outside production, and only settable from a route that 404s
+-- there — see server/entitlements.ts. Two gates rather than one, because a
+-- column that turns off billing is worth being paranoid about.
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dev_unlimited" boolean DEFAULT false NOT NULL;

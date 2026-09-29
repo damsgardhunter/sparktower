@@ -28,9 +28,11 @@
  * stops being curious.
  */
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, TrendingUp, TrendingDown, Minus, DoorOpen, Swords, Quote } from "lucide-react";
+import { Loader2, TrendingUp, TrendingDown, Minus, DoorOpen, Swords, Quote, Users } from "lucide-react";
 
 export interface CompanyProfileData {
   id: string;
@@ -53,6 +55,11 @@ export interface CompanyProfileData {
   reads: { label: string; verdict: string; edge: "them" | "you" | "level" }[];
   contested: { id: string; name: string; loyalty: number; yours: number; theirs: number; note: string }[];
   history: { year: number; share: number; shareChange: number; customers: number; note: string | null }[];
+  /** Who is at this table. Empty for an incumbent — nobody is behind them. */
+  roster: {
+    userId: string; name: string; headline: string | null; avatarUrl: string | null;
+    isBot: boolean; isYou: boolean; role: string | null; title: string | null;
+  }[];
 }
 
 const money = (n: number) =>
@@ -109,6 +116,30 @@ export function CompanyProfile({ ventureId, companyId, onClose }: {
                 <div className="flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="text-[11px] font-normal">{data.persona.known}</Badge>
                   {data.posturedAs && <Badge variant="outline" className="text-[11px] font-normal">{data.posturedAs}</Badge>}
+                </div>
+              </section>
+            )}
+
+            {/*
+             * Who is actually at the other table.
+             *
+             * A rival team used to be a name and a share, which is everything
+             * the engine knows and nothing the game is about: five people are
+             * sitting behind that share and there was no way to find out who.
+             * Each name goes to that person's real profile, which is where
+             * following or connecting with them happens — the same page you
+             * would reach from anywhere else on SparkTower, rather than a
+             * second, lesser version of it inside the game.
+             */}
+            {data.roster.length > 0 && (
+              <section data-testid="section-company-roster">
+                <p className="text-xs font-semibold flex items-center gap-1.5 mb-2">
+                  <Users className="h-3.5 w-3.5 text-muted-foreground" /> Who's at this table
+                </p>
+                <div className="space-y-1">
+                  {data.roster.map((person) => (
+                    <RosterRow key={person.userId} person={person} />
+                  ))}
                 </div>
               </section>
             )}
@@ -202,5 +233,48 @@ function Figure({ label, value, sub }: { label: string; value: string; sub?: str
       <p className="text-base font-semibold tabular-nums">{value}</p>
       {sub && <p className="text-[10px] text-muted-foreground">{sub}</p>}
     </div>
+  );
+}
+
+/**
+ * One person on a roster.
+ *
+ * A link for anybody real and plain text for a bot, because a bot's profile
+ * page is an empty room and sending somebody to one teaches them the link is
+ * not worth pressing.
+ */
+function RosterRow({ person }: {
+  person: { userId: string; name: string; headline: string | null; avatarUrl: string | null; isBot: boolean; isYou: boolean; title: string | null };
+}) {
+  const inside = (
+    <>
+      <Avatar className="h-7 w-7">
+        {person.avatarUrl && <AvatarImage src={person.avatarUrl} alt="" />}
+        <AvatarFallback className="text-[10px]">{person.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="text-sm font-medium truncate">{person.name}</span>
+          {person.isYou && <Badge variant="default" className="text-[10px]">You</Badge>}
+          {person.isBot && <Badge variant="outline" className="text-[10px]">bot</Badge>}
+        </span>
+        <span className="block text-xs text-muted-foreground truncate">
+          {person.title ?? "No seat yet"}{person.headline && !person.isBot ? ` · ${person.headline}` : ""}
+        </span>
+      </span>
+    </>
+  );
+
+  if (person.isBot) {
+    return <div className="flex items-center gap-2.5 rounded-md p-1.5" data-testid={`roster-${person.userId}`}>{inside}</div>;
+  }
+  return (
+    <Link
+      href={`/profile/${person.userId}`}
+      className="flex items-center gap-2.5 rounded-md p-1.5 hover:bg-accent transition-colors"
+      data-testid={`roster-${person.userId}`}
+    >
+      {inside}
+    </Link>
   );
 }

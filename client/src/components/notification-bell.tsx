@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -61,8 +61,49 @@ export function NotificationBell() {
     onSuccess: refreshNotifications,
   });
 
+  /*
+   * Which ones were unread when this panel opened.
+   *
+   * Opening the bell marks them read — see the effect below — and that would
+   * take the blue off every row the instant somebody looked at it, which is
+   * the wrong way round: the badge is for "there is something you have not
+   * seen", and the dots are for "here is which ones". So the dots are drawn
+   * from this snapshot instead of from the rows, and survive until the panel
+   * closes.
+   */
+  const [wasUnread, setWasUnread] = useState<Set<string>>(new Set());
+  const marking = useRef(false);
+
+  /*
+   * Seen is read.
+   *
+   * Before this, opening the bell cleared nothing: the count sat there until
+   * somebody either clicked every notification one at a time or found the
+   * "Mark all read" link. So the badge said eleven, you read all eleven, and
+   * it still said eleven — which teaches people that the number is noise and
+   * to stop looking at it, which is the one thing a notification badge cannot
+   * survive.
+   *
+   * Marked by id rather than with `all`, deliberately: one arriving while the
+   * panel is open was never seen, so it keeps its badge.
+   */
+  useEffect(() => {
+    if (!open || !data) return;
+    const unreadIds = data.items.filter((i) => !i.read).map((i) => i.id);
+    if (!unreadIds.length || marking.current) return;
+    marking.current = true;
+    setWasUnread((prev) => new Set([...prev, ...unreadIds]));
+    read.mutate({ ids: unreadIds }, { onSettled: () => { marking.current = false; } });
+    // `read` is a stable mutation object; depending on it would re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, data]);
+
+  /* A fresh look next time: what was new then is not new now. */
+  useEffect(() => { if (!open) setWasUnread(new Set()); }, [open]);
+
   const unread = counts?.count ?? 0;
   const items = data?.items ?? [];
+  const isNew = (n: NotificationItem) => !n.read || wasUnread.has(n.id);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -97,9 +138,9 @@ export function NotificationBell() {
               {items.map((n) => (
                 <li key={n.id}>
                   <button
-                    className={`w-full text-left flex items-start gap-2.5 px-3 py-2.5 hover:bg-accent/60 ${n.read ? "" : "bg-primary/5"}`}
+                    className={`w-full text-left flex items-start gap-2.5 px-3 py-2.5 hover:bg-accent/60 ${isNew(n) ? "bg-primary/5" : ""}`}
                     onClick={() => {
-                      if (!n.read) read.mutate({ ids: [n.id] });
+                      /* Already marked read on open; this only has to go there. */
                       setOpen(false);
                       setLocation(n.href);
                     }}
@@ -111,7 +152,7 @@ export function NotificationBell() {
                       {n.excerpt && <span className="block text-xs text-muted-foreground truncate">"{n.excerpt}"</span>}
                       <span className="block text-[11px] text-muted-foreground">{ago(n.createdAt)}</span>
                     </span>
-                    {!n.read && <span className="h-2 w-2 rounded-full bg-primary mt-1.5 shrink-0" aria-hidden />}
+                    {isNew(n) && <span className="h-2 w-2 rounded-full bg-primary mt-1.5 shrink-0" aria-hidden />}
                   </button>
                 </li>
               ))}

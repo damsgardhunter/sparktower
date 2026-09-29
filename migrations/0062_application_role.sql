@@ -1,0 +1,11 @@
+-- Which open role an application is for.
+--
+-- Applications used to arrive with a message and some answers and no way to
+-- say what the person was applying *to*. That was tolerable while applying
+-- meant pressing one Apply button on the project; now the public page lists
+-- the open roles and you click the one you want, so the answer exists and
+-- needs somewhere to live.
+--
+-- Nullable on purpose: every application already recorded predates this, and
+-- a project with no roles listed still takes a general application.
+ALTER TABLE "project_applications" ADD COLUMN IF NOT EXISTS "role" text;

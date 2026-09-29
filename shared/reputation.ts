@@ -122,6 +122,16 @@ export interface MarketFacts {
 /** How a builder's companies actually did in the market simulation. */
 export interface SimFacts {
   seasons: {
+    /**
+     * Which market it was played in.
+     *
+     * A replay keeps the market it copied, so this is the same string across
+     * every run of one world — which is exactly what stops eleven goes at a
+     * memorised market reading as eleven seasons. See `simScore`.
+     */
+    marketId: string;
+    /** When it was played, so the most recent run of a market can be found. Epoch ms. */
+    playedAt: number;
     /** Where the company finished, 1 is first. */
     rank: number;
     /** How many companies were in that market, so a rank means something. */
@@ -232,22 +242,58 @@ export function seasonScore(s: SimFacts["seasons"][number]): number {
 }
 
 /**
- * How the builder plays the market simulation, over every season they have
+ * How the builder plays the market simulation, over every *market* they have
  * played, with the better half weighted more heavily.
  *
  * A builder learning the game will lose the first one badly, and holding that
  * against them for the rest of the year would make the pillar a record of when
- * somebody started rather than how they play. Their best season counts double,
+ * somebody started rather than how they play. Their best market counts double,
  * which is the usual way of reading a record of games.
+ *
+ * ## Why per market and not per season
+ *
+ * Both halves of this used to count seasons, and both were written when a
+ * season was scarce: each one cost a model call and arrived in a market nobody
+ * had seen before, so playing more of them really was more evidence. Replaying
+ * a market you already own is now free and gives you the *same* world — same
+ * rivals, same shares, same arithmetic — and that broke the assumption twice
+ * over. The best run counted double, so eleven goes at a memorised market
+ * meant eleven chances at a flattering `best`; and `settled` rose with the
+ * count, so the grinding paid a second time.
+ *
+ * A market is the unit of evidence, and what it contributes is the **most
+ * recent** run of it, not the best. Taking the best would have left the hole
+ * half open: eleven goes at one world and you keep the luckiest, which is a
+ * record of your best afternoon rather than how you play. The latest run is
+ * how you play *now*, and it still rewards practice — the honest kind, where
+ * the eleventh go is better than the first because you learned something, not
+ * because you rolled it again.
+ *
+ * Across markets the best still counts double. That is where the learning
+ * curve belongs: a builder who lost their first market badly is not held to it
+ * forever, and no amount of replaying one world can manufacture a second.
  */
 export function simScore(f: SimFacts): number | null {
   if (f.seasons.length === 0) return null;
-  const scores = f.seasons.map(seasonScore).sort((a, b) => b - a);
+  /*
+   * Best per market. A season with no market id — an older row, or one of the
+   * seven played straight — falls back to its own identity so it still counts
+   * once, rather than every such season collapsing into one.
+   */
+  const latestByMarket = new Map<string, { at: number; score: number }>();
+  f.seasons.forEach((season, i) => {
+    const key = season.marketId || `season:${i}`;
+    const held = latestByMarket.get(key);
+    const at = Number.isFinite(season.playedAt) ? season.playedAt : i;
+    if (!held || at >= held.at) latestByMarket.set(key, { at, score: seasonScore(season) });
+  });
+
+  const scores = [...latestByMarket.values()].map((x) => x.score).sort((a, b) => b - a);
   const best = scores[0];
   const mean = scores.reduce((sum, s) => sum + s, 0) / scores.length;
   const blended = (best * 2 + mean) / 3;
-  /* Playing more than one season is itself evidence: one game is a sample of one. */
-  const settled = 0.85 + 0.15 * saturate(f.seasons.length - 1, 2);
+  /* Playing a second *market* is evidence; playing the same one twice is practice. */
+  const settled = 0.85 + 0.15 * saturate(scores.length - 1, 2);
   return clamp100(blended * settled * 100);
 }
 

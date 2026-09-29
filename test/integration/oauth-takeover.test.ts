@@ -101,3 +101,83 @@ describe("someone else registered your address first", () => {
     expect(row.accessTokensRevokedAt).toBeTruthy();
   });
 });
+
+/**
+ * The same rules, for Apple — and the one place they have to differ.
+ *
+ * Apple is not Google. "Hide My Email" hands over a relay address invented for
+ * this app, which is deliverable and is *not* proof that the person owns any
+ * mailbox somebody else might have registered. So the identity is trusted
+ * enough to sign in with, and not enough to take a password off an account
+ * that claimed the address first. A shared real address, which Apple marks
+ * verified, behaves exactly as Google does.
+ *
+ * These drive `linkAppleAccount` directly. The route above it is the part that
+ * decides `proved`, from `email_verified` and `is_private_email` on a token
+ * signed by Apple — which cannot be forged here and is not what these are
+ * about.
+ */
+describe("signing in with Apple, against an address somebody already used", () => {
+  it("joins the existing account rather than making a second one", async () => {
+    const app = await getTestApp();
+    const address = `apple-join-${Date.now()}@example.test`;
+
+    const owner = request.agent(app);
+    const made = await owner.post("/api/auth/register").set("x-forwarded-for", ip())
+      .send({ email: address, password: squatterPassword, firstName: "Owner" });
+    expect(made.status).toBe(201);
+    await verifyEmail(app, address, ip());
+
+    const before = await db.select().from(users).where(eq(users.email, address));
+    expect(before).toHaveLength(1);
+
+    const linked = await authStorage.linkAppleAccount(before[0].id, `apple-sub-${Date.now()}`, true);
+
+    const after = await db.select().from(users).where(eq(users.email, address));
+    expect(after, "one address, one account").toHaveLength(1);
+    expect(after[0].id, "and it is the one that was already there").toBe(before[0].id);
+    expect(linked.appleId).toBeTruthy();
+    expect(linked.authProvider).toBe("apple");
+  }, 60_000);
+
+  it("puts a squatter out when Apple proves a shared address", async () => {
+    const app = await getTestApp();
+    const address = `apple-victim-${Date.now()}@example.test`;
+
+    const squatter = request.agent(app);
+    const made = await squatter.post("/api/auth/register").set("x-forwarded-for", ip())
+      .send({ email: address, password: squatterPassword, firstName: "Squatter" });
+    expect(made.status).toBe(201);
+    // Deliberately never verified: that is the whole of the squatter's problem.
+
+    const [row] = await db.select().from(users).where(eq(users.email, address));
+    const linked = await authStorage.linkAppleAccount(row.id, `apple-sub-${Date.now()}`, true);
+
+    expect(linked.passwordHash, "the password somebody else chose is gone").toBeNull();
+    expect(linked.emailVerifiedAt, "and the address counts as proved").not.toBeNull();
+    expect(linked.accessTokensRevokedAt, "every token issued before now is dead").not.toBeNull();
+  }, 60_000);
+
+  it("leaves the password alone when Apple only hands over a relay address", async () => {
+    /*
+     * The difference that matters. A relay address proves the person owns
+     * *that* relay — which Apple made for them — and nothing about the real
+     * address an account was registered with. Clearing a password on that
+     * basis would be handing the account over on weaker evidence than Google
+     * ever gives.
+     */
+    const app = await getTestApp();
+    const address = `apple-relay-${Date.now()}@example.test`;
+
+    const squatter = request.agent(app);
+    expect((await squatter.post("/api/auth/register").set("x-forwarded-for", ip())
+      .send({ email: address, password: squatterPassword, firstName: "Squatter" })).status).toBe(201);
+
+    const [row] = await db.select().from(users).where(eq(users.email, address));
+    const linked = await authStorage.linkAppleAccount(row.id, `apple-sub-${Date.now()}`, false);
+
+    expect(linked.appleId, "they are still signed in").toBeTruthy();
+    expect(linked.passwordHash, "but nothing was taken from anybody").not.toBeNull();
+    expect(linked.emailVerifiedAt, "and the address is still unproved").toBeNull();
+  }, 60_000);
+});

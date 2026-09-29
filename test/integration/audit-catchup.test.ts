@@ -44,7 +44,7 @@ describe("an audit catches the project up", () => {
     const agent = request.agent(app);
     const email = `catchup-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.230").send({ email, password: "Testpass123!", firstName: "Builder" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Catch Up", description: "A meal planner that plans dinners from your fridge.", category: "saas", goal: "ship_mvp", subcategory: "saas", oneLiner: "Dinner plans" })).body;
     const open = (await agent.post(`/api/projects/${project.id}/kanban`).send({ title: "Build the post page with comments", status: "todo" })).body;
     const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
@@ -133,7 +133,7 @@ describe("an audit catches the project up", () => {
     const agent = request.agent(app);
     const email = `catchup-path-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.231").send({ email, password: "Testpass123!", firstName: "Builder" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Path Keeper", description: "A project whose path should follow its code.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const path = async () => (await agent.get(`/api/projects/${project.id}/path`)).body;
 
@@ -193,7 +193,7 @@ describe("an audit catches the project up", () => {
     const agent = request.agent(app);
     const email = `catchup-drift-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.233").send({ email, password: "Testpass123!", firstName: "Builder" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Drift Check", description: "A project whose board kept things the code removed.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const old = (await agent.post(`/api/projects/${project.id}/kanban`).send({ title: "Weekly check-in composer", status: "done" })).body;
     const fake = (await agent.post(`/api/projects/${project.id}/kanban`).send({ title: "Stripe checkout", status: "done" })).body;

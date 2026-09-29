@@ -77,7 +77,13 @@ export const STEP_LABELS: Record<NewProjectStep, string> = {
 export const PROJECT_CATEGORIES = [
   "Web App", "Mobile App", "AI/ML", "SaaS", "Fintech", "Sustainability", "IoT", "Design",
   "Data Analytics", "Marketing", "E-Commerce", "Education", "Healthcare", "Social Media",
-  "Gaming", "Blockchain", "Content Creation", "DevOps", "Research", "Nonprofit", "Other",
+  "Gaming", "Blockchain", "Content Creation", "DevOps", "Research", "Nonprofit",
+  // The businesses that aren't software — see the note in shared/categories.ts.
+  "Food & Drink", "Retail & Shops", "Trades & Home Services", "Professional Services",
+  "Health & Wellness", "Beauty & Personal Care", "Construction & Property",
+  "Transport & Logistics", "Events & Hospitality", "Agriculture & Food Production",
+  "Manufacturing",
+  "Other",
 ];
 
 export const AVAILABLE_ROLES = [

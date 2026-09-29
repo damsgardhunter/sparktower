@@ -4,11 +4,27 @@ import { OUT_OF_CREDITS } from "@shared/credits";
 
 /** Mirrors CREDITS_EVENT in components/upgrade-to-keep-generating (kept here so this file imports no UI). */
 const CREDITS_EVENT = "sparktower:credits";
+/** Mirrors PAYMENT_EVENT in components/payment-dialog, for the same reason. */
+const PAYMENT_EVENT = "sparktower:payment";
 
-async function throwIfResNotOk(res: Response) {
+/**
+ * The request a 402 refused, kept so the dialog can finish it.
+ *
+ * Someone who has just paid for a codebase audit should get the audit, not a
+ * closed dialog and the job of remembering which button they pressed. The
+ * dialog replays exactly this and then invalidates, which is the only way the
+ * screen behind it can show the result of a call it never made itself.
+ */
+export interface FailedRequest { method: string; url: string; data?: unknown }
+
+async function throwIfResNotOk(res: Response, request?: FailedRequest) {
   // An ApiError, so screens can say what the server said (see errorText).
   if (!res.ok) {
     const error = await toApiError(res);
+    // Anything priced, anywhere: one dialog, whatever the screen does with the error.
+    if (error.code === "payment_required" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(PAYMENT_EVENT, { detail: { body: error.body, request } }));
+    }
     // Out of AI credits, anywhere: offer the upgrade, whatever the screen does with the error.
     if (error.code === OUT_OF_CREDITS && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(CREDITS_EVENT, {
@@ -39,7 +55,7 @@ export async function apiRequest(
     credentials: "include",
   });
 
-  await throwIfResNotOk(res);
+  await throwIfResNotOk(res, { method, url, data });
   if (method !== "GET") creditsMayHaveChanged(url);
   return res;
 }

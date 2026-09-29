@@ -16,6 +16,7 @@
  * component — it shows what the explore page already showed.
  */
 import { useEffect, useState } from "react";
+import { LiveDot } from "@/components/nova";
 import { useQuery } from "@tanstack/react-query";
 import { Sparkles, Clock, ArrowUpRight } from "lucide-react";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -81,10 +82,7 @@ export function LiveProjects() {
 
       <div className="relative z-10 max-w-5xl mx-auto">
         <div className="flex items-center justify-center gap-2 mb-2">
-          <span className="relative flex h-2.5 w-2.5" aria-hidden>
-            <span className="absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping" style={{ backgroundColor: NOVA_GRADIENT[0] }} />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: NOVA_GRADIENT[1] }} />
-          </span>
+          <LiveDot size="md" aria-hidden />
           <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-500">
             {lead ? "Being built right now" : "Ideas worth stealing"}
           </span>

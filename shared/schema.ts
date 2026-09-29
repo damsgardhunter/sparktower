@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
+import { CURRENCY_CODES } from "./currency";
 
 // Re-exporting from auth models as requested
 export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
@@ -132,6 +133,14 @@ export const projects = pgTable("projects", {
    * and nonsense for shipping". Plain text with a backfill default of "other".
    */
   subcategory: text("subcategory").default("other").notNull(),
+  /**
+   * What this business counts its money in — see shared/currency.ts.
+   *
+   * Not what SparkTower charges in, which stays dollars because Stripe takes
+   * dollars. This is the owner's own money: what the shop turns over, what is
+   * in its bank, what the simulator answers in.
+   */
+  currency: text("currency").default("USD").notNull(),
   /**
    * The optional phase the project has chosen to be in (e.g. "branch-build",
    * the keep-building extension after week 2), or null on the main line.
@@ -652,6 +661,13 @@ export const projectApplications = pgTable("project_applications", {
   resumeUrl: text("resume_url"),
   answers: jsonb("answers").default([]),
   message: text("message"),
+  /*
+   * The open role this application is for, as it was listed on the project.
+   * Null for a general application — a project with no roles listed still
+   * takes one, and every application made before the public page listed roles
+   * individually predates the question being asked.
+   */
+  role: text("role"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1457,6 +1473,23 @@ export const NOTIFICATION_KINDS = [
   "project_application", "application_accepted", "application_rejected",
   // The owner removed you from their project's team.
   "project_removed",
+  // Nova finished building out a path you paid for. It takes minutes and
+  // outlives the page, so the bell is how somebody who walked away finds out.
+  "nova_build_done",
+  /*
+   * The simulator, checking its own homework.
+   *
+   * A projection is worth coming back for exactly once: when enough weeks have
+   * been filed that it can be marked against what actually happened. Nothing
+   * else here can tell somebody how good their own forecasting is, and it is
+   * the one thing they cannot work out for themselves.
+   */
+  "projection_marked",
+  /*
+   * A marketing scheme scored well enough to be worth a year in the simulator
+   * and has never been run. The scoring was paid for; the run is free.
+   */
+  "scheme_untested",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -1560,6 +1593,52 @@ export const moderationLog = pgTable("moderation_log", {
  * across instances — an in-memory counter on autoscale is one counter per
  * instance, which is N times the limit. Swept after a day.
  */
+/**
+ * What Nova actually spent, per call.
+ *
+ * Two jobs, and the second is the reason this is a table rather than a
+ * counter. The first is enforcement: a daily ceiling on credits needs to know
+ * what today has already cost, and `rate_limit_hits` cannot answer it — it
+ * counts calls rather than credits and is swept after a day.
+ *
+ * The second is that nobody could say what a subscription costs to serve. A
+ * credit is a price, not a cost: a chat turn and an audit of a whole
+ * repository are one credit and eight, and their real costs are not in that
+ * ratio at all. Without the tokens written down, "are we making money on the
+ * thirty-dollar plan" is a matter of opinion. With them it is a query.
+ *
+ * Tokens arrive after the answer does, so they are null until the call
+ * returns and stay null if it failed. A row with no tokens is a call that was
+ * charged for and produced nothing, which is worth being able to find.
+ */
+export const aiSpend = pgTable("ai_spend", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  /** The action's key where the caller named one, else a slug of what the person was told. */
+  action: varchar("action").notNull(),
+  /** What it was priced at. */
+  credits: integer("credits").notNull(),
+  /** What it cost, once the model has answered. Null while in flight, and for a call that failed. */
+  promptTokens: integer("prompt_tokens"),
+  completionTokens: integer("completion_tokens"),
+  /**
+   * Of the prompt tokens, how many the provider served from its cache.
+   *
+   * The whole point of ordering a prompt so the unchanging part comes first is
+   * that this number goes up. Without it, "is caching working" is a thing to
+   * believe rather than a thing to look at — and a change that quietly breaks
+   * the shared prefix looks identical to one that does not.
+   */
+  cachedTokens: integer("cached_tokens"),
+  model: text("model"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** The daily ceiling: this person, everything since a moment. */
+  spent: index("ai_spend_user_idx").on(table.userId, table.createdAt),
+  /** The per-action ceiling: this person, this action, since a moment. */
+  perAction: index("ai_spend_action_idx").on(table.userId, table.action, table.createdAt),
+}));
+
 export const rateLimitHits = pgTable("rate_limit_hits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
@@ -1668,6 +1747,160 @@ export const stripeEvents = pgTable("stripe_events", {
    */
   claimedAt: timestamp("claimed_at").defaultNow().notNull(),
 });
+
+/**
+ * Every movement of money on an account, in cents. The balance on `users` is
+ * the running total; this is why it is what it is.
+ *
+ * It exists for three jobs, and each one shaped a column:
+ *
+ *   - **Idempotency.** A top-up carries the Stripe Checkout session that paid
+ *     for it, and `stripe_session_id` is unique. The webhook credits a balance
+ *     by inserting here first: a replayed event inserts nothing and therefore
+ *     adds nothing, whatever else it does. This is the same shape donations
+ *     use, for the same reason.
+ *   - **Answering "what did I pay for?"** without reconstructing it from
+ *     Stripe. `outcome` and `project_id` say which purchase each spend was.
+ *   - **Refunds.** A failed action's money goes back as its own `refund` row
+ *     rather than by editing the spend, so the history stays a history.
+ *
+ * `amount_cents` is signed — money in is positive, money out negative — so the
+ * sum of a person's rows is their balance, and a disagreement with the column
+ * is visible rather than theoretical.
+ */
+export const novaLedger = pgTable("nova_ledger", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** "topup" | "spend" | "refund" | "grant" — grant is support putting money on an account by hand. */
+  /**
+   * "topup" | "spend" | "refund" | "grant" | "earnings" — grant is support
+   * putting money on an account by hand; earnings is money the person made
+   * here (a backed project, a challenge prize) landing in their balance
+   * rather than going out to a bank.
+   */
+  kind: text("kind", { enum: ["topup", "spend", "refund", "grant", "earnings"] }).notNull(),
+  /** Which priced outcome, for a spend or its refund. Null on a top-up. */
+  outcome: text("outcome"),
+  /** Signed: positive in, negative out. */
+  amountCents: integer("amount_cents").notNull(),
+  /** The balance after this row was applied, so a statement reads without re-summing. */
+  balanceAfter: integer("balance_after").notNull(),
+  /** Unique: the Checkout session that paid for a top-up. This is what makes a replayed webhook harmless. */
+  stripeSessionId: varchar("stripe_session_id"),
+  /**
+   * Unique: what this line was for, when it came from somewhere other than
+   * Stripe — "backing:<id>", "prize:<challengeId>". The same guarantee as
+   * stripeSessionId and the reason a retried release credits somebody once.
+   */
+  sourceKey: varchar("source_key"),
+  /** What it was for, in the person's own terms ("Audit my codebase"). */
+  note: text("note"),
+  /** The project a purchase was for, when it was for one. */
+  projectId: varchar("project_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("nova_ledger_user_idx").on(table.userId, table.createdAt),
+  bySession: unique("nova_ledger_stripe_session").on(table.stripeSessionId),
+  bySource: unique("nova_ledger_source_key").on(table.sourceKey),
+}));
+
+/**
+ * "Nova builds the whole business", bought once for one project.
+ *
+ * The purchase is a pass rather than a single long-running job: building out
+ * every section of a path is dozens of model calls that a person watches
+ * arrive over minutes, and charging each one against what they already paid
+ * would mean threading a receipt through every route. Instead the pass sits
+ * here, and any priced outcome on that project is covered by it — see
+ * requireCredits in server/entitlements.ts, which looks for one before it
+ * reaches for the balance.
+ *
+ * One per (person, project): buying it twice for the same project is a mistake
+ * we refuse rather than a second charge, hence the unique index.
+ */
+export const novaBuildPasses = pgTable("nova_build_passes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull(),
+  paidCents: integer("paid_cents").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  once: unique("nova_build_passes_user_project").on(table.userId, table.projectId),
+}));
+
+/**
+ * One run of "Nova builds the whole business" — the priced outcome.
+ *
+ * Shaped like code_audit_runs, and for the same reason: the work happens
+ * outside the request that started it, so the only way anybody can see it is
+ * a row it keeps up to date. A run the server restarted through is stamped
+ * closed when the status is next read, because an unfinished row and a
+ * running build look identical from the outside otherwise.
+ *
+ * The pass (nova_build_passes) is the receipt and is permanent; this is the
+ * work, and there can be several — a build that stopped because the path grew
+ * is run again, and the pass means it costs nothing the second time.
+ */
+/**
+ * Every set of images Nova has generated, and what it was for.
+ *
+ * Two jobs, which is why it is a ledger rather than a counter: it says whether
+ * a project (or a badge) has had its one free go, and it says how many images
+ * an account has made in the last hour, which is the ceiling on the image
+ * pass. A counter on the project would answer the first and not the second,
+ * and an hourly total that resets is a thing to get wrong at midnight.
+ */
+export const aiImageRuns = pgTable("ai_image_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** "project" or "badge" — what the free go belongs to. */
+  scope: text("scope").notNull(),
+  /** The project's or badge's id. */
+  scopeId: varchar("scope_id").notNull(),
+  /** How many pictures this run made. One request can make five. */
+  images: integer("images").notNull().default(1),
+  /** True when this was the free one, so a refund or a reset can find it. */
+  free: boolean("free").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  /* "has this project had its free go?" */
+  index("ai_image_runs_scope_idx").on(t.scope, t.scopeId, t.createdAt),
+  /* "how many has this account made in the last hour?" */
+  index("ai_image_runs_user_idx").on(t.userId, t.createdAt),
+]);
+export type AiImageRun = typeof aiImageRuns.$inferSelect;
+
+export const novaBuildRuns = pgTable("nova_build_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  startedById: varchar("started_by_id").notNull().references(() => users.id),
+  /** See BUILD_STAGES in shared/nova-build.ts. */
+  stage: text("stage", { enum: ["starting", "reading", "building", "finishing"] }).default("starting").notNull(),
+  /** Steps Nova has finished, and how many it set out to do. */
+  stepsDone: integer("steps_done").default(0).notNull(),
+  stepsTotal: integer("steps_total").default(0).notNull(),
+  /** Steps left open on purpose, because they are the builder's to answer. */
+  stepsForYou: integer("steps_for_you").default(0).notNull(),
+  /**
+   * Steps that were meant to be Nova's and threw.
+   *
+   * Counted apart from `stepsForYou` because they are the opposite of it: one
+   * is a decision deliberately handed back, the other is work that didn't
+   * happen. They used to share a counter, so a build where six model calls
+   * failed told the buyer it had "left 6 steps for you — the decisions only
+   * you can make", which is a sentence about a failure that reads like a
+   * feature.
+   */
+  stepsFailed: integer("steps_failed").default(0).notNull(),
+  /** What it is on right now, for the line under the progress bar. */
+  currentTitle: text("current_title"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  error: text("error"),
+}, (t) => [
+  index("nova_build_runs_project_idx").on(t.projectId, t.startedAt),
+]);
+export type NovaBuildRun = typeof novaBuildRuns.$inferSelect;
 
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1848,6 +2081,31 @@ export const projectTracks = pgTable("project_tracks", {
 
 export type ProjectTrack = typeof projectTracks.$inferSelect;
 
+/**
+ * When a section's path tree was last reconciled, and for which inputs.
+ *
+ * Pure bookkeeping for `syncPathTree`, which runs from a GET that every open
+ * dashboard polls: these let it skip a write-locked reconcile when nothing it
+ * depends on has changed since the last one.
+ *
+ * Its own table rather than columns on `project_tracks`, because a track row
+ * exists only once a section has been started, and this has to work for every
+ * project that can be read. Bookkeeping that silently does nothing for half
+ * its cases is worse than none.
+ */
+export const pathSyncState = pgTable("path_sync_state", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  /** `goal|subcategory|route` — everything the reconcile's result depends on. */
+  syncedKey: text("synced_key").notNull(),
+}, (t) => [
+  unique("path_sync_state_project_goal").on(t.projectId, t.goal),
+]);
+
+export type PathSyncState = typeof pathSyncState.$inferSelect;
+
 export const exploreSeen = pgTable("explore_seen", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -1858,6 +2116,37 @@ export const exploreSeen = pgTable("explore_seen", {
   unique("explore_seen_user_target").on(t.userId, t.kind, t.targetId),
   index("explore_seen_recent_idx").on(t.userId, t.seenMs),
 ]);
+
+/**
+ * "Is there a problem? Report it" — a sentence from somebody whose screen is
+ * broken, and where that report stands afterwards.
+ *
+ * Kept apart from `contentReports`, which is about people and posts and ends
+ * in moderation. This is about the product and ends in a fix, and the two
+ * queues are read by different people for different reasons.
+ *
+ * `userId` is nullable and clears on delete: the signed-out pages take reports
+ * too, and a bug does not stop existing because the account that found it did.
+ */
+export const problemReports = pgTable("problem_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  message: text("message").notNull(),
+  /** The path they were on, without its query or fragment. See shared/problem-reports.ts. */
+  path: text("path"),
+  userAgent: text("user_agent"),
+  /** One of PROBLEM_STATUSES. */
+  status: text("status").default("new").notNull(),
+  /** What whoever read it wants the next person to know. */
+  note: text("note"),
+  handledById: varchar("handled_by_id").references(() => users.id, { onDelete: "set null" }),
+  handledAt: timestamp("handled_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("problem_reports_status_idx").on(t.status, t.createdAt),
+]);
+
+export type ProblemReport = typeof problemReports.$inferSelect;
 
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -2332,6 +2621,14 @@ export const insertProjectBase = createInsertSchema(projects).omit({
     errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or run a company." }),
   }),
   subcategory: z.string({ required_error: "Pick what kind of project it is for that goal.", invalid_type_error: "Pick what kind of project it is for that goal." }).min(1, "Pick what kind of project it is for that goal."),
+  /*
+   * Optional, and validated against the list rather than trusted: it is a
+   * display currency, so an unknown code is a pound sign that never appears
+   * rather than an error worth stopping a project being created for.
+   */
+  currency: z.enum(CURRENCY_CODES, {
+    errorMap: () => ({ message: `Pick a currency: ${CURRENCY_CODES.join(", ")}.` }),
+  }).optional(),
 });
 
 export const insertProjectSchema = insertProjectBase.superRefine((v, ctx) => {
@@ -2810,6 +3107,31 @@ export const companies = pgTable("companies", {
   description: text("description"),
   /** The project it runs itself through, on the Run a company path, if any. */
   projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  /**
+   * Seats paid for on the simulation, at five dollars each.
+   *
+   * A seat is a person at a table for the life of a season, not a month: a
+   * company buys ten seats, runs a season for ten people, and the seats are
+   * still there for the next one. Held on the company rather than on a season
+   * so an away day that ends early does not burn them.
+   */
+  simNovaSeatsPaid: integer("sim_nova_seats_paid").default(0).notNull(),
+  /*
+   * And the cheaper seat: one person at a table in a season the company
+   * picked from the markets we wrote, rather than one Nova built around their
+   * business. Kept as its own balance rather than a discount on the same one,
+   * because the two are not the same thing to sell — a Nova seat pays for a
+   * model reading your project and proposing a market, and a company that
+   * bought ten of those did not thereby buy ten of these.
+   */
+  simPlaySeatsPaid: integer("sim_play_seats_paid").default(0).notNull(),
+  /**
+   * And the two that buy a faster clock: a season decided four times a year,
+   * or twelve. More of the product for the same people, so they are their own
+   * seats rather than a surcharge.
+   */
+  simQuarterlySeatsPaid: integer("sim_quarterly_seats_paid").default(0).notNull(),
+  simMonthlySeatsPaid: integer("sim_monthly_seats_paid").default(0).notNull(),
   /*
    * Who did it, for the record — and only for the record. Set null, not
    * cascade, when that account goes: one person closing their account must
@@ -2822,11 +3144,94 @@ export const companies = pgTable("companies", {
    * removal) makes every earlier link stop working at once.
    */
   inviteKeyVersion: integer("invite_key_version").default(0).notNull(),
+  /**
+   * The domain somebody proved they control, normalised (shared/company-verification.ts).
+   *
+   * Unique across every company, and that uniqueness is the anti-impersonation
+   * rule doing most of the work: once acme.com is claimed, a second "ACME Inc."
+   * cannot claim it. Null only for companies that predate verification — they
+   * can still be run, and cannot post a challenge until somebody proves the
+   * domain.
+   */
+  verifiedDomain: text("verified_domain"),
+  verifiedAt: timestamp("verified_at"),
+  /** "file" or "dns" — which proof was accepted, kept for the record. */
+  verifiedMethod: text("verified_method"),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   bySlug: unique("companies_slug").on(t.slug),
+  /** One domain, one company. The database is where this is true, not the route. */
+  byDomain: unique("companies_verified_domain").on(t.verifiedDomain),
 }));
 export type Company = typeof companies.$inferSelect;
+
+/**
+ * Somebody proving they control a domain, before there is a company to attach
+ * it to.
+ *
+ * Keyed on the person rather than the company on purpose: the proof has to
+ * come *first*, or the hole stays open — a company row that exists before
+ * anybody has proved anything is a company that can be named "Stripe" and left
+ * sitting there. So a verification is started, passed, and then spent on a
+ * company that is created in the same breath.
+ *
+ * Rows are kept after they are spent. "Who proved acme.com, when, and by which
+ * method" is the question worth being able to answer when somebody disputes a
+ * challenge.
+ */
+export const companyVerifications = pgTable("company_verifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Normalised, so the uniqueness check and the claim are about the same string. */
+  domain: text("domain").notNull(),
+  /** What must appear in the file or the TXT record. Opaque, prefixed so one found in the wild is obviously ours. */
+  token: text("token").notNull(),
+  /** Which proof was accepted; null until one is. */
+  method: text("method", { enum: ["file", "dns"] }),
+  verifiedAt: timestamp("verified_at"),
+  /** The company it was spent on. Null while unspent; a verification is good for exactly one. */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  /** Failed checks, so a token cannot be ground against somebody else's site indefinitely. */
+  attempts: integer("attempts").default(0).notNull(),
+  /** What the last check actually saw, for somebody debugging their own DNS. */
+  lastError: text("last_error"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byUser: index("company_verifications_user_idx").on(t.userId, t.createdAt),
+  byDomain: index("company_verifications_domain_idx").on(t.domain),
+}));
+
+/**
+ * The safe: a challenge's prize, taken from the company up front and held here
+ * until somebody wins it.
+ *
+ * One row per challenge, and the row is the money. A prize that is a sentence
+ * in a text box costs nothing to promise and nothing to break, and the person
+ * who pays for a broken one is an entrant who spent a fortnight on it. This is
+ * what lets the challenge page say "already paid in and held" rather than
+ * "the company says".
+ *
+ * `state` is the whole lifecycle (shared/challenges-money.ts) and the row is
+ * always in exactly one of its four states.
+ */
+export const challengePrizes = pgTable("challenge_prizes", {
+  challengeId: varchar("challenge_id").primaryKey().references(() => companyChallenges.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  /** Whose balance it came out of, and whose it goes back to. */
+  fundedBy: varchar("funded_by").references(() => users.id, { onDelete: "set null" }),
+  amountCents: integer("amount_cents").notNull(),
+  /** What was charged to post, kept apart from the prize: the fee is ours and is never refunded with it. */
+  feeCents: integer("fee_cents").notNull(),
+  state: text("state", { enum: ["held", "awarded", "refunded", "released"] }).default("held").notNull(),
+  /** Who it went to, once it has gone. */
+  awardedTo: varchar("awarded_to").references(() => users.id, { onDelete: "set null" }),
+  awardedAt: timestamp("awarded_at"),
+  settledAt: timestamp("settled_at"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byCompany: index("challenge_prizes_company_idx").on(t.companyId, t.state),
+}));
 
 /** Who acts for a company. An owner can do anything; an admin everything but delete it; a member can see and join. */
 export const companyMembers = pgTable("company_members", {
@@ -3177,6 +3582,20 @@ export const startupGameVerdicts = pgTable("startup_game_verdicts", {
    * leaves these out, because a placeholder that ranks is a lie.
    */
   fromModel: boolean("from_model").default(true).notNull(),
+  /**
+   * How many times the model has been asked about this game and not answered.
+   *
+   * A placeholder verdict is provisional: while somebody is on the results
+   * page it is asked about again, so an outage does not leave a finished game
+   * unscored for ever. Asking once a minute for a day is 1,440 model calls
+   * for one game, which is a lot of money for a question that has already
+   * been answered wrong fourteen times.
+   *
+   * Counted rather than timed, because the count is what costs. It backs off
+   * from a minute and stops, and it lives on the row rather than in memory so
+   * a restart does not hand a failing game a fresh budget.
+   */
+  attempts: integer("attempts").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   /** Every leaderboard is this index, read five ways. */
@@ -3337,6 +3756,113 @@ export type SprintMatchmakingQueueEntry = typeof sprintMatchmakingQueue.$inferSe
  * the whole point of the game is competing against the other teams in your
  * market. Two ventures in different niches never meet.
  */
+/**
+ * Seats bought, one row per payment.
+ *
+ * The ledger exists for one reason: Stripe redelivers. Without a record keyed
+ * on the session, a webhook delivered twice credits the seats twice, and the
+ * company gets what it did not pay for — which is the same bug as charging
+ * twice, pointed the other way. The increment on the company and the row here
+ * are one transaction.
+ */
+export const simSeatPurchases = pgTable("sim_seat_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  seats: integer("seats").notNull(),
+  /**
+   * Which seat was bought: "play" for a season from our markets, "nova" for
+   * one Nova builds, and the two that buy a faster clock.
+   */
+  kind: text("kind", { enum: ["play", "nova", "quarterly", "monthly"] }).default("nova").notNull(),
+  /** In cents, as Stripe counts it. */
+  amount: integer("amount").notNull(),
+  stripeSessionId: text("stripe_session_id").notNull(),
+  boughtBy: varchar("bought_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oncePerSession: unique("sim_seat_purchases_session").on(table.stripeSessionId),
+  byCompany: index("sim_seat_purchases_company_idx").on(table.companyId, table.createdAt),
+}));
+
+/**
+ * Valuations bought for the Ten Years game, a dollar each.
+ *
+ * Exists for the same reason `sim_seat_purchases` does: the unique session id
+ * is what makes a webhook redelivery credit nothing. The rest of the row is
+ * the receipt.
+ */
+export const gamePlayPurchases = pgTable("game_play_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  plays: integer("plays").notNull(),
+  /** In cents, as Stripe counts it. */
+  amount: integer("amount").notNull(),
+  stripeSessionId: text("stripe_session_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oncePerSession: unique("game_play_purchases_session").on(table.stripeSessionId),
+}));
+
+/**
+ * What the last audit read for one area, and what it concluded.
+ *
+ * A codebase audit re-read the whole repository every time. On a measured day
+ * six of them were 2.19M tokens and $3.40 — 44% of everything Nova spent —
+ * and almost none of that repository had changed between runs. Reading a file
+ * to conclude what you concluded about it yesterday is the clearest waste in
+ * the product.
+ *
+ * So each area remembers the exact files it read, by content, as one
+ * fingerprint. If the next audit would read the same bytes, the stored
+ * conclusion is reused and no model is called at all. The fingerprint covers
+ * the file *contents*, not their names, so a changed file invalidates the
+ * area that reads it and nothing else.
+ *
+ * Cheap to be wrong about in one direction only: a stale fingerprint means a
+ * re-read that was not needed, which costs money. A fingerprint that matches
+ * when the code changed would mean a wrong verdict, which is why it is a hash
+ * of content and not a timestamp.
+ */
+/**
+ * The two numbers the whole AI economy hangs on, where they can be changed
+ * without a deploy.
+ *
+ * `costPerCreditMicros` is what a credit costs to serve. It is not a constant
+ * — it is whatever people happened to do that day, and it has already been
+ * measured at four cents and at two — so it has to be adjustable by whoever
+ * is watching the bill, not fixed in a file by whoever last deployed.
+ * Everything derives from it: the daily ceilings, what a price can include,
+ * and every figure on the spend console.
+ *
+ * `dailySpendCapUsd` is the brake over the whole platform.
+ *
+ * Stored in millionths of a dollar because a credit costs pennies and floats
+ * do not belong in money. One row, ever: `id` is fixed.
+ */
+export const aiSettings = pgTable("ai_settings", {
+  id: varchar("id").primaryKey().default("singleton"),
+  /** What a credit costs to serve, in millionths of a dollar. 20,000 = 2 cents. */
+  costPerCreditMicros: integer("cost_per_credit_micros").notNull(),
+  /** The platform's daily ceiling in whole dollars. Zero takes the brake off. */
+  dailySpendCapUsd: integer("daily_spend_cap_usd").notNull(),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const codeAuditMemory = pgTable("code_audit_memory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** The capability area, from shared/capabilities.ts. */
+  area: varchar("area").notNull(),
+  /** Hash of every file this area read, by path and content. */
+  fingerprint: varchar("fingerprint").notNull(),
+  /** What the model concluded last time these exact bytes were read. */
+  detail: jsonb("detail").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  onePerArea: unique("code_audit_memory_area").on(table.projectId, table.area),
+}));
+
 export const simSeasons = pgTable("sim_seasons", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /** Which market — an id from @shared/simulation/niches. */
@@ -3368,6 +3894,54 @@ export const simSeasons = pgTable("sim_seasons", {
    * a stranger in one, and its rooms are reached only with `inviteCode`.
    */
   companyId: varchar("company_id"),
+  /**
+   * Where this season came from, and therefore which seat it costs.
+   *
+   * "catalogue" is one of the markets we wrote, taken as it is. "nova" is one
+   * Nova built by reading the company's own project. They are priced
+   * differently, so the season has to remember which it is — a season that
+   * forgot could be started with the cheaper seat.
+   *
+   * Public seasons are "catalogue" and are not charged for at all; only a
+   * season with a `companyId` passes the gate.
+   */
+  origin: text("origin", { enum: ["catalogue", "nova"] }).default("catalogue").notNull(),
+  /**
+   * How well the bot-run companies in this season play.
+   *
+   * "filler" is what bots have always been: a warm body in a seat nobody
+   * took, filing the obvious number so the company moves. "survivor" is a
+   * company actually trying to get in — it works out what to charge and who
+   * to aim at rather than inheriting last year's numbers.
+   *
+   * A season for people learning to enter a market wants the second, because
+   * a table cannot learn to survive from rivals who do not. Measured over 112
+   * seasons, survivors came through 68% of the time against 63% for fillers
+   * and earned between a third and twice as much when they did.
+   */
+  botSkill: text("bot_skill", { enum: ["filler", "survivor"] }).default("filler").notNull(),
+  /**
+   * How often the table decides: once a year, four times, or twelve.
+   *
+   * The market and the levers are the same either way; what changes is how
+   * quickly a table can answer a year that is going wrong, which is a real
+   * operating skill an annual season cannot teach. Priced above the ordinary
+   * seat because it is more of the product — see SEAT_PRICE_CENTS.
+   */
+  cadence: text("cadence", { enum: ["yearly", "quarterly", "monthly"] }).default("yearly").notNull(),
+  /**
+   * A market Nova wrote for this company, rather than one of the seven.
+   *
+   * The seven live in code on purpose: they are balanced against each other,
+   * and a season that kept a copy would play last month's game while everyone
+   * else played this month's. A written market is the exception, and it has to
+   * be stored, because there is no code for it — it exists for one company and
+   * nothing else will ever rebalance it.
+   *
+   * Null for every season that plays one of the seven, which is most of them.
+   * See shared/simulation/custom-market.ts.
+   */
+  customMarket: jsonb("custom_market"),
   inviteCode: text("invite_code"),
   /**
    * How long a year lasts, in minutes, when it isn't a real day. A public
@@ -3376,7 +3950,57 @@ export const simSeasons = pgTable("sim_seasons", {
    * room is still there. Null means a day. The company can also resolve the
    * year early — see server/company-season-routes.ts.
    */
-  yearMinutes: integer("year_minutes"),
+  periodMinutes: integer("period_minutes"),
+  /**
+   * How much of the world this season plays on: "home" for the market's own
+   * regions, "world" for the whole map, or a continent's id for that continent
+   * alone (see shared/simulation/geography.ts).
+   *
+   * Every public season is "home", which is the game as it has always been.
+   * A company running its own season can widen it, because "where in the world
+   * do we go next" is the question a company season is for.
+   */
+  scope: text("scope").default("home").notNull(),
+  /**
+   * How many companies to fill the season with, run entirely by bots.
+   *
+   * A season with one real team in it is a company with no competition, which
+   * teaches the wrong lesson about every decision in it. Rather than wait for
+   * nine other tables to exist, a company can seat them.
+   */
+  botTeams: integer("bot_teams").default(0).notNull(),
+  /**
+   * What the company paid for this private season, and for how many seats.
+   *
+   * A company's first season is free — a workshop nobody has run before is the
+   * thing that sells the second one — so these are zero on it, and zero is a
+   * perfectly good record of "this one cost nothing". Every season after it is
+   * charged per seat when it's created, at OUTCOME_PRICE_CENTS.seasonSeat.
+   * Null on public seasons, which are free for everyone, always.
+   */
+  seatsPaid: integer("seats_paid").default(0).notNull(),
+  paidCents: integer("paid_cents").default(0).notNull(),
+  /**
+   * How many people sit at one table in this season.
+   *
+   * Five everywhere it has ever been, because five is the number of desks.
+   * One is a solo founder: a season where the whole company is one person who
+   * holds every lever and draws one executive salary rather than five. That is
+   * not a smaller version of the same game — a startup cannot carry $700,000
+   * of officers — so it is the season's own shape rather than a preference
+   * applied afterwards.
+   */
+  /* 5 is LOBBY_SIZE in @shared/simulation/lobby, written out rather than imported: the schema is the root of the import graph and must not depend on the engine. */
+  seatCount: integer("seat_count").default(5).notNull(),
+  /**
+   * Whether empty seats get filled by Nova after a minute.
+   *
+   * True for the public market, where somebody who pressed play is owed a
+   * game rather than a waiting room. False for a season whose seats were
+   * bought for named people: filling their chairs a minute before they arrive
+   * is how a team of four turns up to find Nova already playing three of them.
+   */
+  botFill: boolean("bot_fill").default(true).notNull(),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
   byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),
@@ -3405,10 +4029,16 @@ export const simVentures = pgTable("sim_ventures", {
    * hostage.
    */
   phase: text("phase", { enum: ["filling", "claiming", "naming", "running", "retired"] }).default("filling").notNull(),
+  /**
+   * A company with nobody in it: every chair a bot, seated to fill out a
+   * season that would otherwise have one table in it and no competition.
+   *
+   * Distinct from a room where bots took the seats nobody claimed — that room
+   * has a person in it, and the bots are colleagues. This one is a rival.
+   */
+  botOnly: boolean("bot_only").default(false).notNull(),
   /** When the current phase stops waiting and resolves itself. */
   phaseEndsAt: timestamp("phase_ends_at"),
-  /** The engine's Company for this venture, after the last resolved year. */
-  state: jsonb("state"),
   /**
    * When the room left the lobby and sat waiting for its season to start.
    *
@@ -3588,6 +4218,16 @@ export const simOffers = pgTable("sim_offers", {
   /** One live offer from a buyer to a target in a year. */
   once: unique("sim_offers_once").on(table.fromVentureId, table.toVentureId, table.year),
   byTarget: index("sim_offers_target_idx").on(table.toVentureId, table.status),
+  /*
+   * One sale per company per year, held by the database.
+   *
+   * Drizzle can't describe a partial unique index, so it lives in migration
+   * 0054 and is named here so the next person reading this table knows it
+   * exists. Accepting is conditional on the *offer* still being pending, which
+   * makes each offer atomic with itself and says nothing about the company —
+   * two offers to the same company are two rows, and both acceptances used to
+   * win. See server/simulation-market-routes.ts.
+   */
 }));
 
 /** A recovery move a team has committed to, applied at the start of the next tick. */
@@ -3626,4 +4266,149 @@ export const simReports = pgTable("sim_reports", {
    * with two conflicting accounts of year six.
    */
   once: unique("sim_reports_once").on(table.seasonId, table.companyId, table.year),
+}));
+
+/* ── Simulating one real company's decisions ──────────────────────────────── */
+
+/**
+ * Where a project's own business starts from, for the decision simulator.
+ *
+ * One row per project, edited in place, because this is a description of the
+ * company as it is rather than a record of anything that happened: there is
+ * nothing to compare two versions of. It is pre-filled from the weekly
+ * check-ins where they can answer it and corrected by the owner where they
+ * can't — a check-in has no idea what a loan costs or how many people are on
+ * the payroll — and every scenario stores its own copy, so a scenario run in
+ * March still says what March's numbers were after the baseline has moved on.
+ */
+export const simulationBaselines = pgTable("simulation_baselines", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  /** A shared/simulation/decision-sim.ts Baseline. */
+  numbers: jsonb("numbers").notNull(),
+  /** Which fields the owner typed rather than took from the check-ins, so a re-read never overwrites them. */
+  overridden: jsonb("overridden").notNull().default(sql`'[]'::jsonb`),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/**
+ * One question asked of the simulator, and what the arithmetic said.
+ *
+ * Kept rather than replaced, for the same reason the roadmaps are: the value
+ * of this is comparing "hire two" against "hire twelve" against "spend it on
+ * marketing instead", and a table that held only the latest answer could not.
+ * Each row carries the baseline it was run against and the levers Nova read
+ * the question as, so a scenario can be re-run with one assumption edited and
+ * the two put side by side.
+ *
+ * `result` is computed, never the model's: the model turns the sentence into
+ * levers and writes the prose, and shared/simulation/decision-sim.ts decides
+ * what happens. See server/decision-sim-routes.ts.
+ */
+export const simulationScenarios = pgTable("simulation_scenarios", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** What they typed. */
+  question: text("question").notNull(),
+  /** How far out it was run, in months. */
+  months: integer("months").notNull(),
+  /** The Baseline it was run against, frozen at the moment it ran. */
+  baseline: jsonb("baseline").notNull(),
+  /** The Levers the question was read as — editable, and re-runnable. */
+  levers: jsonb("levers").notNull(),
+  /** Nova's account of what it assumed, one line per assumption. */
+  assumptions: jsonb("assumptions").notNull(),
+  /** The computed Answer: three runs, the do-nothing run, the verdict and the facts. */
+  result: jsonb("result").notNull(),
+  /** What Nova wrote around the numbers. */
+  narrative: jsonb("narrative").notNull(),
+  /** Which scenario this was re-run from, for "the same question with one number changed". */
+  rerunOf: varchar("rerun_of"),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("simulation_scenarios_project_idx").on(t.projectId, t.createdAt),
+}));
+
+/**
+ * "Ten years from now", run against a real company instead of an invented one.
+ *
+ * The game (`startup_games`) asks two strangers to invent a startup and values
+ * what they made up. This asks the same question of a business that exists:
+ * everything already on the project stands in for the five rounds, and the one
+ * thing nobody can read off a check-in — where a million dollars would go — is
+ * the only thing the owner is asked.
+ *
+ * The verdict is the same shape as the game's (shared/sprints/scoring.ts), so
+ * the two are comparable and neither has its own idea of what 780 means.
+ * Kept per run: an owner who does this again in a year should be able to see
+ * what changed.
+ */
+/**
+ * A marketing scheme for a product that already exists, and what Nova made of it.
+ *
+ * The decision simulator answers "what if I spend £1,000 a month on marketing"
+ * with a curve, which is the right answer to that question and no answer at
+ * all to the one a marketer asks: is *this plan* any good? A budget is not a
+ * scheme. Who it is aimed at, where it runs, what it says, what it offers and
+ * how anybody would know it worked — that is the scheme, and it is the thing
+ * worth scoring before a pound is spent on it.
+ *
+ * Scored, then testable: a scheme Nova rates worth trying can be run through
+ * the simulator for a year as a spend lever, against the business's own
+ * numbers, so "we think this will work" becomes a curve somebody can argue
+ * with.
+ */
+export const marketingSchemes = pgTable("marketing_schemes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").references(() => users.id, { onDelete: "set null" }),
+  /** The plan, in the marketer's own words. */
+  scheme: text("scheme").notNull(),
+  /** What they intend to spend a month on it, and for how long. */
+  monthlyBudget: integer("monthly_budget").notNull(),
+  months: integer("months").notNull().default(12),
+  /** What they expect it to bring in a month once it is working. Their claim, not Nova's. */
+  expectedMonthlyReturn: integer("expected_monthly_return").notNull().default(0),
+  /*
+   * For a scheme selling something people keep paying for. With these, it is
+   * tested as a subscriber base that accumulates rather than as a campaign
+   * holding up a level of trade — the same plan modelled the wrong way is
+   * wrong by an order of magnitude. Stored in whole units of the project's
+   * currency; churn is per mille so it survives a column of integers.
+   */
+  pricePerMonth: integer("price_per_month").notNull().default(0),
+  /** Customers leaving each month, per thousand. 30 is 3%. */
+  churnPerMille: integer("churn_per_mille").notNull().default(0),
+  newCustomersAtFull: integer("new_customers_at_full").notNull().default(0),
+  marketSize: integer("market_size").notNull().default(0),
+  /** Nova's read: scores per dimension, what is strong, what is missing. */
+  evaluation: jsonb("evaluation").notNull(),
+  /** 0–100, computed from the scores rather than asked for. */
+  score: integer("score").notNull().default(0),
+  /** Whether it is worth putting through the simulator at all. */
+  worthTesting: boolean("worth_testing").notNull().default(false),
+  /** The last run of it through the decision engine, if it has been tested. */
+  test: jsonb("test"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("marketing_schemes_project_idx").on(t.projectId, t.createdAt),
+]);
+export type MarketingScheme = typeof marketingSchemes.$inferSelect;
+
+export const tenYearOutlooks = pgTable("ten_year_outlooks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** The first million, by shared/sprints/cards.ts option id. */
+  allocation: jsonb("allocation").notNull(),
+  /** The company as it was read: numbers, sections, goals. What the valuation was an answer to. */
+  profile: jsonb("profile").notNull(),
+  /** A shared/sprints/scoring.ts Verdict, cleaned. */
+  verdict: jsonb("verdict").notNull(),
+  /** False when the model couldn't be reached and the row is a placeholder. */
+  fromModel: boolean("from_model").notNull().default(true),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("ten_year_outlooks_project_idx").on(t.projectId, t.createdAt),
 }));

@@ -8,9 +8,11 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { makeVerifiedCompany } from "../helpers/company";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { deleteAccount } from "../../server/account-data";
+import { CHALLENGE_FEE_CENTS, MIN_PRIZE_CENTS } from "@shared/challenges-money";
 import {
   companies, companyAuditLog, companyChallenges, companyFollows, companyMembers, feedPosts,
   projectMembers, projects, recruitInvites, users,
@@ -33,7 +35,7 @@ async function player(app: any, firstName = `L${n + 1}`) {
 
 async function company(app: any) {
   const owner = await player(app, "Olive");
-  const made = await owner.agent.post("/api/companies").send({ name: "Acme Widgets" });
+  const made = await makeVerifiedCompany(owner.agent, "Acme Widgets");
   expect(made.status, JSON.stringify(made.body)).toBe(201);
   return { owner, companyId: made.body.company.id as string };
 }
@@ -61,9 +63,17 @@ describe("closing an account", () => {
     const run = await owner.agent.post(`/api/companies/${companyId}/run-project`);
     expect(run.status, run.text).toBe(200);
     const projectId = run.body.project.id as string;
+    /*
+     * A challenge now carries a real prize, held by SparkTower, and the fee
+     * and the prize leave the balance together — so the owner has to have the
+     * money before they can post one. This test is about what happens to a
+     * company when its owner closes their account; the prize is a fixture.
+     */
+    await db.update(users).set({ balanceCents: CHALLENGE_FEE_CENTS + MIN_PRIZE_CENTS }).where(eq(users.id, owner.id));
     const challenge = await owner.agent.post(`/api/companies/${companyId}/challenges`).send({
       title: "Cut our returns rate", brief: "We ship furniture and a fifth of it comes back. Show us a way to cut that.",
       terms: "Winners are paid within 30 days of the announcement.", deadline: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      prizeCents: MIN_PRIZE_CENTS,
     });
     expect(challenge.status, challenge.text).toBe(201);
 

@@ -33,6 +33,7 @@ import * as phone from "../../mobile/src/components/sim/desk";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
 import { fixedCosts, SALARY, EXECUTIVE } from "@shared/simulation/decisions";
+import { salaryIn } from "@shared/simulation/workforce";
 import { saturate } from "@shared/simulation/market";
 import { countdown, longCountdown } from "@shared/simulation/lobby-copy";
 import { startingCompany } from "@shared/simulation/season";
@@ -54,8 +55,8 @@ describe("what the doors cost", () => {
      */
     for (const reach of [0, 0.09, 0.12, 0.43, 0.7, 1]) {
       for (const headcount of [0, 5, 40]) {
-        const mine = fixedCosts(company(), headcount, { costIndex: 1 } as any, reach);
-        const theirs = phone.fixedCosts(headcount, 1, ROLES.length, reach);
+        const mine = fixedCosts(company(), headcount, { costIndex: 1 } as any, reach, niche);
+        const theirs = phone.fixedCosts(headcount, 1, ROLES.length, reach, { perHead: salaryIn(niche) });
         expect(theirs, `reach ${reach}, headcount ${headcount}`).toBeCloseTo(mine, 6);
       }
     }
@@ -68,8 +69,8 @@ describe("what the doors cost", () => {
 
   it("moves with the cost index the same way", () => {
     for (const costIndex of [0.9, 1, 1.17]) {
-      expect(phone.fixedCosts(12, costIndex, 5, 1))
-        .toBeCloseTo(fixedCosts(company(), 12, { costIndex } as any, 1), 6);
+      expect(phone.fixedCosts(12, costIndex, 5, 1, { perHead: salaryIn(niche) }))
+        .toBeCloseTo(fixedCosts(company(), 12, { costIndex } as any, 1, niche), 6);
     }
   });
 });
@@ -154,11 +155,14 @@ describe("what the table has committed", () => {
       const mine = commitment(c, { companyId: "t", ...testCase.decisions }, { costIndex: 1 }, niche);
       const map = niche.cities.map((city) => ({ ...city, open: testCase.cities.includes(city.id) })) as any;
       const theirs = phone.commitment({
+        perHead: salaryIn(niche),
         company: {
           cash: c.cash,
           debt: c.debt,
           creditLimit: c.creditLimit,
           seats: [...c.seats],
+          officers: c.officers,
+          scale: c.scale,
           capacity: c.capacity,
         } as any,
         decisions: testCase.decisions,

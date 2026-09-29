@@ -8,6 +8,7 @@
  * in a public market those are strangers, so the dialog says so plainly.
  */
 import { useState } from "react";
+import { usePeriod } from "./desk-currency";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,8 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
   as: "developer" | "dev_flag" | "company";
 }) {
   const { toast } = useToast();
+  const period = usePeriod();
+  const Period = period.one.charAt(0).toUpperCase() + period.one.slice(1);
   const [open, setOpen] = useState(false);
   const last = year >= totalYears;
 
@@ -36,8 +39,8 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
     onSuccess: (body: { resolvedYear: number; status: string }) => {
       setOpen(false);
       toast({
-        title: body.status === "finished" ? "Season over" : `Year ${body.resolvedYear} resolved`,
-        description: body.status === "finished" ? "That was the last year." : `Year ${body.resolvedYear + 1} is open.`,
+        title: body.status === "finished" ? "Season over" : `${Period} ${body.resolvedYear} resolved`,
+        description: body.status === "finished" ? `That was the last ${period.one}.` : `${Period} ${body.resolvedYear + 1} is open.`,
       });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] });
       queryClient.invalidateQueries({ queryKey: ["sim-projection", ventureId] });
@@ -66,14 +69,14 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
               </p>
               <p className="text-xs text-muted-foreground">
                 {as !== "company"
-                  ? "You can end this year now rather than waiting for its clock."
-                  : "Your company runs this season, so you can end the year whenever the room is ready."}
+                  ? `You can end ${period.of} now rather than waiting for its clock.`
+                  : `Your company runs this season, so you can end the ${period.one} whenever the room is ready.`}
               </p>
             </div>
           </div>
           <Button size="sm" variant="outline" onClick={() => setOpen(true)} disabled={advance.isPending} data-testid="button-advance-year">
             {advance.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <FastForward className="mr-1.5 h-4 w-4" />}
-            {last ? "End the season now" : `End year ${year} now`}
+            {last ? "End the season now" : `End ${period.one} ${year} now`}
           </Button>
         </CardContent>
       </Card>
@@ -81,12 +84,12 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{last ? "End the season now?" : `End year ${year} now?`}</AlertDialogTitle>
+            <AlertDialogTitle>{last ? "End the season now?" : `End ${period.one} ${year} now?`}</AlertDialogTitle>
             <AlertDialogDescription>
               {as !== "company"
-                ? "This resolves the year for every team in this market — including real players who may still be deciding. Whatever they have not filed runs on last year's plan. It is recorded in the moderation log."
-                : "This resolves the year for every table in this training season, including anyone still deciding. Whatever they have not filed runs on last year's plan."}
-              {last ? " It is the last year, so the season ends." : ` Year ${year + 1} opens straight away.`}
+                ? `This resolves the ${period.one} for every team in this market — including real players who may still be deciding. Whatever they have not filed runs on last ${period.one}'s plan. It is recorded in the moderation log.`
+                : `This resolves the ${period.one} for every table in this training season, including anyone still deciding. Whatever they have not filed runs on last ${period.one}'s plan.`}
+              {last ? ` It is the last ${period.one}, so the season ends.` : ` ${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${year + 1} opens straight away.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

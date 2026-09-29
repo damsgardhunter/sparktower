@@ -21,6 +21,7 @@ import { serverSourceFiles } from "../helpers/server-files";
 
 /** Paths that look social but stay inside the account's own work, and why. */
 const DOESNT_REACH_ANYONE: Record<string, string> = {
+  "PATCH /api/admin/problem-reports/:id": "an admin triaging a bug report; the note is read by the next admin, never by the person who sent it",
   "POST /api/artifacts/:id/unpublish": "takes a page down — the safe direction",
   "POST /api/projects/:id/backing/tiers/apply-template": "fills in the project's own tier template",
   "POST /api/code-audits/:auditId/apply": "applies an audit's changes to their own board",

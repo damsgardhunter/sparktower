@@ -13,6 +13,9 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
+import { SiteFooter } from "@/components/site-footer";
+import { LanguageProvider } from "@/lib/i18n";
+import Careers from "@/pages/careers";
 import Home from "@/pages/home";
 import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
@@ -24,6 +27,7 @@ import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import ContestDetail from "@/pages/contest-detail";
 import Pricing from "@/pages/pricing";
+import Earnings from "@/pages/earnings";
 import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
 import InviteAcceptPage from "@/pages/invite-accept";
@@ -33,6 +37,7 @@ import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
+import ProjectSimPage from "@/pages/project-sim";
 import SimulationPage from "@/pages/simulation";
 import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
@@ -50,14 +55,20 @@ import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
+import { PaymentDialog, TopUpReturn, PurchaseConfirmProvider } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
 import PostDetail from "@/pages/post-detail";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
+import AdminProblems from "@/pages/admin-problems";
 import AdminSafety from "@/pages/admin-safety";
 import AdminSecurity from "@/pages/admin-security";
+import AdminConsole from "@/pages/admin-console";
+import { ErrorBoundary } from "@/components/error-boundary";
 import AdminAnalytics from "@/pages/admin-analytics";
+import AdminAiSpend from "@/pages/admin-ai-spend";
+import AdminRevenue from "@/pages/admin-revenue";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
@@ -128,7 +139,9 @@ function Router() {
 
   if (!isAuthenticated) {
     return (
-      <Switch>
+      <div className="flex min-h-screen flex-col">
+        <div className="flex-1 min-h-0">
+        <Switch>
         <Route path="/" component={LandingPage} />
         {/* Google sign-in, for an account with 2FA on, lands here for the code (server/mfa.ts). */}
         <Route path="/mfa" component={MfaVerifyPage} />
@@ -150,12 +163,22 @@ function Router() {
           */}
         <Route path="/privacy" component={PrivacyPolicy} />
         <Route path="/terms" component={TermsOfService} />
+        {/* Somebody looking for a job is not a customer and has no account. */}
+        <Route path="/careers" component={Careers} />
         {/* Named by /.well-known/security.txt, so it must answer for a stranger. */}
         <Route path="/security" component={SecurityPolicy} />
         <Route>
           <Redirect to="/" />
         </Route>
-      </Switch>
+        </Switch>
+        </div>
+        {/*
+          * Signed out and still able to report, which is the case that matters
+          * most: somebody who cannot sign in is by definition not signed in,
+          * and "I cannot sign in" is the report you least want to lose.
+          */}
+        <SiteFooter />
+      </div>
     );
   }
 
@@ -194,6 +217,7 @@ function Router() {
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
           <main className="flex-1 overflow-hidden"><NotFound /></main>
+          <SiteFooter />
         </div>
       </div>
     );
@@ -247,8 +271,17 @@ function Router() {
         <BillingIssueNotice />
         <UpgradeToKeepGenerating />
         <CheckoutReturn />
+        {/* Every 402 in the product, in one place. See payment-dialog. */}
+        <PaymentDialog />
+        <TopUpReturn />
         {/* Room for the logo hanging below the bar, so it never covers the top of a page — inside each page's own background. */}
         <main className="flex-1 overflow-y-auto [&>*]:pt-6">
+          {/*
+            * Around the routed page, so a screen that throws loses that screen
+            * and not the product: the sidebar, the header and the navigation
+            * stay, and one click gets somewhere that works.
+            */}
+          <ErrorBoundary where="page">
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
@@ -290,6 +323,8 @@ function Router() {
               */}
             <Route path="/projects/:id/manage">{(params) => <ProjectManager key={params.id} />}</Route>
             <Route path="/projects/:id">{(params) => <ProjectDashboard key={params.id} />}</Route>
+            {/* What you've earned and how to get it to a bank account. */}
+            <Route path="/earnings" component={Earnings} />
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
@@ -299,7 +334,9 @@ function Router() {
             <Route path="/contests" component={Contests} />
             <Route path="/contests/:slug" component={ContestDetail} />
             <Route path="/sprints" component={Sprints} />
-            {/* The market simulation lives under sprints, which is now "Sprints & simulations". */}
+            {/* The market simulation lives under /sprints, the page now called "Simulations". */}
+            {/* A project's own simulations, one to a page. See `project-sim.tsx`. */}
+            <Route path="/projects/:id/simulate/:game" component={ProjectSimPage} />
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />
@@ -335,14 +372,27 @@ function Router() {
             <Route path="/posts/:id" component={PostDetail} />
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
+            {/* What people said is broken, as opposed to who reported whom. */}
+            <Route path="/admin/problems" component={AdminProblems} />
             <Route path="/admin/safety" component={AdminSafety} />
             <Route path="/admin/security" component={AdminSecurity} />
+            {/* The customer console. Its own API answers 404 to anyone who shouldn't know it exists, and the page draws that as a 404 too. */}
+            <Route path="/admin/console" component={AdminConsole} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
+            {/* What the models cost us. Owner only. */}
+            <Route path="/admin/ai-spend" component={AdminAiSpend} />
+            {/* What the platform has collected and what of it is actually ours. Owner only. */}
+            <Route path="/admin/revenue" component={AdminRevenue} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route path="/admin/contests" component={AdminContests} />
+            {/* Public on purpose: somebody looking for a job has no account here. */}
+            <Route path="/careers" component={Careers} />
             <Route component={NotFound} />
           </Switch>
+          </ErrorBoundary>
         </main>
+        {/* Every screen ends with a way to say it is broken. */}
+        <SiteFooter />
       </div>
     </div>
   );
@@ -356,16 +406,33 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      {/* Above the app, because the footer that switches it is inside it. */}
+      <LanguageProvider>
       <ThemeProvider defaultTheme="light" storageKey="sparktower-theme">
         <TooltipProvider>
           <SidebarProvider style={style as React.CSSProperties}>
-            <div className="w-full min-h-screen bg-background text-foreground">
-              <Router />
-              <Toaster />
-            </div>
+            {/* Anything priced asks before it spends. See payment-dialog. */}
+            <PurchaseConfirmProvider>
+              <div className="w-full min-h-screen bg-background text-foreground">
+                {/*
+                  * The backstop. React unmounts the whole tree when a render
+                  * throws, so without this one bad value anywhere replaced the
+                  * entire product with a blank white page — no message, no
+                  * navigation, and no report. The inner boundary around the
+                  * routed page catches almost everything and keeps the sidebar
+                  * and the header alive; this one is for a throw in the shell
+                  * itself, where there is nothing left to navigate with.
+                  */}
+                <ErrorBoundary where="app">
+                  <Router />
+                </ErrorBoundary>
+                <Toaster />
+              </div>
+            </PurchaseConfirmProvider>
           </SidebarProvider>
         </TooltipProvider>
       </ThemeProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }

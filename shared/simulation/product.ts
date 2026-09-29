@@ -202,15 +202,17 @@ export function placeBet(input: {
   pace?: string;
   year: number;
   seed: string;
+  /** How many periods make a year: a build lands a year out, however long that is. */
+  periods?: number;
 }): Feature {
-  const { idea, mode, pace, year, seed } = input;
+  const { idea, mode, pace, year, seed, periods = 1 } = input;
   if (mode === "copy") return { id: idea.id, name: idea.name, segment: idea.segment, lift: COPY_LIFT, lands: year, mode };
   const p = paceOf(pace);
   const flopped = rng(seed)() < p.flop;
   return {
     id: idea.id, name: idea.name, segment: idea.segment,
     lift: flopped ? 0 : BUILD_LIFT,
-    lands: p.landsNow > 0 ? year : year + 1,
+    lands: p.landsNow > 0 ? year : year + Math.max(1, periods),
     mode, flopped,
   };
 }
@@ -218,9 +220,10 @@ export function placeBet(input: {
 // ─── Security, breaches and outages ──────────────────────────────────────────
 
 /** Security built up, 0–100: a fifth of it wears off each year, and spending adds to it. */
-export function securityNext(level: number | undefined, spend: number | undefined): number {
+/** A fifth wears off a year, and spending adds to it — both per period, not per call. */
+export function securityNext(level: number | undefined, spend: number | undefined, per = 1): number {
   const now = Math.max(0, Math.min(100, level ?? 0));
-  return Math.min(100, now * 0.8 + saturate(Math.max(0, spend ?? 0), 150_000) * 40);
+  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), 150_000 * per) * 40 * per);
 }
 
 export interface Breach {
@@ -244,8 +247,9 @@ export function breachChance(security: number | undefined, techDebt: number | un
   return Math.max(0.01, Math.min(0.4, 0.07 + d * 0.12 - s * 0.06));
 }
 
-export function breachOf(input: { security?: number; techDebt?: number; seed: string }): Breach | null {
-  if (rng(input.seed)() >= breachChance(input.security, input.techDebt)) return null;
+/** `per` is one period's share of a year: the chance is an annual one, so a quarter carries a quarter of it. */
+export function breachOf(input: { security?: number; techDebt?: number; seed: string; per?: number }): Breach | null {
+  if (rng(input.seed)() >= breachChance(input.security, input.techDebt) * (input.per ?? 1)) return null;
   const shield = 1 - Math.max(0, Math.min(100, input.security ?? 0)) / 150;
   return { reputation: Math.round(12 * shield), service: Math.round(5 * shield), cost: 0.02 * shield };
 }
@@ -264,9 +268,10 @@ export const OUTAGE = { service: 6, reputation: 2 };
 // ─── Data ────────────────────────────────────────────────────────────────────
 
 /** Analytics built up, 0–100: a fifth wears off each year. */
-export function dataNext(level: number | undefined, spend: number | undefined): number {
+/** What is known about the customers: a fifth of it goes stale a year, and spending adds to it. */
+export function dataNext(level: number | undefined, spend: number | undefined, per = 1): number {
   const now = Math.max(0, Math.min(100, level ?? 0));
-  return Math.min(100, now * 0.8 + saturate(Math.max(0, spend ?? 0), 150_000) * 40);
+  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), 150_000 * per) * 40 * per);
 }
 
 /**

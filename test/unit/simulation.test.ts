@@ -89,15 +89,30 @@ describe("the incumbents' 90%", () => {
 
     const holder = (segmentId: string, size: number): Company => ({
       ...newTeam(`holder_${segmentId}`, "Holder"), kind: "incumbent", posture: "coaster",
-      brand: 60, quality: 55, service: 55, price: 20,
+      brand: 40, quality: 40, service: 40, price: 20,
       customers: { [segmentId]: Math.round(size * 0.9) }, capacity: size,
     });
     // Plainly better on every axis, so the offer is not what differs.
     const challenger = (segmentId: string, size: number): Company => ({
       ...newTeam(`challenger_${segmentId}`, "Challenger"),
-      brand: 85, quality: 85, service: 85, price: 15, capacity: size,
+      brand: 97, quality: 97, service: 97, price: 15, capacity: size,
     });
 
+    /*
+     * What *gave way*, not what the challenger ended up holding.
+     *
+     * Those were the same question while the open pool counted every leaver
+     * twice: the churn was large enough to dominate what a challenger won.
+     * Counted once — which is the arithmetic that makes a segment add up to
+     * the people in it — the tenth of the segment nobody holds is the bigger
+     * term, and a challenger this good takes nearly all of it whatever the
+     * loyalty is. Measured on holdings the two segments came out within two
+     * tenths of a point of each other, which says nothing about loyalty.
+     *
+     * So the challenger is made overwhelmingly better and the holder
+     * ordinary, which puts the churn back above the unclaimed tenth and
+     * leaves loyalty as the thing being measured.
+     */
     const taken = (segment: typeof flighty): number => {
       const world = { ...worldWith([]), niche: { ...niche, segments: [segment] } };
       const companies = [holder(segment.id, segment.size), challenger(segment.id, segment.size)];

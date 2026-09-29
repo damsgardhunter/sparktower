@@ -1,4 +1,5 @@
 import { areaLabel, capabilityCounts, CAPABILITY_STATUS_LABEL, type CapabilityEntry } from "@shared/capabilities";
+import { EDITOR_BRIDGE_READY, COMING_SOON } from "@shared/not-ready";
 import { describeProvenance, type AuditProvenance } from "@shared/audit-provenance";
 import type { AuditDelta } from "@shared/audit-delta";
 import { DataSourceCard } from "@/components/data-source-card";
@@ -8,6 +9,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { useUpload } from "@/hooks/use-upload";
 import {
@@ -16,13 +18,14 @@ import {
   Route as RouteIcon, Database, FlaskConical, Check, Terminal, ArrowRight, History,
   HelpCircle,
 } from "lucide-react";
-import { CREDIT_COSTS } from "@shared/plans";
+import { OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
 import { AuditCatchUp, PathChanges, refreshAfterCatchUp } from "@/components/audit-catchup";
 import { SecurityReportPanel } from "@/components/security-report";
 import type { ProjectCodeAudit } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useAuditStatus, quietAuditErrors, auditStageLabel, auditSourceLabel, formatElapsed, auditStatusKey } from "@/lib/audit-status";
+import { LiveDot, NOVA_GRADIENT, Working } from "@/components/nova";
 
 interface AuditListItem {
   id: string;
@@ -51,9 +54,8 @@ interface RepoCheck {
 const IDLE_POLL_MS = 30_000;
 /** …and while a read is running. */
 const RUNNING_POLL_MS = 4_000;
-/** The three stages a run reports, in order, for the progress bar. */
-const STAGE_ORDER = ["fetching", "reading", "saving"];
-const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+/** The three stages a run reports, in order, with the words the panel shows for each. */
+const AUDIT_STAGES = ["fetching", "reading", "saving"].map((id) => ({ id, label: auditStageLabel(id) }));
 
 const STAGE_STYLE: Record<string, { label: string; className: string }> = {
   empty: { label: "Empty", className: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
@@ -126,15 +128,6 @@ function parseSource(source: string | null | undefined, kind?: string | null) {
 const Pill = ({ className = "", children, ...rest }: { className?: string; children: ReactNode } & React.HTMLAttributes<HTMLSpanElement>) => (
   <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${className}`} {...rest}>{children}</span>
 );
-
-function LiveDot({ active = true }: { active?: boolean }) {
-  return (
-    <span className="relative flex h-2 w-2 shrink-0">
-      {active && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
-      <span className={`relative inline-flex h-2 w-2 rounded-full ${active ? NOVA_GRADIENT : "bg-muted-foreground/40"}`} />
-    </span>
-  );
-}
 
 /** A block of the tab, separated from the next by a line. */
 function Block({ title, count, action, children, testId, innerRef }: {
@@ -219,7 +212,8 @@ const change = (before: number | null | undefined, after: number | null | undefi
 
 export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId: string; repoUrl?: string | null; isOwner?: boolean }) {
   const { toast } = useToast();
-  const { can, creditsRemaining, isUnlimited } = useEntitlements();
+  const confirmPurchase = useConfirmPurchase();
+  const { can } = useEntitlements();
   const { uploadFile, isUploading } = useUpload();
 
   const [url, setUrl] = useState(repoUrl || "");
@@ -238,7 +232,24 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const repoInput = useRef<HTMLInputElement>(null);
 
   const isBuilder = can("aiMilestones");
-  const notEnoughCredits = !isUnlimited && creditsRemaining < CREDIT_COSTS.codeAudit;
+  /*
+   * An audit is not paid for in credits, and never was in this pricing.
+   *
+   * `CHARGE_FOR.codeAudit` is a priced outcome: five dollars off the balance,
+   * taken by `requireCredits` at the route. It does not touch the month's free
+   * Nova actions at all. This gate compared those free actions against
+   * `CREDIT_COSTS.codeAudit` (8) from the retired subscription model, so the
+   * button went dead once somebody had spent eighteen of their twenty-five
+   * free actions on anything — a different budget entirely — however much
+   * money was on the account. Reported as "I have credits and funds and cannot
+   * audit", which is exactly what it did.
+   *
+   * Nothing replaces it. A priced outcome that cannot be afforded answers 402
+   * and the payment dialog opens on it, with the price, the balance and a way
+   * to pay in one tap. Disabling the button instead tells somebody they cannot
+   * do it, does not say why, and offers no way to fix it.
+   */
+  const auditPrice = formatMoney(OUTCOME_PRICE_CENTS.codeAudit);
 
   const describeError = (err: any, fallback: string) => {
     const raw = err?.message || "";
@@ -254,6 +265,8 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
 
   const auditMutation = useMutation({
     mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
+      // Priced: asked before it spends, never after. See payment-dialog.
+      if (!(await confirmPurchase("codeAudit", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
       return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
     },
@@ -263,6 +276,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       setTimeout(() => queryClient.invalidateQueries({ queryKey: auditStatusKey(projectId) }), 800);
     },
     onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       seenNewest.current = result.audit.id;
       setSelectedId(null);
       setEditingSource(false);
@@ -271,9 +285,15 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       // The read moves the path even when nothing was auto-applied: path status reads the audit's waiting changes.
       refreshAfterCatchUp(projectId, result.audit.id);
       const n = result.autoApplied?.changes.length ?? 0;
+      /*
+       * `creditsCharged` is always 0 now and the audit is paid for in dollars
+       * (`chargedCents`), so this printed "72% built · 0 credits" after taking
+       * $5. The server sends both precisely so a client can stop saying
+       * credits; this one had not.
+       */
       toast({
         title: "Code read",
-        description: `${result.audit.completionPercent}% built · ${result.creditsCharged} credits${n ? ` · Nova updated ${n}` : ""}`,
+        description: `${result.audit.completionPercent}% built${n ? ` · Nova updated ${n}` : ""}`,
       });
     },
     onError: (err: any) => {
@@ -436,23 +456,22 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     );
   } else if (url.trim()) {
     primary = (
-      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={runRepo} data-testid="button-primary-audit">
+      <Button className="w-full sm:w-auto gap-2" onClick={runRepo} data-testid="button-primary-audit">
         <ScanSearch className="h-4 w-4" />{newest ? "Read the code again" : "Run an audit"}
-        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+        <span className="text-[11px] opacity-80">· {auditPrice}</span>
       </Button>
     );
   } else {
     primary = (
-      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-primary-zip">
+      <Button className="w-full sm:w-auto gap-2" onClick={() => zipInput.current?.click()} data-testid="button-primary-zip">
         <Upload className="h-4 w-4" />Upload a new zip
-        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+        <span className="text-[11px] opacity-80">· {auditPrice}</span>
       </Button>
     );
   }
 
   // Elapsed as the server counted it, ticking on between polls.
   const elapsed = serverRun ? serverRun.elapsedSeconds + Math.max(0, Math.round((now - status.dataUpdatedAt) / 1000)) : 0;
-  const stageIndex = serverRun ? Math.max(0, STAGE_ORDER.indexOf(serverRun.stage)) : -1;
   const runFrom = serverRun ? auditSourceLabel(serverRun.source) : null;
   const runBy = serverRun?.startedBy
     ? serverRun.startedBy.id === user?.id ? "You" : serverRun.startedBy.firstName || "A teammate"
@@ -525,32 +544,27 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
           <div className="sm:pl-5 flex flex-col justify-center gap-1">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:hidden">Do now</p>
             {primary}
-            {notEnoughCredits && !running && <p className="text-[11px] text-destructive">Needs {CREDIT_COSTS.codeAudit} credits · you have {creditsRemaining}</p>}
           </div>
         </div>
 
         {running && (
-          <div className="space-y-1.5" data-testid="audit-running">
-            <div className="grid grid-cols-3 gap-1" aria-hidden>
-              {STAGE_ORDER.map((st, i) => (
-                <div key={st} className="h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === stageIndex ? "animate-pulse" : ""}`} style={{ width: i < stageIndex ? "100%" : i === stageIndex ? "60%" : "0%" }} />
-                </div>
-              ))}
-            </div>
-            <div className="text-xs text-muted-foreground flex items-center justify-between gap-x-3 gap-y-0.5 flex-wrap">
-              <span className="flex items-center gap-1.5 font-medium text-foreground" data-testid="audit-running-stage">
-                <LiveDot />
-                {isUploading ? "Uploading the zip" : serverRun ? auditStageLabel(serverRun.stage) : "Starting the read"}…
-              </span>
-              {serverRun && (
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <span className="truncate" data-testid="audit-running-who">{runWho}</span>
-                  <span className="tabular-nums" data-testid="audit-running-elapsed">· {formatElapsed(elapsed)}</span>
-                </span>
-              )}
-            </div>
-          </div>
+          <Working
+            testId="audit-running"
+            stages={AUDIT_STAGES}
+            current={serverRun?.stage ?? null}
+            /*
+             * The upload happens in this browser before a run row exists, so
+             * the server has no stage for it and the panel would otherwise
+             * claim the fetch had started.
+             */
+            saying={isUploading ? "Uploading the zip" : serverRun ? null : "Starting the read"}
+            meta={serverRun && (
+              <>
+                <span className="truncate" data-testid="audit-running-who">{runWho}</span>
+                <span className="tabular-nums" data-testid="audit-running-elapsed">· {formatElapsed(elapsed)}</span>
+              </>
+            )}
+          />
         )}
 
         {!isBuilder && (
@@ -595,9 +609,9 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 <Button variant="outline" className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || checkMutation.isPending} onClick={() => checkMutation.mutate()} data-testid="button-check-repo">
                   {checkMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Check
                 </Button>
-                <Button className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || running || notEnoughCredits} onClick={runRepo} data-testid="button-audit-repo">
+                <Button className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || running} onClick={runRepo} data-testid="button-audit-repo">
                   {auditMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
-                  Audit <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+                  Audit <span className="text-[11px] opacity-80">· {auditPrice}</span>
                 </Button>
               </div>
             </div>
@@ -615,7 +629,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
               <button type="button" className="text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2" onClick={() => setTokenOpen((o) => !o)} data-testid="button-toggle-token">
                 {tokenOpen ? "Hide token" : "Private repo?"}
               </button>
-              <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" disabled={running || notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-upload-zip">
+              <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" disabled={running} onClick={() => zipInput.current?.click()} data-testid="button-upload-zip">
                 {isUploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}Upload a .zip instead
               </button>
             </div>
@@ -1019,12 +1033,19 @@ function EditorRow({ count }: { count: number }) {
       <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
       <span className="font-medium">Editor bridge</span>
       <span className="text-xs text-muted-foreground truncate hidden sm:inline">VS Code · Claude Code · Cursor</span>
+      {/*
+        * Not ready (shared/not-ready.ts). Anyone who already linked an editor
+        * still gets the way in to manage — and revoke — what they linked; what
+        * goes is the invitation to link a new one.
+        */}
       {count > 0 ? (
         <a href="/profile#editor" className="ml-auto text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1.5" data-testid="link-editor-manage">
           <LiveDot />{count} linked · Manage
         </a>
-      ) : (
+      ) : EDITOR_BRIDGE_READY ? (
         <a href="/profile#editor" className="ml-auto text-xs font-medium text-primary hover:underline" data-testid="link-editor-connect">Connect</a>
+      ) : (
+        <span className="ml-auto text-xs text-muted-foreground" data-testid="editor-row-soon">{COMING_SOON}</span>
       )}
     </li>
   );

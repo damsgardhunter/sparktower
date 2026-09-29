@@ -406,9 +406,28 @@ export const EXECUTIVE_SALARY = 140_000;
  * array — a dissolved seat leaves the table but stops costing a salary, so the
  * two can diverge and only one of them is the bill.
  */
-export function fixedCosts(headcount: number, costIndex: number, seatCount: number, reach = 1): number {
-  const salaries = num(headcount) * SALARY_PER_HEAD * (Number.isFinite(costIndex) ? costIndex : 1);
-  return (salaries + Math.max(0, num(seatCount)) * EXECUTIVE_SALARY) * footprint(reach);
+export function fixedCosts(
+  headcount: number, costIndex: number, seatCount: number, reach = 1,
+  /*
+   * What one ordinary head costs in *this* market, and how big the market is.
+   *
+   * Both were missing and both matter more than the seat count on the markets
+   * Nova writes. `perHead` is `salaryIn(niche)` on the web — engineers cost
+   * what engineers cost here, not what the generic figure says. `scale` is the
+   * size of the market: a startup's market runs at a hundredth of the
+   * catalogue's, so a bill computed without it is a hundred times the one the
+   * company is actually charged.
+   *
+   * `officers` is how many of those chairs are paid for, which stopped being
+   * "one per seat" when a founder began holding all five desks alone.
+   */
+  opts: { perHead?: number; officers?: number; scale?: number } = {},
+): number {
+  const perHead = Number.isFinite(opts.perHead) ? (opts.perHead as number) : SALARY_PER_HEAD;
+  const officers = Math.max(0, num(opts.officers ?? seatCount));
+  const scale = Number.isFinite(opts.scale) ? (opts.scale as number) : 1;
+  const salaries = num(headcount) * perHead * (Number.isFinite(costIndex) ? costIndex : 1);
+  return (salaries + officers * EXECUTIVE_SALARY) * footprint(reach) * scale;
 }
 
 /**
@@ -450,7 +469,15 @@ function num(value: any): number {
  * over-reads its own danger and under-spends the whole season.
  */
 export function commitment(input: {
-  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats"> & { capacity?: number };
+  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats"> & {
+    capacity?: number;
+    /** Salaries actually paid. One, for a founder holding every desk. */
+    officers?: number;
+    /** The size of this company's market; every fixed cost is charged at it. */
+    scale?: number;
+  };
+  /** What one ordinary head costs in this market — `salaryIn(niche)` on the web. */
+  perHead?: number;
   decisions: FiledDecisions;
   costIndex: number;
   /**
@@ -536,7 +563,9 @@ export function commitment(input: {
   }
 
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
-  const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1);
+  const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1, {
+    perHead: input.perHead, officers: company.officers, scale: company.scale,
+  });
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   // A drawdown counts only up to the line, as commitment() and resolve() both
   // clamp it: asking the bank for fifty million against a two-million line
@@ -1050,8 +1079,17 @@ export function validateDraft(
      * left alone, and only the chief executive's focus is a question the year
      * cannot run without.
      */
+    /*
+     * Compared as text, exactly as validateDecision() does — see the note
+     * there. `terms` is offered as "0"/"30"/"60"/"90" because a select deals
+     * in strings and stored as the number the engine wants, so the value on a
+     * draft is 30 where the option says "30". Strict equality reads that as an
+     * answer nobody offered and refuses the whole filing.
+     */
+    const offered = (v: unknown) => field.options!.some((o) => String(o.value) === String(v));
+
     if (field.kind === "choice" && field.id === "focus") {
-      if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      if (!offered(value)) errors[field.id] = "Pick one.";
       continue;
     }
 
@@ -1061,7 +1099,7 @@ export function validateDraft(
       // an error under an empty control would be the form blaming somebody for
       // not answering a question it never asked.
       if ((field.options?.length ?? 0) === 0) continue;
-      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+      if (value !== undefined && value !== null && value !== "" && !offered(value)) {
         errors[field.id] = "Pick one.";
       }
       continue;

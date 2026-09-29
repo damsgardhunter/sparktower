@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Loading } from "@/components/nova";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -521,7 +522,7 @@ export default function DocumentBuilder() {
   };
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+    return <Loading what="Opening the document" />;
   }
   if (!doc) {
     return (

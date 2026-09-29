@@ -1,0 +1,13 @@
+-- Nova actions are bought in packs now, not rented by the day.
+--
+-- The day pass sold twenty-four hours of unlimited small actions for a dollar,
+-- which priced the one thing here that costs real money per press — a model
+-- call — at whatever a determined person could get through before midnight.
+-- A pack is the honest shape: a fixed number of actions for a fixed price,
+-- spent one at a time, and they do not expire, because money put on an account
+-- here never does.
+--
+-- `day_pass_until` deliberately stays. Somebody may have bought a pass an hour
+-- ago and it would be theft to drop it on deploy; the column is still read
+-- until the last one runs out, and nothing sells a new one.
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "nova_actions_bought" integer DEFAULT 0 NOT NULL;

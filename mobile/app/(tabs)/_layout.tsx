@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { colors } from "../../src/theme";
 import { AppHeader, PlainHeader } from "../../src/components/AppHeader";
+import { PLAIN_HEADER_TITLES, usesPlainHeader } from "../../src/components/header-kind";
 import { NovaTabBar } from "../../src/components/nav/NovaTabBar";
 import { TabBarVisibilityProvider } from "../../src/components/tab-bar-visibility";
 
@@ -17,8 +18,17 @@ export default function TabsLayout() {
     <TabBarVisibilityProvider>
       <Tabs
         tabBar={(props) => <NovaTabBar {...props} />}
-      screenOptions={{
-        header: () => <AppHeader />,
+      screenOptions={({ route }) => ({
+        /*
+         * The profile header is the top of Home, not a page decoration. Which
+         * tabs get it instead of a plain title bar is one list
+         * (components/header-kind.ts), read here and by the hook that tells a
+         * screen how much room to leave — so the two cannot disagree, which is
+         * how three screens ended up drawing their first rows underneath it.
+         */
+        header: () => (usesPlainHeader(route.name)
+          ? <PlainHeader title={PLAIN_HEADER_TITLES[route.name] ?? route.name} />
+          : <AppHeader />),
         /*
          * Zero, because the header draws its own: the cover photo runs from the
          * very top of the screen so the time and wifi icon sit on the
@@ -37,7 +47,7 @@ export default function TabsLayout() {
          */
         headerTransparent: true,
         sceneStyle: { backgroundColor: colors.canvas },
-      }}
+      })}
     >
       <Tabs.Screen name="feed" options={{ title: "Home" }} />
       <Tabs.Screen name="discover" options={{ title: "Discover" }} />

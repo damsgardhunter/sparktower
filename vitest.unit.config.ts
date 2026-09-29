@@ -25,5 +25,20 @@ export default defineConfig({
     environment: "node",
     globals: true,
     include: ["test/unit/**/*.test.ts"],
+    /*
+     * The few fixed values a pure test can still need.
+     *
+     * "No environment file" is the rule and it stays — but a handful of unit
+     * tests exercise modules that refuse to run without a secret, which is
+     * correct of them and meant those tests never ran at all. They failed at
+     * import with "SESSION_SECRET must be set", which reads like the suite's
+     * usual background noise rather than "the sealing of personal data is
+     * untested". The values are obviously fake and pinned here, not read from
+     * a developer's `.env`, so the suite still passes on a clean checkout.
+     */
+    env: {
+      SESSION_SECRET: "unit-test-session-secret-not-used-anywhere-real",
+      MOBILE_TOKEN_SECRET: "unit-test-mobile-secret-not-used-anywhere-real",
+    },
   },
 });

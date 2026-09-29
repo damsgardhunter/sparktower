@@ -2,7 +2,7 @@
  * The shape of GET /api/projects/:id/path?goal=… as the section screens read
  * it, and the small formatters every one of them shares.
  */
-import type { IntakeQuestion, WorkKind, LoopType, Actor, VerificationTier, PaceState, ProjectionMode } from "@shared/phase-trees";
+import type { IntakeQuestion, WorkKind, LoopType, Actor, VerificationTier, PaceState, ProjectionMode, PathSurface } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import type { CapitalProfile } from "@shared/capital";
 import type { WorkRow } from "@/components/path-work";
@@ -15,6 +15,8 @@ export interface PathMilestone {
   intake?: IntakeQuestion[];
   prefill?: "resume";
   routeQuestion?: string;
+  /** See BackboneMilestone.doneOn: finished by using a surface of its own. */
+  doneOn?: { surface: PathSurface; label: string };
 }
 export interface PathLoop { taskId: string; title: string; description: string; status: string; expanded: boolean; type: LoopType }
 export interface NextAction extends PathMilestone {
@@ -107,5 +109,11 @@ export function projection(p: PathPace) {
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** Nova's gradient, for Nova moments and the "next" highlight. */
-export const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+/**
+ * Nova's gradient, for Nova moments and the "next" highlight.
+ *
+ * Re-exported rather than written out again: it lives in components/nova/tokens.ts
+ * with the rest of the look. The dozen files importing it from here do not have
+ * to move, and the string exists once.
+ */
+export { NOVA_GRADIENT } from "@/components/nova/tokens";

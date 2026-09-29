@@ -8,8 +8,28 @@
  * enter. The API-level claims are in test/integration/company-*.test.ts; this
  * is the check that the screens are really there and join up.
  */
+import pg from "pg";
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { loadEnvFile } from "../test/setup/env";
+import { testDatabaseUrl } from "../test/setup/database";
+
+loadEnvFile();
+
+/*
+ * Seeding, the way challenge-prize.spec.ts does it and for the same reason:
+ * a company may not be created until its website is proved, and proving one
+ * means answering a request on that domain, which the e2e server cannot do.
+ * The refusal itself is covered by "a company cannot be created without
+ * proving its website"; the transport is covered in
+ * test/integration/company-verification.test.ts. What this spec is for is
+ * everything that happens *after* a company exists.
+ */
+const sql = async (text: string, params: any[]) => {
+  const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
+  await db.connect();
+  try { return await db.query(text, params); } finally { await db.end(); }
+};
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -22,11 +42,12 @@ async function personIn(browser: Browser, ip: string, first: string) {
   expect((await api.post("/api/auth/register", {
     data: { email: `e2e-co-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Co" },
   })).ok()).toBeTruthy();
+  const me = await (await api.get("/api/auth/user")).json();
   await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", {
     data: { displayName: `${first} Co`, headline: "Running a business", bio: "Here for the company tools." },
   })).ok()).toBeTruthy();
-  return { context, api };
+  return { context, api, id: me.id as string };
 }
 
 test("a company signs up, finds every tool, and a founder answers its challenge", async ({ browser }) => {
@@ -34,19 +55,38 @@ test("a company signs up, finds every tool, and a founder answers its challenge"
   const owner = await personIn(browser, "203.0.115.10", "Olive");
   const founder = await personIn(browser, "203.0.115.11", "Finn");
 
-  // Create the company through the screen a business owner would use.
+  /*
+   * The company, already proved. The create form refuses until a domain has
+   * been verified — see the note on `sql` above — so this walks in at the
+   * point a real owner reaches once their proof has landed.
+   */
+  const domain = `harbour-${stamp()}.test`;
+  const made = await sql(
+    `INSERT INTO companies (name, slug, description, website, verified_domain, verified_at, verified_method, created_by, created_at)
+     VALUES ($1, $2, $3, $4, $4, now(), 'file', $5, now()) RETURNING id`,
+    ["Harbour Logistics", `harbour-${stamp()}`, "Freight forwarding for small importers.", domain, owner.id],
+  );
+  const companyId = made.rows[0].id as string;
+  await sql(
+    `INSERT INTO company_members (company_id, user_id, role, joined_at) VALUES ($1, $2, 'owner', now())`,
+    [companyId, owner.id],
+  );
+  /*
+   * Money to post with. A challenge takes its prize and the posting fee out of
+   * the owner's balance the moment it is posted (server/challenge-prizes.ts),
+   * so without this the form submits and nothing appears — which is what the
+   * missing row below turned out to be.
+   */
+  await sql(`UPDATE users SET balance_cents = 100000 WHERE id = $1`, [owner.id]);
+
   const page = await owner.context.newPage();
   await page.goto("/companies");
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
   // Reachable from the sidebar, not only by typing the address.
   await expect(page.getByTestId("link-companies")).toBeAttached({ timeout: 20_000 });
   await expect(page.getByTestId("link-challenges")).toBeAttached();
-  await page.getByTestId("button-new-company").click({ timeout: 20_000 });
-  await page.getByTestId("input-company-name").fill("Harbour Logistics");
-  await page.getByTestId("input-company-description").fill("Freight forwarding for small importers.");
-  await page.getByTestId("button-create-company").click();
+  await page.goto(`/companies/${companyId}`);
   await expect(page.getByTestId("text-company-name")).toHaveText("Harbour Logistics", { timeout: 20_000 });
-  const companyId = page.url().split("/companies/")[1].split("?")[0];
 
   // Every tab opens onto something, not a blank panel or an error.
   for (const tab of ["run", "team", "training", "talent", "challenges", "scouting", "posts", "admin"]) {

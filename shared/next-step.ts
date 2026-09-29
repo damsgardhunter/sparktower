@@ -15,7 +15,7 @@
  * builder saved, and the server sends it.
  */
 import type { ProjectGoal } from "./goals";
-import type { Actor } from "./phase-trees/types";
+import type { Actor, PathSurface } from "./phase-trees/types";
 
 export interface WeeklyUpdate {
   due: boolean;
@@ -55,7 +55,25 @@ export interface NextStepItem {
   track: { goal: ProjectGoal; label: string; short: string; primary: boolean };
   phase: string;
   progress: { done: number; total: number };
-  next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
+  next: {
+    id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null;
+    /**
+     * For a step that is finished by using a screen of its own rather than by
+     * a button — the roadmap, the jobs list, the quarter's goals.
+     *
+     * Carried here because these two cards are the only surfaces that do not
+     * read the path tree: the project's own page takes `doneOn` off the
+     * milestone, while the home card and the phone get this hand-copied
+     * subset and nothing else. Without it they would go on offering "Nova
+     * builds it" on a step where that button was the bug — it ran the generic
+     * generator, wrote a plausible paragraph and ticked a step nobody had
+     * done.
+     *
+     * The actor is left alone and is still true: Nova does build the roadmap.
+     * It is the button that changes, to the way in.
+     */
+    doneOn?: { surface: PathSurface; label: string };
+  } | null;
   daysSinceActivity: number;
   projectedAt: string | null;
   /** The step finished most recently, if it can still be shared for feedback. */

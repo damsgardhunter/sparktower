@@ -49,10 +49,20 @@ export interface BrandLanding {
   landed: number;
 }
 
-export function brandLanding(company: Pick<Company, "brandPipeline">, gained: number): BrandLanding {
-  const landed = Math.max(0, company.brandPipeline ?? 0);
+/**
+ * `per` is one period's share of a year: 1 yearly, 1/4 quarterly, 1/12 monthly.
+ *
+ * A pipeline that emptied itself every call would land a year's worth of brand
+ * in a quarter, so a period releases only its share of what is waiting. The
+ * steady state and the annual throughput come out the same at every cadence —
+ * a quarter adds a quarter of the campaign and releases a quarter of the queue
+ * — and at `per = 1` the arithmetic is exactly what it always was.
+ */
+export function brandLanding(company: Pick<Company, "brandPipeline">, gained: number, per = 1): BrandLanding {
+  const waiting = Math.max(0, company.brandPipeline ?? 0);
+  const landed = waiting * per;
   const thisYear = Math.max(0, gained) * BRAND_NOW;
-  return { now: thisYear + landed, next: Math.max(0, gained) - thisYear, landed };
+  return { now: thisYear + landed, next: waiting - landed + (Math.max(0, gained) - thisYear), landed };
 }
 
 export interface QualityLanding {
@@ -68,11 +78,18 @@ export function qualityLanding(
   company: Pick<Company, "pipeline" | "pipelineLater">,
   shipped: number,
   researched: number,
+  per = 1,
 ): QualityLanding {
+  const near = Math.max(0, company.pipeline ?? 0);
+  const far = Math.max(0, company.pipelineLater ?? 0);
+  // Each stage passes on a period's share, so a two-year research bet still
+  // takes two years however many decisions the table files in one.
+  const landed = near * per;
+  const moved = far * per;
   return {
-    landed: Math.max(0, company.pipeline ?? 0),
-    pipeline: Math.max(0, shipped) + Math.max(0, company.pipelineLater ?? 0),
-    pipelineLater: Math.max(0, researched),
+    landed,
+    pipeline: near - landed + Math.max(0, shipped) + moved,
+    pipelineLater: far - moved + Math.max(0, researched),
   };
 }
 
@@ -87,14 +104,26 @@ export interface Staffing {
   supportEquivalent: number;
 }
 
-export function staffing(company: Pick<Company, "staff">, headcount: number): Staffing {
+export function staffing(company: Pick<Company, "staff">, headcount: number, per = 1): Staffing {
   const wanted = Math.max(0, Math.round(headcount));
-  const established = Math.min(wanted, Math.max(0, company.staff ?? 0));
+  const have = Math.max(0, company.staff ?? 0);
+  const established = Math.min(wanted, have);
   return {
     established,
     newHires: wanted - established,
-    next: wanted,
-    supportEquivalent: established * SALARY * STAFF_LEVERAGE,
+    // A hire settles in over a year, not over whatever a period happens to be.
+    // Whole people. A period's share of a hire is still a fraction of a
+    // person until it is rounded, and "1.5 new hires this month" is not a
+    // sentence a report can print.
+    next: Math.round(have + (wanted - have) * per),
+    /*
+     * A year of what the established staff are worth, as support spend —
+     * scaled, because it is added to a period's support budget and weighed
+     * against a period's threshold. Unscaled, a quarterly season's staff were
+     * worth four years of support a year and service ran away: 75 points
+     * against a yearly season's 60 on the same plan.
+     */
+    supportEquivalent: established * SALARY * STAFF_LEVERAGE * per,
   };
 }
 
@@ -105,15 +134,60 @@ export interface CapacityBuild {
   next: number;
   /** Room ordered this year that is not open yet. */
   building: number;
+  /**
+   * The build in flight: what it started from and what it is for.
+   *
+   * Carried on the company so each period adds the same slice of the original
+   * gap rather than a slice of what is left. Undefined once the build has
+   * arrived, or when there is nothing being built.
+   */
+  buildFrom?: number;
+  buildTo?: number;
 }
 
-export function capacityBuild(company: Pick<Company, "capacity">, target: number): CapacityBuild {
+export function capacityBuild(
+  company: Pick<Company, "capacity"> & { buildFrom?: number; buildTo?: number },
+  target: number,
+  per = 1,
+): CapacityBuild {
   const current = Math.max(0, Math.round(company.capacity));
   const wanted = Math.max(0, Math.round(target));
+
+  // A cut is immediate, and it abandons whatever was being built.
+  if (wanted <= current) {
+    return { now: wanted, next: wanted, building: 0, buildFrom: undefined, buildTo: undefined };
+  }
+
+  /*
+   * A quarter of the *original* gap each quarter, not a quarter of what is
+   * left of it.
+   *
+   * It used to be `current + (wanted - current) * per`, recomputed every
+   * period against a capacity that had already moved — so each quarter closed
+   * a quarter of the remaining gap and the build approached its target
+   * without ever arriving. Asking for 1,000 from 168 gave 376, then 532, then
+   * 649, then 737: after a full year, 74% of what was asked for, and 98% only
+   * in the third year. The lever said "building takes a year" and meant it;
+   * the arithmetic was Zeno's.
+   *
+   * So the build remembers where it started. While the target is unchanged the
+   * step stays the same size, and four quarters of a quarter is the whole
+   * thing. Changing the target starts a new build from wherever the company
+   * has got to, which is what somebody changing their mind means.
+   */
+  const continuing = company.buildTo === wanted && company.buildFrom !== undefined;
+  const from = continuing ? Math.max(0, Math.round(company.buildFrom!)) : current;
+  const step = Math.max(1, Math.round((wanted - from) * per));
+  const next = Math.min(wanted, current + step);
+
   return {
-    // A cut is immediate; growth waits a year.
-    now: Math.min(current, wanted),
-    next: wanted,
+    now: current,
+    // Whole units of room, because capacity feeds the spill pass, where a
+    // fractional seat became a fractional customer.
+    next,
     building: Math.max(0, wanted - current),
+    // Carried while the build is still running, so the step keeps its size.
+    buildFrom: next < wanted ? from : undefined,
+    buildTo: next < wanted ? wanted : undefined,
   };
 }

@@ -34,7 +34,15 @@ services:
     # the release checklist asks for and the one nobody remembers under
     # pressure. A failed migration fails the deploy and the old version keeps
     # serving. (Paid plans only — which this is.)
-    preDeployCommand: npm run db:migrate
+    #
+    # `db:verify` is not decoration. `drizzle-kit migrate` prints "migrations
+    # applied successfully!" whether it applied ten or none, and for a while it
+    # applied none: one bookkeeping row stamped later than any migration made
+    # the rest invisible, and every deploy passed this step while the database
+    # stayed ten migrations behind. The verify asks whether the journal's
+    # entries are actually recorded as applied, so that failure is a red deploy
+    # instead of a quiet one. `npm run db:reconcile` is the repair it points to.
+    preDeployCommand: npm run db:migrate && npm run db:verify
     # The app answers this before it has finished booting, on purpose, so a
     # deploy isn't failed by a probe that arrives during startup work. It does
     # NOT check the database: see /_ready in server/app.ts for why.

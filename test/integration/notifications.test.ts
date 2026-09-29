@@ -119,7 +119,7 @@ describe("founder badges", () => {
     const app = await getTestApp();
     const maker = await person(app, "Maker");
     // Private projects are a paid feature.
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, maker.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, maker.id));
     const visitor = await person(app, "Visitor");
     const made = (await maker.agent.post("/api/projects").send({ title: "Made By Me", description: "A project its founder should get a badge for.", category: "saas", goal: "ship_mvp", subcategory: "saas", logoUrl: "/objects/logo.png" })).body;
     await settle();

@@ -34,12 +34,25 @@ export interface NotificationShape {
  */
 export const PATH_FOCUS = { next: "next", weekly: "weekly" } as const;
 
-/** The project's dashboard, on a section, focused on its next step. */
-export function pathHref(projectId: string, opts: { section?: ProjectGoal | null; focus?: string | null } = {}): string {
+/**
+ * The project's dashboard, on a section, focused on its next step.
+ *
+ * `surface` is for the steps that are finished by a screen of their own
+ * (BackboneMilestone.doneOn) — the roadmap, the jobs list, the quarter's
+ * goals. A card somewhere else entirely, the home screen or the phone, cannot
+ * scroll to a thing on a page it isn't on, so it links to it instead and the
+ * dashboard reads it on arrival (useOpenSurface). Built here so that every
+ * card that offers the way there builds the same link.
+ */
+export function pathHref(
+  projectId: string,
+  opts: { section?: ProjectGoal | null; focus?: string | null; surface?: string | null } = {},
+): string {
   const params = new URLSearchParams();
   if (opts.section) params.set("section", opts.section);
   params.set("tab", "nova");
   params.set("focus", opts.focus || PATH_FOCUS.next);
+  if (opts.surface) params.set("surface", opts.surface);
   return `/projects/${projectId}/manage?${params.toString()}`;
 }
 
@@ -61,6 +74,26 @@ export function notificationText(n: NotificationShape): string {
     case "artifact_signup": return `${who} joined SparkTower from your artifact`;
     case "invite_accepted": return n.projectTitle ? `${who} accepted your invite to ${n.projectTitle}` : `${who} accepted your invite`;
     case "weekly_update": return n.projectTitle ? `Share this week's progress on ${n.projectTitle}` : "Share this week's progress";
+    /*
+     * The excerpt carries what it actually did ("Nova wrote 19 steps, and left
+     * 9 for you"), so this line stays the headline and the count is read
+     * underneath it rather than crammed in.
+     */
+    case "nova_build_done": return n.projectTitle ? `Nova finished building ${n.projectTitle}` : "Nova finished building your path";
+    /*
+     * The headline says a projection can now be checked; the excerpt carries
+     * what it found — "ran about 38% high across 3 months". Deliberately not
+     * "come back and see": the sentence has to be worth the tap on its own,
+     * because a bell that cries wolf is a bell people turn off.
+     */
+    case "projection_marked":
+      return n.projectTitle
+        ? `Your ${n.projectTitle} projection can be checked against what happened`
+        : "One of your projections can be checked against what happened";
+    case "scheme_untested":
+      return n.projectTitle
+        ? `Your marketing scheme for ${n.projectTitle} is worth testing — and testing it is free`
+        : "Your marketing scheme is worth testing, and testing it is free";
     case "feedback_used": return n.projectTitle ? `${who} used your feedback in an update on ${n.projectTitle}` : `${who} used your feedback in an update`;
     // Not "cancelled": one person left, and the other is being told, not blamed.
     case "sprint_left": return `${who} left your sprint`;
@@ -107,6 +140,13 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // The path lives on the project's dashboard: straight to the section the step is on, with its Next Step card in view.
   if ((n.kind === "path_step_done" || n.kind === "next_step") && n.projectId) return pathHref(n.projectId, { section: n.section, focus: n.focus });
   if (n.kind === "weekly_update" && n.projectId) return pathHref(n.projectId, { section: n.section, focus: PATH_FOCUS.weekly });
+  // Onto the path it just built, at the next step — which after a build is the
+  // first decision it left for them.
+  if (n.kind === "nova_build_done" && n.projectId) return pathHref(n.projectId, { section: n.section });
+  /* Both land on the simulations panel, which is where the answer is. */
+  if ((n.kind === "projection_marked" || n.kind === "scheme_untested") && n.projectId) {
+    return `/projects/${n.projectId}/manage?tab=simulations`;
+  }
   if (n.kind === "artifact_signup" && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
   if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;

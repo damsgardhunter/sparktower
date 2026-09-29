@@ -108,6 +108,31 @@ describe("coming back to the next step", () => {
     expect(rows.find((r) => r.projectId === project.id)?.readAt).not.toBeNull();
   });
 
+  it("doesn't tell a solo builder about the step they just clicked", async () => {
+    const app = await getTestApp();
+    const solo = await person(app, "Clicker");
+    const project = (await solo.agent.post("/api/projects").send({ title: "Own Clicks", description: "A solo project whose owner answers their own steps by hand.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+
+    /*
+     * The rule above — a completion with nobody behind it tells everyone — is
+     * deliberate. What made it wrong in practice is that picking one of Nova's
+     * options *is* somebody, and the route recorded no one, so the owner is
+     * also the "everyone" being told. Twenty-four steps answered in one
+     * sitting sent twenty-four notifications about the clicks that made them.
+     */
+    const tasks = (await solo.agent.get(`/api/projects/${project.id}/kanban`)).body;
+    const step = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.1"));
+    const { saveWork } = await import("../../server/phase-trees");
+    const work = await saveWork(project.id, step.id, { kind: "options", intro: "", options: [{ title: "A", body: "The answer they picked." }] } as any);
+
+    await solo.agent.post(`/api/projects/${project.id}/path/work/${work.id}/choose`).send({ index: 0 }).expect(200);
+    await settle();
+
+    expect((await bell(solo)).some((x) => x.kind === "path_step_done"), "the builder was told about their own click").toBe(false);
+    const [row] = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.id, step.id));
+    expect(row.completedById, "a click has an author, which is what the rule reads").toBe(solo.id);
+  });
+
   it("offers the week's unshared steps as a weekly update, posts them once, and reminds once a week", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Weekly");

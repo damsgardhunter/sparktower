@@ -223,17 +223,41 @@ export async function applyDatabaseRules(databaseUrl: string): Promise<void> {
  * keys without needing to know the dependency order, which would otherwise be
  * a list to maintain by hand every time a table is added.
  */
+/**
+ * Tables holding definitions rather than anybody's data, seeded from code when
+ * the app boots and never written by a test. Left alone by `truncateAll` — see
+ * the note inside it.
+ */
+const CATALOG_TABLES = ["badges"];
+
 export async function truncateAll(databaseUrl: string): Promise<void> {
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
   try {
     await assertConnectedToTestDatabase(client);
 
+    /*
+     * Everything except the catalogs.
+     *
+     * `badges` is reference data derived from code (`shared/badges.ts`) and
+     * upserted once when the app boots (`ensureBadgeCatalog`). Truncating it
+     * does not reset state, it deletes the definitions — and because the seed
+     * only runs at boot, nothing puts them back. `awardBadge` then looks up an
+     * id that is no longer there, logs "Skipping unknown badge" and returns
+     * null, so every badge award in every test quietly did nothing. The e2e
+     * database had zero rows in it for exactly this reason: the server seeds
+     * the catalog as it starts, and the global setup truncated it immediately
+     * afterwards.
+     *
+     * The rule is the distinction, not the list: user data is what a test
+     * makes and must be cleared between tests; a catalog is what the code is,
+     * and clearing it just breaks the feature.
+     */
     const { rows } = await client.query<{ name: string }>(`
       SELECT quote_ident(tablename) AS name
       FROM pg_tables
-      WHERE schemaname = 'public'
-    `);
+      WHERE schemaname = 'public' AND tablename <> ALL($1::text[])
+    `, [CATALOG_TABLES]);
     if (rows.length === 0) return;
     const truncate = `TRUNCATE ${rows.map((r) => r.name).join(", ")} RESTART IDENTITY CASCADE`;
 

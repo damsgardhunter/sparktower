@@ -11,6 +11,7 @@ import bcrypt from "bcryptjs";
 import { sessionSecret } from "../../secrets";
 import { isDeleted } from "../../account-data";
 import { surfaceEnabled } from "../../surfaces";
+import { pool } from "../../db";
 
 /** The host part of a configured URL — "https://sparktower.app/" → "sparktower.app". */
 function hostOf(url: string | undefined): string | null {
@@ -63,8 +64,21 @@ export function getSession() {
   const secret = sessionSecret();
   const sessionFn: any = (session as any)?.default || session;
   const pgStore = connectPg(sessionFn);
+  /*
+   * The application's pool, not a second one of its own.
+   *
+   * Handed a `conString`, connect-pg-simple builds its own pool with
+   * node-postgres's defaults — which includes waiting forever for a
+   * connection. That is the failure the main pool was fixed for (server/db.ts),
+   * and it was still live here, on the one query every authenticated request
+   * makes before anything else runs.
+   *
+   * Sharing also makes the connections fungible: a burst of session reads can
+   * use capacity the application isn't using, and there is one number to size
+   * rather than two, one of which could not be sized at all.
+   */
   const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
+    pool,
     createTableIfMissing: false,
     ttl: sessionTtlSeconds,
     tableName: "sessions",

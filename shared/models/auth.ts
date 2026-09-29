@@ -20,11 +20,84 @@ export const users = pgTable("users", {
   passwordHash: varchar("password_hash"),
   authProvider: varchar("auth_provider").default("local"),
   googleId: varchar("google_id").unique(),
+  /**
+   * Apple's stable identifier for this person *in this app* (`sub`).
+   *
+   * Unique, like Google's, and the only reliable way to recognise somebody who
+   * signs in with Apple: the email is optional — Apple's "Hide My Email"
+   * returns a per-app relay address instead — and is only handed over on the
+   * very first authorization. `sub` is there every time and never changes, so
+   * it is what an account is matched on.
+   */
+  appleId: varchar("apple_id").unique(),
   stripeCustomerId: varchar("stripe_customer_id"),
+  /**
+   * Extra Ten Years valuations this person has bought, at a dollar each.
+   *
+   * The game is free to play and free to be valued once a day, because it is
+   * how people meet the product. The valuation is a model call we pay for and
+   * charge no credits against, so the second one in a day is a dollar rather
+   * than a subsidy. Banked rather than dated: a play bought today is still
+   * there next week.
+   */
+  gamePlaysPaid: integer("game_plays_paid").default(0).notNull(),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionTier: varchar("subscription_tier").default("free"),
+  /**
+   * Small Nova actions used this calendar month, against the free monthly
+   * allowance (MONTHLY_SMALL_ACTIONS). Counted in actions, not credits — one
+   * chat turn, one nudge, one persona is one. Reset by
+   * storage.resetCreditsIfNeeded the first time the month is noticed.
+   *
+   * The column keeps its old name because every row in production already has
+   * a number in it and renaming a live counter buys nothing.
+   */
   creditsUsed: integer("credits_used").default(0).notNull(),
   creditsResetAt: timestamp("credits_reset_at"),
+  /**
+   * Money on the account, in cents, added through Stripe Checkout and spent
+   * instantly on a priced outcome — so buying a roadmap is one tap rather than
+   * a redirect. It never expires: it is the person's money, and an outcome
+   * that fails puts it straight back (server/wallet.ts).
+   *
+   * Every movement is also written to nova_ledger, which is the audit trail;
+   * this column is the running total the app reads on every request.
+   */
+  balanceCents: integer("balance_cents").default(0).notNull(),
+  /**
+   * A developer's account: never charged, allowance never moves.
+   *
+   * The one switch that replaced a dropdown of four identical free tiers. It
+   * is honoured only when NODE_ENV is not production *and* the route that sets
+   * it is reachable, which it is not in production — two gates, because a
+   * column that turns billing off deserves them.
+   */
+  devUnlimited: boolean("dev_unlimited").default(false).notNull(),
+  /**
+   * Small Nova actions bought and not yet spent.
+   *
+   * The thing somebody buys when the month's free allowance has run out. Not
+   * a subscription and not a rental: a pack of actions, spent one at a time,
+   * which do not expire — money put on an account here never does, and an
+   * action bought with it is the same promise.
+   */
+  novaActionsBought: integer("nova_actions_bought").default(0).notNull(),
+  /**
+   * The old day pass: while this is in the future, small actions were free and
+   * didn't touch the allowance.
+   *
+   * Nothing sells one any more — see `novaActionsBought` — and it is still
+   * read, and honoured, until the last one bought runs out. Dropping it on
+   * deploy would take a day from somebody who paid for it an hour earlier.
+   */
+  dayPassUntil: timestamp("day_pass_until"),
+  /**
+   * While this is in the future, image generation is unlimited — bought for
+   * five dollars a day, and separate from the ordinary pass on purpose.
+   * Pictures are the one thing here that costs real money on every press, and
+   * the dollar pass would have made them free in bulk.
+   */
+  imagePassUntil: timestamp("image_pass_until"),
   /**
    * The last subscription payment that failed and hasn't been fixed since —
    * set by invoice.payment_failed, cleared by the next paid invoice. What the
@@ -36,6 +109,24 @@ export const users = pgTable("users", {
   /** A subscription payment refunded in full, which took the paid plan away until the next one is paid. */
   subscriptionRefundedAt: timestamp("subscription_refunded_at"),
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
+  /**
+   * Where money this person earns here should land.
+   *
+   * "balance" puts it on their SparkTower balance, spendable on Nova straight
+   * away and needing no bank, no onboarding and no identity check. "bank"
+   * sends it out to their connected Stripe account.
+   *
+   * Null means they have not said, which is deliberately not the same as
+   * wanting their balance. An absent choice resolves to the bank when there is
+   * a connected account to pay and the balance when there isn't — so
+   * connecting an account still means what it always meant, and the dead end
+   * it replaced (releasing refused outright without one) is gone.
+   *
+   * Defaulting this to "balance" instead would have silently redirected every
+   * creator who had already connected a bank, because nothing flips a default.
+   * The backing payout tests caught exactly that.
+   */
+  payoutTarget: varchar("payout_target", { enum: ["balance", "bank"] }),
   /**
    * Platform-side authority, distinct from a user's role on any one project.
    *

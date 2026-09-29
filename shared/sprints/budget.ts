@@ -36,16 +36,34 @@ import { SPEND_OPTIONS, type SpendOption } from "./cards";
 /** What they are given. */
 export const BUDGET_TOTAL = 1_000_000;
 
+/**
+ * A deck and the money that goes with it.
+ *
+ * The arithmetic below — snapping to steps, refusing negatives, never
+ * exceeding the total, averaging two people's answers — is about budgets, not
+ * about startups, and a second caller wanted it: the ten-year outlook asks a
+ * real, operating business where it would put money, and was handing a café
+ * owner this deck's "a senior engineer" and "building the product". So every
+ * function takes the deck it is working on, and defaults to this one, which is
+ * the sprint game's and is what every existing caller means.
+ */
+export interface SpendDeck {
+  options: SpendOption[];
+  total: number;
+}
+
+export const SPRINT_DECK: SpendDeck = { options: SPEND_OPTIONS, total: BUDGET_TOTAL };
+
 /** An allocation: option id → dollars. Missing means zero. */
 export type Allocation = Record<string, number>;
 
-export const emptyAllocation = (): Allocation =>
-  Object.fromEntries(SPEND_OPTIONS.map((o) => [o.id, 0]));
+export const emptyAllocation = (deck: SpendDeck = SPRINT_DECK): Allocation =>
+  Object.fromEntries(deck.options.map((o) => [o.id, 0]));
 
 export const allocated = (a: Allocation): number =>
   Object.values(a).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
 
-export const unallocated = (a: Allocation): number => BUDGET_TOTAL - allocated(a);
+export const unallocated = (a: Allocation, deck: SpendDeck = SPRINT_DECK): number => deck.total - allocated(a);
 
 /**
  * An allocation cleaned up into something that can be committed.
@@ -60,17 +78,17 @@ export const unallocated = (a: Allocation): number => BUDGET_TOTAL - allocated(a
  *     numbers a person chose
  *   - the total can never exceed the budget
  */
-export function cleanAllocation(raw: unknown): Allocation {
+export function cleanAllocation(raw: unknown, deck: SpendDeck = SPRINT_DECK): Allocation {
   const source = (raw ?? {}) as Record<string, unknown>;
-  const out = emptyAllocation();
+  const out = emptyAllocation(deck);
 
-  for (const option of SPEND_OPTIONS) {
+  for (const option of deck.options) {
     const n = Number(source[option.id]);
     if (!Number.isFinite(n) || n <= 0) continue;
-    out[option.id] = Math.min(BUDGET_TOTAL, Math.round(n / option.step) * option.step);
+    out[option.id] = Math.min(deck.total, Math.round(n / option.step) * option.step);
   }
 
-  return trimToBudget(out);
+  return trimToBudget(out, deck);
 }
 
 /**
@@ -81,9 +99,9 @@ export function cleanAllocation(raw: unknown): Allocation {
  * wiped by a proportional trim — and the least surprising, since the line you
  * see shrink is the one you put the most into.
  */
-export function trimToBudget(a: Allocation): Allocation {
+export function trimToBudget(a: Allocation, deck: SpendDeck = SPRINT_DECK): Allocation {
   const out = { ...a };
-  let over = allocated(out) - BUDGET_TOTAL;
+  let over = allocated(out) - deck.total;
   if (over <= 0) return out;
 
   const byLargest = Object.keys(out).sort((x, y) => (out[y] ?? 0) - (out[x] ?? 0));
@@ -104,18 +122,18 @@ export function trimToBudget(a: Allocation): Allocation {
  * Any rounding shortfall goes to the bank, which is the only line where an
  * arbitrary few thousand dollars means something honest.
  */
-export function mergeAllocations(allocations: Allocation[]): Allocation {
-  if (allocations.length === 0) return emptyAllocation();
-  if (allocations.length === 1) return cleanAllocation(allocations[0]);
+export function mergeAllocations(allocations: Allocation[], deck: SpendDeck = SPRINT_DECK): Allocation {
+  if (allocations.length === 0) return emptyAllocation(deck);
+  if (allocations.length === 1) return cleanAllocation(allocations[0], deck);
 
-  const merged = emptyAllocation();
-  for (const option of SPEND_OPTIONS) {
+  const merged = emptyAllocation(deck);
+  for (const option of deck.options) {
     const mean = allocations.reduce((sum, a) => sum + (Number(a[option.id]) || 0), 0) / allocations.length;
     merged[option.id] = Math.round(mean / option.step) * option.step;
   }
 
-  const trimmed = trimToBudget(merged);
-  const left = unallocated(trimmed);
+  const trimmed = trimToBudget(merged, deck);
+  const left = unallocated(trimmed, deck);
   if (left > 0) trimmed.runway = (trimmed.runway ?? 0) + left;
   return trimmed;
 }
@@ -155,9 +173,9 @@ export interface BudgetSummary {
   deployed: number;
 }
 
-export function summariseBudget(a: Allocation): BudgetSummary {
-  const clean = cleanAllocation(a);
-  const lines: BudgetLine[] = SPEND_OPTIONS.map((option) => {
+export function summariseBudget(a: Allocation, deck: SpendDeck = SPRINT_DECK): BudgetSummary {
+  const clean = cleanAllocation(a, deck);
+  const lines: BudgetLine[] = deck.options.map((option) => {
     const amount = clean[option.id] ?? 0;
     return {
       option,
@@ -174,7 +192,7 @@ export function summariseBudget(a: Allocation): BudgetSummary {
 
   return {
     total,
-    unallocated: BUDGET_TOTAL - total,
+    unallocated: deck.total - total,
     lines,
     funded: lines.filter((l) => l.amount > 0).sort((x, y) => y.amount - x.amount),
     underfunded: lines.filter((l) => l.underfunded),
@@ -186,15 +204,15 @@ export function summariseBudget(a: Allocation): BudgetSummary {
 }
 
 /** Whether a budget is finished enough to commit. */
-export function budgetIsReady(a: Allocation): { ok: true } | { ok: false; reason: string } {
-  const left = unallocated(cleanAllocation(a));
-  if (left < 0) return { ok: false, reason: "That's more than a million." };
+export function budgetIsReady(a: Allocation, deck: SpendDeck = SPRINT_DECK): { ok: true } | { ok: false; reason: string } {
+  const left = unallocated(cleanAllocation(a, deck), deck);
+  if (left < 0) return { ok: false, reason: `That's more than ${money(deck.total)}.` };
   /*
    * Leaving some unspent is a real decision — "keep it in the bank" is a line
    * on the board — so the only thing refused here is a budget nobody touched.
    * A player who wants to bank the lot can, by putting it there on purpose.
    */
-  if (left === BUDGET_TOTAL) return { ok: false, reason: "Spend at least some of it." };
+  if (left === deck.total) return { ok: false, reason: "Spend at least some of it." };
   return { ok: true };
 }
 

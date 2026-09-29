@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Loading } from "@/components/nova";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
 import { NovaActionButton } from "@/components/nova-action-button";
@@ -26,7 +28,7 @@ import {
   Loader2, Map, Sparkles, RefreshCw, Flag, CheckCircle2, Circle,
   CircleDot, Clock, Users2, Target, Compass, Hammer, X, Pencil, ChevronDown, ChevronUp,
 } from "lucide-react";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import type { ProjectRoadmap, RoadmapPhase } from "@shared/schema";
 
 interface RoadmapResponse {
@@ -92,6 +94,7 @@ export function RoadmapTab({ projectId, isOwner, goal }: { projectId: string; is
 
 function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean }) {
   const { toast } = useToast();
+  const confirmPurchase = useConfirmPurchase();
   const { can, creditsRemaining, isUnlimited } = useEntitlements();
 
   const [goal, setGoal] = useState("");
@@ -135,12 +138,15 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
 
   const generateMutation = useMutation({
     mutationFn: async () => {
+      // Priced: asked before it spends, never after. See payment-dialog.
+      if (!(await confirmPurchase("roadmapGeneration", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/generate`, {
         goal, startingPoint: startingPoint || undefined, targetDate: targetDate || undefined, depth,
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       toast({ title: "Roadmap ready", description: "Nova mapped out your path. Review the phases below." });
       setGoal(""); setStartingPoint(""); setTargetDate("");
       invalidate();
@@ -188,6 +194,14 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
 
   const rebuildMutation = useMutation({
     mutationFn: async () => {
+      /*
+       * A rebuild is the same purchase as a first build — it is the roadmap
+       * being written again. Keeping a bought roadmap current is the free
+       * "update" above, which is the distinction worth protecting: charge for
+       * the rebuild and people stop rebuilding; charge for the nudge and they
+       * stop touching the plan at all.
+       */
+      if (!(await confirmPurchase("roadmapRebuild", { projectId }))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/rebuild`, {
         whatChanged: whatChanged || undefined,
         newGoal: newGoal || undefined,
@@ -196,6 +210,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
       return res.json();
     },
     onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       toast({
         title: `Roadmap rebuilt (v${result?.roadmap?.version ?? "?"})`,
         description: `${result.milestonesUpdated} milestones resequenced, ${result.tasksUpdated} tasks re-prioritised.`,
@@ -264,7 +279,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
   });
 
   if (isLoading) {
-    return <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
+    return <Loading what="Reading your roadmap" />;
   }
 
   // Gated: pitch the Builder plan by outcome rather than by entitlement.
@@ -281,7 +296,21 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
   }
 
   const roadmap = data?.roadmap;
-  const notEnoughCredits = !isUnlimited && creditsRemaining < CREDIT_COSTS.roadmapGeneration;
+  /*
+   * Building a roadmap is a priced outcome, not a credit spend.
+   *
+   * `CHARGE_FOR.roadmapGeneration` is "roadmap": three dollars off the
+   * balance, taken by `requireCredits` at the route, and it never touches the
+   * month's free Nova actions. Comparing those free actions against
+   * `CREDIT_COSTS.roadmapGeneration` from the retired subscription pricing
+   * disabled this button for anybody who had spent them on something else,
+   * with money sitting on the account — the same fault as the codebase audit,
+   * which is how this one was found.
+   *
+   * Left ungated: a 402 opens the payment dialog with the price, the balance
+   * and a way to pay. A dead button explains nothing and offers nothing.
+   */
+  const roadmapPrice = formatMoney(OUTCOME_PRICE_CENTS.roadmap);
 
   if (!roadmap) {
     return (
@@ -341,20 +370,16 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
               <p className="text-xs text-muted-foreground">{ROADMAP_DEPTHS[depth].hint}</p>
             </div>
 
-            {notEnoughCredits && (
-              <p className="text-xs text-destructive">
-                Roadmap generation costs {CREDIT_COSTS.roadmapGeneration} credits and you have {creditsRemaining}.
-              </p>
-            )}
-
             <Button
               className="w-full gap-2"
-              disabled={!goal.trim() || generateMutation.isPending || notEnoughCredits || !isOwner}
+              disabled={!goal.trim() || generateMutation.isPending || !isOwner}
               onClick={() => generateMutation.mutate()}
               data-testid="button-generate-roadmap"
             >
               {generateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {generateMutation.isPending ? "Nova is planning..." : "Build my roadmap"}
+              {/* What it costs, in the money it is actually charged in. */}
+              {!generateMutation.isPending && <span className="text-[11px] opacity-80">· {roadmapPrice}</span>}
             </Button>
             {!isOwner && <p className="text-xs text-muted-foreground text-center">Only the project owner can build the roadmap.</p>}
           </CardContent>

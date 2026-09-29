@@ -31,6 +31,7 @@ const label = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 /** AI calls that are deliberately free, each with why. */
 const FREE_AI: Record<string, string> = {
   "POST /api/mock-interviews/:id/finish": "the closing verdict — free, once per interview whose questions were paid for, and on the AI burst limit",
+  "POST /api/projects/:id/decision-sim/scenarios/:scenarioId/rerun": "re-running a scenario the project has already bought, with one of the owner's own assumptions changed — free on purpose, and on the AI burst limit",
 };
 
 /** Routes that check in their own body but charge inside a helper: the helper is checked instead. */
@@ -45,8 +46,17 @@ const CHARGED_IN_HELPER: Record<string, [file: string, fn: string]> = {
 };
 
 /** Routes that charge a different amount from what they checked, each with why that's safe. */
+/**
+ * Routes that charge a different amount from what they checked, each with why
+ * that's safe.
+ *
+ * Nearly empty now. Under pay-per-use the `amount` argument is no longer a
+ * price — it is CHARGEABLE or NO_CHARGE, and the price lives in the outcome —
+ * so a route checking and charging different numbers is much rarer than it
+ * was. A whole-document fill used to be here because it charged per block; the
+ * document is now one price, taken at its plan, and the fill charges nothing.
+ */
 const AMOUNT_EXCEPTIONS: Record<string, string> = {
-  "POST /api/documents/:docId/fill": "charges the blocks actually filled — documentFillCost(filled) — which can't exceed the estimate checked",
   "POST /api/mock-interviews/:id/answer": "the follow-up question is checked and charged on its own, after it's generated",
 };
 

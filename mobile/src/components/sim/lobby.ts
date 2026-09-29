@@ -125,6 +125,16 @@ export interface VentureView {
   seasonOver?: boolean;
   /** While filling: seconds until bots take the empty seats if nobody else arrives. */
   botsInSeconds?: number | null;
+  /**
+   * Which year the next tick resolves, and how many the season runs. Null
+   * before the season starts — a room still choosing seats has no year yet.
+   *
+   * Sent by the room so the running card can say where the season is without
+   * waiting on the standings request, which is the slower of the two and the
+   * one that would leave "Year — of —" on screen while it landed.
+   */
+  year?: number | null;
+  totalYears?: number | null;
 }
 
 // --- The clock -----------------------------------------------------------

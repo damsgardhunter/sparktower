@@ -39,7 +39,7 @@ describe("the close read of an open loop", () => {
     const agent = request.agent(app);
     const email = `loopread-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.240").send({ email, password: "Testpass123!", firstName: "Admin" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Safety Loop", description: "A project whose admin safety loop is built but outside the digest's sample.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const loops = (await agent.get(`/api/projects/${project.id}/path`)).body.loopTree.loops;
     const product = loops.find((l: any) => l.type === "product");

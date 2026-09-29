@@ -36,6 +36,7 @@ import {
   buildTrackRecord, summaryOf, ROLE_FOR_SEAT, type SeatPlay, type GamePlay, type TrackRecord,
 } from "@shared/track-record";
 import type { Role } from "@shared/simulation/types";
+import { marketNameOf } from "./simulation-scope";
 
 const MESSAGE_MIN = 20;
 const MESSAGE_MAX = 800;
@@ -113,7 +114,7 @@ export async function loadTrackRecords(userIds: string[]): Promise<Map<string, T
     const play: SeatPlay = {
       seasonId: s.seasonId,
       seasonName: s.seasonName,
-      nicheName: nicheById(s.nicheId)?.name ?? null,
+      nicheName: marketNameOf(s),
       seasonStatus: s.status,
       role: s.role,
       yearsPlayed: resolved.size,

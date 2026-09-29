@@ -86,6 +86,48 @@ export default function PickMarket() {
       <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
         {resume}
 
+        {/*
+          * The door to a market of your own, above the seven we wrote.
+          *
+          * Somebody whose business is already in this app should not have to
+          * rehearse it in a dating-app market. Offered here rather than on the
+          * project page because that page is the public one and this is the
+          * owner's door — pressing it stands a company up.
+          */}
+        <Card>
+          <View style={{ gap: spacing.sm }}>
+            <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+              Or run one built around your own project
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>
+              Nova reads what you are building and writes the market it is actually in — who buys, and the four
+              companies that already have them.
+            </Text>
+            <Btn
+              label="Have Nova Customize my Season"
+              icon="sparkles-outline"
+              variant="outline"
+              small
+              onPress={() => router.push("/sim/from-project" as any)}
+              testID="button-from-project"
+            />
+            {/*
+              * And the other half of the feature: the same business, run on
+              * its real numbers rather than in a market. A season is a game;
+              * these answer "can I afford to hire her" on the figures the
+              * owner actually has.
+              */}
+            <Btn
+              label="Or run your own numbers"
+              icon="calculator-outline"
+              variant="ghost"
+              small
+              onPress={() => router.push("/sim/business" as any)}
+              testID="button-business-sims"
+            />
+          </View>
+        </Card>
+
         {mine.length === 0 ? (
         <NovaGradient style={{ borderRadius: radius.md, padding: spacing.lg, gap: 6 }}>
           <Text style={{ color: "#FFFFFF", fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 }}>

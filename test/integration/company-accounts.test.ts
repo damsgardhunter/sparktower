@@ -6,6 +6,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { makeVerifiedCompany } from "../helpers/company";
 import { verifyEmail } from "../helpers/verify-email";
 import { readCompanyInviteToken, makeCompanyInviteToken } from "../../server/company-routes";
 
@@ -26,11 +27,17 @@ async function player(app: any, firstName = `C${n + 1}`) {
 
 async function companyWithOwner(app: any) {
   const owner = await player(app, "Olive");
-  const made = await owner.agent.post("/api/companies").send({
-    name: "Acme Widgets", industry: "Fintech", size: "11-50", website: "acme.example", description: "We make widgets.",
+  /*
+   * No `website` here any more. Creating a company spends a domain
+   * verification and the route sets the website from the domain that was
+   * proved — anything the caller sends is overwritten, which is the point:
+   * the website on a company is the one it demonstrated it owns.
+   */
+  const made = await makeVerifiedCompany(owner.agent, "Acme Widgets", {
+    industry: "Fintech", size: "11-50", description: "We make widgets.",
   });
   expect(made.status, JSON.stringify(made.body)).toBe(201);
-  return { owner, companyId: made.body.company.id as string };
+  return { owner, companyId: made.body.company.id as string, domain: made.domain };
 }
 
 /** Someone joins through a link the owner makes. */
@@ -46,7 +53,7 @@ async function joinByLink(owner: any, companyId: string, who: any, role = "membe
 describe("making and reading a company", () => {
   it("creates, lists and reads back in the shape the page relies on", async () => {
     const app = await getTestApp();
-    const { owner, companyId } = await companyWithOwner(app);
+    const { owner, companyId, domain } = await companyWithOwner(app);
 
     const list = await owner.agent.get("/api/companies");
     expect(list.status).toBe(200);
@@ -56,10 +63,19 @@ describe("making and reading a company", () => {
     const one = await owner.agent.get(`/api/companies/${companyId}`);
     expect(one.status).toBe(200);
     expect(Object.keys(one.body).sort()).toEqual(["company", "me", "members", "role"]);
-    expect(Object.keys(one.body.company).sort()).toEqual(["description", "id", "industry", "name", "projectId", "size", "slug", "website"]);
+    /*
+     * The proof travels with the company now, because the page draws a badge
+     * from it — a builder deciding whether to spend a fortnight on somebody's
+     * challenge is entitled to see which domain they proved and when.
+     */
+    expect(Object.keys(one.body.company).sort()).toEqual([
+      "description", "id", "industry", "name", "projectId", "size", "slug",
+      "verifiedAt", "verifiedDomain", "verifiedMethod", "website",
+    ]);
     expect(one.body.company).toMatchObject({
       id: companyId, name: "Acme Widgets", industry: "Fintech", size: "11-50",
-      website: "https://acme.example", description: "We make widgets.", projectId: null,
+      website: `https://${domain}`, description: "We make widgets.", projectId: null,
+      verifiedDomain: domain,
     });
     expect(one.body.company.slug).toMatch(/^acme-widgets-[a-z0-9]{6}$/);
     expect(one.body.role).toBe("owner");

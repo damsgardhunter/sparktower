@@ -46,6 +46,8 @@ export interface ResolvedMilestone {
   supersedes?: string[];
   intake?: IntakeQuestion[];
   work?: WorkKind;
+  /** See BackboneMilestone.doneOn: this step is finished on a surface of its own. */
+  doneOn?: BackboneMilestone["doneOn"];
   prefill?: "resume";
   routeQuestion?: string;
   inMarket?: boolean;
@@ -91,6 +93,7 @@ function resolveMilestone(m: BackboneMilestone, phaseId: string, subcategory: st
     supersedes: m.supersedes,
     intake: m.intake,
     work: m.work,
+    doneOn: m.doneOn,
     prefill: m.prefill,
     routeQuestion: m.routeQuestion,
     inMarket: m.inMarket,

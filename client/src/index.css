@@ -719,6 +719,45 @@
   color: #fff;
   box-shadow: 0 4px 14px -4px rgb(168 85 247 / 0.5);
 }
+/*
+ * A text box that shows where you are.
+ *
+ * The default field is a one-pixel grey rectangle that changes to a slightly
+ * different grey when focused, which on a form of six of them makes "which one
+ * am I in" a question you answer by looking for the caret. This gives the
+ * focused field the Nova gradient in its border — the same ring the cards
+ * wear, so focus reads as the product rather than as a browser default.
+ *
+ * Built the way .nova-ring is (a fill clipped to the padding box over the
+ * gradient clipped to the border box) because that is the only way to get a
+ * gradient border with rounded corners in one element. The unfocused state
+ * keeps a real border so the box does not appear to grow by 1.5px on focus.
+ */
+.nova-field {
+  border: 1.5px solid hsl(var(--border));
+  background: hsl(var(--background));
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.nova-field:hover:not(:disabled):not(:focus) { border-color: hsl(var(--border) / 0.9); background: hsl(var(--muted) / 0.35); }
+.nova-field:focus,
+.nova-field:focus-visible {
+  outline: none;
+  border-color: transparent;
+  background:
+    linear-gradient(hsl(var(--background)), hsl(var(--background))) padding-box,
+    linear-gradient(90deg, #4ade80, #10b981, #a855f7) border-box;
+  box-shadow: 0 0 0 3px rgb(16 185 129 / 0.12);
+}
+/* The same, for a field that is telling you something is wrong. */
+.nova-field[aria-invalid="true"] {
+  border-color: hsl(var(--destructive) / 0.6);
+}
+.nova-field[aria-invalid="true"]:focus {
+  background: hsl(var(--background));
+  border-color: hsl(var(--destructive));
+  box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.12);
+}
+
 /* Something to press that goes somewhere: lights up on hover. (A plain-CSS class can't take Tailwind's hover: variant.) */
 .nova-hover-glow { transition: box-shadow 0.2s ease, transform 0.2s ease; }
 .nova-hover-glow:hover {

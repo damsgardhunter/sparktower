@@ -17,19 +17,20 @@
  * — and the `where` clause is what makes the second and third no-ops rather
  * than a game that skips a round.
  */
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
   startupGames, startupGameSubmissions, startupGameDrafts, startupGameMessages, startupGameVerdicts, users,
 } from "@shared/schema";
 import {
-  ROUND_SECONDS, nextRound, roundCanSettleEarly, settleChoice,
+  GAME_COOLDOWN_MS, GAMES_PER_DAY, ROUND_SECONDS, gameUnlocksAt, nextRound, roundCanSettleEarly, settleChoice,
   type Round, type Submission,
 } from "@shared/sprints/game";
 import { DECKS, MAX_CUSTOM_CARDS, cardById, customCard, isCustomCard } from "@shared/sprints/cards";
 import { botMove } from "@shared/sprints/partner";
 import { cleanAllocation, mergeAllocations, budgetIsReady } from "@shared/sprints/budget";
 import { cleanClaims, mergeClaims, claimsAreReady, type Claim } from "@shared/sprints/product";
+import type { DimensionId } from "@shared/sprints/scoring";
 
 export type GameRound = Round | "abandoned";
 
@@ -93,7 +94,7 @@ export async function startGameFor(input: {
   playerId: string;
   partnerId: string;
   era?: "past" | "modern" | "futuristic";
-}): Promise<{ ok: true; id: string } | { ok: false; existingId: string }> {
+}): Promise<{ ok: true; id: string } | { ok: false; existingId: string } | { ok: false; spent: true; unlocksAt: Date | null }> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`startup-game:${input.playerId}`}))`);
 
@@ -104,6 +105,26 @@ export async function startGameFor(input: {
       ))
       .limit(1);
     if (open) return { ok: false as const, existingId: open.id };
+
+    /*
+     * The day's allowance, re-counted inside the lock.
+     *
+     * The route checks this too, and that check is the one that writes the
+     * sentence a person reads. This is the one that is true: two taps in the
+     * same second — a phone and a laptop — sail past a check made before the
+     * transaction every time, and the whole point of a daily limit is that it
+     * cannot be beaten by pressing harder.
+     */
+    const since = new Date(Date.now() - GAME_COOLDOWN_MS);
+    const today = await tx.select({ startedAt: startupGames.startedAt }).from(startupGames)
+      .where(and(
+        sql`(${startupGames.player1Id} = ${input.playerId} or ${startupGames.player2Id} = ${input.playerId})`,
+        gte(startupGames.startedAt, since),
+      ))
+      .orderBy(sql`${startupGames.startedAt} asc`);
+    if (today.length >= GAMES_PER_DAY) {
+      return { ok: false as const, spent: true as const, unlocksAt: gameUnlocksAt(today[0].startedAt) };
+    }
 
     const [game] = await tx.insert(startupGames).values({
       player1Id: input.playerId,
@@ -671,6 +692,50 @@ export async function gameState(gameId: string, viewerId: string) {
 }
 
 /** Games this person is in the middle of. */
+/**
+ * Whether this person has had their game today, and when the next one opens.
+ *
+ * Counted from `started_at` over a rolling twenty-four hours (see
+ * `GAME_COOLDOWN_MS`), and a game still in progress is deliberately not a
+ * refusal: `playing` means "go back to it", which is a different sentence from
+ * "come back tomorrow" and the screen says whichever is true.
+ */
+export async function dailyGameStatus(userId: string): Promise<{
+  /** They have started their allowance of games inside the window. */
+  spent: boolean;
+  /** When the next one unlocks, or null if one is available now. */
+  unlocksAt: Date | null;
+  /** How many they started inside the window. */
+  startedToday: number;
+  /** A game still open, which they may always return to. */
+  playing: string | null;
+}> {
+  const since = new Date(Date.now() - GAME_COOLDOWN_MS);
+  const rows = await db.select({ id: startupGames.id, round: startupGames.round, startedAt: startupGames.startedAt })
+    .from(startupGames)
+    .where(and(
+      sql`(${startupGames.player1Id} = ${userId} or ${startupGames.player2Id} = ${userId})`,
+      gte(startupGames.startedAt, since),
+    ))
+    .orderBy(sql`${startupGames.startedAt} desc`);
+
+  const open = await activeGamesFor(userId);
+  const oldestInWindow = rows.length ? rows[rows.length - 1].startedAt : null;
+
+  return {
+    spent: rows.length >= GAMES_PER_DAY,
+    /*
+     * From the *oldest* game in the window, not the newest. With one game a
+     * day the two are the same; with two they are not, and counting from the
+     * newest would mean a second game pushed the unlock of the first one back
+     * — a limit that gets stricter the more you play it.
+     */
+    unlocksAt: rows.length >= GAMES_PER_DAY ? gameUnlocksAt(oldestInWindow) : null,
+    startedToday: rows.length,
+    playing: open[0]?.id ?? null,
+  };
+}
+
 export async function activeGamesFor(userId: string) {
   return db.select().from(startupGames)
     .where(and(
@@ -700,7 +765,14 @@ export async function pastGamesFor(userId: string, limit = 20) {
     overall: startupGameVerdicts.overall,
     tenYear: startupGameVerdicts.tenYear,
     peak: startupGameVerdicts.peak,
+    peakYear: startupGameVerdicts.peakYear,
     fromModel: startupGameVerdicts.fromModel,
+    /* The five, so a past game can show where it placed on each board rather than one number. */
+    growth: startupGameVerdicts.growth,
+    capital: startupGameVerdicts.capital,
+    product: startupGameVerdicts.product,
+    acquisition: startupGameVerdicts.acquisition,
+    risk: startupGameVerdicts.risk,
   })
     .from(startupGames)
     .leftJoin(startupGameVerdicts, eq(startupGameVerdicts.gameId, startupGames.id))
@@ -710,6 +782,51 @@ export async function pastGamesFor(userId: string, limit = 20) {
     ))
     .orderBy(sql`coalesce(${startupGames.completedAt}, ${startupGames.abandonedAt}, ${startupGames.startedAt}) desc`)
     .limit(Math.min(50, Math.max(1, Math.floor(limit))));
+
+  /*
+   * Where each of these placed, on every board, in one query.
+   *
+   * The obvious implementation is a standings call per game, which on a list
+   * of twenty is twenty round trips to answer one screen. This counts how many
+   * scored verdicts beat each of these games on each of the five columns —
+   * the same "strictly better, plus one" arithmetic `rank()` does on the
+   * boards, so a past game and the leaderboard cannot disagree about where it
+   * came.
+   *
+   * Only games the model actually scored are ranked, and only against other
+   * model-scored games: a placeholder from an outage is not a result, and
+   * ranking against one would move everybody else's position for a number
+   * nobody earned.
+   */
+  const scored = rows.filter((r) => r.overall != null && r.fromModel);
+  const places = new Map<string, Record<DimensionId, { rank: number; of: number }>>();
+  if (scored.length) {
+    const [total] = await db.select({ of: sql<number>`(count(*))::int` })
+      .from(startupGameVerdicts).where(eq(startupGameVerdicts.fromModel, true));
+
+    const ranked = await db.select({
+      gameId: startupGameVerdicts.gameId,
+      growth: sql<number>`(rank() over (order by ${startupGameVerdicts.growth} desc))::int`,
+      capital: sql<number>`(rank() over (order by ${startupGameVerdicts.capital} desc))::int`,
+      product: sql<number>`(rank() over (order by ${startupGameVerdicts.product} desc))::int`,
+      acquisition: sql<number>`(rank() over (order by ${startupGameVerdicts.acquisition} desc))::int`,
+      risk: sql<number>`(rank() over (order by ${startupGameVerdicts.risk} asc))::int`,
+      overall: sql<number>`(rank() over (order by ${startupGameVerdicts.overall} desc))::int`,
+    }).from(startupGameVerdicts).where(eq(startupGameVerdicts.fromModel, true));
+
+    const wanted = new Set(scored.map((r) => r.id));
+    for (const row of ranked) {
+      if (!wanted.has(row.gameId)) continue;
+      places.set(row.gameId, {
+        growth: { rank: row.growth, of: total.of },
+        capital: { rank: row.capital, of: total.of },
+        product: { rank: row.product, of: total.of },
+        acquisition: { rank: row.acquisition, of: total.of },
+        risk: { rank: row.risk, of: total.of },
+      } as Record<DimensionId, { rank: number; of: number }>);
+      (places.get(row.gameId) as any).overall = { rank: row.overall, of: total.of };
+    }
+  }
 
   return rows.map((r) => ({
     id: r.id,
@@ -724,7 +841,20 @@ export async function pastGamesFor(userId: string, limit = 20) {
     // abandoned game. The card has to be able to tell those apart from a zero.
     verdict: r.overall === null || r.overall === undefined
       ? null
-      : { overall: r.overall, tenYear: r.tenYear, peak: r.peak, fromModel: !!r.fromModel },
+      : {
+          overall: r.overall, tenYear: r.tenYear, peak: r.peak, peakYear: r.peakYear,
+          fromModel: !!r.fromModel,
+          scores: {
+            growth: r.growth ?? 0, capital: r.capital ?? 0, product: r.product ?? 0,
+            acquisition: r.acquisition ?? 0, risk: r.risk ?? 0,
+          },
+        },
+    /**
+     * Where it placed on each board, including overall. Null for a game that
+     * was never scored — and for one scored only by the outage placeholder,
+     * which is not a result and is not ranked.
+     */
+    places: places.get(r.id) ?? null,
   }));
 }
 

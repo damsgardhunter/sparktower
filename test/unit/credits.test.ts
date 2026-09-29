@@ -26,6 +26,22 @@ describe("checkout return", () => {
     expect(checkoutReturnUrls("https://st.test", "/x?tab=1").success).toBe("https://st.test/x?tab=1&checkout=success");
     expect(checkoutReturnUrls("https://st.test", "//evil.test")).toEqual({ success: "https://st.test/pricing?success=true", cancel: "https://st.test/pricing?canceled=true" });
   });
+
+  it("marks a top-up as its own thing, so it isn't mistaken for a subscription", () => {
+    /*
+     * The two returns do different work: a subscription re-syncs the plan and
+     * says "you're upgraded"; a top-up has money waiting and an action that
+     * was interrupted to buy it, and has to offer to finish that. One marker
+     * for both sent every top-up down the subscription's path.
+     */
+    expect(checkoutReturnUrls("https://st.test", "/projects/abc/manage", "topup").success)
+      .toBe("https://st.test/projects/abc/manage?checkout=topup");
+    expect(checkoutReturnUrls("https://st.test", "/x?tab=1", "topup").success).toBe("https://st.test/x?tab=1&checkout=topup");
+    // …including when there is no page to go back to and it lands on pricing.
+    expect(checkoutReturnUrls("https://st.test", "//evil.test", "topup").success).toBe("https://st.test/pricing?checkout=topup");
+    // A cancel is a cancel either way.
+    expect(checkoutReturnUrls("https://st.test", "/x", "topup").cancel).toBe("https://st.test/x?checkout=canceled");
+  });
 });
 
 describe("upgrades", () => {

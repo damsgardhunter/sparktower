@@ -15,12 +15,12 @@
  */
 import { rateLimit } from "./moderation";
 import type { Express } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { randomUUID } from "crypto";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
-import { CREDIT_COSTS, documentFillCost } from "@shared/plans";
+import { CREDIT_COSTS, documentFillCost, CHARGEABLE, NO_CHARGE, OUTCOME_PRICE_CENTS} from "@shared/plans";
 import {
   buildOperableProjectState, stripIdFragments, collectProjectIds,
 } from "./project-operations";
@@ -32,15 +32,12 @@ import {
   type BlockKind, type DocumentPage, type DocumentSettings, type DocumentBlock,
 } from "@shared/documents";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -334,7 +331,9 @@ export function registerDocumentRoutes(app: Express) {
       };
       if (!title?.trim()) return res.status(400).json({ message: "What's the document called?" });
 
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.documentPlan, "a document plan"))) return;
+      // One price for the whole document: taken here, at the plan. Every fill,
+      // re-plan and tighten inside it afterwards is free.
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Writing your document", { outcome: "document", projectId, action: "documentPlan" }))) return;
 
       // No ids: this path writes prose, and a model shown ids cites them.
       const state = await buildOperableProjectState(projectId, { includeIds: false });
@@ -423,11 +422,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         settings,
       } as any);
 
-      await storage.deductCredits(userId, CREDIT_COSTS.documentPlan);
+      await storage.deductCredits(userId, CHARGEABLE);
       res.json({
         document,
         approach: str(parsed.approach, 1000),
-        creditsCharged: CREDIT_COSTS.documentPlan,
+        creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.document,
       });
     } catch (error) {
       console.error("Document plan error:", error);
@@ -597,8 +596,10 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       // Priced on what this request will actually attempt, not on everything
       // the builder asked for across the whole loop.
-      const cost = blockId ? CREDIT_COSTS.documentBlockFill : documentFillCost(attempted.size);
-      if (!(await requireCredits(res, userId, cost, "filling in the document"))) return;
+      // Free: the document was paid for at its plan. `cost` stays as the size
+      // hint the client draws ("this is a big fill") and buys nothing.
+      void (blockId ? CREDIT_COSTS.documentBlockFill : documentFillCost(attempted.size));
+      if (!(await requireCredits(res, userId, NO_CHARGE, "filling in the document"))) return;
 
       const state = await buildOperableProjectState(doc.projectId, { includeIds: false });
       const knownIds = await collectProjectIds(doc.projectId);
@@ -782,13 +783,15 @@ Return one entry per block you were asked to write, and nothing else.`,
       } as any);
 
       /*
-       * Charged for what actually landed, not what was attempted. A page whose
-       * completion failed shouldn't be billed just because the request was made.
+       * Nothing to charge: the whole document was bought at its plan, one
+       * price however many blocks it turns out to have. The size hint is still
+       * computed and reported, because the client draws "this is a big fill"
+       * from it — it is just not money any more.
        */
       const actualCost = blockId
         ? CREDIT_COSTS.documentBlockFill
         : documentFillCost(filled.size);
-      await storage.deductCredits(userId, actualCost);
+      await storage.deductCredits(userId, NO_CHARGE);
 
       res.json({
         document: updated,
@@ -810,7 +813,8 @@ Return one entry per block you were asked to write, and nothing else.`,
         nextPageIndex: deferred.length ? deferred[0] : null,
         // Surfaced so a partial run is visible rather than silent.
         unmatchedIds: unmatched.length,
-        creditsCharged: actualCost,
+        creditsCharged: 0,
+        sizeHint: actualCost,
       });
     } catch (error) {
       console.error("Document fill error:", error);
@@ -832,7 +836,8 @@ Return one entry per block you were asked to write, and nothing else.`,
       if (!ent) return;
 
       const { feedback, confirmDiscard } = req.body as { feedback?: string; confirmDiscard?: boolean };
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.documentPlan, "a document re-plan"))) return;
+      // Free, inside a document already paid for.
+      if (!(await requireCredits(res, userId, NO_CHARGE, "a document re-plan", { action: "documentPlan" }))) return;
 
       const pages = (doc.pages as DocumentPage[]) || [];
       const completion = await getOpenAI().chat.completions.create({
@@ -946,10 +951,11 @@ Respond ONLY with valid JSON:
         // Taken before the overwrite, so /undo has something to go back to.
         pagesHistory: pushPagesHistory(doc, "replan"),
       } as any);
-      await storage.deductCredits(userId, CREDIT_COSTS.documentPlan);
+      // Free: inside a document already paid for.
+      await storage.deductCredits(userId, NO_CHARGE);
       res.json({
         document: updated, approach: str(parsed.approach, 1000),
-        creditsCharged: CREDIT_COSTS.documentPlan,
+        creditsCharged: 0,
         carriedBlocks: claimed.size, lostWords, totalWords,
         canUndo: true,
       });
@@ -1025,9 +1031,9 @@ Respond ONLY with valid JSON:
         return res.status(400).json({ message: "Nothing is overflowing — every page already fits." });
       }
 
-      // Priced per overflowing page, once, however many passes it takes.
-      const cost = Math.max(1, overflowing.length);
-      if (!(await requireCredits(res, userId, cost, "tightening the document"))) return;
+      // Free, inside a document already paid for — the whole document was
+      // bought at its plan, and tightening it is finishing what was bought.
+      if (!(await requireCredits(res, userId, NO_CHARGE, "tightening the document"))) return;
 
       const result = await tightenPages({
         title: doc.title, pages, settings,
@@ -1044,7 +1050,7 @@ Respond ONLY with valid JSON:
       }
 
       const updated = await storage.updateDocument(doc.id, { pages: result.pages } as any);
-      await storage.deductCredits(userId, cost);
+      await storage.deductCredits(userId, NO_CHARGE);
 
       res.json({
         document: updated,
@@ -1054,7 +1060,6 @@ Respond ONLY with valid JSON:
         stillOverflowing: result.stillOverflowing,
         totalPdfPages: result.totalPdfPages,
         failed: result.failed,
-        creditsCharged: cost,
       });
     } catch (error) {
       console.error("Tighten error:", error);

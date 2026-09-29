@@ -112,6 +112,43 @@ describe("refreshing an expired token", () => {
     expect(calls.filter((c) => c.url.endsWith("/refresh"))).toHaveLength(1);
   });
 
+  /*
+   * A price is not a failure. Any of a dozen things can be the one that costs
+   * money — a code audit, a document, a simulation, an image — and before this
+   * a 402 was an ordinary error that each screen had to recognise for itself,
+   * which meant the ones nobody remembered dead-ended with no way to pay.
+   */
+  it("announces a price before throwing it, so something can always offer the way out", async () => {
+    const { api, saveSession, setPaymentRequiredHandler, ApiError } = await client();
+    await saveSession({ accessToken: "good", refreshToken: "good" });
+    const asked = vi.fn();
+    setPaymentRequiredHandler(asked);
+    const body = { code: "payment_required", message: "Simulating a decision costs $3.", label: "Simulate a decision", price: { cents: 300, display: "$3" } };
+    respond = () => ({ status: 402, body });
+
+    const err = await api("/api/projects/x/decision-sim/scenarios", { method: "POST" }).catch((e) => e);
+
+    expect(asked, "the paywall hears about it").toHaveBeenCalledTimes(1);
+    expect(asked.mock.calls[0][0]).toMatchObject({ code: "payment_required", label: "Simulate a decision" });
+    // And it still rejects, so a screen with something of its own to say can.
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(402);
+    expect(err.body).toMatchObject({ price: { display: "$3" } });
+    setPaymentRequiredHandler(null);
+  });
+
+  it("does not mistake an ordinary refusal for a price", async () => {
+    const { api, saveSession, setPaymentRequiredHandler } = await client();
+    await saveSession({ accessToken: "good", refreshToken: "good" });
+    const asked = vi.fn();
+    setPaymentRequiredHandler(asked);
+    respond = () => ({ status: 403, body: { code: "not_yours", message: "Not yours." } });
+
+    await api("/api/projects/x").catch(() => {});
+    expect(asked).not.toHaveBeenCalled();
+    setPaymentRequiredHandler(null);
+  });
+
   it("ends the session when the refresh is refused, without retrying forever", async () => {
     const { api, saveSession, getAccessToken, getRefreshToken, setSessionExpiredHandler, ApiError } = await client();
     await saveSession({ accessToken: "stale", refreshToken: "revoked" });

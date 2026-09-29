@@ -15,7 +15,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { ACTOR_SHORT, NEXT_STEP_COPY } from "@shared/next-step";
-import { ACTOR_LABEL } from "@shared/phase-trees/types";
+import { ACTOR_LABEL, PATH_SURFACES } from "@shared/phase-trees/types";
 
 const root = join(__dirname, "..", "..");
 const mobileCard = readFileSync(join(root, "mobile", "src", "components", "feed", "ContinuePathCard.tsx"), "utf8");
@@ -91,3 +91,32 @@ describe("what the phone's forgot-password screen restates", () => {
     expect(signIn).toContain("/(auth)/forgot-password");
   });
 });
+
+/**
+ * The screens that finish a step by being used.
+ *
+ * `doneOn` reaches these two cards through the next-step projection rather
+ * than through the tree, and the phone restates the surface names like it
+ * restates everything else. A fourth surface will be added by somebody
+ * working on the dashboard who has no reason to open a mobile file, and the
+ * phone would then send them to `?surface=` with a value it can't label —
+ * so this fails on the day the list grows rather than the day somebody
+ * notices a card behaving oddly.
+ */
+describe("the surfaces a step can be finished on", () => {
+  it("is the same list on the phone as in the trees", () => {
+    const restated = /export type PathSurface = ([^;]+);/.exec(mobileCard);
+    expect(restated, "the phone should restate PathSurface").toBeTruthy();
+    const names = [...restated![1].matchAll(/"([\w-]+)"/g)].map((m) => m[1]).sort();
+    expect(names).toEqual([...PATH_SURFACES].sort());
+  });
+
+  it("is offered as a way in by both cards, not as a button that does the work", () => {
+    for (const [what, source] of [["the phone", mobileCard], ["the web", webCard]] as const) {
+      expect(source, `${what} links to the surface`).toMatch(/surface[=:]/);
+      expect(source, `${what} names it on the card`).toContain("Open ");
+      expect(source, `${what} says the step closes itself`).toContain("ticks itself");
+    }
+  });
+});
+

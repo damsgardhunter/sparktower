@@ -46,30 +46,53 @@ async function builder(app: any) {
 
 const idsOf = (body: any[]) => body.map((m) => m.matchedUserId as string);
 
+/**
+ * A page is twenty — every tier matches at "priority" since the entitlements
+ * became free for everybody — so a pool has to be bigger than that for there
+ * to be anything to rotate at all. This is the smallest community that
+ * actually exercises the feature, and building it is most of what the test
+ * costs.
+ */
+const PAGE = 20;
+
 describe("a second run of matches", () => {
-  it("shows people the first run didn't, and stops holding back when the pool runs thin", async () => {
+  it("prefers people the first run didn't show, and never empties the screen", async () => {
     const app = await getTestApp();
     const me = await builder(app);
-    for (let i = 0; i < 12; i++) await builder(app);
+    // Two more than fit on a page, so there is something held back to promote.
+    for (let i = 0; i < PAGE + 2; i++) await builder(app);
 
     const first = await me.agent.post("/api/matches/generate").send({});
     expect(first.status).toBe(200);
     const firstIds = idsOf(first.body);
-    expect(firstIds.length).toBeGreaterThan(0);
+    expect(firstIds.length).toBe(PAGE);
 
     const second = await me.agent.post("/api/matches/generate").send({});
     expect(second.status).toBe(200);
     const secondIds = idsOf(second.body);
-    expect(secondIds.length).toBe(firstIds.length);
-    // The point of the whole feature: nobody from the first run comes back.
-    expect(secondIds.filter((id) => firstIds.includes(id))).toEqual([]);
+    expect(secondIds.length).toBe(PAGE);
 
-    // By now most of the community has been shown twice. A run that held all of
-    // them back would return nothing, so it stops holding back instead.
+    /*
+     * The point of the whole feature. Nobody expects a completely fresh page
+     * from a community of twenty-two — you cannot rotate that through twenty
+     * slots — but everybody the first run passed over has to come up now,
+     * ahead of anyone it already showed. That is the assertion that fails if
+     * the hold-back is off, and it used to be: the rotation was all-or-nothing
+     * and gave up whenever a full page of unseen people could not be found,
+     * which on any real community was always.
+     */
+    const neverShown = firstIds.length ? secondIds.filter((id) => !firstIds.includes(id)) : [];
+    expect(neverShown.length, "the two people held back should be promoted").toBe(2);
+
+    // And it still fills the page rather than showing two and a gap.
+    expect(secondIds.filter((id) => firstIds.includes(id)).length).toBe(PAGE - 2);
+
+    // By now the whole community has been shown twice. A run that held all of
+    // them back would return nothing; it repeats rather than empties.
     const third = await me.agent.post("/api/matches/generate").send({});
     expect(third.status).toBe(200);
-    expect(idsOf(third.body).length).toBeGreaterThan(0);
-  }, 120_000);
+    expect(idsOf(third.body).length).toBe(PAGE);
+  }, 240_000);
 });
 
 describe("opening the matches list", () => {

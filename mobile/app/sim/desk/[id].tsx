@@ -662,6 +662,7 @@ export default function Desk() {
               filings so it re-runs exactly when somebody files. */}
           {!finished ? (
             <ProjectionCard
+              currency={(data as any)?.currency}
               ventureId={String(id)}
               draft={dirty ? draft : null}
               filedStamp={JSON.stringify((data as any).filed ?? {})}

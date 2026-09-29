@@ -25,7 +25,8 @@ import { db } from "../../server/db";
 import { simBids, simDecisions, simSeasons, simSeats, simVentures, users } from "@shared/schema";
 import { fileBotBids, fileBotDecisions, fillVentureWithBots } from "../../server/simulation-bots";
 import { startReadySeasons } from "../../server/simulation-tick";
-import { BOT_FILL_AFTER_SECONDS } from "@shared/simulation/bots";
+import { BOT_FILL_AFTER_SECONDS, botAmbition } from "@shared/simulation/bots";
+import { between } from "@shared/simulation/random";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { nicheById } from "@shared/simulation/niches";
 import type { Listing } from "@shared/simulation/assets";
@@ -406,6 +407,38 @@ describe("what the bots bid for", () => {
   ];
 
   /**
+   * Two lots this particular bot would actually want.
+   *
+   * Whether a bot bids at all is a coin weighted by the room's id, and the room
+   * gets a fresh uuid every run. `botBids` offers `reserve × m × ambition` and
+   * skips anything under the reserve, where `ambition` is seeded on the venture
+   * (0.75–1.4) and `m` on the venture, the year and the *lot* (0.95–1.35). So a
+   * company whose ambition came out at 0.8 needs a lot it likes enough to offer
+   * 1.25×, and on fixed lot ids that is a draw it loses about half the time —
+   * which is what this test was doing, in CI and locally, as "expected 0 to be
+   * greater than 0".
+   *
+   * The lot id is the one term in that product a test may choose, so it chooses
+   * it: the same engine, the same seeding, asked about lots this bot wants
+   * rather than two it may not. What is being tested is that a bot chair puts
+   * money on the table and that what it files clears the reserve — not whether
+   * one particular uuid felt like shopping.
+   *
+   * Declining is real behaviour too, and has its own test below.
+   */
+  const lotsWorthBidding = (ventureId: string): Listing[] => {
+    const ambition = botAmbition(ventureId);
+    const keen = (id: string) => between(`bot:${ventureId}:1:bid:${id}`, 0.95, 1.35) * ambition >= 1;
+    const found: Listing[] = [];
+    for (let n = 0; n < 5_000 && found.length < listings.length; n++) {
+      const id = `lot-${n}`;
+      if (keen(id)) found.push({ ...listings[found.length], id });
+    }
+    expect(found.length, "the seeding offers plenty of lots any bot would want").toBe(listings.length);
+    return found;
+  };
+
+  /**
    * A full room whose chief executive is a bot.
    *
    * The seating is asserted rather than assumed: when this failed in CI it
@@ -447,17 +480,18 @@ describe("what the bots bid for", () => {
     expect(chairs.map((c) => c.isBot), "a bot, in the chair, as the query sees it").toEqual([true]);
 
     const company = rich(ventureId);
+    const onOffer = lotsWorthBidding(ventureId);
     const { botBids } = await import("@shared/simulation/bots");
-    const wanted = botBids({ ventureId, year: 1, company, listings });
-    expect(wanted.length, `the bot wanted something (cash ${company.cash}, ${listings.length} lots)`).toBeGreaterThan(0);
+    const wanted = botBids({ ventureId, year: 1, company, listings: onOffer });
+    expect(wanted.length, `the bot wanted something (cash ${company.cash}, ${onOffer.length} lots)`).toBeGreaterThan(0);
 
-    const placed = await fileBotBids({ companies: [{ id: ventureId, company }], listings, year: 1 });
+    const placed = await fileBotBids({ companies: [{ id: ventureId, company }], listings: onOffer, year: 1 });
     expect(placed, "a bot chair bids").toBe(wanted.length);
 
     const rows = await db.select().from(simBids).where(eq(simBids.ventureId, ventureId));
     expect(rows.length).toBe(placed);
     for (const row of rows) {
-      const lot = listings.find((l) => l.id === row.listingId)!;
+      const lot = onOffer.find((l) => l.id === row.listingId)!;
       expect(row.amount, "over the reserve, or it buys nothing").toBeGreaterThanOrEqual(lot.reserve);
     }
   }, 120_000);

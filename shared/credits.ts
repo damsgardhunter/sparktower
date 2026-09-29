@@ -44,13 +44,35 @@ export function safeReturnPath(raw: unknown): string | null {
 }
 
 /** Where Stripe sends someone after checkout: the page they left, flagged, or the pricing page as before. */
-export function checkoutReturnUrls(base: string, returnTo: unknown): { success: string; cancel: string } {
+/**
+ * `kind` distinguishes what was bought, because the two purchases want
+ * different things on the way back. A subscription re-syncs the plan and says
+ * so; a top-up has money waiting and an action that was interrupted to buy it,
+ * and the page has to offer to finish that action rather than congratulate
+ * anybody. Same marker either way would have sent a top-up down the
+ * subscription path and told them they'd been upgraded.
+ */
+export function checkoutReturnUrls(
+  base: string,
+  returnTo: unknown,
+  kind: "subscription" | "topup" = "subscription",
+): { success: string; cancel: string } {
+  const marker = kind === "topup" ? "topup" : "success";
   const path = safeReturnPath(returnTo);
-  if (!path) return { success: `${base}/pricing?success=true`, cancel: `${base}/pricing?canceled=true` };
+  /*
+   * No usable return path: the pricing page, which reads `success=true` for a
+   * subscription. A top-up still needs its own marker there, or it lands on
+   * the subscription's "you're upgraded".
+   */
+  if (!path) {
+    return kind === "topup"
+      ? { success: `${base}/pricing?checkout=topup`, cancel: `${base}/pricing?canceled=true` }
+      : { success: `${base}/pricing?success=true`, cancel: `${base}/pricing?canceled=true` };
+  }
   const [beforeHash, hash] = path.split("#");
   const sep = beforeHash.includes("?") ? "&" : "?";
   const tail = hash ? `#${hash}` : "";
-  return { success: `${base}${beforeHash}${sep}checkout=success${tail}`, cancel: `${base}${beforeHash}${sep}checkout=canceled${tail}` };
+  return { success: `${base}${beforeHash}${sep}checkout=${marker}${tail}`, cancel: `${base}${beforeHash}${sep}checkout=canceled${tail}` };
 }
 
 /** Plans worth offering someone out of credits: the ones above theirs. */
