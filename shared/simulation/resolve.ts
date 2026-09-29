@@ -605,11 +605,11 @@ export function resolveYear(
     const perfGain = lift(d.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per) * focus.marketing * eff.cmo * pace.marketing * aim;
     // PR is a coin flip; a referral programme only works if the product is worth recommending.
     const seedOf = (what: string) => `${world.seasonId}:${world.year}:${company.id}:${what}`;
-    const pr = prOutcome(d.cmo?.prSpend, seedOf("pr"));
+    const pr = prOutcome(d.cmo?.prSpend, seedOf("pr"), company.scale, per);
     if (pr.landed === "hit") notesFor[company.id].push(`The PR push landed: ${pr.brand.toFixed(1)} points of brand for the money.`);
     if (pr.landed === "miss") notesFor[company.id].push("The PR push went nowhere. It happens a little under half the time.");
     if (pr.landed === "backfire") notesFor[company.id].push("The PR push backfired: the story people remembered was not the one that was pitched. Reputation took a knock.");
-    const referral = referralBrand(d.cmo?.referralSpend, company.quality);
+    const referral = referralBrand(d.cmo?.referralSpend, company.quality, company.scale, per);
     if ((d.cmo?.referralSpend ?? 0) > 0 && referral < 1) {
       notesFor[company.id].push("The referral programme paid people to recommend a product they did not rate. Almost nobody did.");
     }
@@ -632,6 +632,7 @@ export function resolveYear(
       current: company.techDebt,
       featureSpend: (d.cto?.featureSpend ?? 0) * pace.debt,
       paydown: d.cto?.techDebtPaydown,
+      scale: company.scale,
     });
     if (techDebt > 55 && (company.techDebt ?? 0) <= 55) {
       notesFor[company.id].push(
@@ -716,6 +717,7 @@ export function resolveYear(
       newHires: staff.newHires,
       recruiting: d.coo?.recruitingSpend ?? 0,
       training: d.coo?.trainingSpend ?? 0,
+      scale: company.scale,
     });
     // Last year's cost review, felt now.
     const scar = Math.max(0, company.reviewScar ?? 0);
@@ -1081,8 +1083,8 @@ export function resolveYear(
        */
       quality: clamp(company.quality + (quality.landed + shippedNow + yielded.quality) * hQuality + sourcing.quality * per - decay.quality),
       reputation: clamp(company.reputation + reputationNow + yielded.reputation),
-      security: securityNext(company.security, d.cto?.securitySpend, per),
-      data: dataNext(company.data, d.cto?.dataSpend, per),
+      security: securityNext(company.security, d.cto?.securitySpend, per, company.scale),
+      data: dataNext(company.data, d.cto?.dataSpend, per, company.scale),
       features,
       /** This year's PR backfire, if any, for reputation at settlement. Never stored. */
       prReputation: pr.reputation,
@@ -1305,8 +1307,45 @@ export function resolveYear(
       + (d?.coo?.recruitingSpend ?? 0) + (d?.coo?.trainingSpend ?? 0) + extra.operations + plant;
     // The finance seat's cost review comes off the overhead this year; the bill for it arrives next year.
     const review = company.kind === "player" ? reviewSaving(d?.cfo?.costReview) : 0;
+    /*
+     * Staff a company that has already failed cannot pay are let go.
+     *
+     * Running out of money does not end a season — that is the brief, and it
+     * is right (see the emergency loan below). But it left failure costing
+     * nothing at all: `fundYear` cuts discretionary spending to nought when
+     * cash and credit are gone, and *fixed* costs were not cut by anything, so
+     * a bankrupt company went on paying sixty salaries it could not pay. Driven
+     * under on purpose and then left alone, a company sat at minus £4.9m and
+     * falling at period thirteen, still serving 32,768 customers, with nothing
+     * whatever happening to it. A player could ignore bankruptcy entirely and
+     * never touch the recovery moves it is supposed to open.
+     *
+     * So a company that is already bankrupt and has no credit left keeps only
+     * the people its money covers. That is what administration does, and it is
+     * the one consequence that does not end anybody's season: the company is
+     * still there next period, smaller, with the recovery moves still open.
+     */
+    const brokeAndOutOfCredit = company.kind === "player"
+      && company.bankruptSince !== undefined
+      && company.cash <= 0
+      && company.creditLimit - company.debt <= 0;
+    const askedFor = d?.coo?.headcount ?? 0;
+    let staffPaid = askedFor;
+    if (brokeAndOutOfCredit && askedFor > 0) {
+      /* What this period's takings will cover, once the table's own salaries are met. */
+      const forPeople = Math.max(0, revenue - fixedCosts(company, 0, nextEconomy, reachOf(company, niche), niche) * per);
+      const each = Math.max(1, fixedCosts(company, 1, nextEconomy, reachOf(company, niche), niche) * per
+        - fixedCosts(company, 0, nextEconomy, reachOf(company, niche), niche) * per);
+      staffPaid = Math.max(0, Math.min(askedFor, Math.floor(forPeople / each)));
+      if (staffPaid < askedFor) {
+        notesFor[company.id] = [
+          ...(notesFor[company.id] ?? []),
+          `There was no money and no credit left, so ${(askedFor - staffPaid).toLocaleString()} of the ${askedFor.toLocaleString()} people on the payroll were let go. What the company still earns covers ${staffPaid.toLocaleString()}.`,
+        ];
+      }
+    }
     const fixed = company.kind === "player"
-      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche), niche) * per
+      ? fixedCosts(company, staffPaid, nextEconomy, reachOf(company, niche), niche) * per
         * focusEffects(d?.ceo?.focus).fixed * (1 - review) * sourcingOf(d?.coo?.sourcing).fixed
       : 0;
     if (review > 0) {
@@ -1401,7 +1440,26 @@ export function resolveYear(
     const rates = company.kind === "player"
       ? scaleInterest(interestOn(company, nextEconomy.interestRate), per)
       : { interest: company.debt * nextEconomy.interestRate * per, rate: nextEconomy.interestRate, emergencyRate: nextEconomy.interestRate, bondRate: nextEconomy.interestRate };
-    const interest = rates.interest;
+    /*
+     * And what being owed money costs, which nothing charged for.
+     *
+     * Giving customers ninety days to pay is a real trade: easier to buy from,
+     * and a quarter of a year's takings financed by you. The financing half
+     * was missing entirely — receivables were free capital — so long terms won
+     * customers, ended with *more* cash and *more* profit, and were strictly
+     * the right answer whoever you were. Measured over sixteen quarters,
+     * ninety-day terms were worth 51,024 more than billing on delivery at no
+     * cost at all, which is the shape `responsibilities.ts` calls a tax on not
+     * noticing the lever.
+     *
+     * Charged at the company's *own* rate rather than the market's, so this is
+     * the same trade the credit rating already governs: a company nobody wants
+     * to lend to pays most to be patient with its customers, and a thriving
+     * one can afford to be the easiest company in the market to buy from.
+     */
+    const owedFor = company.kind === "player" ? termsOf(d?.cfo?.terms, per) : termsOf(0, per);
+    const carrying = revenue * owedFor.deferred * rates.rate * (owedFor.days / 365);
+    const interest = rates.interest + carrying;
     /*
      * The marketing seat's forecast, which everybody else planned on. Right,
      * it saves money; badly wrong, it costs it. See `forecastOutcome`.
@@ -1431,7 +1489,7 @@ export function resolveYear(
       ? breachOf({ security: base0?.security, techDebt: base0?.techDebt, seed: `${world.seasonId}:${world.year}:${company.id}:breach`, per })
       : null;
     const outage = company.kind === "player"
-      && rng(`${world.seasonId}:${world.year}:${company.id}:outage`)() < outageChance(base0?.techDebt, d?.cto?.reliabilitySpend) * per;
+      && rng(`${world.seasonId}:${world.year}:${company.id}:outage`)() < outageChance(base0?.techDebt, d?.cto?.reliabilitySpend, company.scale) * per;
     // A lawsuit, from year three: more likely for a company that has let service slide.
     const lawsuit = company.kind === "player"
       ? lawsuitOf({ service: company.service, seed: `${world.seasonId}:${world.year}:${company.id}:lawsuit`, year: world.year, per })
@@ -1506,7 +1564,7 @@ export function resolveYear(
      * year's is collected now. A factor will buy what is owed for cash today,
      * at a price (see `treasury.ts`).
      */
-    const terms = company.kind === "player" ? termsOf(d?.cfo?.terms) : termsOf(0);
+    const terms = company.kind === "player" ? termsOf(d?.cfo?.terms, per) : termsOf(0, per);
     const owedNow = revenue * terms.deferred;
     const collected = company.kind === "player" ? Math.max(0, company.receivables ?? 0) : 0;
     const sold = company.kind === "player" ? factoring({ receivables: owedNow, share: d?.cfo?.factorPct }) : { sold: 0, cash: 0, cost: 0 };
@@ -1591,9 +1649,29 @@ export function resolveYear(
       }
       if (cash < 0 && company.kind === "player") {
         bankruptSince ??= world.year;
+        /*
+         * What could not be paid is owed, rather than sitting as negative cash.
+         *
+         * A bank balance below zero is not a thing a company can have, and
+         * carrying the hole that way hid it from every number that matters:
+         * `valuation` is revenue plus assets minus **debt**, with no term for
+         * cash, so a company £12.5m overdrawn was worth exactly what an
+         * identical solvent one was worth. Failure did not show up on the
+         * scoreboard at all.
+         *
+         * Booked as debt it does what it should: it subtracts from what the
+         * company is worth, it accrues interest at the rate a failing company
+         * gets, and it has to be repaid before the company is solvent again.
+         * Nobody is put out of the season for it — that is the brief, and the
+         * recovery moves are still the way out.
+         */
+        const unpaid = -cash;
+        debt += unpaid;
+        if (company.kind === "player") emergencyDebt += unpaid;
+        cash = 0;
         notesFor[company.id] = [
           ...(notesFor[company.id] ?? []),
-          "The company ran out of money and credit. It is not out of the season: assets can be sold, seats dissolved, debt restructured, and a rival may bid for what is left.",
+          `The company ran out of money and credit. ${Math.round(unpaid).toLocaleString()} of bills went unpaid and are now owed. It is not out of the season: assets can be sold, seats dissolved, debt restructured, and a rival may bid for what is left.`,
         ];
       }
     }
@@ -1875,9 +1953,31 @@ export function resolveYear(
             receivables,
             terms: terms.days,
             revenueShares: (company.revenueShares ?? []).filter((r) => r.until > world.year),
-            // Who the promotion brought in, for next year's churn; who left, and where the company stood, for win-back.
+            /*
+             * Who the promotion brought in, for next year's churn.
+             *
+             * Everyone who arrived this period, not only the new demand. This
+             * counted `fresh` alone — people entering the market for the first
+             * time — and that is a small minority of what a company wins: the
+             * rest come from rivals, or from a rival's overflow. So the churn
+             * a promotion is supposed to pay for was charged on a fraction of
+             * the customers it actually won, and "first month free" came out
+             * strictly dominant in all seven markets: more customers, more
+             * cash, more profit and 14% to 25% more company value than running
+             * no offer at all, with no setting where it cost anything.
+             *
+             * A promotion wins price-watchers through every door it opens.
+             * They are all deal-chasers.
+             */
             dealChasers: company.promo
-              ? Object.fromEntries(niche.segments.map((s) => [s.id, allocation.fresh[s.id]?.[company.id] ?? 0]))
+              ? Object.fromEntries(niche.segments.map((s) => {
+                  const fresh = allocation.fresh[s.id]?.[company.id] ?? 0;
+                  const fromRivals = Object.values(allocation.flows[s.id] ?? {})
+                    .reduce((sum, to) => sum + (to[company.id] ?? 0), 0);
+                  const overflow = Object.values(allocation.spill[s.id] ?? {})
+                    .reduce((sum, to) => sum + ((to as Record<string, number>)[company.id] ?? 0), 0);
+                  return [s.id, fresh + fromRivals + overflow];
+                }))
               : undefined,
             leftLastYear: Object.fromEntries(niche.segments.map((s) => [s.id,
               Object.values(allocation.flows[s.id]?.[company.id] ?? {}).reduce((a, n) => a + n, 0)])),

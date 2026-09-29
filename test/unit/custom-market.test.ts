@@ -13,8 +13,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCustomMarket, marketProblems, marketShares, MIN_SEGMENT_SIZE, MAX_SEGMENT_SIZE,
-  INCUMBENT_SHARE_MIN, INCUMBENT_SHARE_MAX,
+  INCUMBENT_SHARE_MIN, INCUMBENT_SHARE_MAX, INCUMBENT_STRENGTH_MEAN_MAX,
 } from "@shared/simulation/custom-market";
+import { NICHES } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
 import { startingCompany } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
@@ -438,5 +439,53 @@ describe("what it costs to serve one customer", () => {
   it("still allows a market where the margin is thin", () => {
     const m = priced([10, 100], 7);
     expect(m.baseUnitCost).toBe(7);
+  });
+});
+
+/**
+ * A market whose rivals are all excellent is decided before anybody sits down.
+ *
+ * The share they hold is banded (see `INCUMBENT_SHARE_MIN`) and how *good*
+ * they are was not, so Nova could truthfully describe a field averaging ninety
+ * for quality and brand. A company opens at quality 38 and brand 8, and four
+ * years of good play reaches about 64 and 57 — against that field nothing a
+ * founder does changes the ordering.
+ */
+describe("how strong a market Nova wrote is allowed to be", () => {
+  const withRivals = (rivals: any[]) => buildCustomMarket({ ...sane, incumbents: rivals }, "x")!;
+
+  it("takes a hard market as written", () => {
+    // One fortress and three ordinary rivals: a real market shape, untouched.
+    const m = withRivals([
+      { id: "a", name: "A", posture: "fortress", startingShare: 0.34, quality: 88, brand: 88, service: 65, priceIndex: 1.2 },
+      { id: "b", name: "B", posture: "coaster", startingShare: 0.22, quality: 48, brand: 60, service: 45, priceIndex: 1 },
+      { id: "c", name: "C", posture: "innovator", startingShare: 0.18, quality: 72, brand: 40, service: 55, priceIndex: 0.85 },
+      { id: "d", name: "D", posture: "discounter", startingShare: 0.14, quality: 38, brand: 28, service: 30, priceIndex: 0.6 },
+    ]);
+    expect(m.incumbents[0].quality, "the market leader is still excellent").toBe(88);
+    expect(m.incumbents.map((i) => i.brand)).toEqual([88, 60, 40, 28]);
+  });
+
+  it("pulls back a field nobody could out-build, keeping who is best", () => {
+    const m = withRivals([
+      { id: "a", name: "A", posture: "fortress", startingShare: 0.3, quality: 95, brand: 95, service: 90, priceIndex: 1.2 },
+      { id: "b", name: "B", posture: "brawler", startingShare: 0.25, quality: 92, brand: 90, service: 88, priceIndex: 1 },
+      { id: "c", name: "C", posture: "innovator", startingShare: 0.2, quality: 90, brand: 88, service: 85, priceIndex: 0.9 },
+      { id: "d", name: "D", posture: "coaster", startingShare: 0.13, quality: 88, brand: 85, service: 80, priceIndex: 1 },
+    ]);
+    const mean = (ns: number[]) => ns.reduce((a, b) => a + b, 0) / ns.length;
+    expect(mean(m.incumbents.map((i) => i.quality))).toBeLessThanOrEqual(INCUMBENT_STRENGTH_MEAN_MAX);
+    expect(mean(m.incumbents.map((i) => i.brand))).toBeLessThanOrEqual(INCUMBENT_STRENGTH_MEAN_MAX);
+    // Scaled, not clipped: the ordering the model thought about survives.
+    const q = m.incumbents.map((i) => i.quality);
+    expect([...q].sort((a, b) => b - a)).toEqual(q);
+    expect(q[0]).toBeGreaterThan(q[3]);
+  });
+
+  it("leaves every catalogue market alone", () => {
+    for (const niche of NICHES) {
+      const mean = niche.incumbents.reduce((sum, i) => sum + i.quality, 0) / niche.incumbents.length;
+      expect(mean, `${niche.name} is written under the ceiling already`).toBeLessThanOrEqual(INCUMBENT_STRENGTH_MEAN_MAX);
+    }
   });
 });

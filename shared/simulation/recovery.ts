@@ -105,6 +105,9 @@ export interface Covenant {
 
 export const COVENANT_YEARS = 2;
 
+/** What a rescue investor takes: a third of the company, as the copy has always said. */
+export const RESCUE_SHARE = 1 / 3;
+
 /**
  * What a company in this position can do.
  *
@@ -242,17 +245,35 @@ export function applyRecovery(input: {
   }
 
   const amount = Math.max(1_500_000, Math.round(company.creditLimit * 0.9));
+  /*
+   * And the third actually changes hands.
+   *
+   * It did not. The note has always said "a third of the company" and nothing
+   * took a third of anything: the move handed over £1.5m or more, cleared the
+   * bankruptcy, and cost three points of reputation. Free money, in the one
+   * situation where money is worth most — and the game said so in words while
+   * doing the opposite, which is worse than the exploit. The test that covers
+   * this asserted that the *note* mentions a third.
+   *
+   * The seasons are ranked on `founderValue`, which is the company's worth
+   * times this share, so taking the money now costs a third of everything the
+   * founders go on to build. That is what makes it the last resort the copy
+   * says it is. Floored at the same 5% as an ordinary raise, so a company
+   * rescued repeatedly still has something left to play for.
+   */
+  const share = Math.max(0.05, (company.founderShare ?? 1) * (1 - RESCUE_SHARE));
   return {
     company: {
       ...company,
       cash: company.cash + amount,
       // The money clears the immediate hole, which is the point of it.
       bankruptSince: undefined,
+      founderShare: share,
       reputation: Math.max(0, company.reputation - 3),
     },
     released: [],
     notes: [
-      `Took ${amount.toLocaleString()} in rescue funding for a third of the company. The doors stay open; a third of whatever you build from here belongs to somebody who was not in the room.`,
+      `Took ${amount.toLocaleString()} in rescue funding for a third of the company. The doors stay open; the founders now hold ${Math.round(share * 100)}% of whatever this becomes.`,
     ],
   };
 }

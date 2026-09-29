@@ -12,13 +12,15 @@ import { resolveYear as resolveWithNews } from "@shared/simulation/resolve";
 import { startingCompany } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { NICHES, nicheById } from "@shared/simulation/niches";
-import { cleanDecision, defaultDraft, validateDecision, LEVER_FIELDS } from "@shared/simulation/levers";
+import { cleanDecision, defaultDraft, validateDecision, LEVER_FIELDS, LEVERS_FOR_A_TABLE } from "@shared/simulation/levers";
 import {
-  BOND_DISCOUNT, BOND_TERM, UNLOCKS, annualPlans, buildCostPerUnit, forecastOutcome, isUnlocked, leaseCostPerUnit,
-  paidBy, seatAllowances, takings,
+  BOND_DISCOUNT, BOND_TERM, SOLO_ORDER, UNLOCKS, annualPlans, buildCostPerUnit, forecastOutcome, isUnlocked, leaseCostPerUnit,
+  paidBy, seatAllowances, soloSchedule, soloUnlocked, takings,
 } from "@shared/simulation/responsibilities";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
 import { interestOn } from "@shared/simulation/finance";
+import { prOutcome } from "@shared/simulation/product";
+import { termsOf } from "@shared/simulation/treasury";
 
 const niche = nicheById("dating_apps")!;
 const team = (over: Partial<Company> = {}): Company => ({
@@ -324,5 +326,142 @@ describe("borrowing is bounded by the line", () => {
 
   it("does not carry last year's raise into this year's draft", () => {
     expect(defaultDraft("cfo", team(), { borrow: 1, repay: 1, cashBuffer: 5, raiseAmount: 3_000_000 }).raiseAmount).toBe(0);
+  });
+});
+
+describe("the schedule one person plays on", () => {
+  /** Every lever a founder alone can ever be shown, deduped as the desk dedupes them. */
+  const soloLevers = () => {
+    const ids = new Set<string>();
+    for (const role of ROLES) for (const f of LEVER_FIELDS[role]) if (!LEVERS_FOR_A_TABLE.has(f.id)) ids.add(f.id);
+    return ids;
+  };
+
+  it("names every lever a founder can be shown, and nothing else", () => {
+    /*
+     * The two lists are written in different files and neither can see the
+     * other, so a lever added to `LEVER_FIELDS` and forgotten here would
+     * simply never appear on a solo desk — a decision quietly deleted from
+     * one person's game with nothing to say it had gone.
+     */
+    const levers = soloLevers();
+    expect([...levers].filter((id) => !SOLO_ORDER.includes(id))).toEqual([]);
+    expect(SOLO_ORDER.filter((id) => !levers.has(id))).toEqual([]);
+    expect(new Set(SOLO_ORDER).size).toBe(SOLO_ORDER.length);
+  });
+
+  it("opens a season with eleven decisions rather than nineteen", () => {
+    const open = [...soloSchedule(16, 4)].filter(([, at]) => at === 1).map(([id]) => id);
+    expect(open).toHaveLength(11);
+    /*
+     * Everything the desk's own integration tests file in a solo first period.
+     * They are the contract: a ramp that took any of these away would be
+     * taking away a decision a business really does make on day one.
+     */
+    expect(open).toEqual(expect.arrayContaining([
+      "focus", "positioning", "price", "capacityTarget", "brandSpend",
+      "featureSpend", "supportSpend", "headcount", "borrow", "cashBuffer",
+    ]));
+  });
+
+  it("hands the rest over a few at a time instead of a desk at a time", () => {
+    const schedule = soloSchedule(16, 4);
+    const held = (period: number) => [...schedule.values()].filter((at) => at <= period).length;
+    let worst = 0;
+    for (let p = 2; p <= 16; p++) worst = Math.max(worst, held(p) - held(p - 1));
+    /*
+     * The team schedule's step is thirteen — year three hands a solo founder
+     * every seat's year-three levers in the same period. Anything near that is
+     * the bug this replaced.
+     */
+    expect(worst).toBeLessThanOrEqual(5);
+  });
+
+  it("finishes teaching before the season ends", () => {
+    const schedule = soloSchedule(16, 4);
+    const last = Math.max(...schedule.values());
+    expect(last).toBeLessThanOrEqual(12);
+    // And everything a four-year table would reach is reached.
+    expect(schedule.size).toBe([...soloLevers()].filter((id) => {
+      const years = UNLOCKS.filter((u) => u.field === id).map((u) => u.year);
+      return (years.length ? Math.min(...years) : 1) <= 4;
+    }).length);
+  });
+
+  it("does not hand a short season the levers a long one is for", () => {
+    // Opening a niche is a year-five move. A four-year season never gets there.
+    expect(soloSchedule(16, 4).has("openNiche")).toBe(false);
+    expect(soloSchedule(56, 4).has("openNiche")).toBe(true);
+  });
+
+  it("drops a lever filed before the founder's own desk opened it", () => {
+    const early = cleanDecision("cmo", { price: 40, prSpend: 1_000 }, [], { year: 1, periods: 4, soloTotal: 16 });
+    expect(early.price).toBe(40);
+    expect(early.prSpend).toBeUndefined();
+    expect(soloUnlocked("prSpend", 1, 16, 4)).toBe(false);
+    const later = cleanDecision("cmo", { price: 40, prSpend: 1_000 }, [], { year: 16, periods: 4, soloTotal: 16 });
+    expect(later.prSpend).toBe(1_000);
+  });
+
+  it("leaves a five-person table on the schedule written for it", () => {
+    // No `soloTotal`, so nothing changes for a seat that has colleagues.
+    expect(cleanDecision("cmo", { price: 40, prSpend: 1_000 }, [], { year: 3 }).prSpend).toBe(1_000);
+    expect(isUnlocked("cmo", "prSpend", 3)).toBe(true);
+  });
+});
+
+/**
+ * Levers priced for a year, charged for a period.
+ *
+ * Three levers were found doing the same arithmetic wrong, and all three read
+ * as balance problems rather than as bugs: a rate written per *year* was being
+ * applied to a *period*, so a quarterly season got four times the effect and a
+ * monthly one twelve. `cadence.ts` explains the rule; these are the places that
+ * did not follow it, each with the measurement that found it.
+ */
+describe("a year's worth is not a period's worth", () => {
+  it("does not let a PR push land four times a year", () => {
+    const year = prOutcome(500_000, "seed:hit", 1, 1);
+    const quarter = prOutcome(500_000, "seed:hit", 1, 0.25);
+    /*
+     * Both are the same seed, so both land or neither does; what is compared
+     * is how much a landing is worth. A quarter of a year's push should be a
+     * quarter of a year's brand, and it used to be all of it — which made PR
+     * the only lever in the game with a negative net cost.
+     */
+    if (year.landed !== "hit") return;
+    expect(quarter.brand).toBeCloseTo(year.brand / 4, 6);
+  });
+
+  it("scales what a PR push costs to the market it is in", () => {
+    /*
+     * A flat £100,000 threshold is nothing in a catalogue market and twice the
+     * whole opening bank in one Nova wrote for a founder, where it made the
+     * lever unusable rather than expensive.
+     */
+    const rich = prOutcome(50_000, "seed:hit", 1, 1);
+    const small = prOutcome(50_000, "seed:hit", 0.01, 1);
+    if (rich.landed !== "hit") return;
+    expect(small.brand, "the same money goes further in a smaller market").toBeGreaterThan(rich.brand);
+  });
+
+  it("charges payment terms against the period they defer, not the year", () => {
+    /*
+     * Ninety days is the whole of a quarter. Deferring `days / 365` of a
+     * period's takings left a company on the longest terms in the market
+     * collecting almost as fast as one billing on delivery.
+     */
+    expect(termsOf(90, 1).deferred).toBeCloseTo(90 / 365, 6);
+    expect(termsOf(90, 0.25).deferred, "a quarter of sales on ninety days is nearly all still owed")
+      .toBeGreaterThan(0.9);
+    expect(termsOf(90, 1 / 12).deferred, "and never more than everything").toBe(1);
+    // Billing on delivery is still the baseline it always was, at every cadence.
+    expect(termsOf(0, 0.25).deferred).toBe(0);
+    expect(termsOf(0, 0.25).appeal).toBe(1);
+  });
+
+  it("still makes longer terms worth giving", () => {
+    // The lever has to remain a trade, not a penalty: it buys appeal.
+    expect(termsOf(90, 0.25).appeal).toBeGreaterThan(termsOf(0, 0.25).appeal);
   });
 });

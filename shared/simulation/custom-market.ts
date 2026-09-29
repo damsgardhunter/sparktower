@@ -127,7 +127,44 @@ export const INCUMBENT_SHARE_MAX = 0.88;
 /** @deprecated The ceiling of the band. Kept as the old name for callers that meant "the most they hold". */
 export const INCUMBENT_SHARE_TOTAL = INCUMBENT_SHARE_MAX;
 
+/**
+ * How strong the field is allowed to be, on average, before it is pulled back.
+ *
+ * The share a market's incumbents hold is banded (see `INCUMBENT_SHARE_MIN`)
+ * and how *good* they are was not, so Nova could write four rivals at ninety
+ * for quality and brand and the market was decided before anybody sat down. A
+ * company opens at quality 38 and brand 8; four years of good play reaches
+ * about 64 and 57. Against a field averaging ninety, nothing a founder does
+ * changes the ordering, and a season whose first period can only fail is not a
+ * season — the same argument the share band is built on.
+ *
+ * It is a ceiling on the *mean*, not on any one rival, because the market
+ * leader being excellent is the point. A single fortress at 88 with three
+ * ordinary rivals behind it is a hard market and a real one, and it passes
+ * here untouched. Both markets in `docs/simulation-playtest.md` average in the
+ * fifties, as do all seven catalogue markets, so nothing anybody has played
+ * moves.
+ *
+ * Scaled rather than clipped, so the relative ordering survives: who is best
+ * stays best, and the gaps between them keep their proportions.
+ */
+export const INCUMBENT_STRENGTH_MEAN_MAX = 70;
+
 const POSTURES: IncumbentPosture[] = ["fortress", "brawler", "coaster", "innovator"];
+
+/**
+ * Pull a field of ratings back until its average sits under the ceiling.
+ *
+ * Multiplied by one factor, so nobody is reordered and nobody is singled out.
+ */
+function withinStrength(values: number[]): number[] {
+  if (!values.length) return values;
+  const mean = values.reduce((sum, n) => sum + n, 0) / values.length;
+  if (mean <= INCUMBENT_STRENGTH_MEAN_MAX) return values;
+  const factor = INCUMBENT_STRENGTH_MEAN_MAX / mean;
+  /* Floored, not rounded: rounding a scaled field back up can leave the mean a shade over the ceiling. */
+  return values.map((v) => Math.floor(v * factor));
+}
 
 const num = (v: unknown, lo: number, hi: number, fallback: number): number => {
   const n = Number(v);
@@ -183,11 +220,46 @@ function cleanSegments(raw: unknown): Segment[] | null {
   }));
 }
 
-function cleanRegions(raw: unknown, segmentIds: string[]): City[] | null {
+/**
+ * The most a region may cost to open, as a share of what that region is worth
+ * in a year.
+ *
+ * Entry costs are the one number Nova writes in absolute money that nothing
+ * scaled afterwards, and the model writes them for a company that does not
+ * exist: £15,000 to £90,000, which sounds modest until it is set against a
+ * founder's bank. Measured, the seven hand-written markets price a region at
+ * **0.75% to 2.0%** of that region's own annual worth, every one of them, and
+ * a market Nova wrote priced it at **7% to 33%** — up to thirty times dearer
+ * relative to the business doing the buying.
+ *
+ * What that did to a season: expanding, at any point, bankrupted the company.
+ * A four-year run that opened one extra region ended with nothing and 269
+ * customers; the same run that never expanded ended with money and 244. The
+ * main growth lever in the game was strictly worse than not touching it, so
+ * the answer to "how do I get bigger than one region" was "you do not".
+ *
+ * The ceiling is the top of the range the catalogue already uses, so a market
+ * written inside it is untouched. Past it, every region is pulled back by the
+ * same factor rather than clipped one by one: "the US costs more than its size
+ * alone would say" is a real thing about a market and the model was asked
+ * about it, so the shape it wrote survives and only the scale moves.
+ */
+export const ENTRY_COST_MAX_SHARE = 0.02;
+
+function cleanRegions(raw: unknown, segmentIds: string[], marketValue: number): City[] | null {
   const list = Array.isArray(raw) ? raw.slice(0, MAX_REGIONS) : [];
   if (list.length < MIN_REGIONS) return null;
   const ids = unique(list.map((c: any, i) => slug(c?.id ?? c?.name, `region_${i + 1}`)));
   const weights = normalise(list.map((c: any) => num(c?.weight, 0.01, 1, 0.1)), 1);
+  /*
+   * Entry costs, pulled back together if any of them is past what a region of
+   * that size is worth. One factor for all of them, so "the US is dearer than
+   * its size alone would say" — a real thing the model knows and was asked
+   * about — survives. See `ENTRY_COST_MAX_SHARE`.
+   */
+  const asked = list.map((c: any) => num(c?.entryCost, 10_000, 5_000_000, 250_000));
+  const worst = Math.max(...asked.map((cost, i) => cost / Math.max(1, marketValue * weights[i] * ENTRY_COST_MAX_SHARE)));
+  const affordable = worst > 1 ? 1 / worst : 1;
   return list.map((c: any, i): City => {
     // Only segments that exist, or the engine looks up a multiplier for nobody.
     const mix: Record<string, number> = {};
@@ -202,7 +274,7 @@ function cleanRegions(raw: unknown, segmentIds: string[]): City[] | null {
       id: ids[i],
       name: str(c?.name, 60, `Region ${i + 1}`),
       weight: weights[i],
-      entryCost: Math.round(num(c?.entryCost, 10_000, 5_000_000, 250_000)),
+      entryCost: Math.max(1, Math.round(asked[i] * affordable)),
       note: str(c?.note, 200, "A place this market exists."),
       ...(Object.keys(mix).length ? { segmentMix: mix } : {}),
     } as City;
@@ -221,14 +293,22 @@ function cleanIncumbents(raw: unknown): IncumbentSeed[] | null {
   const held = asWritten.reduce((sum, n) => sum + n, 0);
   const target = Math.min(INCUMBENT_SHARE_MAX, Math.max(INCUMBENT_SHARE_MIN, held));
   const shares = normalise(asWritten, target);
+  /*
+   * And how good they are, banded the same way the share is — a field nobody
+   * could out-build decides the season before it starts. See
+   * `INCUMBENT_STRENGTH_MEAN_MAX`.
+   */
+  const quality = withinStrength(list.map((x: any) => num(x?.quality, 10, 95, 55)));
+  const brand = withinStrength(list.map((x: any) => num(x?.brand, 5, 95, 50)));
+  const service = withinStrength(list.map((x: any) => num(x?.service, 10, 95, 55)));
   return list.map((x: any, i): IncumbentSeed => ({
     id: ids[i],
     name: str(x?.name, 60, `Rival ${i + 1}`),
     posture: POSTURES.includes(x?.posture) ? x.posture : POSTURES[i % POSTURES.length],
     startingShare: shares[i],
-    quality: num(x?.quality, 10, 95, 55),
-    brand: num(x?.brand, 5, 95, 50),
-    service: num(x?.service, 10, 95, 55),
+    quality: quality[i],
+    brand: brand[i],
+    service: service[i],
     priceIndex: num(x?.priceIndex, 0.5, 2.5, 1),
     persona: {
       tagline: str(x?.persona?.tagline, 160, "The one everyone has heard of."),
@@ -383,7 +463,12 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
 
   const segments = cleanSegments(m.segments);
   if (!segments) return null;
-  const cities = cleanRegions(m.regions ?? m.cities, segments.map((s) => s.id));
+  /*
+   * What the whole market turns over in a year, at the prices its own segments
+   * expect. Regions are priced against it — see `ENTRY_COST_MAX_SHARE`.
+   */
+  const marketValue = segments.reduce((sum, seg) => sum + seg.size * seg.referencePrice, 0);
+  const cities = cleanRegions(m.regions ?? m.cities, segments.map((s) => s.id), marketValue);
   if (!cities) return null;
   const incumbents = cleanIncumbents(m.incumbents);
   if (!incumbents) return null;

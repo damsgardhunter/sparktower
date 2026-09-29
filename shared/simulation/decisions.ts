@@ -38,7 +38,7 @@
 import type { Company, Economy, Niche, Role } from "./types";
 import { ROLES } from "./types";
 import { salaryIn } from "./workforce";
-import { saturate, atScale } from "./market";
+import { atScale, saturate } from "./market";
 
 /** Price and how the market hears about you. */
 export interface MarketingDecision {
@@ -619,10 +619,65 @@ export const officersOf = (company: { seats?: Role[]; officers?: number }): numb
 export const REFERENCE_YEAR_OF_COSTS = 1_100_000;
 
 export const yearOfCostsFor = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
-  REFERENCE_YEAR_OF_COSTS * (officersOf(company) / ROLES.length) * (Number(company.scale) || 1);
+  REFERENCE_YEAR_OF_COSTS * (officersOf(company) / ROLES.length) * payScale(company.scale);
 
 export const SALARY = 85_000;
 export const EXECUTIVE = 140_000;
+
+/**
+ * How a person's pay moves with the size of the market they work in.
+ *
+ * Not linearly, which is what it used to do. `EXECUTIVE * scale` is right in
+ * spirit — a founder in a market worth £1.3m is not on a corporate chief
+ * executive's package — and wrong in arithmetic, because a market a hundredth
+ * the size made a founder cost a hundredth of a person: **£700 a year**. At
+ * that price a company that decided nothing at all was comfortably profitable
+ * from its first period and ended a four-year season richer than it started,
+ * which is the finding this exists to fix (`docs/simulation-playtest.md`).
+ *
+ * Pay compresses instead of shrinking. Rent, tooling and headcount scale with
+ * the business; the floor under one person does not, because the person still
+ * has to eat. A square root is the same compression `marketFor` already uses
+ * on the field of companies, and it has the property that matters here: at
+ * catalogue scale it is exactly one, so the seven hand-written markets get the
+ * number they have always had and nothing balanced against them moves.
+ *
+ *     scale 1.00  →  1.000  ·  £140,000   (the seven catalogue markets)
+ *     scale 0.10  →  0.200  ·  £27,900
+ *     scale 0.01  →  0.040  ·  £5,600     (a startup market Nova wrote)
+ *
+ * The exponent is calibrated rather than derived, so here is the measurement
+ * it came from — four strategies, sixteen quarters, the market in
+ * `docs/simulation-playtest.md`, reading the company's value at the end:
+ *
+ *     exponent   does nothing        plays it well
+ *     1.0 (old)  +£176 a period      −£208 a period   ← doing nothing pays
+ *     0.8        −£62                −£172            ← barely a cost
+ *     0.7        −£471               −£114            ← chosen
+ *     0.6        −£1,119             −£148, £527 left ← squeezes the player too
+ *
+ * 0.7 is the point where a company that decides nothing is visibly bleeding
+ * and halving its customers, while one that fixes the axis its segment weighs
+ * still ends the season worth nearly three times as much. Below it the
+ * founder's own salary starts deciding the season, which is not a decision
+ * anybody gets to make.
+ */
+export const PAY_SCALE_POWER = 0.7;
+
+export const payScale = (scale?: number): number =>
+  Math.pow(Math.max(0, Math.min(1, Number(scale) || 1)), PAY_SCALE_POWER);
+
+/**
+ * What one executive chair costs for a year in this company's market.
+ *
+ * One definition, because there were two and they disagreed. `fixedCosts`
+ * charged this with the regional footprint applied and `startingCompany` sized
+ * the opening plant against it without — so every company opened with a plant
+ * built for two and a half times the payroll it actually paid. Both now ask
+ * here.
+ */
+export const officerCost = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
+  officersOf(company) * EXECUTIVE * payScale(company.scale);
 
 /**
  * What technical debt does while you carry it.
@@ -661,10 +716,19 @@ export function nextTechDebt(input: {
   current?: number;
   featureSpend?: number;
   paydown?: number;
+  /**
+   * The market's size. Both figures below are absolute money and neither was
+   * scaled, so in a market Nova wrote for a founder debt never accumulated
+   * (£5,000 of features against a £400,000 threshold is nothing) and could
+   * never be cleared either — a point of it cost £70,000, and ten points more
+   * than the company had ever had. The mechanic was simply absent at that
+   * scale. See `atScale`.
+   */
+  scale?: number;
 }): number {
-  const { current = 0, featureSpend = 0, paydown = 0 } = input;
-  const added = saturate(Math.max(0, featureSpend), 400_000) * 9;
-  const cleared = Math.max(0, paydown) / 70_000;
+  const { current = 0, featureSpend = 0, paydown = 0, scale = 1 } = input;
+  const added = saturate(Math.max(0, featureSpend), atScale(400_000, scale)) * 9;
+  const cleared = Math.max(0, paydown) / Math.max(1, atScale(70_000, scale));
   return Math.max(0, Math.min(100, current + added - cleared - 0.5));
 }
 
@@ -763,7 +827,7 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
   // and a real loss — which is the trade the CEO is being offered.
   // `officersOf` rather than `seats.length`, because one founder holding five
   // desks is five levers and one salary. See Company.officers.
-  const executives = officersOf(company) * EXECUTIVE;
+  const executives = officerCost(company);
   /*
    * At the scale of the market this company is in.
    *
@@ -774,7 +838,16 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
    * game — it is an impossible one, and it was: fourteen years of losses
    * every single time. A smaller business pays smaller salaries.
    */
-  return (salaries + executives) * footprint * (company.scale ?? 1);
+  /*
+   * The footprint applies to both lines, as it always has.
+   *
+   * It is arguably wrong on the executive line — the same five people run the
+   * company whether it sells in one region or ten — but the seven catalogue
+   * markets are balanced against this number over years of play, and taking
+   * 0.4 off their payroll doubles their fixed costs overnight. It is written
+   * down in `docs/simulation-backlog.md` rather than changed here.
+   */
+  return (salaries * (company.scale ?? 1) + executives) * footprint;
 }
 
 /**

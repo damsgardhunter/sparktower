@@ -478,3 +478,41 @@ describe("how long building room actually takes", () => {
     expect(capacityBuild({ capacity: 168 }, 1_000, 1 / 4).now).toBe(168);
   });
 });
+
+/**
+ * One number, typed once, should not end a season.
+ *
+ * Room decides who gets turned away, so a capacity target below the customer
+ * count threw out customers the company already had — and a target of nought
+ * threw out every one of them. Measured on a settled company: 380 customers to
+ * zero in a single period, with no way back, because a company with no
+ * customers wins nothing the period after either.
+ *
+ * It was the only decision in the game that could do that. Swept across every
+ * lever at its extremes — price multiplied and divided by twenty, every money
+ * lever zeroed, every choice set to each of its options, every city closed —
+ * nothing else cost even a quarter of the customers in one period.
+ */
+describe("cutting the room you have", () => {
+  const serving = (n: number) => ({ capacity: 700, customers: { a: n } });
+
+  it("will not throw out the customers you already have", () => {
+    const cut = capacityBuild(serving(380), 0);
+    expect(cut.now, "you still serve the people you are serving").toBe(380);
+    expect(cut.next).toBe(380);
+  });
+
+  it("still lets a company downsize, and still does it at once", () => {
+    // Above the customer count, a cut is immediate exactly as it always was.
+    expect(capacityBuild(serving(380), 500).now).toBe(500);
+    // And as customers leave, the room can follow them down.
+    expect(capacityBuild(serving(120), 150).now).toBe(150);
+    expect(capacityBuild(serving(0), 0).now).toBe(0);
+  });
+
+  it("does not touch a company that is building", () => {
+    const up = capacityBuild(serving(380), 1_400, 0.25);
+    expect(up.now).toBe(700);
+    expect(up.next).toBeGreaterThan(700);
+  });
+});

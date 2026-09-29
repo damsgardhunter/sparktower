@@ -111,6 +111,297 @@ for a market whose *shape* matches the business, which is exactly the kind of
 judgement that needs looking at on real companies before anybody is charged
 for it.
 
+### From a sixteen-quarter playtest, 29 Sept 2026
+
+Four strategies run through the engine on two markets — one Nova wrote, one
+written by hand in the same shape. Numbers and method in
+`docs/simulation-playtest.md`. Every item below is measured, and two of the
+original five findings did not survive being measured properly.
+
+1. ~~One person is shown nineteen levers before making a decision.~~ **Done.**
+   A solo season reads `SOLO_ORDER`/`soloSchedule` instead of `UNLOCKS`: eleven
+   to open with, the rest a few a period across three quarters of the season.
+   Period one goes 19 → 11. `replaceBid` joined `LEVERS_FOR_A_TABLE` on the way
+   past — it was showing to founders without `replaceSeat`, which was already
+   hidden, so there was a bid field with nothing to bid on.
+
+2. ~~Ordering capacity costs nothing on the card that is about capacity.~~
+   **Done.** The forecast card prices the *order* as well as the room, when the
+   order is past anything the market could currently bring.
+
+3. ~~Doing nothing is cash-positive for four years.~~ **Done.** Four things
+   were paying for it:
+   - **A founder cost £700 a year.** `EXECUTIVE * scale` scaled a *person's*
+     pay linearly with the market. `payScale` compresses it instead; exponent
+     0.7, calibrated, and `payScale(1) = 1` so the catalogue does not move.
+   - **The opening plant was sized against a payroll the company was never
+     charged.** `startingCompany` left the regional footprint off the executive
+     line and `fixedCosts` applied it. Both ask `officerCost` now.
+   - **Overflow was a customer magnet.** Customers a rival turns away go to
+     whoever they would have chosen next, and the candidates were only the
+     companies with *room* — so in a market whose incumbents are all full, an
+     idle newcomer took half of everything. Intake is now bounded by what a
+     company won on merit (`SPILL_TOPUP_MAX`), shared proportionally.
+   - **The bank was sized against the market and the bill against the
+     company.** `startingCashFor` gives every company the same number of years
+     of its own costs. Runway: catalogue five-person 18.6y (unchanged), custom
+     five-person 1.7y → 17.1y, solo 85.7y → 17.1y.
+
+   Deciding nothing now ends £10,155 down with its customers cut from 134 to
+   105 and a company worth 1,890, against 4,392 for one that plays well.
+   Before: ended *up* and profitable in every period.
+
+   **Still owed.** Partial, and the bound is the catalogue: at a top-up cap of
+   5 only one team in five finished `balance.test.ts` with a business worth
+   anything, so the cap sits at 8 for margin. Those markets are fed by overflow
+   harder than anybody realised — **32% to 74% of what a new team holds in its
+   first period is overflow, not customers who chose it**, in every catalogue
+   market. Worth understanding before tightening further.
+
+4. ~~A market Nova wrote can be made unplayable by writing its rivals strong.~~
+   **Done, and it was mostly something else.** `INCUMBENT_STRENGTH_MEAN_MAX`
+   bands the field's *mean* quality, brand and service at 70, scaled not
+   clipped so the ordering survives. A single fortress at 88 with three
+   ordinary rivals passes untouched, as do all seven catalogue markets. But the
+   SaaS market that prompted this was not unplayable because of its fortress —
+   it was unplayable because of the defects in (3).
+
+5. ~~Nobody is ever turned away after the first period.~~ **Wrong premise.**
+   People are turned away constantly and on purpose: `stepIncumbent` keeps 6%
+   of headroom precisely so the overflow exists, and 12% was tried once and
+   left every new team in single figures. What was missing is that the
+   *player* never hit their own ceiling, because their opening plant was
+   oversized. Fixed by (3).
+
+6. ~~The only decision that could end a season in one keystroke.~~ **Done.**
+   Setting capacity to nought threw out every customer at once — 380 to zero in
+   a period, unrecoverable. `capacityBuild` floors a cut at the customers being
+   served.
+
+   Swept across every lever at its extremes — price multiplied and divided by
+   twenty, every money lever zeroed, every choice set to each of its options,
+   every city closed — **nothing else costs even a quarter of the customers in
+   one period.** Worth re-running that sweep after any allocation change.
+
+7. ~~Expanding was strictly worse than not expanding.~~ **Done.** Entry costs
+   are the one number Nova writes in absolute money that nothing scaled. All
+   seven catalogue markets price a region at **0.75%–2.0% of that region's own
+   annual worth**; a market Nova wrote priced it at **7%–33%**. Expanding at any
+   point bankrupted the company: one extra region ended with nothing and 269
+   customers, against money and 244 for never expanding. `ENTRY_COST_MAX_SHARE`
+   pulls a whole market's entry costs back by one factor when any region
+   exceeds the catalogue's ceiling, so the shape the model wrote survives.
+   After: 287 customers and 18% more company value.
+
+8. ~~Putting the price up for ever was strictly profitable.~~ **Done, in two
+   places.** Commit 9fc46d03 (another session) fixed the appeal side —
+   `expectationPenalty` drives appeal to ~0.00005 at seventy times the ceiling
+   — and that was necessary and not sufficient, because customers *already
+   held* leave by a different path:
+   - The gouge rate was capped at 0.85 and then multiplied by `per`, so a
+     quarterly season shed 21% a period however absurd the price, while a price
+     raised 50% a period compounded faster. Being priced past what somebody can
+     pay is not an annual rate; it is now applied per period, which is what the
+     comment above it already said it meant.
+   - A list price was judged against the *dearest* ceiling in the market, so a
+     company could charge eighteen times what its largest segment references
+     and those customers were shielded by a richer segment's ceiling. Staying
+     is not choosing: retention is now judged per segment, against what the
+     people actually paying the bill will pay.
+
+   Sixteen quarters, a market referencing £15: +50% a period went from a
+   company worth 149,602 (79× the best honest strategy) to one worth nothing;
+   +20% a period went from 20,057 to 6,905.
+
+   **Open, and a judgement call rather than a hole.** A steady 20% a period
+   still ends the best single strategy measured — £274, twenty-one customers,
+   worth 6,905 against 4,392 for playing well. That is a premium niche business
+   being worth more than a bigger cheap one, which is a real thing and which
+   `valuation` (revenue × 1.2 + assets − debt) will always say. Left as is.
+
+### A sweep of every lever, 29 Sept 2026
+
+Each spending lever run alone for a full season at the same share of cash, then
+every non-spending lever at each of its settings, measured on what the company
+is worth at the end. Three bugs, all the same shape as the price one: a rate
+written per **year** applied to a **period**, so a quarterly season got four
+times the effect and a monthly one twelve. `cadence.ts` states the rule; these
+are the three places that did not follow it.
+
+9. ~~A PR push landed a year's brand every period.~~ **Done.** `prOutcome` had
+   neither `atScale` nor `per`, unlike `brandGain` and `perfGain` beside it. It
+   was the only lever in the game with a **negative net cost** — twelve
+   quarters of PR alone took a company from 16,576 customers to 27,990 and
+   ended with *more* money than it started — and beat everything else per pound
+   by four times. In a market Nova wrote the same flat £100,000 threshold was
+   twice a founder's whole bank, so the lever could not be used at all. Now
+   599 per £1,000 spent, against celebrity at 486 and brand at 393.
+
+10. ~~Payment terms were free money.~~ **Done, twice over.** `termsOf` deferred
+    `days / 365` — a share of a *year's* takings — applied to a *period's*
+    revenue, so ninety-day terms in a quarterly season deferred a quarter of
+    what ninety days actually is. And nothing charged for carrying the
+    receivable at all: it was free capital. Together, the longest terms in the
+    market won more customers **and** ended with more cash **and** more profit
+    than billing on delivery. Deferral is now per period, and what is owed is
+    carried at the company's *own* credit rate — so the company nobody wants to
+    lend to pays most to be patient with its customers. Ninety days now ends
+    with less cash than billing on delivery, and the sweet spot is 30–60.
+
+11. ~~A promotion's churn was charged on a tenth of what it won.~~ **Done.**
+    `dealChasers` was booked from `allocation.fresh` — customers new to the
+    market — which is a small minority of what a promotion wins; the rest come
+    from rivals and from rivals' overflow. One measured period: 36 fresh
+    against 403 from overflow, so the cost landed on eight per cent of the
+    benefit. Every arrival counts now. "First month free" fell from +85,008 to
+    +43,920 of company value in dating apps, and "a January sale" from +38,016
+    to −672.
+
+**Open, and measured rather than guessed:**
+
+- **"First month free" is still never a mistake.** Halved, but positive in all
+  seven markets at every horizon tried. Its appeal is 0.16 for a cost of
+  one-twelfth of *new* customers' revenue; a January sale is 0.09 for four per
+  cent of *everyone's*. Per unit of cost the free month is about five times the
+  better buy, which is why nobody would ever choose the sale. Equalising them
+  is a tuning judgement nobody has taken.
+- **Whether a sale hurts depends on the horizon.** At sixteen quarters it costs
+  money in dating apps and drone delivery; at twelve it pays in all seven. The
+  test that came out of this asserts the deal-chaser *accounting* rather than
+  the sign of the outcome, because the sign moves with the season length and
+  pinning it would be pinning the seed.
+- **Cost-cutting levers score nothing.** `valuation` is `revenue × 1.2 + assets
+  − debt`, so efficiency, a margin focus, a cost review, automation and
+  sourcing all improve profit and change the score by exactly zero. Excluding
+  cash is load-bearing — it is what makes the price-ramp company worth nothing
+  — so this is a question about the score, not about the market, and it wants
+  answering on its own.
+- **The lesson the game is built on is thin at the length it is sold.** Over
+  forty quarters, doing both marketing and product is worth twice doing
+  marketing alone. Over sixteen — the length of a custom season — it wins by
+  five per cent. The ordering is right at every length; the *teaching* wants
+  six years to land.
+
+### Levers with no downside, 29 Sept 2026
+
+A second sweep, this time every *choice* and *percent* lever at each of its
+settings over forty quarters, with the options read out of `LEVER_FIELDS` so
+they could not be mistyped. Three of the fixes above came out of it. What is
+left is a pattern rather than a bug, and it is the thing to look at next.
+
+**Several levers have a benefit that compounds and a cost that does not.**
+Measured on dating apps over twenty-four quarters, stacked on top of ordinary
+competent play:
+
+    invest in marketing and product              1,289,280
+    + annual discount at its cap                 1,459,248
+    + ninety-day terms + first month free        2,028,528
+
+Three levers, **+57%**, none of which has a setting where it hurts. A player
+who finds them takes all three every time, which makes them not decisions.
+
+- **`annualDiscount` is monotonically best at its cap in every market.** Worth
+  20–40% of the company: dating apps +152,448, restaurant chain +134,971,
+  project management +128,766. The arithmetic is honest — about 13% of revenue
+  buys about 21% less churn — but in markets this flighty (loyalty 0.24 to
+  0.38) reduced churn compounds over a season while the discount is charged
+  once a period. Only MMOs has a peak below the cap. There is no arithmetic
+  error here, which is why it has been left alone: it is a tuning judgement
+  against markets that are balanced around the current number.
+
+  Worth knowing: `responsibilities.ts` says every lever "was built to have a
+  real trade-off, and the tests hold them to it: a range where it helps, and a
+  setting where it hurts". For annual plans the tests assert only that the
+  mechanism exists — revenue down, retention up, customers up — all in a single
+  period. The property the comment claims is not actually tested here, which is
+  the same blind spot that hid the price bug.
+
+- **Price tiers are worth up to three times the company, and are never wrong.**
+  Setting a tier at each segment's reference price beats a single list price in
+  every market: drone delivery 197,010 → 601,380, podcasts 262,399 → 483,481.
+  The gain tracks the spread in what segments will pay (drone delivery's widest
+  segment pays 28× its narrowest). That is price discrimination behaving
+  correctly — a business with that spread *must* segment — and the level of
+  each tier is a real decision. But *whether* to use tiers is not, and in a
+  wide-spread market a table that has not found the lever is playing at a
+  two-thirds handicap without being told.
+
+**Things that look dead and are not.** Several levers moved nothing in the
+sweep because their preconditions were absent, not because they are broken:
+`referralSpend` does nothing below quality 40 by design; `techDebtPaydown` has
+nothing to pay down at zero debt; `recruitingSpend` and `trainingSpend` need
+staff; `featureMode` needs a `featureBet`; `engineerPay` and `factorPct` need
+headcount and receivables. Worth re-checking any of them in a run where the
+precondition holds before concluding anything.
+
+**What this harness cannot see.** Insurance and the shock levers were measured
+with `withoutEvent`, so they read as pure cost — they cannot be judged this
+way. Bids go through `sim-market-routes.ts` rather than through `resolveYear`,
+so the auction is untouched by any of this and still wants its own sitting.
+
+### What the copy promised and the code did not, 29 Sept 2026
+
+A third pass, looking for fields that are written and never read, and for moves
+whose notes describe something the code does not do. Two of the four recovery
+moves were lying to the player — the escape route from a bankruptcy that had
+just been given teeth.
+
+12. ~~Rescue funding was free.~~ **Done.** The move hands over £1.5m or more,
+    clears the bankruptcy, and costs three points of reputation. Its note has
+    always said "for a third of the company", and `founderShare` was never
+    touched — not by the move, not by the caller in `simulation-tick.ts`. Free
+    money in the one situation where money is worth most, while the game said
+    in words that it had cost a third. The test that covered it asserted the
+    *note* matched `/third of the company/i`. It now takes the third, floored
+    at the same 5% an ordinary raise uses, and the note reports the real
+    number.
+
+13. ~~Restructuring promised a lower rate and never gave one.~~ **Done.**
+    `restructure` sets `covenant.rateRelief = 0.03` and tells the player "the
+    creditor agreed: a lower rate, and a cap on discretionary spending". The
+    field was in the type, set by the move, rendered on the desk and built by
+    three test files, and **read by no code anywhere** — `interestOn` never saw
+    the covenant. So the move cost six reputation and a spending cap in
+    exchange for nothing. The relief now applies while the covenant is in force
+    and stops when it lifts; emergency debt is deliberately excluded, since a
+    creditor restructuring the line is not also discounting the rescue that
+    came before it.
+
+14. ~~Bots opened in better regions than people.~~ **Done.** `openingRegion`
+    gives a person the cheapest region above a size floor — the same home every
+    season, deliberately, so teams are comparable. For a bot it tossed a seeded
+    coin and half the time took *the largest region it can afford*. Reach is a
+    hard ceiling on the market a company can ever address, so that is a
+    permanent head start no person can have:
+
+        market            human home   bot average   ratio
+        Podcasts               9.0%        19.4%      2.2x
+        MMOs                   8.1%        17.1%      2.1x
+        Drone delivery         9.9%        15.3%      1.5x
+        (all seven markets)                          1.4-2.2x
+
+    A player using a bot's own policy, decision for decision, finished fifth of
+    five against four of them. With the size bias removed — the scatter kept,
+    which was the stated purpose — bots average 0.9x to 1.2x the human home and
+    that player finishes third. The test that pinned the old behaviour asserted
+    the implementation; the `describe` above it and `openingRegion`'s own
+    comment both state the purpose as scatter alone, and say "the point is not
+    that bots play well".
+
+**Open, and honestly unexplained.** A 3x gap remains between the best bot and a
+player running a bot's identical policy. One attempt to isolate it — five
+identical policies in one market — collapsed into everyone ending near zero,
+which is a degenerate case and says nothing about the real one. It wants a
+purpose-built experiment rather than a theory.
+
+**Two veins now exhausted, for whoever looks next.** Every lever on every desk
+is read by the engine (checked by walking `LEVER_FIELDS` against the engine
+source). Every field written onto `Company` is read somewhere. The bugs in this
+section were the last of the "set but never read" kind.
+
+Not tested, and worth its own sitting: multiplayer, bots as rivals, the
+auction, and mergers. This was one founder against the market.
+
 ## Built, so nobody rebuilds it
 
 - Every seat's decisions, arriving over the first five years of a season

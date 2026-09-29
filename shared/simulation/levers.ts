@@ -28,7 +28,7 @@ import type { Company, Niche, NicheVoice, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { interlock, fixedCosts, sanitiseDecisions } from "./decisions";
 import { reachOf } from "./market";
-import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked } from "./responsibilities";
+import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked, soloUnlocked } from "./responsibilities";
 import { SEVERANCE, payEffect } from "./people";
 import { featureCost } from "./product";
 import { programmeCost, researchCost, statementCost } from "./world";
@@ -336,7 +336,7 @@ function standing(role: Role, company: Company, draft: Record<string, any>): Rec
  * itself.
  */
 export const LEVERS_FOR_A_TABLE: ReadonlySet<string> = new Set([
-  "budget", "targets", "bonusPool", "overrule", "replaceSeat", "holdBackSeat", "rehire",
+  "budget", "targets", "bonusPool", "overrule", "replaceSeat", "replaceBid", "holdBackSeat", "rehire",
 ]);
 
 export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
@@ -540,12 +540,23 @@ export function cleanDecision(
     periods?: number;
     /** The market's segments: price tiers can only be set for ones that exist. */
     segmentIds?: readonly string[];
+    /**
+     * How many decisions the whole season has, when one person is playing it
+     * alone. Present means solo, and solo reads a different schedule
+     * (`soloSchedule`) — so a filing cannot carry a lever the founder's own
+     * desk has not opened yet, which is the same guarantee the team path gets
+     * from `isUnlocked`.
+     */
+    soloTotal?: number;
   } = {},
 ): Record<string, any> {
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
-    if (context.year !== undefined && !isUnlocked(role, field.id, context.year, context.periods ?? 1)) continue;
+    if (context.soloTotal !== undefined) {
+      // A solo founder holds every desk, so the gate is the lever, not the role.
+      if (context.year !== undefined && !soloUnlocked(field.id, context.year, context.soloTotal, context.periods ?? 1)) continue;
+    } else if (context.year !== undefined && !isUnlocked(role, field.id, context.year, context.periods ?? 1)) continue;
     const raw = source[field.id];
     switch (field.kind) {
       case "choice":

@@ -1930,6 +1930,27 @@ function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCost
   };
   const risk = capacityRisk({ capacity, forecast: live, price, idleCostPerUnit });
   /*
+   * The same question asked of the room being *ordered* rather than the room
+   * that exists.
+   *
+   * Everything else on this card is about the period in front of you, which is
+   * right — capacity ordered now cannot serve it. But that left the order
+   * itself unpriced: a playtest built twenty-two thousand seats for sixteen
+   * hundred customers and nothing on this card moved, because the two tiles
+   * below are worked out from today's capacity and today's capacity had not
+   * changed yet. The bill arrived a year later as a company with no cash and
+   * no idea which decision had spent it.
+   *
+   * This period's range is only a stand-in for next period's — the projection
+   * panel does the honest comparison against next period's demand. It is a
+   * good enough stand-in to catch an order that is multiples of anything the
+   * market could currently bring, which is the mistake worth interrupting.
+   */
+  const ordering = Math.round(capacityNext) > Math.round(capacity)
+    ? capacityRisk({ capacity: capacityNext, forecast: live, price, idleCostPerUnit })
+    : null;
+  const overbuilding = ordering?.verdict === "idle";
+  /*
    * The verdict in two words and a line, with an icon: colour is never the
    * only thing saying whether this is fine.
    */
@@ -2004,6 +2025,22 @@ function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCost
           {yours === "capacity" && (
             <p className="mt-1 text-[11px] text-muted-foreground">
               Room you order now opens over the next year — size it to the demand you expect then, not to this {period.one}'s.
+              {" "}Cutting is immediate, but never below the {voice.customers} you are already serving.
+            </p>
+          )}
+          {/*
+            * Said only when the order is past anything the market could
+            * currently bring. Building ahead of demand is a real strategy and
+            * "generous" is a judgement call; multiples of the whole range is
+            * the one that is almost always a slip of the keyboard.
+            */}
+          {overbuilding && (
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-amber-600" data-testid="text-overbuilding">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                You're ordering room for {Math.round(capacityNext).toLocaleString()} — about {Math.max(2, Math.round(capacityNext / Math.max(1, live.high)))}× the most this {period.one} could bring.
+                {" "}Unless demand grows into it, {ordering!.idleAtLow.toLocaleString()} of it sits empty at {money(ordering!.idleCostAtLow)} a {period.one}.
+              </span>
             </p>
           )}
         </div>

@@ -119,15 +119,38 @@ export const creditMultiplier = (score: number): number => 0.4 + Math.max(0, Mat
  * Charged on the debt it started the year with. The emergency part of it pays
  * the premium; the rest pays the company's own rate.
  */
-export function interestOn(company: Pick<Company, "debt" | "emergencyDebt" | "creditScore" | "bonds">, marketRate: number): {
+export function interestOn(company: Pick<Company, "debt" | "emergencyDebt" | "creditScore" | "bonds" | "covenant">, marketRate: number): {
   interest: number;
   rate: number;
   emergencyRate: number;
   /** What a long-term loan issued now would be fixed at. */
   bondRate: number;
 } {
-  const rate = marketRate + spreadFor(company.creditScore ?? RATING_START);
-  const emergencyRate = rate + EMERGENCY_PREMIUM;
+  const asked = marketRate + spreadFor(company.creditScore ?? RATING_START);
+  /*
+   * The lower rate a restructuring creditor agreed to.
+   *
+   * `restructure` has always set `rateRelief: 0.03` on the covenant and told
+   * the player "the creditor agreed: a lower rate, and a cap on discretionary
+   * spending". Nothing read it. The field was in the type, set by the move,
+   * shown on the desk and built by the tests, and no code anywhere applied it
+   * — so restructuring cost six points of reputation and a cap on spending in
+   * exchange for a rate cut that never arrived. The move was strictly worse
+   * than its own description, which is the same defect as the rescue raise
+   * that said it took a third of the company and took nothing.
+   *
+   * It applies while the covenant is in force and stops when it lifts, which
+   * is the trade the copy describes: cheaper money for as long as you live
+   * within the cap.
+   */
+  const relief = Math.max(0, company.covenant?.rateRelief ?? 0);
+  const rate = Math.max(0.005, asked - relief);
+  /*
+   * Emergency money is priced off what the company would otherwise pay, not
+   * off the relieved rate: a creditor restructuring the line is not also
+   * discounting the rescue that came before it.
+   */
+  const emergencyRate = asked + EMERGENCY_PREMIUM;
   const emergency = Math.max(0, Math.min(company.emergencyDebt ?? 0, company.debt));
   /*
    * Long-term loans pay the rate they were issued at, whatever the rating has
@@ -142,7 +165,7 @@ export function interestOn(company: Pick<Company, "debt" | "emergencyDebt" | "cr
     interest: ordinary * rate + emergency * emergencyRate + bondInterest,
     rate,
     emergencyRate,
-    bondRate: Math.max(0.005, rate - BOND_DISCOUNT),
+    bondRate: Math.max(0.005, asked - BOND_DISCOUNT),
   };
 }
 

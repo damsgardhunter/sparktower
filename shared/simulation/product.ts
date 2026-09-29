@@ -14,7 +14,7 @@
  * them.
  */
 import type { Company, Niche, Segment } from "./types";
-import { saturate } from "./market";
+import { atScale, saturate } from "./market";
 import { marketPriceOf } from "./decisions";
 import { rng } from "./random";
 
@@ -221,9 +221,15 @@ export function placeBet(input: {
 
 /** Security built up, 0–100: a fifth of it wears off each year, and spending adds to it. */
 /** A fifth wears off a year, and spending adds to it — both per period, not per call. */
-export function securityNext(level: number | undefined, spend: number | undefined, per = 1): number {
+export function securityNext(level: number | undefined, spend: number | undefined, per = 1, scale = 1): number {
   const now = Math.max(0, Math.min(100, level ?? 0));
-  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), 150_000 * per) * 40 * per);
+  /*
+   * `atScale`, for the reason given on `prOutcome`: £150,000 is a line item in
+   * a market worth £400m and three times the whole opening bank in one Nova
+   * wrote for a founder, where it made the lever unusable rather than dear.
+   * The period scaling was already here and is right.
+   */
+  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), atScale(150_000, scale) * per) * 40 * per);
 }
 
 export interface Breach {
@@ -258,9 +264,10 @@ export function breachOf(input: { security?: number; techDebt?: number; seed: st
  * An outage: the debt coming due. Nothing under thirty points of debt; above
  * it, more likely the more there is, and reliability work makes it rarer.
  */
-export function outageChance(techDebt: number | undefined, reliabilitySpend: number | undefined): number {
+export function outageChance(techDebt: number | undefined, reliabilitySpend: number | undefined, scale = 1): number {
   const d = Math.max(0, (techDebt ?? 0) - 30);
-  return Math.min(0.6, d / 150) * (1 - saturate(Math.max(0, reliabilitySpend ?? 0), 300_000));
+  // At the market's scale: £300,000 of reliability work is a different decision in a market worth £1.3m.
+  return Math.min(0.6, d / 150) * (1 - saturate(Math.max(0, reliabilitySpend ?? 0), atScale(300_000, scale)));
 }
 
 export const OUTAGE = { service: 6, reputation: 2 };
@@ -269,9 +276,10 @@ export const OUTAGE = { service: 6, reputation: 2 };
 
 /** Analytics built up, 0–100: a fifth wears off each year. */
 /** What is known about the customers: a fifth of it goes stale a year, and spending adds to it. */
-export function dataNext(level: number | undefined, spend: number | undefined, per = 1): number {
+export function dataNext(level: number | undefined, spend: number | undefined, per = 1, scale = 1): number {
   const now = Math.max(0, Math.min(100, level ?? 0));
-  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), 150_000 * per) * 40 * per);
+  // Scaled to the market as well as to the period. See `securityNext`.
+  return Math.min(100, now * Math.pow(0.8, per) + saturate(Math.max(0, spend ?? 0), atScale(150_000, scale) * per) * 40 * per);
 }
 
 /**
@@ -291,13 +299,37 @@ export const dataEffects = (level: number | undefined) => {
  * PR and influencers: a coin flip. A bit better than even, it lands and buys
  * brand cheaply; otherwise it buys nothing, and one time in ten it backfires.
  */
-export function prOutcome(spend: number | undefined, seed: string): { brand: number; reputation: number; landed: "hit" | "miss" | "backfire" | null } {
+export function prOutcome(
+  spend: number | undefined,
+  seed: string,
+  /** The market's size, so £100,000 means the same thing in a market worth £1.3m. */
+  scale = 1,
+  /** A period's share of a year, so four quarters of PR is a year of PR. */
+  per = 1,
+): { brand: number; reputation: number; landed: "hit" | "miss" | "backfire" | null } {
   const s = Math.max(0, spend ?? 0);
   if (s <= 0) return { brand: 0, reputation: 0, landed: null };
   const r = rng(seed)();
-  if (r < 0.55) return { brand: saturate(s, 100_000) * 14, reputation: 0, landed: "hit" };
+  /*
+   * Scaled twice, and it used to be scaled neither way.
+   *
+   * Every other marketing lever reads `atScale(threshold, scale) * per` for
+   * what it takes and `cap * per` for what it gives — see `brandGain` and
+   * `perfGain` in `resolve.ts`, and the two functions above this one. This was
+   * a flat £100,000 for a flat 14 points, which broke in both directions:
+   *
+   *  - In a quarterly season a push landed its whole year's worth of brand
+   *    four times a year, and in a monthly one twelve. Measured over twelve
+   *    quarters of dating apps, PR alone took a company from 16,576 customers
+   *    to 27,990 and *made* money doing it — the only lever in the game with a
+   *    negative net cost, and better per pound than everything else by a
+   *    factor of four.
+   *  - In a market Nova wrote for a startup, £100,000 is twice the whole
+   *    opening bank, so the lever could not be used at all.
+   */
+  if (r < 0.55) return { brand: saturate(s, atScale(100_000, scale) * per) * 14 * per, reputation: 0, landed: "hit" };
   if (r < 0.9) return { brand: 0, reputation: 0, landed: "miss" };
-  return { brand: 0, reputation: -3, landed: "backfire" };
+  return { brand: 0, reputation: -3 * per, landed: "backfire" };
 }
 
 /**
@@ -305,8 +337,9 @@ export function prOutcome(spend: number | undefined, seed: string): { brand: num
  * the product is worth recommending. Nothing below quality 40; at 100, as
  * good as the same money on brand.
  */
-export function referralBrand(spend: number | undefined, quality: number): number {
+export function referralBrand(spend: number | undefined, quality: number, scale = 1, per = 1): number {
   const s = Math.max(0, spend ?? 0);
   const worth = Math.max(0, Math.min(1, (quality - 40) / 60));
-  return saturate(s, 150_000) * 12 * worth;
+  // Scaled to the market and to the period, for the reasons given on `prOutcome`.
+  return saturate(s, atScale(150_000, scale) * per) * 12 * per * worth;
 }

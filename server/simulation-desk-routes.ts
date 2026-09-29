@@ -41,7 +41,7 @@ import { forecastDemand } from "@shared/simulation/forecast";
 import { projectYear } from "@shared/simulation/projection";
 import { advanceAuthority, advanceSeasonNow, warnIfDevAdvance } from "./season-control";
 import { mfaGate, mfaRequiredFor, mfaSatisfied } from "./mfa";
-import { SPENDING_SEATS, arrivingIn, buildCostPerUnit, isUnlocked, leaseCostPerUnit, unlockYear } from "@shared/simulation/responsibilities";
+import { SPENDING_SEATS, arrivingIn, buildCostPerUnit, isUnlocked, leaseCostPerUnit, soloSchedule, unlockYear } from "@shared/simulation/responsibilities";
 import { STAFF_QUALITY_START, WARN_AT, overrulable, personOf } from "@shared/simulation/people";
 import { breachChance, featureCost, featureMenu, outageChance } from "@shared/simulation/product";
 import { AUTOMATION_RATE, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
@@ -206,6 +206,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
+    /*
+     * The whole season's length, which the solo schedule needs: it spreads one
+     * person's levers across the season rather than handing them five desks'
+     * worth on the first screen. See `soloSchedule`.
+     */
+    const seasonPeriods = totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence);
+    const soloLevers = soloSchedule(seasonPeriods, periods);
     /** One chair at this table: a founder holding every desk, on one salary. */
     const solo = (season.seatCount ?? 5) <= 1;
     const { decisions, filedBy } = await draftFor(venture.id, year);
@@ -402,7 +409,14 @@ export function registerSimulationDeskRoutes(app: Express): void {
        */
       fields: seat.role ? dedupeById((solo ? [...ROLES] : [seat.role as Role]).flatMap((r) => LEVER_FIELDS[r]
         // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
-        .filter((base) => isUnlocked(r, base.id, year, periods))
+        /*
+         * A solo founder is on their own schedule. Five desks' opening levers
+         * on one screen is nineteen decisions before the first one is made, so
+         * theirs arrive a few a period across the season. See `soloSchedule`.
+         */
+        .filter((base) => solo
+          ? (soloLevers.get(base.id) ?? Infinity) <= year
+          : isUnlocked(r, base.id, year, periods))
         /*
          * And not the ones that are only decisions about colleagues. A founder
          * holding every desk has no budget to split between themselves and no
@@ -415,7 +429,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
         .map(({ base, desk }) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
-        const unlocksIn = unlockYear(desk, base.id);
+        /* Which year it turned up in — read from whichever schedule this season is on. */
+        const unlocksIn = solo
+          ? Math.ceil((soloLevers.get(base.id) ?? 1) / periods)
+          : unlockYear(desk, base.id);
         const field = { ...speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         if (field.id === "tiers") {
           return {
@@ -633,12 +650,16 @@ export function registerSimulationDeskRoutes(app: Express): void {
         expansion: Math.round((announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] })?.entryCost ?? 0) * EXPANSION_DISCOUNT),
       },
       /** The levers this seat gets next year, by label, so nobody is surprised by them. */
-      arrivingNextYear: seat.role
-        ? arrivingIn(seat.role as Role, year + 1, periods)
-          /* Nothing is arriving that this table will never be shown. */
-          .filter((id) => !solo || !LEVERS_FOR_A_TABLE.has(id))
-          .map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
-        : [],
+      arrivingNextYear: !seat.role ? [] : solo
+        /*
+         * Solo levers arrive every period rather than every year, so what is
+         * promised here is next period's — otherwise the line either names
+         * nothing or names a year's worth that turns up in instalments.
+         */
+        ? [...soloLevers].filter(([id, at]) => at === year + 1 && !LEVERS_FOR_A_TABLE.has(id))
+            .map(([id]) => ROLES.flatMap((r) => LEVER_FIELDS[r]).find((f) => f.id === id)?.label ?? id)
+        : arrivingIn(seat.role as Role, year + 1, periods)
+          .map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id),
       /**
        * What to show in the form: what they filed already, else last period's,
        * else a sensible opening.
@@ -1027,7 +1048,11 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
       try {
         const raw = JSON.parse(req.query.draft);
-        const opts = { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) };
+        const opts = {
+          year: season.year, periods: periodsPerYear(season.cadence as Cadence),
+          segmentIds: niche.segments.map((s) => s.id),
+          ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+        };
         const cityIds = niche.cities.map((c) => c.id);
         /*
          * Split per desk, exactly as a filing is.
@@ -1131,7 +1156,12 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     // Only the fields each seat owns, taken from the lever list rather than
     // from the request — the same cleaning a bot's decision goes through.
-    const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) });
+    const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), {
+      year: season.year, periods: periodsPerYear(season.cadence as Cadence),
+      segmentIds: niche.segments.map((s) => s.id),
+      // Solo reads its own schedule, so a filing cannot carry a lever the desk has not opened.
+      ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+    });
     const clean = cleanFor(role);
 
     await db.transaction(async (tx) => {

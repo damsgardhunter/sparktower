@@ -33,7 +33,7 @@
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
 import { defaultDraft } from "./levers";
-import { EXECUTIVE, officersOf } from "./decisions";
+import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedFragmentedTail, seedIncumbents } from "./incumbents";
@@ -157,6 +157,36 @@ export function economyFor(seasonId: string, period: number, periods = 1): {
 export const STARTING_CASH = 6_000_000;
 
 /**
+ * How many years of its own costs a company opens with in the bank.
+ *
+ * The bank used to be `STARTING_CASH * marketScale` — sized against the
+ * *market* — while the bill it has to cover is sized against the *company*:
+ * how many people are at the table, and how much of the country it sells in.
+ * The two came apart the moment a table was not five people in a catalogue
+ * market. Measured:
+ *
+ *     the seven catalogue markets, five people   18.6 years of runway
+ *     a market Nova wrote, five people            1.7 years
+ *     a market Nova wrote, one founder           85.7 years
+ *
+ * The middle row is a season nobody could play and the bottom row is a season
+ * nobody could lose — and neither is a decision anybody made. Both are the same
+ * arithmetic: the numerator moved with the market and the denominator moved
+ * with the company.
+ *
+ * So the bank is a number of years of what this company actually costs, and
+ * every company gets the same number of years. Derived from the figure it
+ * replaces rather than picked, so a full table in a catalogue market opens with
+ * exactly the six million it has always opened with:
+ * `6,000,000 / 1,100,000 = 5.4545…`.
+ */
+export const STARTING_YEARS_OF_RUNWAY = STARTING_CASH / REFERENCE_YEAR_OF_COSTS;
+
+/** What this particular company opens with, given who is at its table and how big its market is. */
+export const startingCashFor = (input: { officers?: number; seats?: Role[]; scale: number }): number =>
+  Math.round(STARTING_YEARS_OF_RUNWAY * yearOfCostsFor(input));
+
+/**
  * What a company can sensibly pay to open its first region: a sixth of the
  * money it has, which leaves it able to trade for three years afterwards.
  */
@@ -169,15 +199,25 @@ export const OPENING_BUDGET = STARTING_CASH * 0.15;
  * sell (see `cities` below), which is the same home every season and makes
  * teams comparable.
  *
- * A bot-run company tosses a seeded coin instead. Half the time it makes the
- * call a good operator would — the largest region it can open without gutting
- * the balance sheet — and half the time it takes any region it can afford,
- * good or daft. Deterministic, like every other bot decision: the same venture
+ * A bot-run company takes any region it can afford, good or daft, chosen from
+ * a seed — deterministic, like every other bot decision, so the same venture
  * always opens in the same place.
  *
  * The point is not that bots play well. It is that five bot companies no
  * longer all open in one region and fight over a twelfth of the market while
  * the incumbents hold the rest.
+ *
+ * Half the time it used to make "the call a good operator would" — the largest
+ * region it could afford — and that quietly handed bots a permanent advantage
+ * no person could have. Reach is a hard ceiling on the market a company can
+ * ever address, so a bigger home compounds for the whole season. Measured
+ * across all seven markets, bots opened in regions **1.4× to 2.2× larger**
+ * than the human home, every time. A player using a bot's own policy, decision
+ * for decision, still finished fourth or fifth of five against four of them.
+ *
+ * Scattering them without the bias costs nothing the comment above wanted: a
+ * uniform pick averages 0.75× to 0.90× the human's home, so a bot may land
+ * well or badly and neither is the rule.
  */
 export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: string } = {}): City {
   const real = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
@@ -188,9 +228,6 @@ export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: 
   if (affordable.length === 0) return real;
 
   const seed = options.seed ?? niche.id;
-  if (between(`${seed}:home:coin`, 0, 1) < 0.5) {
-    return [...affordable].sort((a, b) => b.weight - a.weight)[0];
-  }
   return pick(`${seed}:home:any`, affordable);
 }
 
@@ -275,7 +312,7 @@ export function startingCompany(input: {
      * The bank, at the scale of the market. Six million is right for a market
      * worth £400m and absurd in one worth £1.65m — see `marketScale`.
      */
-    cash: Math.round(STARTING_CASH * marketScale(niche)),
+    cash: startingCashFor({ officers, seats, scale: marketScale(niche) }),
     scale: marketScale(niche),
     debt: 0,
     /*
@@ -288,7 +325,7 @@ export function startingCompany(input: {
      * be a decision with a limit somebody can feel, and a line that large is
      * neither.
      */
-    creditLimit: Math.round(2_000_000 * marketScale(niche)),
+    creditLimit: Math.round(startingCashFor({ officers, seats, scale: marketScale(niche) }) / 3),
     reputation: 50,
     quality: 38,
     brand: 8,
@@ -356,8 +393,16 @@ export function startingCompany(input: {
         Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
       );
       const contribution = Math.max(1, opening.referencePrice - niche.baseUnitCost);
-      /* People, not chairs — a solo founder opens against one salary, not five. */
-      const payroll = Math.max(1, officers ?? seats.length) * EXECUTIVE * marketScale(niche);
+      /*
+       * People, not chairs — a solo founder opens against one salary, not five.
+       *
+       * Asked of `officerCost` rather than multiplied out here, because this
+       * line and the one in `fixedCosts` are the same fact and they used to
+       * disagree: this one left the regional footprint off and that one applied
+       * it, so every company opened with a plant sized against two and a half
+       * times the payroll it would actually be charged.
+       */
+      const payroll = officerCost({ officers: Math.max(1, officers ?? seats.length), scale: marketScale(niche) });
       const breakEven = Math.round((payroll * SAFETY_FLOOR) / contribution);
       // Still bounded by what the region could ever hold.
       return Math.round(Math.min(Math.max(ceiling, breakEven), Math.round(market * home.weight * 0.45)));
