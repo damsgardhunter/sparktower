@@ -180,3 +180,51 @@ export function timeAgo(iso: string | Date): string {
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
+
+/**
+ * What isn't a person.
+ *
+ * "People this week" read 1,121 against seven accounts, and 1,103 of the
+ * events behind it came from `curl/8.7.1`. A tool or a crawler keeps no
+ * cookies, so every request it makes mints a fresh visitor id and arrives as
+ * somebody new — one request, one "person". The count itself was right
+ * (`count(DISTINCT coalesce(user_id, visitor_id))`); what it counted was not
+ * people.
+ *
+ * That is not only a development-noise problem. A public site is crawled, and
+ * uptime checks and link previewers hit it all day; on a launched product this
+ * turns the one number an owner glances at into a measure of robot traffic.
+ *
+ * ## Why this is a pattern rather than a list of names
+ *
+ * There is no register of crawlers and there never will be. The reliable
+ * signal is the opposite one: a browser announces itself as `Mozilla/…`, and
+ * the things that do not are, with few exceptions, not people. This still
+ * names the common tools explicitly, because `node` and `axios` send no
+ * `Mozilla` and a bare word is easier to read in a review than an absence.
+ *
+ * Deliberately conservative. A robot counted as a person overstates a number;
+ * a person dismissed as a robot deletes somebody from the record, and only one
+ * of those is recoverable. Headless browsers are *not* here: they announce
+ * `HeadlessChrome`, they are how the browser tests drive the product, and a
+ * real person automating their own use of a site is still a person.
+ */
+export const ROBOT_AGENT_PATTERN =
+  "(bot|crawler|spider|slurp|scraper|curl|wget|libwww|python-requests|go-http-client|axios|okhttp|postman|httpie|node-fetch|monitor|uptime|pingdom|lighthouse|preview)";
+
+const ROBOT_AGENT = new RegExp(ROBOT_AGENT_PATTERN, "i");
+
+/**
+ * True when this user agent is a tool rather than somebody reading.
+ *
+ * An absent agent counts as a robot: every browser sends one, and something
+ * that does not is a script that could not be bothered.
+ */
+export function isRobotAgent(userAgent: string | null | undefined): boolean {
+  const agent = (userAgent ?? "").trim();
+  if (!agent) return true;
+  if (ROBOT_AGENT.test(agent)) return true;
+  // Nothing claiming to be a browser, and not named above: a bare `node`, a
+  // language's default client, anything home-made.
+  return !/^Mozilla\//i.test(agent);
+}
