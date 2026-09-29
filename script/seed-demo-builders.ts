@@ -41,8 +41,9 @@ import { execFileSync } from "child_process";
 import { pathToFileURL } from "node:url";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../server/db";
-import { users, userProfiles, projects, userFollows, projectFollows } from "@shared/schema";
+import { users, userProfiles, projects, projectMembers, userFollows, projectFollows } from "@shared/schema";
 import { instantiatePathTree } from "../server/phase-trees";
+import { storage } from "../server/storage";
 import { DEMO_BUILDERS, type DemoBuilder } from "./seed/demo-builders";
 
 const apply = process.argv.includes("--apply");
@@ -131,18 +132,41 @@ async function seedOne(b: DemoBuilder): Promise<{ userId: string; projects: numb
   for (const p of b.projects) {
     const existing = await db.select({ id: projects.id }).from(projects)
       .where(and(eq(projects.ownerId, row.id), eq(projects.title, p.title)));
+    const fields = {
+      ownerId: row.id,
+      title: p.title,
+      description: p.description,
+      category: p.category,
+      goal: p.goal,
+      subcategory: p.subcategory,
+      /* The overview renders these three and nothing else. Without them a
+         project page is a title on an empty screen, which is what the first
+         twenty looked like. */
+      oneLiner: p.oneLiner,
+      mission: p.mission,
+      techStack: p.techStack ?? [],
+      rolesNeeded: p.rolesNeeded ?? [],
+      teamSize: p.teamSize ?? 1,
+      estimatedWeeks: p.estimatedWeeks ?? 12,
+    };
+
     let projectId = existing[0]?.id;
     if (!projectId) {
-      const [created] = await db.insert(projects).values({
-        ownerId: row.id,
-        title: p.title,
-        description: p.description,
-        category: p.category,
-        goal: p.goal,
-        subcategory: p.subcategory,
-      } as any).returning({ id: projects.id });
+      /*
+       * storage.createProject, not a raw insert: it also puts the owner on the
+       * team. Its own comment says what happens otherwise — "the Team Members
+       * card renders empty" — which is exactly what twenty seeded projects
+       * did, because the first version of this inserted the row directly.
+       */
+      const created = await storage.createProject(fields as any);
       projectId = created.id;
       made += 1;
+    } else {
+      await db.update(projects).set(fields as any).where(eq(projects.id, projectId));
+      /* Backfill for anything seeded before the owner was put on the team. */
+      await db.insert(projectMembers)
+        .values({ projectId, userId: row.id, role: "Owner" } as any)
+        .onConflictDoNothing();
     }
 
     /*

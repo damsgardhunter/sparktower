@@ -142,6 +142,50 @@ async function draw(
   });
 }
 
+/**
+ * The two pictures, drawn. Nothing about money, permission or HTTP.
+ *
+ * Split out of the route so that something other than a signed-in request can
+ * ask for a brand kit — seeding sixteen demo builders' projects, where the
+ * owners are bot accounts that cannot sign in at all and there is no session
+ * to make the request with (script/seed-demo-brand.ts).
+ *
+ * The cover is drawn from the logo, read back out of object storage rather
+ * than held as a buffer: that is the only way to be sure the thing handed to
+ * the model is the thing the project will actually show. A cover drawn from a
+ * buffer that failed to store would match a logo nobody can see.
+ *
+ * A failed cover returns null rather than throwing, because the logo is the
+ * purchase and half the product reads it while only the public page reads the
+ * cover. A failed *logo* throws: there is no reference to draw a cover from.
+ */
+export async function drawBrandKit(
+  project: Project, style: LogoStyleDef,
+): Promise<{ logoUrl: string; coverUrl: string | null }> {
+  const logoUrl = await draw(openai.images.generate({
+    model: IMAGE_MODEL,
+    prompt: logoPrompt(project, style),
+    size: "1024x1024",
+    quality: IMAGE_QUALITY,
+  } as any), project.ownerId);
+
+  let coverUrl: string | null = null;
+  const reference = await readReference(logoUrl, "logo");
+  if (reference) {
+    coverUrl = await draw(openai.images.edit({
+      model: IMAGE_MODEL,
+      prompt: coverPrompt(project, style),
+      image: [reference],
+      size: "1536x1024",
+      quality: IMAGE_QUALITY,
+    } as any), project.ownerId).catch((err) => {
+      console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
+      return null;
+    });
+  }
+  return { logoUrl, coverUrl };
+}
+
 export function registerBrandKitRoutes(app: Express) {
   /**
    * Draw a placeholder logo, then a cover built around it. One dollar, or free
@@ -216,35 +260,7 @@ export function registerBrandKitRoutes(app: Express) {
     if (!ent) return;
 
     try {
-      const logoUrl = await draw(openai.images.generate({
-        model: IMAGE_MODEL,
-        prompt: logoPrompt(project, style),
-        size: "1024x1024",
-        quality: IMAGE_QUALITY,
-      } as any), project.ownerId);
-
-      /*
-       * The cover, from the logo that now exists. It is read back out of object
-       * storage rather than kept in memory as a buffer, because that is the
-       * only way to be sure the thing handed to the model is the thing the
-       * project will actually show — a cover drawn from a buffer that failed to
-       * store would match a logo nobody can see.
-       */
-      let coverUrl: string | null = null;
-      const reference = await readReference(logoUrl, "logo");
-      if (reference) {
-        coverUrl = await draw(openai.images.edit({
-          model: IMAGE_MODEL,
-          prompt: coverPrompt(project, style),
-          image: [reference],
-          size: "1536x1024",
-          quality: IMAGE_QUALITY,
-        } as any), project.ownerId).catch((err) => {
-          // Kept, not failed: see the file comment. The logo is the purchase.
-          console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
-          return null;
-        });
-      }
+      const { logoUrl, coverUrl } = await drawBrandKit(project, style);
 
       const replaced = { logoUrl: project.logoUrl ?? null, coverUrl: project.coverUrl ?? null };
       const [updated] = await db.update(projects)
