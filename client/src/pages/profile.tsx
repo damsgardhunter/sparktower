@@ -1243,10 +1243,25 @@ export default function Profile() {
                     <p className="text-sm text-muted-foreground">On the site right now</p>
                   </div>
                   <div>
-                    <p className="text-lg font-semibold tabular-nums">
+                    <p className="text-lg font-semibold tabular-nums" data-testid="text-people-week">
                       {analyticsPeek?.totals?.visitors ?? "—"}
                     </p>
                     <p className="text-sm text-muted-foreground">People this week</p>
+                  </div>
+                  {/*
+                    * Signed-in accounts, beside the people.
+                    *
+                    * "People" counts browsers, so one person on a laptop and a
+                    * phone is two of them and a signed-out reader is one at
+                    * all. Accounts is the number that answers "who actually
+                    * has a login and used it", which is a different question
+                    * and the one worth watching before a launch.
+                    */}
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums" data-testid="text-accounts-week">
+                      {analyticsPeek?.totals?.accounts ?? "—"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">Accounts signed in</p>
                   </div>
                   <div>
                     <p className="text-lg font-semibold tabular-nums">
@@ -1255,6 +1270,19 @@ export default function Profile() {
                     <p className="text-sm text-muted-foreground">Actions taken</p>
                   </div>
                 </div>
+
+                {/*
+                  * What was left out, said out loud rather than silently
+                  * dropped. A number that quietly excludes most of the traffic
+                  * is a number nobody can check.
+                  */}
+                {!!analyticsPeek?.totals?.robots && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-robots-excluded">
+                    {analyticsPeek.totals.robots.toLocaleString()} crawler{analyticsPeek.totals.robots === 1 ? "" : "s"} and
+                    {" "}script{analyticsPeek.totals.robots === 1 ? "" : "s"} are not counted as people. They keep no cookies,
+                    so each request arrives as somebody new.
+                  </p>
+                )}
 
                 <Button onClick={() => setLocation("/admin/analytics")} data-testid="button-open-analytics">
                   Open the live console <ExternalLink className="h-4 w-4 ml-2" />

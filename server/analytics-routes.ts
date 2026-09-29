@@ -18,7 +18,7 @@ import { activityEvents, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireOwner } from "./platform-roles";
 import {
-  ACTIVITY_EVENTS, ONLINE_WINDOW_MINUTES, RETENTION_DAYS, actionLabel, pageLabel,
+  ACTIVITY_EVENTS, ONLINE_WINDOW_MINUTES, RETENTION_DAYS, ROBOT_AGENT_PATTERN, actionLabel, pageLabel,
 } from "@shared/analytics";
 import {
   EXPLORE_ACTIONS, EXPLORE_EVENTS, EXPLORE_EVENT_NAMES, EXPLORE_FUNNEL, EXPLORE_LABEL, countCycles, exploreLabel,
@@ -47,7 +47,26 @@ const days = (n: number) => ago(n, "days");
  * settles. Falling back to the visitor id keeps signed-out readers countable,
  * which is most of the interesting traffic.
  */
-const countPeople = sql<number>`count(DISTINCT coalesce(${activityEvents.userId}, ${activityEvents.visitorId}))::int`;
+/**
+ * The same rule as `isRobotAgent`, asked of the database.
+ *
+ * The pattern is bound as a parameter rather than written into the string —
+ * the repository's own audit rejects `sql.raw`, and it is right to: a pattern
+ * that lives in one shared constant and travels as a parameter cannot drift
+ * from the one the server applies, and cannot be smuggled into.
+ *
+ * Signed-in events are people whatever they are holding. Somebody who has an
+ * account and a session is not a crawler, and a builder driving their own
+ * project through a script is still that builder — the account is the better
+ * evidence and it overrides the agent.
+ */
+const notRobot = sql`(${activityEvents.userId} IS NOT NULL OR (${activityEvents.userAgent} IS NOT NULL AND ${activityEvents.userAgent} ~* ${ROBOT_AGENT_PATTERN} IS NOT TRUE AND ${activityEvents.userAgent} ~* '^Mozilla/'))`;
+
+/** And its opposite, so what was left out is shown rather than quietly dropped. */
+const countRobots = sql<number>`count(DISTINCT ${activityEvents.visitorId}) FILTER (WHERE NOT ${notRobot})::int`;
+
+/** One row per person, robots left out. The number the owner is shown. */
+const countPeople = sql<number>`count(DISTINCT coalesce(${activityEvents.userId}, ${activityEvents.visitorId})) FILTER (WHERE ${notRobot})::int`;
 
 /**
  * One row, ready to read.
@@ -373,6 +392,8 @@ export function registerAnalyticsRoutes(app: Express) {
       const [totals] = await db.select({
         events: sql<number>`count(*)::int`,
         visitors: countPeople,
+        /** Left out of `visitors`, and shown rather than hidden. See `notRobot`. */
+        robots: countRobots,
         sessions: sql<number>`count(DISTINCT ${activityEvents.sessionId})::int`,
         accounts: sql<number>`count(DISTINCT ${activityEvents.userId})::int`,
         pageViews: sql<number>`count(*) FILTER (WHERE ${activityEvents.name} = ${ACTIVITY_EVENTS.pageView})::int`,
