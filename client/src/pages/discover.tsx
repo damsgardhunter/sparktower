@@ -18,7 +18,7 @@ import { useExploreUpdates } from "@/hooks/use-explore-updates";
 import { openDiscover } from "@/lib/explore";
 import { DiscoverSearchBar } from "@/components/discover/discover-search-bar";
 import { TopProjects } from "@/components/discover/top-projects";
-import { MatchStrip } from "@/components/discover/match-strip";
+import { MatchStrip, useSteadyMatches } from "@/components/discover/match-strip";
 import {
   DiscoverResults,
   type PersonWithProfile,
@@ -56,7 +56,12 @@ export default function Discover() {
    * the same three faces in "People who may interest you" and again in
    * "People" a scroll later, which reads as a bug.
    */
-  const { data: matches } = useQuery<{ matchedUserId: string }[]>({ queryKey: ["/api/matches"], enabled: browsing });
+  /*
+   * The same held list the strip renders from, so the two cannot disagree about
+   * who is where. Reading the cache separately was what let a card leave one
+   * list before it arrived in the other — see `useSteadyMatches`.
+   */
+  const { data: matches } = useSteadyMatches();
   const alreadyShown = new Set(browsing ? (matches ?? []).map((m) => m.matchedUserId) : []);
 
   const { data, isLoading, isFetching, isError } = useQuery<DiscoverSearchResponse>({
