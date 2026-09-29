@@ -399,6 +399,70 @@ is read by the engine (checked by walking `LEVER_FIELDS` against the engine
 source). Every field written onto `Company` is read somewhere. The bugs in this
 section were the last of the "set but never read" kind.
 
+### Where a company opens decides its season, 29 Sept 2026
+
+Chasing the unexplained gap between a bot and a player running a bot's own
+policy. One company against the incumbents, identical policy, twenty-four
+quarters, varying only the home region:
+
+    home weight   cities opened   customers   founder value
+       2.0%             1            11,635              0
+       9.0%             5           216,100     11,205,776
+      12.6%             9           569,691     35,718,881
+      15.3%             9           526,937     32,550,485
+
+That is the whole of the gap. It is not strategy and it is not the bots: a
+company that opens in a small region never escapes it. Reach is a hard ceiling
+on the market it can address, so a small home means small revenue, which means
+it cannot afford to open anywhere else, which keeps it small. The one at 2.0%
+opened a single region in twenty-four quarters and finished worth nothing —
+and it could afford to expand at period four and the bot logic never tried.
+
+A person is protected from the worst of this: `openingRegion` gives them the
+cheapest region that is *still a real place to sell* (`weight >= 0.08`), so a
+human is never handed the 2.0% death sentence. Bots have no such floor.
+
+**Two things worth someone's time, neither of them a one-line fix:**
+
+15. **Bots never expand.** `bots.ts` files an empty `expand` every period
+    (`if (field.id === "programme" || field.id === "expand") draft[field.id] = ""`)
+    and deletes `expandVote`, so a bot never puts a region up and never votes
+    on a person's. Bot-run companies grow only through `targetCities`. A bot
+    that lands somewhere small therefore has no way out at all, which is why
+    the 2.0% company above sat on one region for six years with the money to
+    leave.
+
+16. **`targetCities` bypasses the expansion mechanic entirely.** There are two
+    doors into a new region, and the designed one is worse on five axes out of
+    six:
+
+        | | targetCities (cmo) | expand (coo) |
+        |---|---|---|
+        | available | period 1 | year 4 |
+        | which region | any | the one announced |
+        | agreement | none | a majority of the table |
+        | opens | immediately | next year |
+        | first-year reach | full | brand / 60, floored at 15% |
+        | cost | 100% | 70% |
+
+    The player guide teaches the ramp as a rule of the game — "a region opened
+    this period is reached only as far as your brand carries" — and it is
+    simply untrue for anybody who has found the marketing seat's lever. The
+    announced region, the vote, the discount and the brand ramp are all
+    bypassed by a lever available on day one.
+
+    **Tried and reverted.** Applying the same ramp to a bought region is a
+    four-line change and it costs the catalogue its balance: `balance.test.ts`
+    went from two-plus teams finishing with a business to one. Those markets
+    are tuned against regions being fully reached the period they are paid
+    for. Making the rule consistent means re-tuning expansion economics, not
+    adding a ramp, so it is written down here rather than half-done.
+
+    There is a reading in which this is not a defect at all: full price for
+    immediate full reach, against 70% for slow and announced. That reading
+    does not survive the other four axes — year four, one region, a vote, and
+    a year's delay is a lot to pay for 30% off.
+
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
 
