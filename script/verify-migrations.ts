@@ -19,6 +19,7 @@
  */
 import pg from "pg";
 import { readJournal } from "./lib/journal";
+import { pathToFileURL } from "node:url";
 
 async function main(): Promise<number> {
   const url = process.env.DATABASE_URL;
@@ -54,10 +55,24 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    console.error(err);
-    process.exit(1);
-  },
-);
+/*
+ * Only when run as a command, never on import.
+ *
+ * `main()` at module scope means importing anything from this file — a helper,
+ * a type, a constant a test wants — connects to a database, does the work and
+ * calls process.exit in the middle of whatever imported it. Vitest reports
+ * that as "process.exit unexpectedly called with 0" against an unrelated test
+ * file, which is the worst shape a failure can have: every test passes and the
+ * check is red, with nothing pointing at the cause. It cost a session an
+ * afternoon on the catch-up script (1dcf2a0a); these are its siblings.
+ */
+const runDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (runDirectly) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(err);
+      process.exit(1);
+    },
+  );
+}
