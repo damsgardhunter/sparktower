@@ -20,7 +20,7 @@
  * is resumed by running it again.
  */
 import { pathToFileURL } from "node:url";
-import { and, desc, eq, isNotNull, like } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, like } from "drizzle-orm";
 import { db } from "../server/db";
 import { users, projects, novaBuildRuns, projectKanbanTasks } from "@shared/schema";
 
@@ -30,10 +30,23 @@ const LIMIT = limitArg > -1 ? Number(process.argv[limitArg + 1]) : Infinity;
 
 const DEMO_EMAIL = "%@demo.sparktower.invalid";
 
+/**
+ * Whether this project has a build worth keeping.
+ *
+ * Finished *and* without an error. The first version asked only whether a run
+ * had finished, which counts a run that stopped half way — and the account
+ * running out of credits mid-pass produced exactly that. It would have been
+ * skipped on the next run and quietly left unbuilt, which is the failure this
+ * script exists to avoid.
+ */
 async function alreadyBuilt(projectId: string): Promise<boolean> {
   const [run] = await db.select({ id: novaBuildRuns.id })
     .from(novaBuildRuns)
-    .where(and(eq(novaBuildRuns.projectId, projectId), isNotNull(novaBuildRuns.finishedAt)))
+    .where(and(
+      eq(novaBuildRuns.projectId, projectId),
+      isNotNull(novaBuildRuns.finishedAt),
+      isNull(novaBuildRuns.error),
+    ))
     .orderBy(desc(novaBuildRuns.startedAt)).limit(1);
   return !!run;
 }
