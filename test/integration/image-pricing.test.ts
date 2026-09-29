@@ -40,7 +40,7 @@ const { verifyEmail } = await import("../helpers/verify-email");
 const { db } = await import("../../server/db");
 const { users, aiImageRuns } = await import("@shared/schema");
 const { eq } = await import("drizzle-orm");
-const { OUTCOME_PRICE_CENTS, IMAGE_PASS_HOURLY_LIMIT } = await import("@shared/plans");
+const { OUTCOME_PRICE_CENTS, IMAGE_PASS_HOURLY_LIMIT, IMAGE_PASS_DAILY_LIMIT } = await import("@shared/plans");
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -145,6 +145,52 @@ describe("the day of images", () => {
     expect(over.body.code).toBe("image_hourly_limit");
     expect(over.body.hourlyLimit).toBe(IMAGE_PASS_HOURLY_LIMIT);
     expect(over.headers["retry-after"], "told when, not just no").toBeTruthy();
+  });
+
+  /**
+   * The hourly ceiling stops a script. It does not stop a day.
+   *
+   * Fifty an hour for twenty-four hours is twelve hundred images — about £48
+   * of spending against a £5 pass, which would be the one line on the price
+   * list that loses money on every sale rather than on an unlucky one.
+   */
+  it("stops at a hundred and fifty a day, which is what makes the pass pay", async () => {
+    const app = await getTestApp();
+    const me = await person(app, { balanceCents: OUTCOME_PRICE_CENTS.imagePass });
+    expect((await postImage(me)).status).toBe(200);
+    expect((await me.agent.post("/api/nova/image-pass")).status).toBe(200);
+
+    /*
+     * A day's worth, spread far enough back that no single hour is over the
+     * hourly ceiling — otherwise this would pass for the wrong reason.
+     */
+    for (let hoursAgo = 2; hoursAgo <= 7; hoursAgo++) {
+      await db.insert(aiImageRuns).values({
+        userId: me.id, scope: "account", scopeId: me.id, images: 25, free: false,
+        createdAt: new Date(Date.now() - hoursAgo * 60 * 60_000),
+      } as any);
+    }
+
+    const over = await postImage(me);
+    expect(over.status).toBe(429);
+    expect(over.body.code, "the day is the true reason, not the hour").toBe("image_daily_limit");
+    expect(over.body.dailyLimit).toBe(IMAGE_PASS_DAILY_LIMIT);
+    expect(over.headers["retry-after"]).toBeTruthy();
+  });
+
+  it("lets a heavy but human day through", async () => {
+    const app = await getTestApp();
+    const me = await person(app, { balanceCents: OUTCOME_PRICE_CENTS.imagePass });
+    expect((await postImage(me)).status).toBe(200);
+    expect((await me.agent.post("/api/nova/image-pass")).status).toBe(200);
+
+    // Well under both ceilings: a real day of work is not a refusal.
+    await db.insert(aiImageRuns).values({
+      userId: me.id, scope: "account", scopeId: me.id, images: 40, free: false,
+      createdAt: new Date(Date.now() - 3 * 60 * 60_000),
+    } as any);
+
+    expect((await postImage(me)).status).toBe(200);
   });
 });
 

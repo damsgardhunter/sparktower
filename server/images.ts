@@ -26,7 +26,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "./db";
 import { aiImageRuns, users } from "@shared/schema";
 import {
-  FREE_IMAGE_RUNS, IMAGE_PASS_HOURLY_LIMIT, IMAGE_PASS_HOURS, OUTCOME_PRICE_CENTS,
+  FREE_IMAGE_RUNS, IMAGE_PASS_DAILY_LIMIT, IMAGE_PASS_HOURLY_LIMIT, IMAGE_PASS_HOURS, OUTCOME_PRICE_CENTS,
   formatMoney,
 } from "@shared/plans";
 import { paymentRequired } from "./entitlements";
@@ -58,9 +58,30 @@ export async function freeRunUsed(scope: ImageScope, scopeId: string): Promise<b
 
 /** Images this account has made in the last hour — the ceiling on the pass. */
 export async function imagesThisHour(userId: string): Promise<number> {
+  return imagesSince(userId, 1);
+}
+
+/** The same question of the day, which is the window that bounds the bill. */
+export async function imagesToday(userId: string): Promise<number> {
+  return imagesSince(userId, 24);
+}
+
+/**
+ * How many images this account has made in the last `hours`.
+ *
+ * The window is a bound parameter rather than an interval literal spliced into
+ * the string. Both callers pass a constant, so nothing here is reachable from
+ * a request — but a query built by concatenation is one refactor away from
+ * being reachable, and the audit that rejects `sql.raw` is right not to have
+ * to reason about which callers exist today.
+ */
+async function imagesSince(userId: string, hours: number): Promise<number> {
   const [row] = await db.select({ n: sql<number>`coalesce(sum(${aiImageRuns.images}), 0)::int` })
     .from(aiImageRuns)
-    .where(and(eq(aiImageRuns.userId, userId), gte(aiImageRuns.createdAt, sql`now() - interval '1 hour'`)));
+    .where(and(
+      eq(aiImageRuns.userId, userId),
+      gte(aiImageRuns.createdAt, sql`now() - make_interval(hours => ${hours})`),
+    ));
   return row?.n ?? 0;
 }
 
@@ -113,6 +134,25 @@ export async function requireImages(
   }
 
   if (await imagePassActive(userId)) {
+    /*
+     * The day first, because it is the one that bounds what the pass costs us
+     * and because its answer is the true one. Checked the other way round,
+     * somebody who had spent the day at it was told to wait five minutes for
+     * an hour that was never going to give them anything.
+     */
+    const today = await imagesToday(userId);
+    if (today + wanted > IMAGE_PASS_DAILY_LIMIT) {
+      refuseWithRetry(res, {
+        action: "ai",
+        message:
+          `That's ${today} images today, and the pass allows ${IMAGE_PASS_DAILY_LIMIT} a day. ` +
+          `It resets as the day rolls on — nothing was charged.`,
+        retryAfterSeconds: 3600,
+        code: "image_daily_limit",
+        extra: { madeToday: today, dailyLimit: IMAGE_PASS_DAILY_LIMIT, wanted },
+      });
+      return null;
+    }
     const already = await imagesThisHour(userId);
     if (already + wanted > IMAGE_PASS_HOURLY_LIMIT) {
       /*

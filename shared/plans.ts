@@ -197,6 +197,23 @@ export const IMAGE_PASS_HOURS = 24;
 export const IMAGE_PASS_HOURLY_LIMIT = 50;
 
 /**
+ * And the ceiling that actually bounds the bill.
+ *
+ * The hourly limit stops a script; it does not stop a day. Fifty an hour for
+ * twenty-four hours is twelve hundred images, which at this model's prices is
+ * roughly £48 of spending against a £5 pass — the one line on the price list
+ * that could lose money on every single sale rather than on an unlucky one.
+ *
+ * A hundred and fifty a day is well past what anybody makes on purpose (the
+ * heaviest honest day we have seen is a long way under it) and it caps the
+ * worst case at about £6, which the pass covers. Checked before the hourly
+ * one, so somebody who has genuinely spent the day at it is told the true
+ * reason rather than being sent away to wait five minutes for an hour that
+ * will not help.
+ */
+export const IMAGE_PASS_DAILY_LIMIT = 150;
+
+/**
  * How many generations a thing gets before the pass is needed.
  *
  * One, per project and per badge. Enough to see what Nova makes of your
