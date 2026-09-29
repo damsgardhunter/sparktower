@@ -6,7 +6,6 @@
  * changed their profile and wants to see the effect without waiting for the
  * staleness window.
  */
-import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { UserCard } from "@/components/user-card";
@@ -25,30 +24,11 @@ type Match = UserMatch & { matchedUser: User; matchedProfile: UserProfile };
 /** Six is what fits two rows on a laptop; the rest is what the search below is for. */
 const SHOWN = 6;
 
-/**
- * The matches, and then the same matches for as long as you are looking.
- *
- * The query has to be `staleTime: 0` — the endpoint regenerates on a stale read,
- * so a cached answer means the regeneration never happens. The consequence was
- * that the list could change *while somebody was reading it*: anyone in this
- * strip is filtered out of the People grid below it (see discover.tsx), so a
- * card that moved between the two lists vanished from under the cursor and
- * reappeared somewhere else. A browser test caught it as "element was detached
- * from the DOM, retrying" for sixty seconds; a person gets no retry, they get a
- * misclick on whatever slid into the gap.
- *
- * So the fetch stays live and the *rendering* is held still: the first answer of
- * a page view is kept and used until the page is left, or until something asks
- * for new ones on purpose. Refreshing is still possible — the button below does
- * it — and that is the difference worth keeping. A list that changes because you
- * asked it to is a feature; one that changes because a poll came back is a
- * moving target.
- *
- * Shared with the grid that filters against it, so the two can never disagree
- * about who is where.
- */
-export function useSteadyMatches() {
-  const query = useQuery<Match[]>({
+export function MatchStrip({ updateFor }: { updateFor: (userId: string) => ExploreUpdate | undefined }) {
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  const { data: matches, isLoading, isError } = useQuery<Match[]>({
     queryKey: ["/api/matches"],
     // The endpoint refreshes itself on a stale read, so the page must actually
     // ask on arrival — the app's default of never-stale would serve a cache
@@ -57,34 +37,9 @@ export function useSteadyMatches() {
     refetchOnMount: "always",
   });
 
-  /*
-   * Held in a ref rather than state: settling on the first answer must not
-   * cause a second render, and nothing reads it except the render that follows
-   * the one that set it.
-   */
-  const held = useRef<Match[] | null>(null);
-  if (held.current === null && query.data) held.current = query.data;
-
-  return {
-    ...query,
-    data: held.current ?? query.data,
-    /** Let go of what is on screen, so the next answer is the one shown. */
-    release: () => { held.current = null; },
-  };
-}
-
-export function MatchStrip({ updateFor }: { updateFor: (userId: string) => ExploreUpdate | undefined }) {
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-
-  const { data: matches, isLoading, isError, release } = useSteadyMatches();
-
   const regenerate = useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/matches/generate")).json(),
     onSuccess: () => {
-      // Asked for, so the held list lets go: this is the one moment the strip
-      // is meant to change under somebody, because they pressed the button.
-      release();
       queryClient.invalidateQueries({ queryKey: ["/api/matches"] });
       toast({ title: "Matches refreshed", description: "We took another look at who fits what you're building." });
     },

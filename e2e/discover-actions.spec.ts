@@ -58,21 +58,22 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   // Connect from Discover, with a note. The card changes at once.
   const note = "Saw your habit tracker — I'm building something similar.";
   /*
-   * Browsed, not searched — which is the point of this one.
+   * Searched for rather than browsed.
    *
-   * A plain /discover leads with the match strip, and anyone in it is filtered
-   * out of the People grid below. The strip used to re-fetch under the reader
-   * (`/api/matches` is `staleTime: 0` because the endpoint regenerates on a
-   * stale read), so a card could leave one list before arriving in the other.
-   * This click spent sixty seconds being told the button had detached from the
-   * DOM, twice in CI.
+   * A plain /discover is a browse, and a browse leads with "People who may
+   * interest you" — a strip fed by /api/matches, which is deliberately
+   * `staleTime: 0` and regenerates on a stale read (match-strip.tsx). Anyone in
+   * the strip is filtered out of the People grid below it, so as the suite grows
+   * and newer accounts crowd into the match list, this fixture's card moves
+   * between the two lists and then out of both. The click resolved the button
+   * and then spent sixty seconds being told it had detached from the DOM.
    *
-   * `useSteadyMatches` now holds the first answer of a page view still, so the
-   * card cannot move while somebody reaches for it. Arriving here without a
-   * query is what exercises that; searching would turn the strip off and prove
-   * nothing about it.
+   * A query turns browse mode off (isBrowsing, use-discover-filters.ts), so the
+   * strip is not rendered and the results are the search's — which is what makes
+   * this deterministic however many accounts exist. Nothing about what is being
+   * tested changes: these assertions are about what the card's buttons do.
    */
-  await page.goto("/discover");
+  await page.goto("/discover?q=Bea+Builder");
   await page.getByTestId(`button-connect-${beaId}`).click();
   await page.getByTestId("input-connect-note").fill(note);
   await page.getByTestId("button-send-connect").click();
