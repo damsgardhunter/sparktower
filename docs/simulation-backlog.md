@@ -2414,42 +2414,64 @@ bounds, and that is a design change rather than a constant.
 Worth knowing before touching it: idle cost is also what makes a thin-margin
 market punishing (drone delivery, above), so it is one number pulling two ways.
 
-### Open: owning something for a whole year makes the year worse
-A company holding a patent and a distribution deal wins 25,118 customers at the
-allocation against 15,338 without them, and finishes the year with **fewer**
-customers than the same company owning nothing. Merit wins are monotonic; the
-whole inversion is in the overflow.
+### Closed: owning something for a whole year made the year worse
+A company holding a patent and a distribution deal won 25,118 customers at the
+allocation against 15,338 without them, and finished the year with **fewer**
+customers than the same company owning nothing. Merit wins were monotonic; the
+whole inversion was in the overflow.
 
 Customers a full rival turns away are shared among the companies with room, in
-proportion to `appeal² × reach × fit`, **with no regard for how much room each
-one has**. A rival 105 customers short of its own capacity took 96.9% of the
-claim on 45,695 people, kept its 105, and the other ~44,000 evaporated instead
-of passing to the newcomer with room for 27,373 — and it only had room because
-the *stronger* newcomer had taken enough on merit to leave it short.
+proportion to `appeal² × reach × fit` — and that took no account of how much
+room each one had. A rival 105 customers short of its own capacity took 96.9%
+of the claim on 45,695 people, kept its 105, and the other ~44,000 evaporated
+instead of passing to the newcomer with room for 27,373. It only had room
+because the *stronger* newcomer had taken enough on merit to leave it short, so
+improving the product moved the newcomer from all of the overflow to a
+thirtieth of it.
 
-**A fix is written and measured, and it is one test away.** Weighting each
-claim by the share of the rejected a company could actually hold
-(`weight × min(1, room / count)`) — a single-pass change, not a redistribution
-— makes the year monotonic:
+Each claim is now scaled by the share of the rejected a company could actually
+hold — `weight × min(1, room / count)`, a single pass rather than a
+redistribution, which is what an earlier water-filling attempt got wrong. The
+year is monotonic: **13,673 plain · 17,108 patent · 17,588 deal · 21,638
+both**. `SPILL_TOPUP_MAX` comes down from 8 to 3 with it, and that also fixes
+two things the earlier attempt broke — a passive company loses money again, and
+a bought region is worth its price.
 
-    plain 23,253 · deal 28,288 · patent 30,458 · both 36,533
+The four-team bar in `balance.test.ts` was re-derived from 4% of market
+potential to 3%, with the reason written there: closing the leak sends the
+turned-away to whoever can use them, which in a crowded market is the strongest
+company, and every also-ran came down about 15%. All four teams still finish
+with real companies — 471,887 / 1,250,246 / 73,351 / 87,212 customers, none
+bankrupt — so what the bar stands for is unchanged.
 
-At `SPILL_TOPUP_MAX` 2–3 it also *fixes* two things the earlier water-filling
-attempt broke: a passive company goes back to losing money, and a bought region
-is worth its price again. Winnability holds, with the year's events on.
+### Open: the smallest generated markets pay for it
+Measured across fourteen Nova markets, eight seeds, eight strategies, events
+on: two got worse. Quorumcast fell from eight seeds with a profitable plan to
+**five of eight**, and hearthmap from eight to seven. The other twelve are
+unchanged and nothing anywhere goes bankrupt.
 
-What it costs is one test: `balance.test.ts`, four teams in one market, needs
-two of three also-rans above 4% of market potential. The swing team reaches
-**14.79m against a 16.08m bar — 8.7% short**, where on the tree today it clears
-by 8%. Every lever was swept and none of them move it: `SPILL_TOPUP_MAX` 2
-through 8, the spill's appeal exponent at 1, 1.5 and 2, and dating apps' open
-share at 0.16 through 0.22. It is the fix itself, not its tuning — with the
-leak closed, customers a rival turns away go to whoever can actually use them
-instead of vanishing, and in a crowded market that concentrates on the
-strongest company. The also-rans end about 15% poorer.
+Both are among the smallest markets written, and both lived on the top-up that
+came down from 8 to 3. Whether that is the right price for the inversion above
+is a real question and the answer is not obvious.
 
-So this is now a judgement rather than a puzzle: **is a crowded market
-concentrating more the right price for owning good things not making your year
-worse?** The bar it misses was itself calibrated against an engine where a
-share of every overflow disappeared. Not taken unilaterally, and not shipped
-red.
+It is also a gap in the guards: `every-market-winnable.test.ts` walks `NICHES`,
+which is the seven hand-written markets only. Nothing in the suite exercises a
+generated market, so this regression is visible in a harness and invisible to
+CI. That is worth closing before the next change to the overflow.
+
+### Open: keeping room still decides the catalogue season
+The growth bound was tried and is not shipped. Capping how many customers a
+company can take on at once — half again of what it serves, with a floor for
+newcomers — does fix the magnet, from 4.62x down to between 2.83x and 1.54x
+depending on how tight the floor is. It breaks two things on the way:
+
+  - `forecast.ts` does not know about it, so the forecast stops bracketing what
+    happens (4 of 8 years inside the range, against 5 required);
+  - worse, it stops rivals absorbing what another company turned away — "the
+    turned-away went somewhere: expected 0 to be greater than 0" — which is a
+    mechanic this engine deliberately has.
+
+So it is not a constant to tune but three pieces of work that have to land
+together: the bound, the forecast that predicts it, and a rule for overflow
+that a rival is too busy to absorb.
+

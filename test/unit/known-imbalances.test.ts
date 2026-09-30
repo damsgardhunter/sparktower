@@ -245,7 +245,7 @@ describe("price tiers", () => {
  * the bug.
  */
 describe("owning something for a whole year", () => {
-  it.fails("beats owning nothing", () => {
+  it("beats owning nothing", () => {
     const niche = nicheById("dating_apps")!;
     const base = () => ({
       ...startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] as Role[] }),
