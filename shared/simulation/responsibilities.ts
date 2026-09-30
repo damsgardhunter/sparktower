@@ -679,12 +679,72 @@ export function drawdown(company: Pick<Company, "creditLimit" | "debt">, borrow:
  * Shared by the year (`resolveYear`) and the forecast, so a forecast never
  * predicts what a plan the company cannot pay for would have bought.
  */
+/**
+ * The regions a plan can actually pay to open, cheapest first.
+ *
+ * Regions already open are always kept — this decides what is *added*, never
+ * what is given up, because closing a region is not a thing the lever does.
+ */
+export function affordableCities(
+  company: Pick<Company, "cities">,
+  niche: Pick<Niche, "cities">,
+  wanted: readonly string[] | undefined,
+  spendable: number,
+): string[] {
+  const here = Array.isArray(company.cities) ? company.cities : [];
+  if (!Array.isArray(wanted)) return [...here];
+  const adding = niche.cities
+    .filter((c) => wanted.includes(c.id) && !here.includes(c.id))
+    .sort((a, b) => a.entryCost - b.entryCost);
+  const kept: string[] = [...here];
+  let left = Math.max(0, spendable);
+  for (const city of adding) {
+    if (city.entryCost > left) continue;
+    left -= city.entryCost;
+    kept.push(city.id);
+  }
+  return kept;
+}
+
 export function fundYear(company: Company, d: TeamDecisions, niche: Niche, economy: Economy): { decisions: TeamDecisions; notes: string[] } {
   /*
    * Marketing's money, including the moves that are one price or nothing: a
    * research report, a win-back campaign, and the statement the chief
    * executive makes about last year's shock.
    */
+  /*
+   * Opening a region is charged in full, in the period it happens, and it was
+   * the one purchase in the game with no affordability check at all: a table
+   * could tick four regions it could not begin to afford, and the engine
+   * opened all of them and funded the hole with an emergency loan at a
+   * punitive rate. Played out — a company holding $88,915 opened $149,000 of
+   * regions, finished the quarter on nothing, and carried $43,290 of debt it
+   * had never agreed to take.
+   *
+   * So the regions are trimmed to what the money reaches. What is deliberately
+   * *not* done is counting the entry cost against the same purse as the
+   * spending below it. It is real money and it belongs there in principle, and
+   * putting it there narrows the gap between a table that plays well and one
+   * that does not by about half — those markets are tuned against expansion
+   * being free of the budget, and re-tuning them is a bigger job than this.
+   * Written down in `docs/simulation-backlog.md` rather than half-done.
+   */
+  /*
+   * What the table could spend at all, worked out before anything is priced
+   * against it: cash, plus anything drawn down, plus the credit still
+   * available, less what finance is holding back. The commitment meter on the
+   * desk shows the same total.
+   */
+  const buffer = Math.max(0, d.cfo?.cashBuffer ?? 0);
+  const drawn = drawdown(company, d.cfo?.borrow);
+  const spendable = Math.max(0, company.cash + drawn + Math.max(0, company.creditLimit - company.debt - drawn) - buffer);
+
+  const here = Array.isArray(company.cities) ? company.cities : [];
+  /* Only the regions the money reaches — see `affordableCities`. */
+  const cities = affordableCities(company, niche, d.cmo?.targetCities, spendable);
+  const refused = Array.isArray(d.cmo?.targetCities)
+    ? niche.cities.filter((c) => d.cmo!.targetCities!.includes(c.id) && !here.includes(c.id) && !cities.includes(c.id))
+    : [];
   const marketing = (d.cmo?.brandSpend ?? 0) + (d.cmo?.performanceSpend ?? 0) + (d.cmo?.celebritySpend ?? 0)
     + (d.cmo?.prSpend ?? 0) + (d.cmo?.referralSpend ?? 0) + (d.cmo?.winbackSpend ?? 0)
     + (d.cmo?.research && d.cmo.research !== "none" ? researchCost(niche) : 0)
@@ -718,16 +778,11 @@ export function fundYear(company: Company, d: TeamDecisions, niche: Niche, econo
   const wanted = marketing + product + ops;
   if (wanted <= 0) return { decisions: d, notes: [] };
 
-  const buffer = Math.max(0, d.cfo?.cashBuffer ?? 0);
-  /*
-   * Measured against everything the table could actually spend, which is
-   * what the commitment meter has always shown: cash, plus anything drawn
-   * down, plus the credit still available, less what finance is holding back.
-   */
-  const drawn = drawdown(company, d.cfo?.borrow);
-  const spendable = Math.max(0, company.cash + drawn + Math.max(0, company.creditLimit - company.debt - drawn) - buffer);
   const floorCut = wanted > spendable ? spendable / wanted : 1;
   const notes: string[] = [];
+  if (refused.length > 0) {
+    notes.push(`There was not enough to open ${refused.map((c) => c.name).join(", ")}. ${refused.length === 1 ? "It stays" : "They stay"} closed rather than being opened on money the company does not have.`);
+  }
   if (floorCut < 1) {
     const became = `${Math.round(wanted).toLocaleString()} of planned spending became ${Math.round(wanted * floorCut).toLocaleString()}. Everyone's year was cut by the same fraction.`;
     notes.push(buffer > 0
@@ -753,13 +808,23 @@ export function fundYear(company: Company, d: TeamDecisions, niche: Niche, econo
   }
 
   const f = { cmo: floorCut * split.factor.cmo, cto: floorCut * split.factor.cto, coo: floorCut * split.factor.coo };
-  if (f.cmo === 1 && f.cto === 1 && f.coo === 1) return { decisions: d, notes };
+  if (f.cmo === 1 && f.cto === 1 && f.coo === 1 && refused.length === 0) return { decisions: d, notes };
   return { notes, decisions: {
     ...d,
     cmo: d.cmo && {
       ...d.cmo, brandSpend: d.cmo.brandSpend * f.cmo, performanceSpend: d.cmo.performanceSpend * f.cmo, celebritySpend: d.cmo.celebritySpend * f.cmo,
       prSpend: (d.cmo.prSpend ?? 0) * f.cmo, referralSpend: (d.cmo.referralSpend ?? 0) * f.cmo,
       winbackSpend: (d.cmo.winbackSpend ?? 0) * f.cmo,
+      /*
+       * And the regions, to the ones that can actually be paid for.
+       *
+       * A region is all or nothing — there is no opening 60% of Spain — so
+       * this cannot be scaled like the spending above it. The cheapest first,
+       * for as far as the money goes: a table that ticked four regions and
+       * could afford two gets two, and the two it gets are the two it could
+       * most plausibly have meant.
+       */
+      targetCities: cities,
     },
     cto: d.cto && {
       ...d.cto,

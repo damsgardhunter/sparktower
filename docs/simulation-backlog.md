@@ -504,6 +504,69 @@ human is never handed the 2.0% death sentence. Bots have no such floor.
     earlier, which handed a bot the *best* region as a rule. The guard in
     `season.test.ts` now asserts the absence of that rule rather than a ratio.
 
+### From playing two seasons by hand, 30 Sept 2026
+
+Two custom markets built from scratch and played period by period, with a
+handful of deliberate mistakes to see whether the engine punishes them. An AI
+meeting-notes tool at scale 0.01 (opening bank $47,773) and a consumer
+rent-splitting app at scale 0.09 (opening bank $228,404).
+
+18. ~~A region could be opened with money the company did not have.~~ **Done.**
+    Opening one is charged in full in the period it happens, and it was the
+    only purchase in the game with no affordability check — every other line is
+    cut to what the company can pay, including a feature bet, which is counted
+    for exactly this reason. Played out: a company holding $88,915 ticked four
+    regions costing $149,000, opened all four, finished the quarter on nothing
+    and carried $43,290 of debt it had never agreed to take. `affordableCities`
+    now takes the ones the money reaches, cheapest first, and says which stayed
+    closed.
+
+19. ~~An annual interest rate reported as a quarterly one.~~ **Done.**
+    `inPeriodWords` rewrote every "a year" so a note written for a yearly
+    season reads right in a quarterly one — including the "a year" inside "at
+    30.1% a year". A company that ran out of money was told its emergency loan
+    cost 30.1% *a quarter*: four times the real rate, twelve times in a monthly
+    season. Anything with a percentage in front of it is left alone now.
+
+**Open, and measured:**
+
+- **Entry costs do not count against the spending budget.** They are real money
+  leaving in that period and they belong in `fundYear`'s `wanted` beside the
+  feature bet. Putting them there narrows the gap between a table that plays
+  well and one that does not by about half — `balance.test.ts` measures a
+  survivor beating a filler by 13 points and it drops to 6 — because those
+  markets are tuned against expansion being free of the budget. Trimming to
+  what is affordable (above) fixes the defect that was actually observed;
+  charging it against the purse is the larger, separate job.
+
+- **Borrowing destroys a small company's score instantly.** `valuation` is
+  `revenue × 1.2 + assets − debt`, so at 64 customers paying $36 a year that is
+  $2,765 against a $6,000 loan — 38% of the credit line — and the company is
+  worth nothing from then until the debt is repaid. Cash is not a term either,
+  so $5,762 in the bank counts for zero. A going concern with customers,
+  quality and money reads as worthless on the board the seasons rank on.
+
+- **Quality barely moves at startup scale.** Two quarters and $4,200 of feature
+  spend took quality from 37 to 37: it ships at about a point a quarter against
+  0.55 of decay. Sixteen quarters of near-continuous investment reached 61,
+  while the market leader opened at 74.
+
+- **A price round-trip is nearly free.** Cutting $11 to $4 cost a quarter's
+  revenue and bought 4% more customers — correctly punished. Putting it
+  straight back to $11, a 175% rise, cost almost nothing and the company
+  finished the quarter with *more* customers than before the experiment. The
+  `resented` cap of 0.2 is deliberate, so this is a judgement rather than a
+  bug, but it means price can be searched by trial with no memory.
+
+- **The engine writes £ in a game denominated in $.** "Cleaning it up cost £11",
+  from the breach note.
+
+**Three things worked exactly as intended**, which is worth recording as well:
+building for 3,000 seats when 87 customers were in sight bled about $8,900 a
+quarter and was reversible in one decision; pricing at $150 against a $42
+reference took 64 customers to 11 in a quarter and *lowered* revenue; and
+hiring forty people flipped +$18,112 to −$45,932 and was equally reversible.
+
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
 

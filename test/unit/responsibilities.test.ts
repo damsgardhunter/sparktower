@@ -15,7 +15,7 @@ import { NICHES, nicheById } from "@shared/simulation/niches";
 import { cleanDecision, defaultDraft, validateDecision, LEVER_FIELDS, LEVERS_FOR_A_TABLE } from "@shared/simulation/levers";
 import {
   BOND_DISCOUNT, BOND_TERM, SOLO_ORDER, UNLOCKS, annualPlans, buildCostPerUnit, forecastOutcome, isUnlocked, leaseCostPerUnit,
-  paidBy, seatAllowances, soloSchedule, soloUnlocked, takings,
+  fundYear, paidBy, seatAllowances, soloSchedule, soloUnlocked, takings,
 } from "@shared/simulation/responsibilities";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
 import { interestOn } from "@shared/simulation/finance";
@@ -493,5 +493,51 @@ describe("a year's worth is not a period's worth", () => {
   it("still makes longer terms worth giving", () => {
     // The lever has to remain a trade, not a penalty: it buys appeal.
     expect(termsOf(90, 0.25).appeal).toBeGreaterThan(termsOf(0, 0.25).appeal);
+  });
+});
+
+/**
+ * A region you cannot pay for does not open.
+ *
+ * Opening one is charged in full in the period it happens, and it was the only
+ * purchase in the game with no affordability check: every other line — the
+ * marketing, the product plan, the room being built, even a feature bet — is
+ * cut to what the company can pay. Ticking four regions it could not begin to
+ * afford opened all four, and the hole was covered by an emergency loan at a
+ * punitive rate. Played out over a season: a company holding $88,915 opened
+ * $149,000 of regions, finished the quarter on nothing, and carried $43,290 of
+ * debt it had never agreed to take.
+ */
+describe("opening regions the company cannot pay for", () => {
+  const withCities = (cities: string[], cash: number) =>
+    ({ ...team({ cash, creditLimit: 0, debt: 0 }), cities } as Company);
+
+  it("opens the ones the money reaches, cheapest first", () => {
+    const four = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost);
+    const home = four[0].id;
+    const budget = four[1].entryCost + four[2].entryCost;
+    const out = fundYear(
+      withCities([home], budget),
+      plain({ cmo: { targetCities: [home, four[1].id, four[2].id, four[3].id] } }),
+      niche,
+      { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as any,
+    );
+    const opened = out.decisions.cmo!.targetCities!;
+    expect(opened, "the region it already sells in is never given up").toContain(home);
+    expect(opened, "the two it can afford").toEqual(expect.arrayContaining([four[1].id, four[2].id]));
+    expect(opened, "and not the one it cannot").not.toContain(four[3].id);
+    expect(out.notes.join(" "), "and it says which stayed closed").toMatch(/stays closed|stay closed/i);
+  });
+
+  it("leaves a plan it can afford exactly as it was", () => {
+    const cheapest = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost);
+    const out = fundYear(
+      withCities([cheapest[0].id], 50_000_000),
+      plain({ cmo: { targetCities: cheapest.map((c) => c.id) } }),
+      niche,
+      { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as any,
+    );
+    expect(out.decisions.cmo!.targetCities).toEqual(cheapest.map((c) => c.id));
+    expect(out.notes.join(" ")).not.toMatch(/stays closed/i);
   });
 });
