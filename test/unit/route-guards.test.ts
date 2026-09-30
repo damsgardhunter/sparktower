@@ -300,7 +300,7 @@ describe("kill switches", () => {
    * is a decision for the owner, not a default.
    */
   const NO_API_OF_ITS_OWN: Record<string, string> = {
-    projects: "the object everything else hangs off: /api/projects would take the entire product down, so the switch is client-only until someone decides otherwise",
+    projects: "the object everything else hangs off. Its prefix would be /api/projects, which is every project route and every other project surface with it, so the switch would mean 'the whole product off' rather than what its label says. Decided 2026-09-30: it stays client-only. Revisit by renaming it to say so, or by dropping it from the console — not by quietly giving it the broad prefix",
   };
 
   it("gives every surface in the console either real routes or a written reason", () => {

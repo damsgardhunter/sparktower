@@ -49,23 +49,7 @@ comment* claims, then check each assertion against the bug it describes by
 breaking the route and watching the test fail. Both defects so far were found
 that way, and one test passed vacuously until a deliberate control caught it.
 
-### 2. `projects` is the one surface with no kill switch, and that is a decision to make
-
-Every other registered surface now owns API routes. `projects` does not,
-because its prefix would be `/api/projects` — every project route in the
-product and every other project surface with it — so the switch would mean
-"the whole product off" rather than what its label says. The admin console
-shows the toggle either way.
-
-Three options, none of which should be picked by a test:
-
-1. Leave it, and accept that one console toggle is client-only.
-2. Give it `/api/projects` and rename it so the label says what it does.
-3. Remove it from the console.
-
-Recorded in `route-guards.test.ts` as `NO_API_OF_ITS_OWN` so it stays visible.
-
-### 3. Deploy verification — the public half is now observed, the private half is not
+### 2. Deploy verification — the public half is now observed, the private half is not
 
 `npm run check:live` was run against production on 30 September and passed
 every check:
@@ -108,7 +92,7 @@ to close it, both needing the owner's own credentials:
 2. Run `npm run check:env` in the Render shell, where the production
    environment actually is.
 
-### 4. Access control is correct but held together by convention
+### 3. Access control is correct but held together by convention
 
 There is no defect here — see *Checked and not a gap* — but twelve different
 access helpers do this job with no shared type and no common middleware:
@@ -123,7 +107,7 @@ is the part that matters. Unifying the helpers would additionally make the
 property *readable* — and would have saved four failed attempts to determine it
 statically. Worth doing, not urgent now that the sweep exists.
 
-### 5. Product and simulation
+### 4. Product and simulation
 
 - A tier priced past its own segment's ceiling still floors at 10% appeal, so
   raising a price past every buyer can still win customers.
@@ -145,6 +129,7 @@ statically. Worth doing, not urgent now that the sweep exists.
 | The mobile 2FA screen offered recovery codes the product had removed: a button POSTing to a route that never existed, a `recoveryCodesLeft` field the server never sent, and a promise of a way back in that could not be kept | `3a674b2f` | `mobile-api-paths.test.ts` (every `/api/...` literal under `mobile/` resolves to a mounted route; the 2FA status shape matches the route's own `res.json`) |
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
 | No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| `projects` was the one registered surface owning no API routes, so its admin toggle changed nothing on the server — an open question rather than a defect | decided 2026-09-30 | **Stays client-only.** Its prefix would be `/api/projects`, which is every project route and every other project surface with it, so the switch would mean "the whole product off" rather than what its label says. Recorded in `route-guards.test.ts` as `NO_API_OF_ITS_OWN` with the reasoning, and the test refuses to excuse any *other* surface — so a new switch that reaches nothing still fails. Revisit by renaming the toggle or dropping it from the console, not by quietly giving it the broad prefix |
 | Four E2E specs failed locally and passed in CI, and the reason was two separate things. `testDatabaseUrl` consulted `TEST_DATABASE_URL` for the default suffix only, so every session got its own `*_test` database and then all shared one `project_e2e` that each run truncates — three of the four. The fourth was a real flake that `retries: 1` had been hiding: the awaited element arrived just after Playwright's default 5s assertion timeout, so the spec failed every local run and passed CI on the retry | this change | `test-database-url.test.ts` (the E2E database is derived from the pinned base, and CI's resolution is unchanged); the flake verified by three consecutive local passes where it had failed every time |
 | `POST /api/documents/:docId/tighten` applied the model's reply by block id across the whole document, so an id belonging to a page nobody asked about was written anyway. One hallucinated id away from rewriting a builder's prose on an unselected page — silently, with no undo, since the original is replaced. `pageIndex` in particular promises one page | this change | `document-tighten.test.ts` (a reply is only honoured for the blocks it was shown; also: a document that fits costs nothing, and a failed rewrite is not a partial save) |
 | `POST /api/projects/:id/backing/badge-preview` took an image permit and never recorded it, so `freeRunUsed` was never true and **every press was the free one** — unlimited `images.edit` calls for nothing, on the route whose own comment says it was "the one picture nobody paid for". Every other image route records its run; this one did not | this change | `badge-preview.test.ts` (the second preview is refused; a typo does not spend the free image; owner-only) |
