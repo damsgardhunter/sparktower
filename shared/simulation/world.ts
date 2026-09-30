@@ -101,10 +101,14 @@ export interface Deal {
 export type DealAnswer = "accept" | "decline" | "vote";
 
 /**
- * The year's offers to one company: one, some years two. A distribution
- * partner and a co-marketing partner can come to anybody; a buyer only comes
- * to a company worth buying — one with customers — and only from year five,
- * when there is something to buy.
+ * The year's offers to one company: one partner, some years two, and a buyer
+ * on top in the years one is interested. A distribution partner and a
+ * co-marketing partner can come to anybody; a buyer only comes to a company
+ * worth buying — one with customers — and only from year five, when there is
+ * something to buy.
+ *
+ * A buyer is an offer *as well as* the partner, never instead of one. See the
+ * note on `buyerToo`.
  */
 export function dealsFor(input: {
   seasonId: string;
@@ -122,11 +126,30 @@ export function dealsFor(input: {
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
   const offers: Deal[] = [];
 
-  const kinds: DealKind[] = ["distribution", "comarketing"];
   const biggest = [...incumbents].sort((a, b) => sum(b.customers) - sum(a.customers))[0];
-  if (year >= 5 && held > 0 && biggest && r() < 0.35) kinds.push("buyout");
+  /*
+   * A buyer is drawn first but added last, and never in a partner's place.
+   *
+   * "buyout" used to go into the same pool the partners were drawn from, and
+   * the pool was then sampled `count` times — so in the years a buyer was
+   * interested and only one offer came, the buyer could be the whole of it and
+   * no partner came at all. Measured over 400 year-five draws, **21 of them
+   * (5.3%) offered a buyout and nothing else**: a one-in-nineteen chance of a
+   * year with no partner, in a game where the line above and the test both say
+   * a partner comes to everybody and the draw decides only which one.
+   *
+   * It stayed hidden because which years those are depends on the draw, and
+   * the draw moves whenever the company's customers move — `held > 0` decides
+   * whether the buyer is rolled for at all, so a balance change somewhere else
+   * shifts every later number in the sequence. It surfaced as a fixture that
+   * had always passed suddenly finding `undefined` where a partner should be.
+   *
+   * So the partners are drawn on their own, and a buyer is one more offer on
+   * top rather than one instead.
+   */
+  const buyerToo = year >= 5 && held > 0 && !!biggest && r() < 0.35;
   const count = r() < 0.4 ? 2 : 1;
-  const pool = [...kinds];
+  const pool: DealKind[] = ["distribution", "comarketing"];
   while (offers.length < count && pool.length) {
     const kind = pool.splice(Math.floor(r() * pool.length), 1)[0];
     const from = partners[Math.floor(r() * partners.length)];
@@ -139,21 +162,22 @@ export function dealsFor(input: {
         title: `${from} want to distribute you`,
         terms: `Room for ${capacity.toLocaleString()} more ${niche.voice.capacityShort} and 4 points of brand for three years, for ${Math.round(revenueShare * 100)}% of revenue for those three years.`,
       });
-    } else if (kind === "comarketing") {
+    } else {
       const cost = Math.round(pot * (0.0006 + r() * 0.0006) / 10_000) * 10_000;
       offers.push({
         id, kind, from, cost,
         title: `${from} want a joint campaign`,
         terms: `You put in ${cost.toLocaleString()}, they match it, and the campaign runs under both names — brand for half the price, this year.`,
       });
-    } else {
-      const price = Math.round(worth * (1.15 + r() * 0.3) / 10_000) * 10_000;
-      offers.push({
-        id, kind, from: biggest!.name, price, buyerId: biggest!.id,
-        title: `${biggest!.name} want to buy the business`,
-        terms: `${price.toLocaleString()} for the customers, what you own and what you owe. You keep the company, every seat and the cash, and start again from in front.`,
-      });
     }
+  }
+  if (buyerToo && biggest) {
+    const price = Math.round(worth * (1.15 + r() * 0.3) / 10_000) * 10_000;
+    offers.push({
+      id: `${year}-buyout`, kind: "buyout", from: biggest.name, price, buyerId: biggest.id,
+      title: `${biggest.name} want to buy the business`,
+      terms: `${price.toLocaleString()} for the customers, what you own and what you owe. You keep the company, every seat and the cash, and start again from in front.`,
+    });
   }
   return offers;
 }
