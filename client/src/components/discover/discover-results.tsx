@@ -28,13 +28,29 @@ interface Props {
   isLoading: boolean;
   isError: boolean;
   updateFor: (kind: "project" | "builder", id: string) => ExploreUpdate | undefined;
+  /** The matches this list is filtered against have not arrived yet. See below. */
+  peopleWaiting?: boolean;
 }
 
-export function DiscoverResults({ filters, projects, people, counts, isLoading, isError, updateFor }: Props) {
+export function DiscoverResults({ filters, projects, people, counts, isLoading, isError, updateFor, peopleWaiting = false }: Props) {
   const followed = useFollowedProjectIds();
   const { data: connections } = useConnectionStates(people.map((p) => p.id));
   const showProjects = filters.kind !== "people";
-  const showPeople = filters.kind !== "projects";
+  /*
+   * People wait for the match strip; projects never do.
+   *
+   * Everyone in the strip above is filtered out of this list, so until the
+   * matches have arrived this section does not yet know who belongs in it. It
+   * used to paint anyway and correct itself a moment later — and a card that
+   * somebody clicked in that moment was unmounted mid-gesture, taking its open
+   * dialog with it. On this screen that is a connection request aimed at
+   * whoever moved into the gap.
+   *
+   * Only this section waits. An earlier attempt held the whole results block
+   * back and broke the Explore funnel, because the projects above are what a
+   * view is counted from and they have nothing to do with the strip.
+   */
+  const showPeople = filters.kind !== "projects" && !peopleWaiting;
 
   if (isLoading) return <ResultsSkeleton />;
 
@@ -49,7 +65,10 @@ export function DiscoverResults({ filters, projects, people, counts, isLoading, 
     );
   }
 
-  const nothing = (!showProjects || projects.length === 0) && (!showPeople || people.length === 0);
+  /* "Nothing matches" must not flash while half the answer is still coming. */
+  const nothing = !peopleWaiting
+    && (!showProjects || projects.length === 0)
+    && (!showPeople || people.length === 0);
   if (nothing) {
     return (
       <Panel
