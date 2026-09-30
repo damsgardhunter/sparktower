@@ -79,8 +79,16 @@ export function certFilesIn(names: string[], dir: string = CERT_DIR): string[] {
     if (!name.endsWith(".cer") && !name.endsWith(".der")) return false;
     // A separator of either kind, or a relative step, is not a name in a folder.
     if (name.includes("/") || name.includes("\\") || name === "." || name === "..") return false;
-    // And whatever it was, the file it resolves to has to sit directly in the folder.
-    return path.dirname(path.resolve(base, name)) === base;
+    /*
+     * And whatever it was, the file it resolves to has to be inside the folder
+     * — written the way `objectStorage` writes it, which is the idiom this
+     * repository already uses for exactly this question. One dialect for
+     * "is this path still where I meant it to be" is worth more than a
+     * marginally tidier second one, and the audit's own path-traversal check
+     * knows this shape and does not know the other.
+     */
+    const inside = path.relative(base, path.resolve(base, name));
+    return inside !== "" && !inside.startsWith("..") && !path.isAbsolute(inside);
   });
 }
 

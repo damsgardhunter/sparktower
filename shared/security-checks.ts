@@ -596,7 +596,24 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       detail: !anyPathFromRequest.length
         ? "No file paths are built from request values."
         : risky.length
-          ? `A file path is built from a request value with no check that it stays inside its folder, in ${risky.length} file${risky.length === 1 ? "" : "s"}.`
+          /*
+           * What was read, not what was proved.
+           *
+           * This is a file-level co-occurrence: somewhere in the file a path is
+           * built from a value, somewhere in the file a request is read, and
+           * nowhere in it is a containment check. Those three facts are worth
+           * acting on and they are not the same as a path that can escape — in
+           * this repository the first file it named built its path from
+           * `readdirSync` and read a request fifty lines away, for a receipt
+           * that never went near a filesystem.
+           *
+           * A check that says "this needs a look" is useful. One that says "you
+           * have a vulnerability" when it cannot know that spends the reader's
+           * trust, and the next true finding is paid for out of the same
+           * account. So it describes its evidence and leaves the conclusion to
+           * whoever opens the file.
+           */
+          ? `${risky.length} file${risky.length === 1 ? "" : "s"} build${risky.length === 1 ? "s" : ""} a file path and read${risky.length === 1 ? "s" : ""} request input, with nothing in ${risky.length === 1 ? "it" : "them"} that keeps the path inside its folder. Worth reading to see whether the two meet.`
           : "Request-supplied file paths are constrained where they're built.",
       why: "\"../\" in a filename reads or writes files outside the folder you meant — other users' uploads, .env, your keys.",
       fix: "Where the path is built, resolve it and refuse it unless it is still inside the root (path.relative(root, full) must not start with \"..\"), or accept only a strict id shape (^[A-Za-z0-9_-]+$) and build the path yourself.",
