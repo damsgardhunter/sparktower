@@ -665,8 +665,28 @@ export function resolveYear(
      * the pipeline; what arrives now is last year's shipping and research that
      * started two years ago. See `lag.ts`.
      */
+    /*
+     * And who is building it.
+     *
+     * `staffQuality` drove service and nothing else: the people a company
+     * hires, recruits for, trains and pays had no effect whatever on the
+     * product they build, which is not true of any business and was why
+     * `recruitingSpend` and `trainingSpend` measured as dead levers. Engineer
+     * pay already moved what shipped (`pay.output`); the people themselves did
+     * not.
+     *
+     * `staffLeverage` runs 0.5 to 1.5 and is exactly 1 at the staff quality a
+     * company starts with, so this changes nothing for a table that ignores
+     * it: good people make the same budget go further, poor ones waste it.
+     *
+     * A company with nobody on the payroll ships at 1. A solo founder is the
+     * engineer, and what they can build is already priced into the lever
+     * itself — docking them for having no employees would be charging them
+     * twice for being one person.
+     */
+    const builders = (company.staff ?? 0) > 0 ? staffLeverage(company.staffQuality ?? STAFF_QUALITY_START) : 1;
     // An automated line is a line set up for what it already makes: product work buys less.
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product;
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
     /*
      * The pace again: shipping swings the year's result either way, and puts
      * part of it in front of customers now rather than next year.

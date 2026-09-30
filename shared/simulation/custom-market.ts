@@ -257,7 +257,23 @@ function cleanRegions(raw: unknown, segmentIds: string[], marketValue: number): 
    * its size alone would say" — a real thing the model knows and was asked
    * about — survives. See `ENTRY_COST_MAX_SHARE`.
    */
-  const asked = list.map((c: any) => num(c?.entryCost, 10_000, 5_000_000, 250_000));
+  /*
+   * What Nova wrote, floored and defaulted at the size of *this* market.
+   *
+   * These used to be clamped to at least £10,000, with £250,000 standing in
+   * when the model left the field out — figures from the catalogue, where a
+   * market turns over £400m. Asked about a stocktake app for bottle shops,
+   * Nova wrote a market worth £210,000 a year and entry costs of 5,000, 7,000
+   * and 4,000: three regions, deliberately different, the cheapest being the
+   * small one. All three were lifted to the £10,000 floor, came out identical,
+   * and every distinction the model had drawn was gone before anybody saw it.
+   *
+   * A tenth of a per cent of what a region turns over is a floor that means
+   * the same thing in any market, and the ceiling below does the rest.
+   */
+  const entryFloor = (weight: number) => Math.max(1, marketValue * weight * 0.001);
+  const asked = list.map((c: any, i: number) =>
+    num(c?.entryCost, entryFloor(weights[i]), 5_000_000, marketValue * weights[i] * ENTRY_COST_MAX_SHARE));
   const worst = Math.max(...asked.map((cost, i) => cost / Math.max(1, marketValue * weights[i] * ENTRY_COST_MAX_SHARE)));
   const affordable = worst > 1 ? 1 / worst : 1;
   return list.map((c: any, i): City => {

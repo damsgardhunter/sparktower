@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCustomMarket, marketProblems, marketShares, MIN_SEGMENT_SIZE, MAX_SEGMENT_SIZE,
-  INCUMBENT_SHARE_MIN, INCUMBENT_SHARE_MAX, INCUMBENT_STRENGTH_MEAN_MAX,
+  INCUMBENT_SHARE_MIN, INCUMBENT_SHARE_MAX, INCUMBENT_STRENGTH_MEAN_MAX, ENTRY_COST_MAX_SHARE,
 } from "@shared/simulation/custom-market";
 import { NICHES } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -486,6 +486,66 @@ describe("how strong a market Nova wrote is allowed to be", () => {
     for (const niche of NICHES) {
       const mean = niche.incumbents.reduce((sum, i) => sum + i.quality, 0) / niche.incumbents.length;
       expect(mean, `${niche.name} is written under the ceiling already`).toBeLessThanOrEqual(INCUMBENT_STRENGTH_MEAN_MAX);
+    }
+  });
+});
+
+/**
+ * A market written for a real project is small, and the floors were not.
+ *
+ * Asked about a stocktake app for independent bottle shops, Nova wrote a
+ * market worth £210,000 a year with three regions priced at 5,000, 7,000 and
+ * 4,000 to open — deliberately different, the small one cheapest. Entry costs
+ * were clamped to at least £10,000, a figure from the catalogue where a market
+ * turns over £400m, so all three were lifted to the floor and came out
+ * identical. Every distinction the model drew was gone before anybody saw it.
+ */
+describe("what a region costs to open, in a market this size", () => {
+  const market = (entry: number[]) => ({
+    ...sane,
+    segments: [
+      { id: "a", name: "Established", description: "x", size: 3_000, growth: 0.03, priceSensitivity: 0.3, qualityFocus: 0.7, brandFocus: 0.5, serviceFocus: 0.6, loyalty: 0.7, referencePrice: 50 },
+      { id: "b", name: "New", description: "x", size: 2_000, growth: 0.1, priceSensitivity: 0.6, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.4, loyalty: 0.3, referencePrice: 30 },
+    ],
+    regions: [
+      { id: "leeds", name: "Leeds", weight: 0.6, entryCost: entry[0], note: "Home." },
+      { id: "manchester", name: "Manchester", weight: 0.2, entryCost: entry[1], note: "Bigger." },
+      { id: "york", name: "York", weight: 0.2, entryCost: entry[2], note: "Smaller." },
+    ],
+  });
+
+  it("keeps the order the model wrote them in", () => {
+    const m = buildCustomMarket(market([5_000, 7_000, 4_000]), "x")!;
+    const [leeds, manchester, york] = m.cities;
+    expect(manchester.entryCost, "the dearest stays the dearest").toBeGreaterThan(leeds.entryCost);
+    expect(york.entryCost, "and the cheapest stays the cheapest").toBeLessThan(leeds.entryCost);
+  });
+
+  it("prices them against what the market is worth", () => {
+    const m = buildCustomMarket(market([5_000, 7_000, 4_000]), "x")!;
+    /* The market turns over 3,000 x 50 + 2,000 x 30 = 210,000 a year. */
+    for (const city of m.cities) {
+      expect(city.entryCost, `${city.name} costs more than its share of the market is worth in a year`)
+        .toBeLessThanOrEqual(210_000 * city.weight * ENTRY_COST_MAX_SHARE + 1);
+      expect(city.entryCost, `${city.name} is free to open`).toBeGreaterThan(0);
+    }
+  });
+
+  it("takes a market written inside the ceiling exactly as written", () => {
+    /*
+     * 210,000 a year, so the ceiling is 2% of each region's share: 2,520 for
+     * Leeds and 840 for the other two. Written under that, nothing moves.
+     */
+    const m = buildCustomMarket(market([2_000, 800, 700]), "x")!;
+    expect(m.cities.map((c) => c.entryCost)).toEqual([2_000, 800, 700]);
+  });
+
+  it("fills in a sensible figure when the model leaves it out", () => {
+    const m = buildCustomMarket(market([undefined as any, undefined as any, undefined as any]), "x")!;
+    for (const city of m.cities) {
+      expect(city.entryCost, `${city.name} was defaulted to a catalogue-sized number`)
+        .toBeLessThanOrEqual(210_000 * city.weight * ENTRY_COST_MAX_SHARE + 1);
+      expect(city.entryCost).toBeGreaterThan(0);
     }
   });
 });
