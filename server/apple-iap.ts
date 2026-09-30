@@ -55,10 +55,38 @@ import { APPLE_PRODUCTS } from "@shared/plans";
  */
 const CERT_DIR = path.join(process.cwd(), "server", "apple-certs");
 
+/**
+ * Which names in that folder are certificates, and are really in that folder.
+ *
+ * The names come from `readdirSync`, which returns base names — no separators,
+ * no "..", nothing a request has touched. A security review read this as a
+ * request-derived path and it is not one: the only thing this route takes from
+ * a caller is the signed receipt, which never reaches a filesystem call.
+ *
+ * The check is here anyway, for the reason `objectStorage` gives for the
+ * identical one it calls belt and braces. These files are the trust anchors the
+ * whole receipt check rests on, and the cost of saying "and it has to be in
+ * this folder" out loud is one comparison on eight files at boot. It also makes
+ * the property something a test can hold, which an argument about `readdirSync`
+ * in a comment is not.
+ *
+ * Exported for that test. Pure, so it can be asked about paths this folder will
+ * never contain.
+ */
+export function certFilesIn(names: string[], dir: string = CERT_DIR): string[] {
+  const base = path.resolve(dir);
+  return names.filter((name) => {
+    if (!name.endsWith(".cer") && !name.endsWith(".der")) return false;
+    // A separator of either kind, or a relative step, is not a name in a folder.
+    if (name.includes("/") || name.includes("\\") || name === "." || name === "..") return false;
+    // And whatever it was, the file it resolves to has to sit directly in the folder.
+    return path.dirname(path.resolve(base, name)) === base;
+  });
+}
+
 function rootCerts(): Buffer[] {
   try {
-    return readdirSync(CERT_DIR)
-      .filter((f) => f.endsWith(".cer") || f.endsWith(".der"))
+    return certFilesIn(readdirSync(CERT_DIR))
       .map((f) => readFileSync(path.join(CERT_DIR, f)));
   } catch {
     return [];
