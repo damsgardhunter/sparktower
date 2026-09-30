@@ -2634,10 +2634,24 @@ offers as "closest to your actual week" — the one a founder rehearsing their o
 business is steered towards, and the one where nothing they decide pays for
 itself.
 
-Why this is not just changed: four years of monthly is 48 decisions, and a
-season resolves about one a day. The fix is either a season far longer than a
-fortnight, or shortening the lags for a monthly season so work lands sooner —
-both product decisions. What was done instead: the winnability guard now runs
+**Shorter lags were tried and are not the answer.** A monthly season releasing
+its queues faster than real time — brand over six months rather than twelve,
+room sooner, a hire useful in half the time — leaves the two-year case exactly
+where it was at every speed tried:
+
+    MONTHLY_LAG_SPEED   2      3      4      6
+    podcasts   2yr      1.00x  1.00x  0.99x  0.98x
+    project_saas 2yr    1.00x  1.00x  1.01x  1.00x
+    dating_apps 2yr     1.02x  1.02x  1.02x  0.99x
+
+And the faster settings make longer seasons erratic rather than better
+(restaurant chains at four years goes 1.25x to 0.95x, mmos 1.72x to 0.99x). So
+the flatness is not the lags: it is time in market. Customers come out of the
+unowned pool at a rate the pool and the plant bound, and two years is not long
+enough to take much of it however fast brand and quality arrive.
+
+What is left is a season far longer than a fortnight, or accepting monthly as a
+short flat rehearsal. What was done instead: the winnability guard now runs
 monthly and holds it to customers, solvency and running at a profit, with this
 measurement written where it will be read.
 
@@ -2649,7 +2663,39 @@ product and operations all came out at exactly 3x annualised while salaries and
 idle capacity matched, which is the tell. Third time this week the harness was
 the finding.
 
-### Open, and probably not a balance constant: keeping room decides the catalogue season
+### Re-run against the new score: the plant is a big decision, not the only one
+The four capacity experiments were worth re-running once the score had a term
+for earnings, because what they kept pointing at was that nothing reached the
+score except customer count. Two things came out of it.
+
+**The earnings term does not reduce the plant's pull** — 4.62x becomes 5.39x at
+worst. A fuller plant is more revenue *and* more profit, because the fixed costs
+are already paid, so the new term rewards it as well. Construction and
+restaurant chains improved (2.29x to 1.57x, 2.75x to 2.09x); podcasts and drone
+delivery got slightly worse.
+
+**But the plant was never the dominant lever, and the earlier framing was
+wrong.** Set against the spread across ways of playing the same market:
+
+    restaurant_chain   best-to-worst strategy 7.6x   ·   cutting the plant 2.09x
+    project_saas       best-to-worst          7.8x   ·   cutting the plant 3.17x
+
+The plant is worth a third to a half of what the rest of the decisions are worth
+between them. "Keeping room decides the season" was measured against nothing
+else, and it does not survive being measured against the alternatives.
+
+What the new score visibly fixed, in the same table: `cheap` in restaurant
+chains has the second-highest revenue in the market and loses £49,122 a quarter,
+and it has gone from fourth of nine to **last**. The two profitable plans it used
+to beat, `premium` and `lean`, have both passed it. That is the scoring change
+doing exactly what it was for.
+
+So this is downgraded from a defect to a fact about the game: capacity is a good
+investment and retiring it while you could still sell is a real mistake, priced
+about as heavily as one or two other bad calls. Nothing further is owed here
+unless the ratio moves again.
+
+### Closed by measurement: keeping room decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served: keeping it is worth **2.3x to 4.6x** the company's final value
 in every hand-written market, and 1.3x in the markets Nova writes.
