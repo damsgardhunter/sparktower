@@ -2490,18 +2490,35 @@ the same thing. Before quoting a number from a scratch harness: check what it
 is holding constant.
 
 ### Open: keeping room still decides the catalogue season
-The growth bound was tried and is not shipped. Capping how many customers a
-company can take on at once — half again of what it serves, with a floor for
-newcomers — does fix the magnet, from 4.62x down to between 2.83x and 1.54x
-depending on how tight the floor is. It breaks two things on the way:
+Identical spending, the only difference being whether the plant is cut toward
+what is served, keeping it is worth **2.3x to 4.6x** the company's final value
+in every hand-written market (1.3x in the markets Nova writes). Nothing else
+comes close, and retiring idle plant is punished harder than any pricing
+mistake.
 
-  - `forecast.ts` does not know about it, so the forecast stops bracketing what
-    happens (4 of 8 years inside the range, against 5 required);
-  - worse, it stops rivals absorbing what another company turned away — "the
-    turned-away went somewhere: expected 0 to be greater than 0" — which is a
-    mechanic this engine deliberately has.
+Three things have now been tried and none of them is the lever:
 
-So it is not a constant to tune but three pieces of work that have to land
-together: the bound, the forecast that predicts it, and a rule for overflow
-that a rival is too busy to absorb.
+  - **The rent.** `IDLE_RATE` 0.08 → 0.15 → 0.25 → 0.40 leaves the ratio at
+    4.62, 4.27, 4.65, 2.49 while breaking 5, 16 and 21 tests. Five times the
+    price of idle room barely moves it.
+  - **The overflow.** `SPILL_TOPUP_MAX` 8, 4, 2, 1 leaves it at 4.62, 4.62,
+    4.61, 4.70.
+  - **A bound on how fast a company can grow.** Capping what a company can
+    *win* in a period, while leaving its physical room available to *receive*
+    what a rival turned away, leaves the ratio at 4.46–5.30 — in places
+    **worse**. The magnet simply routes around it: customers the bound stops
+    you winning become somebody's turned-away, and the company with the big
+    plant absorbs them as spill instead.
+
+Bounding both channels does fix it — 4.62x down to 1.54x — and it breaks the
+mechanic `spill` exists for. "What fits nowhere leaves the market for the
+year", so with every company bounded there is nowhere for a full market's
+overflow to go and it disappears, which `forecast.test.ts` catches directly
+("the turned-away went somewhere: expected 0 to be greater than 0"). The
+forecast also stops bracketing outcomes, because it does not model the bound.
+
+So the shape of the work is now clear, and it is three things that have to land
+together: a bound on taking customers on, a rule for overflow that nobody has
+the room to absorb — most likely leaving them unserved and available next
+period rather than deleting them — and a forecast that knows about both.
 
