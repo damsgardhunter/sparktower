@@ -37,6 +37,7 @@ import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedFragmentedTail, seedIncumbents, TRULY_OPEN_SHARE } from "./incumbents";
+import { atStanding, type Opening, type Standing } from "./opening";
 import { between, pick } from "./random";
 import { periodsPerYear, type Cadence } from "./cadence";
 import { marketScale } from "./world";
@@ -554,7 +555,12 @@ export function marketFor(niche: Niche, companies: number): Niche {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean }[];
+  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean; standing?: Standing }[];
+  /**
+   * Funded and level, or where each project actually is. Absent means the
+   * contest every season has been until now. See `opening.ts`.
+   */
+  opening?: Opening;
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
 }): World {
@@ -601,7 +607,19 @@ export function buildWorld(input: {
        * hold all but the open tenth, which is every catalogue market.
        */
       ...[seedFragmentedTail(niche, seasonId, seatedAgainst)].filter((c): c is NonNullable<typeof c> => c !== null),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId, companies: teams.length })),
+      /*
+       * The funded company, and then — only when the season asked for it —
+       * moved to where the project actually is.
+       *
+       * Applied after `startingCompany` rather than inside it, so the funded
+       * opening stays the one definition of what a company is, this is visibly
+       * a departure from it, and a competitive season is bit-for-bit what it
+       * always was.
+       */
+      ...teams.map((t) => {
+        const funded = startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId, companies: teams.length });
+        return input.opening === "actual" && t.standing ? atStanding(funded, t.standing, niche) : funded;
+      }),
     ],
     economy: opening,
     // Left off entirely for a yearly season, so a world built before any of

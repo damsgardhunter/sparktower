@@ -372,6 +372,12 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       seasonId: season.id,
       niche,
       cadence: season.cadence as Cadence,
+      /*
+       * Funded and level, or where the project actually is. Taken from the
+       * season rather than decided here, and the standing was snapshotted when
+       * the season was made — see `simSeasons.openingStanding`.
+       */
+      opening: (season as { opening?: "competitive" | "actual" }).opening ?? "competitive",
       teams: playing.map((v) => {
         const held = seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role);
         /*
@@ -390,6 +396,13 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
           seats: soloSeat ? [...ROLES] : held,
           officers: soloSeat ? 1 : undefined,
           botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
+          /*
+           * Where this company actually is, for a season that asked to open
+           * that way. One standing for the season, because a project season is
+           * one project's — a season with several ventures and an "actual"
+           * opening would want one each, and nothing creates that yet.
+           */
+          standing: (season as { openingStanding?: { progress: number; people: number } | null }).openingStanding ?? undefined,
         };
       }),
     });

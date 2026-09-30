@@ -610,6 +610,13 @@
       "when": 1790772083022,
       "tag": "0086_business_model",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1790807446921,
+      "tag": "0087_far_cyclops",
+      "breakpoints": true
     }
   ]
 }

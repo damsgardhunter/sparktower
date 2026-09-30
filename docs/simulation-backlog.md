@@ -2540,35 +2540,34 @@ The trade is stated plainly: a season started before the rules keeps a market
 that may be hard or unplayable. That is the right side to err on, and it stops
 mattering as those seasons finish.
 
-### Open, and a decision rather than a defect: `opening.ts` is finished and unwired
-169 lines that nothing imports. Checked rather than assumed — it is not dead
-code left behind by something removed, it is a feature that was written and
-never connected. `Opening`, `Standing`, `OPENING_BANDS`, `positionFor` and
-`atStanding` appear nowhere else in the repo, there is no column for the choice
-and no control in the desk.
+### Closed: `opening.ts` is wired
+169 lines that were written, finished, and connected to nothing — no import, no
+column, no control. Now a season can open two ways, which is what it was for:
 
-It also works. Run against a funded dating-apps company:
+  - **Funded and level** — money in the bank, a credit line, nobody to serve,
+    everyone identical. Every season until now, and still the default, so
+    nothing changes for anybody who does not ask.
+  - **Where you actually are** — the cash, credit, rating and customers the
+    work so far implies. Its own comment makes the case: "a simulation that
+    hands them six million pounds is teaching them to run a company that is not
+    theirs."
 
-    progress 0.05   cash 0          credit 200,000    score 20   "An idea, and the work so far"
-    progress 0.30   cash 480,000    credit 500,000    score 32   "Building it"
-    progress 0.60   cash 1,200,000  credit 1,000,000  score 45   "Something people use"
-    progress 0.95   cash 2,100,000  credit 1,600,000  score 55   "Trading"
+Five pieces: `simSeasons.opening` and `simSeasons.openingStanding` (migration
+0087, both additive with defaults so existing rows are untouched), a standing
+snapshotted from the project's path at creation, `buildWorld` applying
+`atStanding` after `startingCompany`, the tick passing the season's choice
+through, and a control beside the cadence picker.
 
-What it does is open a season *where a project actually is* rather than funded
-and level — its own comment argues the case better than this does: "a
-simulation that hands them six million pounds is teaching them to run a company
-that is not theirs."
+The standing is taken **once, when the season is made**, not read live: a
+season is a fixed question about a fixed starting point, and a founder who
+ticks off three milestones in week two has not changed the company they
+started with.
 
-Finishing it is four things, none of them hard: a column for the choice, a
-control that offers it, a `Standing` derived from the project's progress, and a
-call to `atStanding` after `startingCompany` in `buildWorld`. It is left here
-rather than done because which seasons should open this way is a product
-question, and rather than deleted because deleting a working feature somebody
-designed is not a decision a cleanup gets to make.
-
-No tests were added. Testing code nothing calls pins behaviour that has never
-had to be right; the measurement above is the evidence it works, and the tests
-belong with the wiring.
+Eight tests, and the two that matter most are the ones about what did *not*
+change: a competitive season is bit-for-bit what it always was even when a
+standing is supplied, and no project — however far along — opens richer than
+the funded contest. "Where you actually are" is a different question, not a
+bonus.
 
 ### Open, and probably not a balance constant: keeping room decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
