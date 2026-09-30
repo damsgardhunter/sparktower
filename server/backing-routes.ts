@@ -562,11 +562,28 @@ export function registerBackingRoutes(app: Express) {
         visibility: "public",
       });
 
+      /*
+       * Recorded once the art exists, which is what closes the gate.
+       *
+       * `requireImages` gives the first run on a project free by asking
+       * `freeRunUsed(scope, scopeId)` — and that answer comes from the rows
+       * this writes. Taking the permit and never recording it meant the free
+       * run was never used up, so every press was the free one: unlimited
+       * `images.edit` calls for nothing, on the route whose own comment above
+       * says it was the one picture nobody paid for. Every other image route
+       * records (project-visuals.ts, post-image-routes.ts, and the real badge
+       * generate below); this one did not.
+       *
+       * After the render and the write, so a failure that produced no picture
+       * charges nobody — the same order the rest of the metering keeps.
+       */
+      await permit.record(1);
+
       const previews = { ...((campaign.badgePreviews as Record<string, string>) || {}), [level]: objectPath };
       await db.update(projectBackingCampaigns).set({ badgePreviews: previews })
         .where(eq(projectBackingCampaigns.id, campaign.id));
 
-      res.json({ level, imageUrl: objectPath, usedLogo: !!logo });
+      res.json({ level, imageUrl: objectPath, usedLogo: !!logo, free: permit.free });
     } catch (error: any) {
       console.error("Badge preview error:", error);
       /*

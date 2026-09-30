@@ -21,8 +21,9 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 `summarizeUntestedRoutes` is the source of this list; re-run it rather than
 trusting the numbers below. As of 30 September: **33 of 499 routes named by no
-test, 15 of them writes** (down from 36/17). Two of the first three looked at
-held a real defect, which is the argument for continuing.
+test, 15 of them writes** (down from 36/17). Two of the first five looked at
+held a real defect — one of them unpaid AI spend — which is the argument for
+continuing.
 
 Ranked by what a silent failure would cost:
 
@@ -30,10 +31,10 @@ Ranked by what a silent failure would cost:
 |---|---|---|
 | `PATCH /api/backings/:id/privacy` | a backer's anonymity | **done** — found a bug |
 | `GET /api/merch-orders/:orderId/print/:face.png` | renders what a backer paid for | **done** |
-| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | next |
-| `POST /api/projects/:id/backing/badge-preview` | spends money on an image | next |
-| `GET /api/stripe/connect-onboarding` | the payout path | |
-| `GET /api/stripe/connect-dashboard` | the payout path | |
+| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | **done** |
+| `POST /api/projects/:id/backing/badge-preview` | spends money on an image | **done** — found a bug |
+| `GET /api/stripe/connect-onboarding` | the payout path | next |
+| `GET /api/stripe/connect-dashboard` | the payout path | next |
 | `POST /api/documents/:docId/tighten` | AI write over a document | |
 | `GET /api/documents/:docId/pdf` | what a customer downloads | |
 | `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
@@ -140,6 +141,8 @@ statically. Worth doing, not urgent now that the sweep exists.
 | The mobile 2FA screen offered recovery codes the product had removed: a button POSTing to a route that never existed, a `recoveryCodesLeft` field the server never sent, and a promise of a way back in that could not be kept | `3a674b2f` | `mobile-api-paths.test.ts` (every `/api/...` literal under `mobile/` resolves to a mounted route; the 2FA status shape matches the route's own `res.json`) |
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
 | No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| `POST /api/projects/:id/backing/badge-preview` took an image permit and never recorded it, so `freeRunUsed` was never true and **every press was the free one** — unlimited `images.edit` calls for nothing, on the route whose own comment says it was "the one picture nobody paid for". Every other image route records its run; this one did not | this change | `badge-preview.test.ts` (the second preview is refused; a typo does not spend the free image; owner-only) |
+| `POST /api/projects/:id/backing/submit-review` had no test: the door into the payout review queue, where a project with no Stripe account must not be reviewable, an approved campaign must not be knocked back to pending by its own creator, and a rejected one must be able to return without the old reviewer notes | this change | `backing-submit-review.test.ts` (all four properties; removing the four checks fails exactly four tests) |
 | `GET /api/merch-orders/:orderId/print/:face.png` had no test, and its central claim — renders from the order's artwork snapshot, never the campaign's live config, so a creator changing their logo cannot change what somebody already bought — was enforced by nothing. No defect found; the `Cache-Control: immutable` header is only honest because of that property, so the two are now asserted together | this change | `merch-print-file.test.ts` (asserted against the regression: reading live config fails it. A control test also caught the first version passing vacuously, because the `front` face draws a fixed tagline and cannot vary — only `back` renders the name) |
 | `PATCH /api/backings/:id/privacy` read `Boolean(req.body.isAnonymous)`, so a request that never mentioned the field — empty body, misspelled key, a retry that lost it — came out `false` and published the name of a backer who had chosen not to be listed, silently and with a 200 | this change | `backing-privacy.test.ts` (the flag must be said, not inferred; anonymity leaves the public wall and stays on the creator's roster; neither a stranger nor the project owner can change it) |
 
