@@ -2321,6 +2321,71 @@ eight, and most of drone delivery and podcasts, profitable on two. That is the
 evidence it measures the right thing rather than being a number chosen to
 rescue the markets it was written for.
 
+## The catalogue pass, 30 Sept 2026
+
+Seven hand-written markets, eight season seeds, seven strategies each (lean,
+grower, premium, cheap, sensible, tiered, product) with the year's events on.
+
+### Closed: a recall cost the same in a market a two-hundredth the size
+`events.ts` held one piece of money and it was the one nothing scaled: a flat
+£450,000. Four tenths of the opening bank in a catalogue market, and 29.1x the
+*entire* bank in an allotment-glut marketplace, 22.5x in a kiln-firing one,
+17.3x in a parish-council one. Recalls fire there three or four times across
+eighteen seasons, so a founder could lose twenty-nine times everything to one
+draw, with no decision that would have made it smaller. `atScale` now applies.
+
+Found only because the sweeps ran with events on for the first time.
+`every-market-winnable.test.ts` now runs both ways.
+
+### Not the fault it looked like: most of the catalogue's weakness was the harness
+Measured with strategies that never cut an over-built plant, the seven markets
+looked alarming — thirteen bankruptcies in construction alone, ten across the
+catalogue. Almost all of it was the plans: `capacityTarget: max(capacity, ...)`
+can only grow, so a company that had priced itself down to two customers went
+on paying £49,613 a quarter for 1,588 units of plant it would never fill. A
+person cuts. With plans that cut by a fifth a period, bankruptcies fall to
+**three in 336 runs**, and every market has a plan profitable on six seeds of
+eight or better.
+
+Worth remembering before reading the next alarming sweep: a strategy that
+cannot do something a player obviously would is not evidence about the market.
+
+### Open: filing nothing out-scores deliberate play in four of the seven
+Ranked by what the company is finally worth, median over eight seeds, with
+events on:
+
+    restaurant_chain   doing nothing ranks 1st of 8
+    drone_delivery     doing nothing ranks 2nd
+    project_saas       doing nothing ranks 2nd
+    podcasts           doing nothing ranks 3rd
+    mmos               doing nothing ranks 5th
+    construction       6th
+    dating_apps        7th
+
+In all fourteen markets Nova wrote, doing nothing ranks **last**. So this is a
+property of the hand-written markets, not of the engine, and it is the same
+complaint as "doing nothing is the most profitable strategy" — which earlier
+work closed on *profit* and never checked on *value*, the number the game
+actually ranks people by.
+
+`defaultDraft` fills in only a price and the plant it already has, so this
+really is filing nothing rather than accepting good defaults.
+
+### Open: undercutting wins almost everywhere
+`cheap` — price at four fifths of the cheapest segment, spend on performance —
+has the best median end value in **ten of twelve** markets tested, including
+most of Nova's. One strategy dominating every market is the same shape as a
+market with one answer.
+
+Both of these probably have one cause: `valuation = revenue x 1.2 + assets -
+debt` has no term for profit, so the score rewards volume and is indifferent to
+whether the volume pays. Undercutting maximises revenue; spending that does not
+move revenue far enough destroys value; and a company that files nothing keeps
+its revenue while spending nothing to hold it. That is already recorded above
+as cost-cutting levers scoring zero, and this is the same defect seen from the
+other end. It wants its own pass, because changing what a season is scored on
+moves every balance measurement in this document.
+
 ### Open: owning something for a whole year makes the year worse
 The effects reach the market — a company holding a patent and a distribution
 deal wins 25,118 customers at the allocation against 15,338 without them. Run
