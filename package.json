@@ -169,7 +169,8 @@
   "overrides": {
     "drizzle-kit": {
       "@esbuild-kit/esm-loader": "npm:tsx@^4.20.4"
-    }
+    },
+    "brace-expansion": "^2.1.7"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
