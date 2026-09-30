@@ -45,7 +45,7 @@ const held = (c: any) => Object.values(c?.customers ?? {}).reduce((sum: number, 
  * point is that an ordinary competent plan works everywhere, not that a
  * market-specific one does.
  */
-function play(niche: any, seasonId: string, rate: number) {
+function play(niche: any, seasonId: string, rate: number, withEvents = false) {
   let world: World = buildWorld({
     seasonId, niche, cadence: "quarterly",
     teams: [{ id: "me", name: "Mine", seats: [...ROLES] as Role[], officers: 1 }],
@@ -63,7 +63,7 @@ function play(niche: any, seasonId: string, rate: number) {
     };
     const filed: any = { companyId: "me" };
     for (const role of ROLES) filed[role] = { ...defaultDraft(role, me, previous?.[role]), ...(want[role] ?? {}) };
-    const out = resolveYear({ ...world, year: period }, [filed as TeamDecisions], undefined, { withoutEvent: true });
+    const out = resolveYear({ ...world, year: period }, [filed as TeamDecisions], undefined, withEvents ? {} : { withoutEvent: true });
     last = out.reports.find((r: any) => r.companyId === "me");
     previous = filed;
     world = out.world;
@@ -83,12 +83,22 @@ const RATES = [0.06, 0.12];
 describe("every market can be won", () => {
   for (const niche of NICHES) {
     describe(niche.id, () => {
-      const seasons = SEEDS.map((seed) => {
-        const nothing = play(niche, seed, 0);
-        const best = RATES.map((rate) => play(niche, seed, rate))
+      /*
+       * Run twice, because the year's events were never part of this.
+       *
+       * Everything measured about balance in this file, and every sweep behind
+       * it, passed `withoutEvent: true` — so a season's recalls, shortages,
+       * shocks and windfalls had never been exercised against the claim that a
+       * market can be played. The first thing running it with them on found
+       * was a recall costing a flat GBP 450,000 in markets whose founders open
+       * with GBP 15,485, which is 29x everything they have.
+       */
+      const seasons = [false, true].flatMap((withEvents) => SEEDS.map((seed) => {
+        const nothing = play(niche, seed, 0, withEvents);
+        const best = RATES.map((rate) => play(niche, seed, rate, withEvents))
           .reduce((a, b) => (b.worth > a.worth ? b : a));
-        return { seed, nothing, best };
-      });
+        return { seed: withEvents ? `${seed} (with the year's events)` : seed, nothing, best };
+      }));
 
       it("gives a competent founder customers to win", () => {
         for (const { seed, best } of seasons) {
