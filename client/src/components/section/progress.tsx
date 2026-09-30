@@ -9,7 +9,6 @@ import { refreshPath, useFail } from "@/components/path-work";
 import { Clamp } from "./block";
 import { projection, type PathStatus } from "./path-types";
 import { Loader2, Sparkles, MessageSquare } from "lucide-react";
-import { NovaActionButton } from "@/components/nova-action-button";
 
 const PACE_LABEL: Record<string, string> = { active: "On pace", nudge: "Quiet week", decaying: "Slipping", dormant: "Paused" };
 const PACE_TONE: Record<string, string> = { active: "text-emerald-600", nudge: "text-amber-600", decaying: "text-amber-700", dormant: "text-muted-foreground" };
@@ -93,20 +92,6 @@ export function NovaRead({ projectId, data, adopting, onReevaluate }: { projectI
           <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setNotes(notes == null ? data.novaNotes : null)} data-testid="button-nova-notes" title="Something Nova keeps getting wrong? Tell it once; every read obeys it.">
             <MessageSquare className="h-3.5 w-3.5 mr-1" />{data.novaNotes ? "Your note" : "Tell Nova"}
           </Button>
-          {/*
-            * Next to the note and the re-evaluate, because the three are the
-            * same job at different depths: tell Nova one thing, have it
-            * re-read what is done, or have it go through the brief, the loops
-            * and the board and rewrite what no longer matches where you are.
-            */}
-          <NovaActionButton
-            projectId={projectId}
-            surface="direction"
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs"
-            label="Catch up"
-          />
           <Button size="sm" variant="outline" className="h-8 text-xs" disabled={adopting} onClick={onReevaluate} data-testid="button-reevaluate" title="Nova re-reads your brief, setup, audits and tasks, and marks what's done.">
             {adopting ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}
             {adopting ? "Re-reading…" : "Re-evaluate"}
