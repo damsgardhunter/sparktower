@@ -17,15 +17,15 @@ Last reviewed: **30 September 2026.**
 
 ## Open
 
-### 1. Seventeen write routes that no test names
+### 1. Sixteen write routes that no test names
 
 `summarizeUntestedRoutes` reports 36 of 499 routes named by no test file, 17 of
-them writes. A mention is not a test, but a route no test names is untested.
+them writes; one is now done (see *Closed*), and finding a real bug in the
+first one looked at is the argument for doing the rest. A mention is not a test, but a route no test names is untested.
 The ones that carry money or privacy:
 
 | Route | Why it matters |
 |---|---|
-| `PATCH /api/backings/:id/privacy` | a backer's choice to be anonymous |
 | `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue |
 | `POST /api/projects/:id/backing/badge-preview` | spends money on an image |
 | `GET /api/stripe/connect-onboarding` | the payout path |
@@ -102,7 +102,8 @@ statically. Worth doing, not urgent now that the sweep exists.
 | 15 of 56 money-spending routes had no kill switch; three surfaces (`tasks`, `milestones`, `projects`) owned no API prefix at all | `92389da0` | `route-guards.test.ts` (every costly route has a surface; every surface owns routes or carries a reason) + 7 outside probes in `kill-switches.test.ts` |
 | The mobile 2FA screen offered recovery codes the product had removed: a button POSTing to a route that never existed, a `recoveryCodesLeft` field the server never sent, and a promise of a way back in that could not be kept | `3a674b2f` | `mobile-api-paths.test.ts` (every `/api/...` literal under `mobile/` resolves to a mounted route; the 2FA status shape matches the route's own `res.json`) |
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
-| No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | this change | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| `PATCH /api/backings/:id/privacy` read `Boolean(req.body.isAnonymous)`, so a request that never mentioned the field — empty body, misspelled key, a retry that lost it — came out `false` and published the name of a backer who had chosen not to be listed, silently and with a 200 | this change | `backing-privacy.test.ts` (the flag must be said, not inferred; anonymity leaves the public wall and stays on the creator's roster; neither a stranger nor the project owner can change it) |
 
 ---
 

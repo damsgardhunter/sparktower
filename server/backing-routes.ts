@@ -1243,8 +1243,22 @@ export function registerBackingRoutes(app: Express) {
         return res.status(403).json({ message: "That isn't your pledge" });
       }
 
+      /*
+       * The field has to be said, not inferred.
+       *
+       * This read `Boolean(req.body.isAnonymous)`, so a request that never
+       * mentioned the field — an empty body, a misspelled key, a retry that
+       * lost it — came out `false` and put the name of somebody who had chosen
+       * not to be listed onto a public page. Silently, and with a 200. A
+       * privacy control has to fail closed: not saying "publish me" is not the
+       * same as saying it.
+       */
+      if (typeof req.body?.isAnonymous !== "boolean") {
+        return res.status(400).json({ message: "Say whether the pledge should be anonymous.", code: "invalid_input", field: "isAnonymous" });
+      }
+
       const [updated] = await db.update(projectBackings)
-        .set({ isAnonymous: Boolean(req.body.isAnonymous) })
+        .set({ isAnonymous: req.body.isAnonymous })
         .where(eq(projectBackings.id, backing.id))
         .returning();
       res.json(updated);
