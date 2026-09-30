@@ -54,7 +54,7 @@ import {
   boughtReach, dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
   statementCost, winBack, type Cover, type Shock, type ShockAnswer,
 } from "./world";
-import { valuation, applyAcquisition } from "./mergers";
+import { valuation, applyAcquisition, EARNINGS_MULTIPLE, EARNINGS_BAND} from "./mergers";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -2130,7 +2130,49 @@ export function resolveYear(
     // A year of what its customers actually pay, tier by tier.
     const sales = takings(c, c.customers, niche.segments).revenue;
     const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
-    return Math.max(0, Math.round(sales * 1.2 + assets - c.debt));
+    /*
+     * And what the company earns, which the score used to be blind to.
+     *
+     * Just over a year of sales, plus what it owns, minus what it owes — with
+     * no term anywhere for whether the sales paid for themselves. So volume was
+     * the whole of it, and a business losing money outranked a smaller one
+     * making it. Measured across twelve markets and nine ways of playing them,
+     * of every pair where one company clearly made money and the other clearly
+     * lost it, **thirty per cent had the profitable one ranked below the
+     * loss-making one**. In restaurant chains a plan earning £58,772 a quarter
+     * came eighth of nine while one losing £49,122 came fourth.
+     *
+     * That is not a close call about weighting, it is the score measuring
+     * something other than whether the business works. A revenue multiple for
+     * what has been built, and an earnings multiple for whether it pays: eight
+     * times, which is an ordinary multiple for a real business and takes those
+     * thirty per cent to **nought**.
+     *
+     * Annualised, because `sales` is a year and a period is a quarter or a
+     * month. Negative earnings subtract, which is the point — a company can be
+     * worth less than its sales suggest, and now is.
+     */
+    const earnings = (ledger[c.id]?.profit ?? 0) * periods;
+    /*
+     * Bounded, so earnings tilt the number rather than deciding it.
+     *
+     * Unbounded, an eight times multiple on a heavy loss drove every company in
+     * a hard market to the zero floor, where they all tie and the score stops
+     * saying anything at all — and on the other side it made the company that
+     * spent nothing and banked a small profit the best-scoring one in four
+     * markets, which is the opposite mistake. A band keeps both halves: being
+     * profitable is worth about as much as the sales themselves, being
+     * loss-making costs nearly as much, and neither can swamp what was built.
+     *
+     * Bent rather than clipped, for the same reason the intake bound could not
+     * be a ceiling: a hard band ties every company that reaches it, and two
+     * companies with the same sales and very different margins scored the same
+     * to the pound. `tanh` approaches the band without ever arriving, so more
+     * earnings is always worth more and the bound still holds.
+     */
+    const ceiling = sales * EARNINGS_BAND;
+    const lift = ceiling > 0 ? ceiling * Math.tanh((earnings * EARNINGS_MULTIPLE) / ceiling) : 0;
+    return Math.max(0, Math.round(sales * 1.2 + lift + assets - c.debt));
   };
   /*
    * What the founders hold: their share of the company, plus every dividend

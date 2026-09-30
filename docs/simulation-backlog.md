@@ -2569,6 +2569,46 @@ standing is supplied, and no project — however far along — opens richer than
 the funded contest. "Where you actually are" is a different question, not a
 bonus.
 
+### Closed, mostly: the score had no term for whether the business worked
+`valueOf` was `sales x 1.2 + assets - debt`. Nothing in it asked whether the
+sales paid for themselves, so volume was the whole of it. Measured across
+twelve markets and nine ways of playing them, over every pair where one company
+clearly made money and the other clearly lost it:
+
+    before   21 of 70 pairs (30%) ranked the profitable company below the loss-making one
+    after    15 of 70 (21%)
+
+In restaurant chains a plan earning £58,772 a quarter came eighth of nine while
+one losing £49,122 came fourth.
+
+There is now an earnings term at six times annualised profit, bent into a band
+of 0.75 of a year's sales either way. Both halves are necessary and both were
+found by failing:
+
+  - **Unbounded** an eight-times multiple fails in both directions at once. A
+    heavy loss drives every company in a hard market to the zero floor, where
+    they all tie and the score says nothing; and on the other side it makes the
+    company that spent nothing and banked a small profit the best-scoring one
+    in four markets.
+  - **Hard-banded** it ties again, at the band edge this time. Two companies
+    with identical sales and very different margins scored the same to the
+    pound — which is the third time a hard bound has produced exact ties in
+    this engine, after the spill and the intake.
+
+So the band is `tanh`, which approaches it without ever arriving: more earnings
+is always worth more, and the bound still holds.
+
+Twenty-one per cent is not nought, and the remainder is the band doing its job
+— a company with enormous sales and a small loss still outranks a tiny
+profitable one, which is defensible and is what the bound is for. Going further
+means weighting earnings until they decide the season, and that fails the tests
+above.
+
+This was also the thing the plant's dominance kept pointing at: there was no
+route to the score except customer count. There is one now, and it is worth
+re-running the four capacity experiments against it before concluding anything
+further about the plant.
+
 ### Open, and probably not a balance constant: keeping room decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served: keeping it is worth **2.3x to 4.6x** the company's final value
