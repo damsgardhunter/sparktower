@@ -2489,6 +2489,25 @@ same market at 7/8 with them on, and the two were compared as though they were
 the same thing. Before quoting a number from a scratch harness: check what it
 is holding constant.
 
+### Closed: the join between a real company and a season had no tests
+`company-baseline.ts` turns a business's weekly check-ins into a starting
+position for the simulator. It is read by `decision-sim-routes.ts`,
+`marketing-routes.ts` and the desk in the client, and it had **no tests at
+all** — 168 lines of translation between the two halves of the product, which
+is exactly where a number drifts without anybody noticing.
+
+Ten cases now hold it to the contract it documents for itself: a week's
+takings become a month's revenue, cash is the *latest* filed balance rather
+than an average of the bank, a field the owner has typed is never overwritten,
+and what the check-ins cannot answer is reported as missing rather than
+invented — no cost base derived from a margin from a revenue, and a software
+company's new-revenue figure is not read as a total.
+
+Checked by mutation rather than assumed: dropping the owner-override guard
+fails one case, and taking cash from the oldest week instead of the newest
+fails another. A test that passes against the bug it was written for is worth
+nothing, and two of the findings in this document were exactly that.
+
 ### Open: keeping room still decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served, keeping it is worth **2.3x to 4.6x** the company's final value
