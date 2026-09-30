@@ -18,6 +18,7 @@ export type ProjectSectionKey =
   | "valueProposition"
   | "targetCustomerProfile"
   | "successMetrics"
+  | "businessModel"
   | "scope"
   | "techStack"
   | "rolesNeeded"
@@ -46,6 +47,7 @@ export const PROJECT_SECTIONS: ProjectSectionDef[] = [
   { key: "valueProposition", label: "Value Proposition", hint: "The unique value you provide", group: "brief", defaultVisible: true },
   { key: "targetCustomerProfile", label: "Target Customer", hint: "Demographics, behaviors, pain points", group: "brief", defaultVisible: true },
   { key: "successMetrics", label: "What Success Looks Like", hint: "How you define success", group: "brief", defaultVisible: true },
+  { key: "businessModel", label: "How It Makes Money", hint: "Pricing and business model — what you charge and how", group: "brief", defaultVisible: true },
   { key: "scope", label: "Roadmap", hint: "Your MVP and nice-to-have scope items", group: "detail", defaultVisible: true },
   { key: "techStack", label: "Tech Stack", hint: "Technologies the project uses", group: "detail", defaultVisible: true },
   { key: "rolesNeeded", label: "Roles Needed", hint: "Roles you're recruiting for", group: "detail", defaultVisible: true },
@@ -136,6 +138,7 @@ export function getProjectBriefContext(project: ProjectLike): { label: string; v
   push("Description", project.description);
   push("Category", project.category);
   push("Problem it solves", project.problemStatement);
+  push("How it makes money (pricing and business model)", project.businessModel);
   push("Target user", project.targetUser);
   push("Value proposition", project.valueProposition);
   push("Target customer profile", project.targetCustomerProfile);

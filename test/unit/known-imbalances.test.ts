@@ -31,6 +31,7 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { defaultDraft } from "@shared/simulation/levers";
 import { OPENING_BUDGET } from "@shared/simulation/season";
+import { BOUGHT_REACH_FLOOR } from "@shared/simulation/world";
 import { ROLES, type Role, type TeamDecisions, type World } from "@shared/simulation/types";
 
 const held = (c: any): number =>
@@ -60,32 +61,26 @@ function play(nicheId: string, periods: number, strategy: (p: number, me: any) =
 
 
 describe("the two doors into a new region", () => {
-  it.fails("should both charge a company for reach it has not earned", () => {
-    /*
-     * `expand` — the announced region, put to the table, opened next year at
-     * 70% — reaches only as far as the brand does in its first year, and the
-     * player guide teaches that as a rule of the game: "a region opened this
-     * period is reached only as far as your brand carries". Buying one through
-     * the marketing seat's `targetCities` sets no ramp, so `regionalReach`
-     * reads `?? 1` and the company has the whole region from the day it pays.
-     *
-     * That leaves the designed mechanic worse on five axes out of six: year
-     * four against period one, one announced region against any, a majority of
-     * the table against nobody's agreement, a year's delay against none, and a
-     * ramp against none — for 30% off.
-     *
-     * Applying the ramp to a bought region is four lines, and it was tried:
-     * `balance.test.ts` went from two-plus teams finishing with a business to
-     * one. Those markets are tuned against regions being fully reached the
-     * period they are paid for, so making the rule consistent means re-tuning
-     * expansion economics rather than adding a ramp.
-     */
+  /**
+   * Fixed, and kept here as the guard it turned into.
+   *
+   * `expand` — the announced region, put to the table, opened a year later at
+   * 70% — reaches only as far as the brand does in its first year, and the
+   * player guide teaches that as a rule of the game. Buying a region through
+   * the marketing seat's `targetCities` set no ramp at all, so the company had
+   * the whole region from the day it paid, and the rule was untrue for anybody
+   * who had found the other lever. That left the designed mechanic worse on
+   * five axes out of six — year four against period one, one announced region
+   * against any, a majority of the table against nobody's agreement, a year's
+   * delay against none, and a ramp against none — for 30% off.
+   *
+   * Both doors charge for reach now. They do not charge the same, which is the
+   * difference worth keeping: a company that paid full price to walk in chose
+   * its moment, so it starts from a floor rather than from its brand alone.
+   * See `BOUGHT_REACH_FLOOR`, which is set by what the catalogue bears.
+   */
+  it("charges a company for reach it has not earned, whichever door it used", () => {
     const niche = nicheById("dating_apps")!;
-    /*
-     * Asserted on customers rather than on the `ramp` field, because `ramp` is
-     * deliberately cleared at the end of the period it applies to — reading it
-     * afterwards says nothing either way.
-     */
     const firstPeriod = (cities?: string[]) => {
       const world = buildWorld({
         seasonId: "known-door", niche, cadence: "quarterly",
@@ -101,33 +96,21 @@ describe("the two doors into a new region", () => {
 
     const home = firstPeriod();
     const homeWeight = niche.cities.find((c) => c.id === home.me.cities[0])!.weight;
-    /* The largest region the company could buy into on day one. */
     const bought = [...niche.cities]
       .filter((c) => !home.me.cities.includes(c.id) && c.entryCost <= OPENING_BUDGET)
       .sort((a, b) => b.weight - a.weight)[0];
     const wider = firstPeriod([bought.id]);
 
-    /*
-     * Brand opens at 8, so `firstYearReach` is its floor of 15%. A region
-     * reached at 15% should add about a seventh of what reaching it in full
-     * would add; the test allows half, which is generous and still nowhere
-     * near what full reach gives.
-     */
-    const ifReachedInFull = 1 + bought.weight / homeWeight;
+    const times = bought.weight / homeWeight;
     const actual = wider.held / Math.max(1, home.held);
-    expect(actual, `buying a region ${(bought.weight / homeWeight).toFixed(1)}x the size of home multiplied customers by ${actual.toFixed(2)}, against ${ifReachedInFull.toFixed(2)} for reaching it in full`)
-      .toBeLessThan(1 + (bought.weight / homeWeight) * 0.5);
+    /* Reaching it in full would be `1 + times`. The floor is what it actually gets. */
+    expect(actual, `a bought region ${times.toFixed(1)}x the size of home multiplied customers by ${actual.toFixed(2)}, against ${(1 + times).toFixed(2)} for reaching it in full`)
+      .toBeLessThan(1 + times * (BOUGHT_REACH_FLOOR + 0.1));
+    /* And it is worth buying: paying full price gets you further in than announcing would. */
+    expect(actual, "a bought region is not worth the money").toBeGreaterThan(1 + times * 0.2);
   });
 });
 
-/**
- * Fixed, and kept here as the guard it turned into.
- *
- * An annual discount used to be the right call in every market at every depth,
- * all the way to its cap. Coming off the plan is charged now — see
- * `ANNUAL_UNWIND` — so there is a depth past which it is the wrong call, and
- * two markets where going to the cap is worse than never offering one.
- */
 describe("an annual discount", () => {
   /*
    * Fixed, and kept here as the guard it turned into.

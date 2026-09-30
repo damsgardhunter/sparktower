@@ -380,3 +380,35 @@ export function expansionOutcome(votes: ("yes" | "no")[]): { carried: boolean; y
 
 /** How much of a newly opened region a company reaches in its first year there: as far as its brand does. */
 export const firstYearReach = (brand: number): number => Math.max(0.15, Math.min(1, brand / 60));
+
+/**
+ * The same, for a region a company bought outright rather than announced.
+ *
+ * There are two doors into a new region and only one of them charged for reach
+ * it had not earned. `expand` — the announced region, put to the table, opened
+ * a year later at 70% — ramps by brand. Buying one through the marketing
+ * seat's `targetCities` set no ramp at all, so the company had the whole
+ * region from the day it paid, and the rule the player guide teaches as a rule
+ * of the game was untrue for anybody who had found the other lever.
+ *
+ * It does not ramp the same way, though, and that is the difference worth
+ * keeping rather than flattening. A company that announced a region a year
+ * ahead arrives with nothing but its brand in front of it. A company that paid
+ * full price to walk in chose its moment and paid for the privilege — so it
+ * starts from a floor rather than from its reputation alone, and only a brand
+ * worth more than that floor carries it further.
+ *
+ * The floor is what the balance actually bears, not a taste. Ramping a bought
+ * region exactly as an announced one is a four-line change and it costs the
+ * catalogue its balance — `balance.test.ts` drops from two-plus teams
+ * finishing with a business to one, because those markets are tuned against
+ * regions being fully reached the period they are paid for. Measured: a floor
+ * of 0.15 fails it, and 0.4 upwards passes. At 0.5 a company buying a region
+ * 1.7 times the size of its home multiplies its customers by 1.85 in that
+ * first period, against 2.70 for reaching it in full — so the rule bites
+ * through both doors now, and the door you pay 30% more for is the one that
+ * gets you further in.
+ */
+export const BOUGHT_REACH_FLOOR = 0.5;
+export const boughtReach = (brand: number): number =>
+  Math.max(BOUGHT_REACH_FLOOR, firstYearReach(brand));

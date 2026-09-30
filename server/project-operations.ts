@@ -128,7 +128,7 @@ export interface AppliedChange {
 /** The op vocabulary, verbatim, for embedding in a prompt. */
 export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Valid operations:
 
-{ "op": "update_project", "fields": { "oneLiner"|"mission"|"valueProposition"|"targetCustomerProfile"|"problemStatement"|"targetUser"|"successMetrics": "new text", "techStack": ["React","Express"], "repoUrl": "https://…", "liveUrl": "https://…", "status": "planning"|"active"|"completed" } }
+{ "op": "update_project", "fields": { "oneLiner"|"mission"|"valueProposition"|"targetCustomerProfile"|"problemStatement"|"targetUser"|"successMetrics"|"businessModel": "new text", "techStack": ["React","Express"], "repoUrl": "https://…", "liveUrl": "https://…", "status": "planning"|"active"|"completed" } }
    // "techStack" REPLACES the list. Use it to correct a stale stack against what an audit found in the code.
 { "op": "update_scope", "mvp": ["short feature name"], "niceToHave": ["short feature name"], "replace": false, "expect": { "mvp": ["the bucket exactly as you were shown it"] } }   // by default a list you send is ADDED to that bucket; omit a bucket to leave it alone. To drop items, send "replace": true AND "expect" with the bucket exactly as the current state shows it — the edit is refused if it changed since, so nothing added meanwhile is lost
 { "op": "create_task", "title": "", "description": "", "priority": "low"|"medium"|"high", "estimateHours": 3, "tags": ["short label"], "milestoneId": "the milestone this is work toward, or null", "dueDate": "YYYY-MM-DD", "subtasks": [{ "title": "" }] }
@@ -155,6 +155,8 @@ Only include the fields you are changing. Only ever use ids that appear in the p
 const BRIEF_FIELDS = [
   "oneLiner", "mission", "valueProposition", "targetCustomerProfile",
   "problemStatement", "targetUser", "successMetrics",
+  /* How the project charges. Nova could read it before it could write it. */
+  "businessModel",
 ] as const;
 
 const TASK_STATUSES = ["todo", "in-progress", "review", "done"];

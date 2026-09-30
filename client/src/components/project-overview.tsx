@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import {
+import { Banknote,
   Compass, Quote, Target, Users2, Sparkles, UserSearch, TrendingUp,
   CircleDot, ListChecks, Settings2,
 } from "lucide-react";
@@ -19,6 +19,7 @@ const BRIEF_CARDS: { key: ProjectSectionKey; icon: typeof Target; accent: string
   { key: "valueProposition", icon: Sparkles, accent: "text-amber-500" },
   { key: "targetCustomerProfile", icon: UserSearch, accent: "text-violet-500" },
   { key: "successMetrics", icon: TrendingUp, accent: "text-emerald-500" },
+  { key: "businessModel", icon: Banknote, accent: "text-teal-500" },
 ];
 
 interface ProjectOverviewProps {

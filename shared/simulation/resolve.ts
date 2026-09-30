@@ -51,7 +51,7 @@ import { automationCost, automationEffect, automationNext, shiftCapacity, sourci
 import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./treasury";
 import {
   DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers, expansionOutcome,
-  dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
+  boughtReach, dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
   statementCost, winBack, type Cover, type Shock, type ShockAnswer,
 } from "./world";
 import { valuation, applyAcquisition } from "./mergers";
@@ -972,6 +972,8 @@ export function resolveYear(
     let expanding = company.expanding;
     let citiesNow = cities;
     const ramp: Record<string, number> = {};
+    /* A region bought outright is reached from a floor, not in full. See `boughtReach`. */
+    for (const city of opened) ramp[city.id] = boughtReach(company.brand);
     if (expanding && expanding.opensYear === world.year) {
       if (!citiesNow.includes(expanding.cityId)) {
         citiesNow = [...citiesNow, expanding.cityId];

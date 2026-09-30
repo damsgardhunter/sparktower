@@ -1,0 +1,11 @@
+-- How the project makes money, in the builder's words.
+--
+-- The brief every Nova prompt reads had no pricing or business model in it at
+-- all — not a field, not a section — so no Nova read on any surface could know
+-- how a project charges. A builder asking why Nova keeps getting their pricing
+-- wrong was being answered by a prompt that had never been told it.
+--
+-- Its own column rather than a line in the description, because the brief is
+-- assembled field by field (shared/project-sections.ts) and anything that is
+-- not a field is not in the prompt.
+ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "business_model" text;

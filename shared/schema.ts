@@ -213,6 +213,14 @@ export const projects = pgTable("projects", {
   problemStatement: text("problem_statement"),
   targetUser: text("target_user"),
   successMetrics: text("success_metrics"),
+  /**
+   * How the project makes money, in the builder's words.
+   *
+   * Part of the brief every Nova prompt reads, because a model asked to
+   * reason about a business without knowing how it charges will invent an
+   * answer — and did. See shared/project-sections.ts.
+   */
+  businessModel: text("business_model"),
   scope: jsonb("scope"),
   oneLiner: text("one_liner"),
   mission: text("mission"),

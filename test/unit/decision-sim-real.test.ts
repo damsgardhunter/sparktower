@@ -15,7 +15,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  answer, runMonths, ruinRisk, subscriptionAt, seasonalFactor, emptyBaseline, cleanMonths,
+  answer, runMonths, ruinRisk, subscriptionAt, priceAtAge, seasonalFactor, emptyBaseline, cleanMonths,
   HORIZONS, DEFAULT_MONTHS, MAX_MONTHS,
   type Baseline, type SubscriptionLever,
 } from "../../shared/simulation/decision-sim";
@@ -527,5 +527,52 @@ describe("a season that reaches the business being built, not just the one alrea
       // The same proportional uplift every month, whatever the season is doing.
       expect(uplift).toBeCloseTo(r.months[0].revenue / plain.months[0].revenue, 3);
     }
+  });
+});
+
+/**
+ * What a subscriber pays as they get older.
+ *
+ * `priceErosion` is written to read as the number an owner would say out loud
+ * — "we lose about five per cent a year on price" is 0.05 — so it compounds
+ * annually while everything else in this engine runs monthly. That is the one
+ * place in the file where a rate is *not* divided by twelve, and it is right
+ * not to be, which is exactly why it is worth pinning: the same shape read the
+ * other way round has been a real bug five times over in the season engine.
+ */
+describe("a subscription price, a year or two in", () => {
+  const sub = (over: Partial<SubscriptionLever> = {}): SubscriptionLever => ({
+    kind: "subscription", label: "Members", startMonth: 1,
+    monthlyAmount: 500, months: 0, newCustomersAtFull: 20, newCustomersFromHours: 0,
+    halfSpend: 500, pricePerMonth: 40, monthlyChurn: 0.05, priceErosion: 0.1,
+    ownerHoursAMonth: 0, reinvest: 0, ceiling: 0, costToServe: 0,
+    ...over,
+  } as SubscriptionLever);
+
+  it("erodes by the year, not by the month", () => {
+    const lever = sub({ pricePerMonth: 100, priceErosion: 0.1 });
+    expect(priceAtAge(lever, 0), "a new subscriber pays the price on the tin").toBe(100);
+    expect(priceAtAge(lever, 12), "a year in, ten per cent off").toBeCloseTo(90, 6);
+    expect(priceAtAge(lever, 24), "two years in, ten per cent off that").toBeCloseTo(81, 6);
+    /*
+     * The failure this guards against: read as a *monthly* rate, a year would
+     * take the price to 28 rather than 90, and a plan built on subscriptions
+     * would come back saying the business collapses.
+     */
+    expect(priceAtAge(lever, 12)).toBeGreaterThan(100 * Math.pow(0.9, 12) * 2);
+  });
+
+  it("leaves a price alone when nothing erodes it", () => {
+    const steady = sub({ pricePerMonth: 40, priceErosion: 0 });
+    for (const age of [0, 6, 18, 36]) expect(priceAtAge(steady, age)).toBe(40);
+  });
+
+  it("survives a lever stored before erosion existed", () => {
+    /*
+     * `Math.pow(NaN, x)` is NaN all the way down, and a NaN price silently
+     * becomes a NaN revenue and a projection of nothing at all.
+     */
+    const old = { ...sub(), priceErosion: undefined as unknown as number };
+    expect(priceAtAge(old, 24)).toBe(old.pricePerMonth);
   });
 });
