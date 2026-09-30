@@ -2609,6 +2609,46 @@ route to the score except customer count. There is one now, and it is worth
 re-running the four capacity experiments against it before concluding anything
 further about the plant.
 
+### Open, and a product question: nothing a founder decides pays off in a monthly season
+Balance had only ever been measured quarterly. Running the winnability sweep at
+a monthly rhythm found it immediately. Building the business, measured against
+doing nothing at all, by how many years the season runs:
+
+    podcasts          2yr 1.00x   3yr 1.00x   4yr 1.49x
+    project_saas      2yr 1.00x   3yr 1.00x   4yr 1.41x
+    restaurant_chain  2yr 1.01x   3yr 1.02x   4yr 1.25x
+    dating_apps       2yr 1.01x   3yr 1.01x   4yr 1.58x
+    mmos              2yr 1.08x   3yr 1.08x   4yr 1.72x
+
+`DEFAULT_YEARS` gives monthly two years, reasoning that "every lag in this game
+is a year long ... two years is the shortest span in which a monthly table sees
+its own work arrive". The direction was right and the number is not.
+
+**It is not the rhythm.** A *quarterly* season cut to two years is just as flat
+(3,057,729 doing nothing against 3,051,750 spending), and a monthly season given
+four years pays *better* than a quarterly one (12,768,910 against 11,072,392).
+It is the length, and monthly is simply the cadence whose default is short.
+
+That matters more than it sounds, because monthly is the option the product
+offers as "closest to your actual week" — the one a founder rehearsing their own
+business is steered towards, and the one where nothing they decide pays for
+itself.
+
+Why this is not just changed: four years of monthly is 48 decisions, and a
+season resolves about one a day. The fix is either a season far longer than a
+fortnight, or shortening the lags for a monthly season so work lands sooner —
+both product decisions. What was done instead: the winnability guard now runs
+monthly and holds it to customers, solvency and running at a profit, with this
+measurement written where it will be read.
+
+Worth noting the near-miss. A first run of the monthly sweep looked like a
+cadence bug — one market went bankrupt and annualised costs came out 15x
+quarterly's. It was the harness spending a share of the bank *per decision*
+rather than per year, so a monthly season spent three times as much: marketing,
+product and operations all came out at exactly 3x annualised while salaries and
+idle capacity matched, which is the tell. Third time this week the harness was
+the finding.
+
 ### Open, and probably not a balance constant: keeping room decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served: keeping it is worth **2.3x to 4.6x** the company's final value

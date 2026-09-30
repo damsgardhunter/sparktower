@@ -46,17 +46,29 @@ const held = (c: any) => Object.values(c?.customers ?? {}).reduce((sum: number, 
  * point is that an ordinary competent plan works everywhere, not that a
  * market-specific one does.
  */
-function play(niche: any, seasonId: string, rate: number, withEvents = false) {
+function play(niche: any, seasonId: string, rate: number, withEvents = false, cadence: "quarterly" | "monthly" = "quarterly") {
   let world: World = buildWorld({
-    seasonId, niche, cadence: "quarterly",
+    seasonId, niche, cadence,
     teams: [{ id: "me", name: "Mine", seats: [...ROLES] as Role[], officers: 1 }],
   });
   let previous: any;
   let last: any;
   let profitable = 0;
-  for (let period = 1; period <= 16; period++) {
+  const spans = cadence === "monthly" ? 24 : 16;
+  for (let period = 1; period <= spans; period++) {
     const me: any = world.companies.find((c) => c.id === "me")!;
-    const spend = Math.max(0, Number(me.cash) * rate);
+    /*
+     * A share of the bank each *year*, not each decision.
+     *
+     * `RATES` is written per quarter, and a monthly season decides three times
+     * as often — so spending the same fraction every period spends three times
+     * as much a year, which made a monthly season look like the engine was
+     * broken when it was this line. Marketing, product and operations all came
+     * out at exactly 3x annualised while salaries and idle capacity matched,
+     * which is the tell. It is the same mistake `cadence.ts` exists to warn
+     * about, made in the harness rather than the engine.
+     */
+    const spend = Math.max(0, Number(me.cash) * rate * (4 / (cadence === "monthly" ? 12 : 4)));
     const want: Record<string, any> = {
       ceo: { focus: period <= 6 ? "quality" : "growth" },
       cmo: { brandSpend: Math.round(spend * 0.25), performanceSpend: Math.round(spend * 0.15) },
@@ -97,12 +109,27 @@ describe("every market can be won", () => {
        * was a recall costing a flat GBP 450,000 in markets whose founders open
        * with GBP 15,485, which is 29x everything they have.
        */
-      const seasons = [false, true].flatMap((withEvents) => SEEDS.map((seed) => {
-        const nothing = play(niche, seed, 0, withEvents);
-        const best = RATES.map((rate) => play(niche, seed, rate, withEvents))
-          .reduce((a, b) => (b.worth > a.worth ? b : a));
-        return { seed: withEvents ? `${seed} (with the year's events)` : seed, nothing, best };
-      }));
+      /*
+       * Three ways round, because balance had only ever been measured one of
+       * them. Every sweep behind this file ran quarterly with events off, so
+       * neither a season's events nor the rhythm a founder actually decides on
+       * — `project-simulation-routes.ts` calls monthly "closest to your actual
+       * week" — had been held to the claim that a market can be played.
+       */
+      const seasons = [
+        ...[false, true].flatMap((withEvents) => SEEDS.map((seed) => {
+          const nothing = play(niche, seed, 0, withEvents);
+          const best = RATES.map((rate) => play(niche, seed, rate, withEvents))
+            .reduce((a, b) => (b.worth > a.worth ? b : a));
+          return { seed: withEvents ? `${seed} (with the year's events)` : seed, nothing, best };
+        })),
+        ...SEEDS.map((seed) => {
+          const nothing = play(niche, seed, 0, true, "monthly");
+          const best = RATES.map((rate) => play(niche, seed, rate, true, "monthly"))
+            .reduce((a, b) => (b.worth > a.worth ? b : a));
+          return { seed: `${seed} (deciding monthly)`, nothing, best };
+        }),
+      ];
 
       it("gives a competent founder customers to win", () => {
         for (const { seed, best } of seasons) {
@@ -117,7 +144,37 @@ describe("every market can be won", () => {
       });
 
       it("pays better than filing nothing", () => {
+        /*
+         * Not asked of a monthly season, and this is the measurement why.
+         *
+         * `DEFAULT_YEARS` gives monthly two years, on the reasoning that "every
+         * lag in this game is a year long ... two years is the shortest span in
+         * which a monthly table sees its own work arrive". The direction is
+         * right and the number is not. Building the business, against doing
+         * nothing at all, by season length:
+         *
+         *     podcasts          2yr 1.00x   3yr 1.00x   4yr 1.49x
+         *     project_saas      2yr 1.00x   3yr 1.00x   4yr 1.41x
+         *     restaurant_chain  2yr 1.01x   3yr 1.02x   4yr 1.25x
+         *     dating_apps       2yr 1.01x   3yr 1.01x   4yr 1.58x
+         *     mmos              2yr 1.08x   3yr 1.08x   4yr 1.72x
+         *
+         * It is not the rhythm: a *quarterly* season cut to two years is just
+         * as flat (3,057,729 doing nothing against 3,051,750 spending), and a
+         * monthly season given four years pays better than a quarterly one
+         * (12,768,910 against 11,072,392). It is the length. Monthly is the
+         * option the product calls "closest to your actual week", and it is the
+         * one where nothing a founder decides pays for itself.
+         *
+         * Lengthening it is not obviously right either — four years of monthly
+         * is 48 decisions, and a season resolves about one a day — so it is
+         * written up in `docs/simulation-backlog.md` as a product question
+         * rather than changed here. What monthly *is* held to is everything
+         * else below: customers, solvency, and a season that can be run at a
+         * profit.
+         */
         for (const { seed, best, nothing } of seasons) {
+          if (seed.includes("monthly")) continue;
           expect(best.worth, `${niche.id} on seed "${seed}": playing well was worth no more than doing nothing`)
             .toBeGreaterThan(nothing.worth);
         }
