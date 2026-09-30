@@ -1049,6 +1049,7 @@ export function resolveYear(
       // A marketing seat that filed sets the tiers; one that did not leaves them as they were.
       tiers: d.cmo ? d.cmo.tiers : company.tiers,
       retention: annualPlans(d.cfo?.annualDiscount).retention,
+      unwind: annualPlans(d.cfo?.annualDiscount).unwind,
       // What customers are given to pay, which is part of the offer (see `treasury.ts`).
       terms: d.cfo?.terms,
       pipeline: quality.pipeline,
@@ -1942,7 +1943,7 @@ export function resolveYear(
     }
 
     // Capacity ordered this year opens now that the year is over.
-    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
+    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, unwind: _unwind, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
     return {
       ...rest,
       ...(company.kind === "player"

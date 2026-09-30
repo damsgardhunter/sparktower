@@ -1,26 +1,29 @@
 /**
- * The balance problems that are measured, understood, and still here.
+ * Balance problems measured over whole seasons: the ones still open, and the
+ * guards left behind by the ones that closed.
  *
- * Everything in this file is written with `it.fails`, which asserts that the
- * test does *not* pass. Each one states the property the game ought to have,
- * with the measurement that showed it does not. That makes this the executable
- * half of `docs/simulation-backlog.md`: the prose says what is owed, and these
- * say it in a way that cannot quietly stop being true.
+ * A problem still open is written with `it.fails`, which asserts that the test
+ * does *not* pass. It states the property the game ought to have and carries
+ * the measurement that showed it does not, so this file is the executable half
+ * of `docs/simulation-backlog.md` — the prose says what is owed and these say
+ * it in a way that cannot quietly stop being true.
  *
- * Two things follow from that, and both are the point:
- *
- *  - Fix one of these and its test starts failing, because a `.fails` test
- *    that passes is a failure. That is the alarm. Delete the `.fails` and the
- *    assertion becomes an ordinary guard against the bug coming back.
+ *  - Fix one and its test starts failing, because a `.fails` test that passes
+ *    is a failure. That is the alarm. Drop the `.fails` and the assertion
+ *    becomes an ordinary guard against the bug coming back.
  *  - Nothing here is skipped. A skipped test is one nobody reads again.
  *
- * Why none of these were simply fixed: each is a tuning judgement against
- * markets balanced over years of play, not an arithmetic defect. Where this
- * sitting found arithmetic — a year's rate charged for a period, absolute
- * money in a scaled market, copy describing a cost no code applied — it was
- * fixed and guarded by an ordinary test. These are the ones where the
- * arithmetic is honest and the *design* is the question, so the measurement is
- * recorded and the call left to somebody who can make it.
+ * Four have been through that cycle. Three were fixed — bots opening where no
+ * company could survive, bots unable to pay for a region out of a period's
+ * marketing budget, and an annual discount that was best at its cap in every
+ * market. The fourth, price tiers, was **withdrawn**: the measurement behind it
+ * compared one tier setting, the best one, against no tiers at all, which asks
+ * whether a well-set lever beats not using it. That is true of every lever in
+ * the game and is not the standard. Swept properly the lever was fine, and the
+ * guards below are what is left of it.
+ *
+ * Two of the four turned out to be the test being wrong rather than the game,
+ * which is worth knowing before writing the next one.
  */
 import { describe, it, expect } from "vitest";
 import { buildWorld } from "@shared/simulation/season";
@@ -54,61 +57,6 @@ function play(nicheId: string, periods: number, strategy: (p: number, me: any) =
   }
   return { worth: last.value ?? 0, customers: held(world.companies.find((c) => c.id === "me")) };
 }
-
-describe("levers that are always the right answer", () => {
-  /**
-   * `responsibilities.ts` sets the standard these fail:
-   *
-   *   "Each one was built to have a real trade-off … a range where it helps,
-   *    and a setting where it hurts. A lever that only ever helps is a tax on
-   *    not noticing it; a lever that never helps is decoration."
-   */
-  it.fails("annual plans should cost more than they buy somewhere", () => {
-    /*
-     * Measured over twenty-four quarters, worth at the cap against worth with
-     * no plan: dating apps +152,448, restaurant chain +134,971, project
-     * management +128,766 — 20% to 40% of the company, in every market, and
-     * monotonically better all the way to `ANNUAL_DISCOUNT_MAX`. Only MMOs has
-     * a peak below the cap.
-     *
-     * The arithmetic is honest: about 13% of revenue buys about 21% less
-     * churn. In markets whose segments are this flighty (loyalty 0.24 to 0.38)
-     * reduced churn compounds over a season while the discount is charged once
-     * a period, so it wins. What is missing is a market or a setting where the
-     * discount costs more than the retention is worth.
-     */
-    const hurts = NICHES.filter((n) => {
-      const none = play(n.id, 16, () => ({ cfo: { annualDiscount: 0 } }));
-      const deep = play(n.id, 16, () => ({ cfo: { annualDiscount: 30 } }));
-      return deep.worth < none.worth;
-    });
-    expect(hurts.length, "no market where an annual discount is the wrong call").toBeGreaterThan(0);
-  });
-
-  it.fails("price tiers should be the wrong call somewhere", () => {
-    /*
-     * A tier at each segment's own reference price beats a single list price
-     * in every market. Drone delivery 197,010 → 601,380; podcasts 262,399 →
-     * 483,481. The gain tracks the spread in what segments will pay — drone
-     * delivery's dearest segment pays 28 times its cheapest — so this is price
-     * discrimination behaving correctly, and a business with that spread
-     * genuinely must segment.
-     *
-     * The level of each tier is a real decision. *Whether* to set tiers at all
-     * is not, and a table that has not found the lever is playing at a
-     * two-thirds handicap without being told.
-     */
-    const hurts = NICHES.filter((n) => {
-      const niche = nicheById(n.id)!;
-      const list = play(n.id, 16, () => ({}));
-      const tiered = play(n.id, 16, () => ({
-        cmo: { tiers: Object.fromEntries(niche.segments.map((s) => [s.id, Math.round(s.referencePrice)])) },
-      }));
-      return tiered.worth < list.worth;
-    });
-    expect(hurts.length, "no market where a single list price beats tiers").toBeGreaterThan(0);
-  });
-});
 
 
 describe("the two doors into a new region", () => {
@@ -169,5 +117,90 @@ describe("the two doors into a new region", () => {
     const actual = wider.held / Math.max(1, home.held);
     expect(actual, `buying a region ${(bought.weight / homeWeight).toFixed(1)}x the size of home multiplied customers by ${actual.toFixed(2)}, against ${ifReachedInFull.toFixed(2)} for reaching it in full`)
       .toBeLessThan(1 + (bought.weight / homeWeight) * 0.5);
+  });
+});
+
+/**
+ * Fixed, and kept here as the guard it turned into.
+ *
+ * An annual discount used to be the right call in every market at every depth,
+ * all the way to its cap. Coming off the plan is charged now — see
+ * `ANNUAL_UNWIND` — so there is a depth past which it is the wrong call, and
+ * two markets where going to the cap is worse than never offering one.
+ */
+describe("an annual discount", () => {
+  /*
+   * Fixed, and kept here as the guard it turned into.
+   *
+   * It used to be the right call in every market at every depth, all the way
+   * to its cap: worth 20% to 40% of the company and monotonically better the
+   * deeper it went. Coming off the plan is charged now — a year at 30% under
+   * list makes the list price a 43% rise, and a rise on people already paying
+   * is what this market has always said they leave over. That cost is
+   * `d / (1 - d)`, so it grows faster than the discount and the lever has an
+   * interior best. See `ANNUAL_UNWIND`.
+   *
+   * Sixteen quarters rather than twenty-four, which is the length a custom
+   * season is actually sold at. Past about twenty the do-nothing baseline dies
+   * in most economies, and a measurement of a dead company says nothing about
+   * the lever.
+   */
+  const DEPTHS = [0, 10, 20, 30];
+  const worthAt = (nicheId: string) => DEPTHS.map((d) => play(nicheId, 16, () => ({ cfo: { annualDiscount: d } })).worth);
+
+  it("does not reward going to the cap", () => {
+    for (const n of NICHES) {
+      const worth = worthAt(n.id);
+      const best = DEPTHS[worth.indexOf(Math.max(...worth))];
+      expect(best, `${n.id}: the deepest discount is the best one, at ${worth.map(Math.round).join(" / ")}`)
+        .toBeLessThan(30);
+    }
+  });
+
+  it("is still worth taking", () => {
+    // The other half of the standard: a lever that never helps is decoration.
+    const helps = NICHES.filter((n) => {
+      const worth = worthAt(n.id);
+      return Math.max(...worth) > worth[0];
+    });
+    expect(helps.length, `a plan is worth offering in only ${helps.length} of ${NICHES.length} markets`)
+      .toBeGreaterThanOrEqual(5);
+  });
+});
+
+/**
+ * Not an imbalance, and this is the correction.
+ *
+ * Price tiers were written up as "never the wrong call" on a measurement that
+ * compared *one* tier setting — each segment at its own reference price, which
+ * is the best setting there is — against a single list price. That asks
+ * whether a well-set lever beats not using it, which is true of every lever in
+ * the game and is not the standard.
+ *
+ * Swept properly, tiers behave like the price they are: every market has an
+ * interior best, and both ends are punished. Undercutting every segment is
+ * worse than one list price in four of the seven markets, and pricing every
+ * segment at twice what it expects takes several of them to nothing.
+ */
+describe("price tiers", () => {
+  const MULTS = [0.6, 1.0, 2.2];
+  const worthAt = (nicheId: string) => {
+    const niche = nicheById(nicheId)!;
+    return MULTS.map((m) => play(nicheId, 16, () => ({
+      cmo: { tiers: Object.fromEntries(niche.segments.map((s) => [s.id, Math.round(s.referencePrice * m)])) },
+    })).worth);
+  };
+
+  it("has a best setting that is not at either end", () => {
+    for (const n of NICHES) {
+      const [low, middle, high] = worthAt(n.id);
+      expect(middle, `${n.id}: undercutting every segment beats pricing at what they expect`).toBeGreaterThan(low);
+      expect(middle, `${n.id}: doubling every segment's price beats pricing at what they expect`).toBeGreaterThan(high);
+    }
+  });
+
+  it("can be set badly enough to be worse than one price for everybody", () => {
+    const worse = NICHES.filter((n) => worthAt(n.id)[0] < play(n.id, 16, () => ({})).worth);
+    expect(worse.length, "no market where a single list price beats badly-set tiers").toBeGreaterThan(0);
   });
 });

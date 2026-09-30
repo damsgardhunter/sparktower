@@ -526,6 +526,12 @@ export interface Company {
    * Set on the way into the market from the annual plans on offer; never stored.
    */
   retention?: number;
+  /**
+   * And the churn when those plans end and the list price comes back, as an
+   * annual rate. Set from the same decision as `retention` and cleared with
+   * it. See `annualPlans`.
+   */
+  unwind?: number;
   /** Room leased for this year only. Set on the way into the market; never stored. */
   leased?: number;
   /** The five chairs as people: how loyal, how good, how hard pushed. See `people.ts`. */

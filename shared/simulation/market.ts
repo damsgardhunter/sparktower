@@ -615,7 +615,18 @@ export function allocate(
       const rise = Math.max(0, priceFor(c, segment.id) / was - 1);
       const resented = Math.min(0.2, rise * (1.3 - segment.loyalty) * 0.5);
       const shopping = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), resented) * (1 - locked) * per;
-      const leaveRate = Math.max(shopping, unaffordable);
+      /*
+       * And the annual plans that ended this period, whose holders are now
+       * looking at the list price for the first time in a year. That is a rise
+       * on people already paying — the thing this loop has always said they
+       * leave over — and it is the one cost of a deep discount that does not
+       * scale linearly with the discount. See `annualPlans`.
+       *
+       * Forgiven the same way an ordinary rise is: a devoted segment shrugs at
+       * it and a flighty one walks.
+       */
+      const unwinding = Math.max(0, c.unwind ?? 0) * per * (1.3 - segment.loyalty);
+      const leaveRate = Math.min(1, Math.max(shopping, unaffordable) + unwinding);
       /*
        * And last year's deal-chasers: customers a promotion won, who leave
        * faster than the rest once the deal is over.

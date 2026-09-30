@@ -300,14 +300,18 @@ competent play:
 Three levers, **+57%**, none of which has a setting where it hurts. A player
 who finds them takes all three every time, which makes them not decisions.
 
-- **`annualDiscount` is monotonically best at its cap in every market.** Worth
-  20–40% of the company: dating apps +152,448, restaurant chain +134,971,
-  project management +128,766. The arithmetic is honest — about 13% of revenue
-  buys about 21% less churn — but in markets this flighty (loyalty 0.24 to
-  0.38) reduced churn compounds over a season while the discount is charged
-  once a period. Only MMOs has a peak below the cap. There is no arithmetic
-  error here, which is why it has been left alone: it is a tuning judgement
-  against markets that are balanced around the current number.
+- ~~**`annualDiscount` is monotonically best at its cap in every market.**~~
+  **Done.** Giving away `d` cost `d`, and what it bought — customers who cannot
+  leave — was worth the same at every depth, so deeper was always better and the
+  lever's range collapsed onto its cap.
+
+  What was missing is what happens when the plan ends: a year at 30% under list
+  makes the list price a 43% rise, and a rise on people already paying is what
+  this market has always said they walk out over. It is also the only cost here
+  that does not scale linearly, since the step back up is `d / (1 - d)`. See
+  `ANNUAL_UNWIND`, calibrated to 0.3. The cap is now the best setting in none of
+  the seven markets, a shallow plan is worth taking in six of seven, and two
+  markets are worse at the cap than with no plan at all.
 
   Worth knowing: `responsibilities.ts` says every lever "was built to have a
   real trade-off, and the tests hold them to it: a range where it helps, and a
@@ -316,15 +320,20 @@ who finds them takes all three every time, which makes them not decisions.
   period. The property the comment claims is not actually tested here, which is
   the same blind spot that hid the price bug.
 
-- **Price tiers are worth up to three times the company, and are never wrong.**
-  Setting a tier at each segment's reference price beats a single list price in
-  every market: drone delivery 197,010 → 601,380, podcasts 262,399 → 483,481.
-  The gain tracks the spread in what segments will pay (drone delivery's widest
-  segment pays 28× its narrowest). That is price discrimination behaving
-  correctly — a business with that spread *must* segment — and the level of
-  each tier is a real decision. But *whether* to use tiers is not, and in a
-  wide-spread market a table that has not found the lever is playing at a
-  two-thirds handicap without being told.
+- ~~**Price tiers are worth up to three times the company, and are never
+  wrong.**~~ **Withdrawn — the measurement was wrong.** It compared *one* tier
+  setting, each segment at its own reference price, which is the best setting
+  there is, against a single list price. That asks whether a well-set lever
+  beats not using it, which is true of every lever in the game.
+
+  Swept across settings, tiers behave like the price they are. Every market has
+  an interior best and both ends are punished: undercutting every segment is
+  worse than one list price in four of the seven markets (restaurant chain
+  606,622 → 527,817, construction 230,040 → 109,806, project management 540,474
+  → 394,084, MMOs 135,324 → 94,637), and pricing every segment at 2.2× what it
+  expects takes three of them to nothing. Leakage was already modelled —
+  `TIER_LEAK`, and a premium tier set far above the rest is partly a price
+  nobody pays. The lever meets the standard; the test did not.
 
 **Things that look dead and are not.** Several levers moved nothing in the
 sweep because their preconditions were absent, not because they are broken:

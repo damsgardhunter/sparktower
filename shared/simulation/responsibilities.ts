@@ -559,7 +559,49 @@ export interface AnnualPlans {
   revenueFactor: number;
   /** How much less likely a customer is to leave, 0–1. */
   retention: number;
+  /**
+   * And what happens when the plan ends: extra churn, as an annual rate.
+   *
+   * Somebody who has spent a year paying 30% under the list price does not
+   * see the list price as the price. They see a rise of 43%, and a rise on
+   * people already paying is the one thing this market model has always said
+   * they walk out over (`resented`, in `market.ts`). Coming off the plan is
+   * exactly that event, and nothing charged for it.
+   *
+   * That mattered because it is the only cost here that does not scale
+   * linearly with the discount. Giving away `d` costs `d`, and what it buys —
+   * customers who cannot leave — is worth the same at every depth, so a
+   * deeper discount was always the better buy and the lever's whole range
+   * collapsed onto its cap. Measured over twenty-four quarters, the cap was
+   * the right answer in all seven markets and worth 20% to 40% of the company.
+   *
+   * The step back up is `d / (1 - d)`, which is what the rise actually is, so
+   * the cost of a deep discount rises faster than the discount does and there
+   * is a depth past which it stops being worth it.
+   */
+  unwind: number;
 }
+
+/**
+ * How much of the step back up to list price is felt as churn.
+ *
+ * Calibrated, not derived, against the standard this file sets for every lever
+ * it defines: a range where it helps and a setting where it hurts. Worth of
+ * the company after twenty-four quarters, by how deep the discount is:
+ *
+ *              d=0       d=10      d=20      d=30     best
+ *   dating   376,416   446,640   442,272   406,176    10%
+ *   drones   197,010   213,030   209,250   122,984    10%   ← 30% worse than none
+ *   pods     262,399   304,214   305,155   288,658    20%
+ *   MMOs      63,340   110,357    65,609         0    10%   ← 30% worse than none
+ *
+ * Higher and the cap becomes ruinous rather than merely wrong, which is no
+ * better a lever than one whose cap is always right. Lower and the whole range
+ * flattens back out toward the cap. At 0.3 a shallow plan is worth taking in
+ * every market, a deep one is worth taking in none, and in two of them going
+ * to the cap is worse than never offering a plan at all.
+ */
+export const ANNUAL_UNWIND = 0.3;
 
 /**
  * Paying a year up front, for a discount.
@@ -571,9 +613,14 @@ export interface AnnualPlans {
  */
 export function annualPlans(discountPct: number | undefined): AnnualPlans {
   const d = Math.max(0, Math.min(ANNUAL_DISCOUNT_MAX, Number(discountPct) || 0)) / 100;
-  if (d <= 0) return { uptake: 0, revenueFactor: 1, retention: 0 };
+  if (d <= 0) return { uptake: 0, revenueFactor: 1, retention: 0, unwind: 0 };
   const uptake = 0.6 * saturate(d, 0.12);
-  return { uptake, revenueFactor: 1 - d * uptake, retention: 0.5 * uptake };
+  return {
+    uptake,
+    revenueFactor: 1 - d * uptake,
+    retention: 0.5 * uptake,
+    unwind: uptake * (d / (1 - d)) * ANNUAL_UNWIND,
+  };
 }
 
 // ─── Borrowing on terms ──────────────────────────────────────────────────────

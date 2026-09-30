@@ -244,9 +244,39 @@ describe("annual plans", () => {
   it("cost revenue on everyone who takes them, and buy customers who stay", () => {
     const none = annualPlans(0);
     const some = annualPlans(15);
-    expect(none).toEqual({ uptake: 0, revenueFactor: 1, retention: 0 });
+    expect(none).toEqual({ uptake: 0, revenueFactor: 1, retention: 0, unwind: 0 });
     expect(some.revenueFactor).toBeLessThan(1);
     expect(some.retention).toBeGreaterThan(0);
+  });
+
+  /**
+   * And there is a depth past which it stops being worth it.
+   *
+   * Giving away `d` costs `d`, and what it buys — customers who cannot leave —
+   * is worth the same at every depth, so the deepest discount was always the
+   * better buy and the lever's whole range collapsed onto its cap. Measured
+   * over twenty-four quarters, the cap was the right answer in all seven
+   * markets and worth 20% to 40% of the company: a lever with no setting where
+   * it hurts, which is the thing this file says a lever must not be.
+   *
+   * What was missing is what happens when the plan ends. Somebody who has
+   * spent a year paying 30% under list does not see list as the price; they
+   * see a rise of 43%, and a rise on people already paying is what this market
+   * has always said they walk out over. It is also the only cost here that
+   * does not scale linearly with the discount — the step back up is
+   * `d / (1 - d)` — which is what gives the lever an interior best.
+   */
+  it("costs more to unwind the deeper it goes", () => {
+    const shallow = annualPlans(10);
+    const deep = annualPlans(30);
+    expect(shallow.unwind, "a plan has to be climbed down from").toBeGreaterThan(0);
+    /*
+     * Three times the discount, but more than three times the unwind: that is
+     * the superlinearity, and it is why there is a depth past which a deeper
+     * discount is the wrong call.
+     */
+    expect(deep.unwind / shallow.unwind).toBeGreaterThan(3);
+    expect(annualPlans(0).unwind, "and no plan is nothing to climb down from").toBe(0);
   });
 
   /*
