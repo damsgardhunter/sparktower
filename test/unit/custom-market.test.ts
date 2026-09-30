@@ -14,7 +14,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildCustomMarket, marketProblems, marketShares, MIN_SEGMENT_SIZE, MAX_SEGMENT_SIZE,
   INCUMBENT_SHARE_MIN, INCUMBENT_SHARE_MAX, INCUMBENT_STRENGTH_MEAN_MAX, ENTRY_COST_MAX_SHARE,
+  openShareFor, ROOM_FOR_A_BUSINESS, OPEN_SHARE_MAX, PRICE_ROOM_FOR_A_BUSINESS,
 } from "@shared/simulation/custom-market";
+import { officerCost } from "@shared/simulation/decisions";
+import { marketScale } from "@shared/simulation/world";
+import { TRULY_OPEN_SHARE } from "@shared/simulation/incumbents";
 import { NICHES } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
 import { startingCompany } from "@shared/simulation/season";
@@ -547,5 +551,119 @@ describe("what a region costs to open, in a market this size", () => {
         .toBeLessThanOrEqual(210_000 * city.weight * ENTRY_COST_MAX_SHARE + 1);
       expect(city.entryCost).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * A market you can actually run a business in.
+ *
+ * Every other rule in the cleaner checks a market's *shape* — how many
+ * segments, how big, how much the rivals hold, what a region costs to enter.
+ * None of them asked whether a company could live in the result, and markets
+ * came back where one could not.
+ *
+ * Nova is asked to write small, because it is writing about a real project:
+ * nine of nine markets generated from real briefs came back under GBP 2.5m a
+ * year, five of them under GBP 700,000. A tenth of a market that size, split
+ * again by region, is not a business. Measured on the worst of them — a
+ * kiln-firing marketplace, 9,000 people, GBP 235,000 a year — a founder had a
+ * home region with 270 unowned customers against a break-even of 181, and was
+ * **never once profitable**: not on any of eight season seeds, not at any rate
+ * of spending from nothing to an eighth of the bank each period, never in
+ * sixteen quarters. The most anyone reached was 104 customers of 9,000.
+ *
+ * Two rules answer it, and they are deliberately not the same bar.
+ * `openShareFor` opens the market up until the home region holds enough
+ * unowned customers to clear break-even, because how much of a young market is
+ * unserved is a number nobody wrote down and nobody will miss.
+ * `pricedForABusiness` lifts the prices only for whatever that could not
+ * reach, because a price is something Nova *said*. Held to the same bar, a
+ * sea-swimming app's prices went up 246-fold; split, the same markets get
+ * there on a 20-fold lift with the open share doing the work.
+ */
+describe("a market you can run a business in", () => {
+  /** The rule, restated: the home region holds enough unowned customers to clear break-even. */
+  const roomInHome = (niche: any) => {
+    const people = niche.segments.reduce((sum: number, s: any) => sum + s.size, 0);
+    const biggest = [...niche.segments].sort((a: any, b: any) => b.size - a.size)[0];
+    const contribution = Math.max(1, biggest.referencePrice - niche.baseUnitCost);
+    const payroll = officerCost({ officers: 1, scale: marketScale(niche) });
+    const breakEven = payroll / contribution;
+    const home = Math.max(...niche.cities.map((c: any) => c.weight));
+    return (people * home * (niche.openShare ?? TRULY_OPEN_SHARE)) / breakEven;
+  };
+
+  it("asks for something near a tenth in the markets it was not written for", () => {
+    /*
+     * The rule has to agree, roughly, with seven markets it had no part in, or
+     * it is not a rule about whether a business is possible — it is a number
+     * picked to rescue a few generated ones.
+     *
+     * It asks those seven for between 0.126 and 0.265: never less than the
+     * tenth they were built with, never within reach of the cap, and between
+     * 1.3x and 2.6x rather than the 3.5x it asks of the markets Nova writes.
+     * They keep their tenth regardless, because they are hand-tuned and never
+     * go through the cleaner.
+     *
+     * What is worth more than the range is the order. The market it asks least
+     * of is project SaaS, which is the one market profitable on eight seeds of
+     * eight; two of the three it asks most of are drone delivery and podcasts,
+     * profitable on two of eight. The rule ranks them about the way playing
+     * them does, which is the evidence that it is measuring the right thing.
+     */
+    for (const niche of NICHES) {
+      const asked = openShareFor(niche);
+      expect(asked, `${niche.id}: the rule would leave less room than the catalogue does`).toBeGreaterThanOrEqual(TRULY_OPEN_SHARE);
+      expect(asked, `${niche.id}: a hand-written market should not need opening up like a tiny one`).toBeLessThan(OPEN_SHARE_MAX);
+    }
+  });
+
+  it("opens a market up when a tenth of it is not a business", () => {
+    /* The kiln-firing marketplace, to scale: small, cheap, and split five ways. */
+    const tiny = buildCustomMarket({
+      name: "Kiln hire", premise: "Spare firings, booked by the shelf.", baseUnitCost: 5,
+      segments: [
+        { id: "solo", name: "Solo hobbyists", size: 3000, referencePrice: 15, growth: 0.04, priceSensitivity: 0.6, qualityFocus: 0.4, brandFocus: 0.3, serviceFocus: 0.4, loyalty: 0.3 },
+        { id: "groups", name: "Collectives", size: 2000, referencePrice: 25, growth: 0.03, priceSensitivity: 0.5, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.5, loyalty: 0.4 },
+      ],
+      regions: [1, 2, 3, 4, 5].map((i) => ({ id: `r${i}`, name: `R${i}`, weight: i === 1 ? 0.3 : 0.175, entryCost: 500, note: "" })),
+      incumbents: [0.3, 0.2, 0.15].map((startingShare, i) => ({
+        id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
+        quality: 50, brand: 50, service: 50, priceIndex: 1,
+      })),
+    }, "kiln")!;
+    expect(tiny, "the market was refused outright").toBeTruthy();
+    expect(tiny.openShare!, "a market this small was left at a tenth").toBeGreaterThan(TRULY_OPEN_SHARE);
+    expect(tiny.openShare!, "no incumbents left in it").toBeLessThanOrEqual(OPEN_SHARE_MAX);
+    /* A whole customer of slack, because prices are rounded to the pound. */
+    expect(roomInHome(tiny), "the home region still cannot pay for the business")
+      .toBeGreaterThanOrEqual(Math.min(ROOM_FOR_A_BUSINESS, PRICE_ROOM_FOR_A_BUSINESS) - 1);
+  });
+
+  it("lifts the prices when the biggest segment earns nothing per customer", () => {
+    /*
+     * The sea-swimming app: 50,000 people, and the segment the opening
+     * defaults sell at paying GBP 1 a year against a GBP 1 unit cost. No
+     * number of customers covers a salary at zero margin, and the unit-cost
+     * clamp cannot help, because `num` floors a unit cost at 1.
+     */
+    const free = buildCustomMarket({
+      name: "Swim", premise: "Tides, temperature and who else is going.", baseUnitCost: 1,
+      segments: [
+        { id: "casual", name: "Casual", size: 20000, referencePrice: 1, growth: 0.05, priceSensitivity: 0.8, qualityFocus: 0.3, brandFocus: 0.4, serviceFocus: 0.3, loyalty: 0.2 },
+        { id: "keen", name: "Enthusiasts", size: 15000, referencePrice: 3, growth: 0.06, priceSensitivity: 0.5, qualityFocus: 0.6, brandFocus: 0.3, serviceFocus: 0.5, loyalty: 0.5 },
+      ],
+      regions: [1, 2, 3, 4, 5].map((i) => ({ id: `r${i}`, name: `R${i}`, weight: i === 1 ? 0.3 : 0.175, entryCost: 500, note: "" })),
+      incumbents: [0.3, 0.2, 0.15].map((startingShare, i) => ({
+        id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
+        quality: 50, brand: 50, service: 50, priceIndex: 1,
+      })),
+    }, "swim")!;
+    const biggest = [...free.segments].sort((a, b) => b.size - a.size)[0];
+    expect(biggest.referencePrice - free.baseUnitCost, "the biggest segment still earns nothing").toBeGreaterThan(1);
+    /* And the shape Nova wrote survives: the keen still pay more than the casual. */
+    const casual = free.segments.find((s) => s.id === "casual")!;
+    const keen = free.segments.find((s) => s.id === "keen")!;
+    expect(keen.referencePrice / casual.referencePrice, "who pays more than whom was rewritten").toBeCloseTo(3, 0);
   });
 });

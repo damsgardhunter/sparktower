@@ -29,6 +29,9 @@
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
 import type { WorkKind } from "./workforce";
 import { ASSET_SLOTS } from "./assets";
+import { marketScale } from "./world";
+import { officerCost } from "./decisions";
+import { TRULY_OPEN_SHARE } from "./incumbents";
 
 /** What a small market is allowed to be. Below this the maths has nothing to work with. */
 export const MIN_SEGMENT_SIZE = 2_000;
@@ -473,6 +476,125 @@ function affordableUnitCost(asked: number, segments: Segment[]): number {
  * seven markets still exist, and falling back to the closest one is a better
  * outcome than a season that cannot be played.
  */
+
+/**
+ * How much of a market has to be unspoken for before a business is possible in it.
+ *
+ * The seven hand-written markets all leave about a tenth, and a tenth is
+ * plenty when the market has millions of people in it. Nova is asked to write
+ * small — a booking site for spare kiln firings, a rota swap for bank staff —
+ * and a tenth of a small market, split again by region, is not a business.
+ *
+ * Measured, before this existed: kilnshare, 9,000 people and £235,000 a year
+ * across five regions, left its founder a home region with **270 unowned
+ * customers** and a break-even of 181. A founder there was never once
+ * profitable — not in sixteen quarters, not on any season seed, and not at any
+ * rate of spending from nothing to a quarter of the bank each period. The most
+ * anybody reached was 104 customers of 9,000. It was not a hard market, it was
+ * an impossible one, and nothing in the cleaner noticed, because every rule
+ * here checks a market's *shape* and none of them checked whether a company
+ * could live in it.
+ *
+ * So the open share is set from what the market costs to operate in: enough
+ * unowned customers in the home region to clear break-even `ROOM_FOR_A_BUSINESS`
+ * times over. Markets that are already big enough keep the usual tenth — the
+ * three markets Nova wrote for real projects, run through this, leave rotaread
+ * exactly where it was and raise only the two that could not be played.
+ *
+ * Capped, because a market with no incumbents worth the name is not the game
+ * either. What the cap cannot reach is still improved by it.
+ */
+export const ROOM_FOR_A_BUSINESS = 70;
+
+/**
+ * The thinner bar the *prices* are lifted to, when opening the market up was
+ * not enough on its own.
+ *
+ * The two levers do not cost the same. How much of a market is unowned is a
+ * number nobody wrote down and nobody will miss — Nova is not asked for it,
+ * and a young market being mostly unserved is true. A price is something Nova
+ * *said*, and moving it rewrites the market's own description of itself. So
+ * the open share is taken as far as it will go first, and the prices only make
+ * up whatever that could not reach.
+ *
+ * Measured, the difference is not small: holding both to the same bar lifted a
+ * sea-swimming app's prices 246-fold, from GBP 1 a year to GBP 246. Splitting
+ * them gets the same eight markets to the same place with a 20-fold lift, and
+ * it is the open share doing the work instead.
+ */
+export const PRICE_ROOM_FOR_A_BUSINESS = 25;
+export const OPEN_SHARE_MAX = 0.35;
+
+export function openShareFor(input: { segments: Segment[]; cities: City[]; baseUnitCost: number }): number {
+  const { segments, cities, baseUnitCost } = input;
+  const people = segments.reduce((sum, s) => sum + s.size, 0);
+  const biggest = [...segments].sort((a, b) => b.size - a.size)[0];
+  if (!biggest || people <= 0 || !cities.length) return TRULY_OPEN_SHARE;
+  /* The price the opening defaults sell at, which is the biggest segment's. */
+  const contribution = Math.max(1, biggest.referencePrice - baseUnitCost);
+  const payroll = officerCost({ officers: 1, scale: marketScale({ segments }) });
+  const breakEven = payroll / contribution;
+  /* The home region is the biggest one a founder can open in. */
+  const home = Math.max(...cities.map((c) => c.weight));
+  const needed = (breakEven * ROOM_FOR_A_BUSINESS) / Math.max(1, people * home);
+  return Math.min(OPEN_SHARE_MAX, Math.max(TRULY_OPEN_SHARE, needed));
+}
+
+/**
+ * Prices that can pay for the business being run in the market.
+ *
+ * `openShareFor` opens a small market up until there is room for a company,
+ * and it runs out of room at `OPEN_SHARE_MAX` — a market still has to have
+ * incumbents in it. What it cannot fix is a market whose customers do not pay
+ * enough to be worth having.
+ *
+ * Nova wrote one: a tide-and-water-quality app for sea swimmers, 50,000 people
+ * and £130,000 a year, whose biggest segment pays **£1 a year against a £1
+ * unit cost**. Contribution per customer was nothing, so no number of
+ * customers covered the founder's own salary — not at any spend, including
+ * spending nothing, on any season seed. `MAX_UNIT_COST_OF_CHEAPEST_PRICE` is
+ * supposed to leave a margin and cannot here, because `num` floors a unit cost
+ * at 1 and the price was 1.
+ *
+ * So the prices come up until the segment the opening defaults sell at earns
+ * enough, across the customers a founder can actually reach, to clear
+ * break-even `ROOM_FOR_A_BUSINESS` times over — the same bar `openShareFor`
+ * uses, reached from the other side. Raising the prices raises what the market
+ * is worth, which raises what its people cost, so it is solved by iterating
+ * rather than in one step.
+ *
+ * Every price moves together, so what Nova said about the *shape* of the
+ * market — who pays more than whom, and by how much — survives. Only the
+ * absolute figures move, and only in the markets that could not otherwise be
+ * played: none of the seven hand-written markets, and none of the generated
+ * ones already earning enough.
+ */
+export const MAX_PRICE_LIFT = 250;
+
+export function pricedForABusiness(input: { segments: Segment[]; cities: City[]; baseUnitCost: number; openShare: number }): Segment[] {
+  const { cities, baseUnitCost, openShare } = input;
+  let segments = input.segments;
+  const people = segments.reduce((sum, s) => sum + s.size, 0);
+  const home = cities.length ? Math.max(...cities.map((c) => c.weight)) : 0;
+  const reach = people * home * openShare;
+  if (reach <= 0) return segments;
+
+  let lifted = 1;
+  for (let pass = 0; pass < 4; pass++) {
+    const biggest = [...segments].sort((a, b) => b.size - a.size)[0];
+    if (!biggest || biggest.referencePrice <= 0) break;
+    const payroll = officerCost({ officers: 1, scale: marketScale({ segments }) });
+    const needed = (payroll * PRICE_ROOM_FOR_A_BUSINESS) / reach;
+    const earns = biggest.referencePrice - baseUnitCost;
+    if (earns >= needed) break;
+    const lift = Math.min((needed + baseUnitCost) / biggest.referencePrice, MAX_PRICE_LIFT / lifted);
+    if (!(lift > 1.001)) break;
+    lifted *= lift;
+    segments = segments.map((s) => ({ ...s, referencePrice: Math.max(1, Math.round(s.referencePrice * lift)) }));
+  }
+  return segments;
+}
+
 export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
@@ -489,14 +611,20 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
   const incumbents = cleanIncumbents(m.incumbents);
   if (!incumbents) return null;
 
+  const baseUnitCost = affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments);
+  const openShare = openShareFor({ segments, cities, baseUnitCost });
+  /* And priced so the customers a founder can reach can pay for the business. */
+  const priced = pricedForABusiness({ segments, cities, baseUnitCost, openShare });
   return {
     id: slug(m.id ?? m.name, fallbackId),
     name: str(m.name, 80, "Your market"),
     premise: str(m.premise, 600, "The market this company is actually in."),
-    segments,
+    segments: priced,
     incumbents,
     cities,
-    baseUnitCost: affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments),
+    baseUnitCost,
+    /* Enough of it unowned that a company can live here at all. See `openShareFor`. */
+    openShare,
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
     workforce: cleanWorkforce(m.workforce),

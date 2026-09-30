@@ -2281,6 +2281,46 @@ that found this is a good one to reuse: **break-even as a share of the home
 region's reachable pool**, compared across markets. The outlier was visible at
 a glance and nothing else in the catalogue was close.
 
+### Closed: Nova could write a market nobody could run a business in
+Every rule in `custom-market.ts` checked a market's *shape* — how many
+segments, how big, what the rivals hold, what a region costs to enter. None
+asked whether a company could live in the result.
+
+Nova is asked to write small, because it is writing about a real project.
+Eight markets generated from real briefs all came back under £33m a year and
+five of them under £700,000. A tenth of a market that size, split again across
+five or six regions, is not a business. On the worst of them — a kiln-firing
+marketplace, 9,000 people, £235,000 a year — a founder's home region held
+**270 unowned customers against a break-even of 181**, and nobody was ever once
+profitable: not on any of eight season seeds, not at any rate of spending from
+nothing to an eighth of the bank a period, never in sixteen quarters. The most
+anyone reached was 104 customers of 9,000.
+
+Measured across the eight, playing each on eight seeds at six spend rates:
+
+    a tenth     3 of 8 markets had no profitable season at any spend
+                1 was beaten by filing nothing
+    the rules   8 of 8 winnable, profitable, never bankrupt, never beaten
+
+Two rules, deliberately not held to the same bar. `openShareFor` opens the
+market up until the home region holds enough unowned customers to clear
+break-even — how much of a young market is unserved is a number nobody wrote
+down and nobody will miss. `pricedForABusiness` lifts prices only for whatever
+that could not reach, because a price is something Nova *said*. Held to the
+same bar, a sea-swimming app's prices went up 246-fold, from £1 a year to £246;
+split, the same eight markets get there on a 20-fold lift with the open share
+doing the work, and every price moves together so who pays more than whom
+survives.
+
+Two things worth keeping. The diagnostic that found it — **break-even as a
+share of the home region's reachable pool** — is the same one that found drone
+delivery, and it is the first thing to reach for when a market reads as
+unplayable. And the rule ranks the seven hand-written markets about the way
+playing them does: it asks least of project SaaS, profitable on eight seeds of
+eight, and most of drone delivery and podcasts, profitable on two. That is the
+evidence it measures the right thing rather than being a number chosen to
+rescue the markets it was written for.
+
 ### Open: owning something for a whole year makes the year worse
 The effects reach the market — a company holding a patent and a distribution
 deal wins 25,118 customers at the allocation against 15,338 without them. Run
