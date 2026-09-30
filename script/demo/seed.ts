@@ -118,15 +118,25 @@ export async function clearDemo(): Promise<number> {
 /** No demo row may ever carry money. Checked, not promised. */
 async function assertNoMoney(ids: string[]): Promise<void> {
   if (!ids.length) return;
+  /*
+   * `inArray`, like the delete four lines above — not an ARRAY[...] literal
+   * built by joining the ids into a string.
+   *
+   * The ids here are ones this file generated moments earlier, so nothing was
+   * getting in; what made it worth changing is that this is the function that
+   * refuses to let demo rows carry money. A safety check written in
+   * string-built SQL teaches the pattern from the one place nobody would think
+   * to distrust, and `sql.raw` with an interpolated value is the shape the
+   * repository's own audit exists to refuse.
+   */
   const owned = await db.select({ id: projects.id }).from(projects)
-    .where(sql`${projects.ownerId} = any(${sql.raw(`ARRAY['${ids.join("','")}']::varchar[]`)})`);
+    .where(inArray(projects.ownerId, ids));
   const projectIds = owned.map((p) => p.id);
   if (!projectIds.length) return;
-  const arr = sql.raw(`ARRAY['${projectIds.join("','")}']::varchar[]`);
   const [campaigns] = await db.select({ n: sql<number>`count(*)::int` }).from(projectBackingCampaigns)
-    .where(sql`${projectBackingCampaigns.projectId} = any(${arr})`);
+    .where(inArray(projectBackingCampaigns.projectId, projectIds));
   const [pledges] = await db.select({ n: sql<number>`count(*)::int` }).from(projectBackings)
-    .where(sql`${projectBackings.projectId} = any(${arr})`);
+    .where(inArray(projectBackings.projectId, projectIds));
   if (campaigns?.n || pledges?.n) {
     throw new Error(`Demo projects must never take money, and ${campaigns?.n ?? 0} campaigns / ${pledges?.n ?? 0} backings exist. Refusing to finish.`);
   }
