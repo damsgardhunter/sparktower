@@ -2570,36 +2570,43 @@ No tests were added. Testing code nothing calls pins behaviour that has never
 had to be right; the measurement above is the evidence it works, and the tests
 belong with the wiring.
 
-### Open: keeping room still decides the catalogue season
+### Open, and probably not a balance constant: keeping room decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
-what is served, keeping it is worth **2.3x to 4.6x** the company's final value
-in every hand-written market (1.3x in the markets Nova writes). Nothing else
-comes close, and retiring idle plant is punished harder than any pricing
-mistake.
+what is served: keeping it is worth **2.3x to 4.6x** the company's final value
+in every hand-written market, and 1.3x in the markets Nova writes.
 
-Three things have now been tried and none of them is the lever:
+Four things have now been tried against it, and the way they fail is more
+informative than any of them individually:
 
-  - **The rent.** `IDLE_RATE` 0.08 → 0.15 → 0.25 → 0.40 leaves the ratio at
-    4.62, 4.27, 4.65, 2.49 while breaking 5, 16 and 21 tests. Five times the
-    price of idle room barely moves it.
-  - **The overflow.** `SPILL_TOPUP_MAX` 8, 4, 2, 1 leaves it at 4.62, 4.62,
-    4.61, 4.70.
-  - **A bound on how fast a company can grow.** Capping what a company can
-    *win* in a period, while leaving its physical room available to *receive*
-    what a rival turned away, leaves the ratio at 4.46–5.30 — in places
-    **worse**. The magnet simply routes around it: customers the bound stops
-    you winning become somebody's turned-away, and the company with the big
-    plant absorbs them as spill instead.
+    the rent          IDLE_RATE 0.08 -> 0.40     4.62x -> 2.49x, 21 tests broken
+    the overflow      SPILL_TOPUP_MAX 8 -> 1     4.62x -> 4.70x, no effect
+    a bound on wins   room still free to receive 4.62x -> 4.46-5.30x, worse
+    a bound on both   hard, saturating, and
+                      sub-linear intake          4.62x -> 2.5-4.1x
 
-Bounding both channels does fix it — 4.62x down to 1.54x — and it breaks the
-mechanic `spill` exists for. "What fits nowhere leaves the market for the
-year", so with every company bounded there is nowhere for a full market's
-overflow to go and it disappears, which `forecast.test.ts` catches directly
-("the turned-away went somewhere: expected 0 to be greater than 0"). The
-forecast also stops bracketing outcomes, because it does not model the bound.
+The third one is the tell: bounding what a company can *win* while leaving its
+room free to *receive* made the magnet worse, because the customers the bound
+stops you winning become somebody's turned-away and the big plant takes them in
+as spill instead. The pressure does not go away, it moves.
 
-So the shape of the work is now clear, and it is three things that have to land
-together: a bound on taking customers on, a rule for overflow that nobody has
-the room to absorb — most likely leaving them unserved and available next
-period rather than deleting them — and a forecast that knows about both.
+The fourth is the other tell. A hard ceiling ties every company that reaches
+it — four tests failed on exact ties, including a company with a patent and a
+distribution deal winning precisely as many customers as one owning nothing,
+which is the fault this engine has already had once. A saturating ceiling ties
+them slightly further up. Sub-linear intake (`limit * (asked/limit)^0.5`) has no
+ceiling and no ties, and at the loosest setting that leaves only three tests
+failing the magnet is back to 4.14x — which is to say, gone.
+
+**The likely reading: this is not a mispriced constant.** Capacity is the
+binding constraint on customers, and customers are the only thing the season is
+scored on, so anything that reduces what capacity is worth reduces what playing
+well is worth by the same amount — they are the same lever seen from two ends.
+Making the plant matter less means giving the other decisions a route to the
+score that does not run through customer count: margin, retention, what a
+customer is worth rather than how many there are. That is a design change to
+what a season measures, not a number in `market.ts`, and it should be taken
+together with the valuation having no profit term (above).
+
+Four experiments are written down here so the fifth person does not run them
+again.
 
