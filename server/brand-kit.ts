@@ -112,10 +112,20 @@ export function coverPrompt(project: Project, style: LogoStyleDef): string {
     `A wide banner image for the public page of a business called "${project.title}".`,
     "The supplied image is that business's logo, drawn moments ago.",
     "Take its exact palette, and place the logo itself in the composition — unchanged in shape and proportion, not redrawn, not restyled, not reinterpreted.",
-    "Everything around it is a setting the logo sits in: shapes, texture and light that extend the same palette.",
+    /*
+     * The three lines below are the fix for what this produced without them:
+     * the edit endpoint handed the reference straight back on a wider canvas,
+     * so twenty covers were the logo centred on white — indistinguishable from
+     * having no cover at all once the page puts a title over the middle. The
+     * logo staying unchanged is the point of the feature; it being the *whole*
+     * picture is the failure.
+     */
+    "Place it small and off-centre. It must not be the centre of the banner and must not fill it.",
+    "The rest of the frame is a designed setting this business belongs in — its materials, surfaces, tools and light — carrying the same palette to every edge.",
+    "A banner that is the logo on a plain or empty background is a failed banner.",
     brief ? `What the business is:\n${brief}` : "",
     `Keep it consistent with a ${style.label.toLowerCase()} — the banner and the mark have to look like one piece of work.`,
-    "Wide landscape composition, uncluttered, plenty of quiet space; the page puts a title over the middle of it.",
+    "Wide landscape composition. Keep the middle calm enough for a title to sit over it, but the frame itself must carry colour and texture to its edges.",
     style.lettering
       ? `The only text is the name in the logo, spelled exactly "${project.title}". No tagline, no other words.`
       : "No text, letters, words or numbers anywhere in the image.",
@@ -139,6 +149,62 @@ async function draw(
   return new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png", {
     owner: ownerId,
     visibility: "public",
+  });
+}
+
+/**
+ * The two pictures, drawn. Nothing about money, permission or HTTP.
+ *
+ * Split out of the route so that something other than a signed-in request can
+ * ask for a brand kit — seeding sixteen demo builders' projects, where the
+ * owners are bot accounts that cannot sign in at all and there is no session
+ * to make the request with (script/seed-demo-brand.ts).
+ *
+ * The cover is drawn from the logo, read back out of object storage rather
+ * than held as a buffer: that is the only way to be sure the thing handed to
+ * the model is the thing the project will actually show. A cover drawn from a
+ * buffer that failed to store would match a logo nobody can see.
+ *
+ * A failed cover returns null rather than throwing, because the logo is the
+ * purchase and half the product reads it while only the public page reads the
+ * cover. A failed *logo* throws: there is no reference to draw a cover from.
+ */
+export async function drawBrandKit(
+  project: Project, style: LogoStyleDef,
+): Promise<{ logoUrl: string; coverUrl: string | null }> {
+  const logoUrl = await draw(openai.images.generate({
+    model: IMAGE_MODEL,
+    prompt: logoPrompt(project, style),
+    size: "1024x1024",
+    quality: IMAGE_QUALITY,
+  } as any), project.ownerId);
+
+  return { logoUrl, coverUrl: await drawCover(project, style, logoUrl) };
+}
+
+/**
+ * The cover alone, from a logo that already exists.
+ *
+ * Split out so a cover can be redrawn without paying for a logo that was
+ * already right — which is exactly what happened when the cover prompt was
+ * fixed and twenty good logos would otherwise have been thrown away to get
+ * twenty new banners.
+ */
+export async function drawCover(
+  project: Project, style: LogoStyleDef, logoUrl: string,
+): Promise<string | null> {
+  const reference = await readReference(logoUrl, "logo");
+  if (!reference) return null;
+  return draw(openai.images.edit({
+    model: IMAGE_MODEL,
+    prompt: coverPrompt(project, style),
+    image: [reference],
+    size: "1536x1024",
+    quality: IMAGE_QUALITY,
+  } as any), project.ownerId).catch((err) => {
+    // Kept, not failed: see the file comment. The logo is the purchase.
+    console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
+    return null;
   });
 }
 
@@ -216,35 +282,7 @@ export function registerBrandKitRoutes(app: Express) {
     if (!ent) return;
 
     try {
-      const logoUrl = await draw(openai.images.generate({
-        model: IMAGE_MODEL,
-        prompt: logoPrompt(project, style),
-        size: "1024x1024",
-        quality: IMAGE_QUALITY,
-      } as any), project.ownerId);
-
-      /*
-       * The cover, from the logo that now exists. It is read back out of object
-       * storage rather than kept in memory as a buffer, because that is the
-       * only way to be sure the thing handed to the model is the thing the
-       * project will actually show — a cover drawn from a buffer that failed to
-       * store would match a logo nobody can see.
-       */
-      let coverUrl: string | null = null;
-      const reference = await readReference(logoUrl, "logo");
-      if (reference) {
-        coverUrl = await draw(openai.images.edit({
-          model: IMAGE_MODEL,
-          prompt: coverPrompt(project, style),
-          image: [reference],
-          size: "1536x1024",
-          quality: IMAGE_QUALITY,
-        } as any), project.ownerId).catch((err) => {
-          // Kept, not failed: see the file comment. The logo is the purchase.
-          console.error("[brand-kit] the cover failed, keeping the logo:", err?.message || err);
-          return null;
-        });
-      }
+      const { logoUrl, coverUrl } = await drawBrandKit(project, style);
 
       const replaced = { logoUrl: project.logoUrl ?? null, coverUrl: project.coverUrl ?? null };
       const [updated] = await db.update(projects)

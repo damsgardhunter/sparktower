@@ -18,12 +18,15 @@
  */
 import { describe, it, expect } from "vitest";
 import { marketScale, marketPotential, REFERENCE_POTENTIAL, MARKET_SCALE_MIN } from "@shared/simulation/world";
-import { atScale } from "@shared/simulation/market";
+import { allocate, atScale } from "@shared/simulation/market";
 import { COMPANIES_A_MARKET_IS_WRITTEN_FOR, marketFor, startingCompany, STARTING_CASH } from "@shared/simulation/season";
-import { fixedCosts } from "@shared/simulation/decisions";
+import { fixedCosts, nextTechDebt, officerCost, payScale } from "@shared/simulation/decisions";
+import { dataNext, outageChance, securityNext } from "@shared/simulation/product";
+import { staffQualityNext } from "@shared/simulation/people";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { buildCustomMarket } from "@shared/simulation/custom-market";
-import { ROLES, type Niche } from "@shared/simulation/types";
+import { seedIncumbents } from "@shared/simulation/incumbents";
+import { ROLES, type Company, type Niche } from "@shared/simulation/types";
 import { distressOf } from "@shared/simulation/recovery";
 import { yearOfCostsFor } from "@shared/simulation/decisions";
 import { TRULY_OPEN_SHARE, seedFragmentedTail, seedIncumbents } from "@shared/simulation/incumbents";
@@ -159,10 +162,28 @@ describe("what a table has committed to salaries", () => {
     expect(asClientSawIt / honest).toBeGreaterThan(100);
   });
 
-  it("keeps every lever's salary at the size of the market it is in", () => {
+  /*
+   * Pay follows the market down, and does not follow it all the way.
+   *
+   * This used to assert exact proportionality — a market a hundredth the size
+   * paid a hundredth of the salary — which is right in spirit and wrong in
+   * arithmetic, because it made a founder cost £700 a year. At that price a
+   * company that decided nothing at all was profitable from its first period
+   * and ended a four-year season richer than it started. See `payScale`.
+   */
+  it("compresses pay with the market instead of erasing it", () => {
     const big = fixedCosts({ ...solo, scale: 1 }, 0, econ as any, 1, niche);
     const small = fixedCosts({ ...solo, scale: 0.01 }, 0, econ as any, 1, niche);
-    expect(small / big).toBeCloseTo(0.01, 4);
+    expect(small / big, "much cheaper than a market a hundred times the size").toBeLessThan(0.1);
+    expect(small / big, "and not a hundredth of it — a person still has to eat").toBeGreaterThan(0.01);
+    expect(small / big).toBeCloseTo(payScale(0.01), 6);
+  });
+
+  /* A catalogue market is scale one, so none of the seven move at all. */
+  it("leaves a full-scale market exactly where it was", () => {
+    expect(payScale(1)).toBe(1);
+    expect(fixedCosts({ ...solo, scale: 1, officers: 5 }, 0, econ as any, 1, niche))
+      .toBeCloseTo(5 * 140_000, 6);
   });
 });
 
@@ -187,8 +208,12 @@ describe("whether a company is in trouble", () => {
   }) as any;
 
   it("measures a year of costs at the size of the company", () => {
-    // A fifth of a full table, at a hundredth of catalogue scale.
-    expect(yearOfCostsFor(startup())).toBeCloseTo(1_100_000 * (1 / 5) * 0.01, 6);
+    /*
+     * A fifth of a full table, at a hundredth of catalogue scale — with pay
+     * compressed rather than shrunk, so that this threshold and the bill it is
+     * measuring move together. See `payScale`.
+     */
+    expect(yearOfCostsFor(startup())).toBeCloseTo(1_100_000 * (1 / 5) * payScale(0.01), 6);
   });
 
   /* And a full table at full scale is exactly the figure it always was. */
@@ -429,5 +454,137 @@ describe("a market with a crowd in it", () => {
     expect(held).toBeGreaterThan(small);
     expect(held / size(grown), "and hold about the same share of it")
       .toBeCloseTo(small / size(niche), 2);
+  });
+});
+
+/**
+ * A company that decides nothing should not be the one that wins.
+ *
+ * Measured over a sixteen-quarter season in a market Nova's shape
+ * (`docs/simulation-playtest.md`), a company filing last period's draft every
+ * period was profitable from its first period and ended richer than it
+ * started, while every strategy that actually did something lost money. Three
+ * separate things were doing that, and each has its own test below.
+ */
+describe("deciding nothing", () => {
+  it("does not pay a founder a hundredth of a person", () => {
+    /*
+     * The root cause. A market a hundredth of catalogue size paid £700 a year
+     * for the one person running the company, so there was almost nothing for
+     * the revenue to have to cover.
+     */
+    const solo = { officers: 1, scale: 0.01 };
+    expect(officerCost(solo)).toBeGreaterThan(4_000);
+    expect(officerCost(solo)).toBeLessThan(10_000);
+    // And a full table at catalogue scale is exactly what it always was.
+    expect(officerCost({ seats: [...ROLES], scale: 1 })).toBe(5 * 140_000);
+  });
+
+  it("sizes the opening plant against the payroll it will actually be charged", () => {
+    /*
+     * `startingCompany` and `fixedCosts` are the same fact and used to
+     * disagree: one multiplied the executive line out by hand without the
+     * regional footprint and the other applied it, so every company opened
+     * with a plant built for a payroll it did not have.
+     */
+    const niche = nicheById(NICHES[0].id)!;
+    const c = startingCompany({ id: "s", name: "S", niche, seats: [...ROLES], officers: 1 });
+    expect(officerCost({ officers: 1, scale: marketScale(niche) })).toBe(officerCost(c));
+  });
+});
+
+/**
+ * Overflow tops a business up; it does not make one.
+ *
+ * Customers a rival turns away go to whoever they would have chosen next,
+ * which is one of the doors a newcomer comes in through and is sized on
+ * purpose (see `stepIncumbent`). But the takers are only the companies with
+ * room left, and in a market whose incumbents are all full that is one
+ * company — so an idle newcomer with a 0.6% claim on a segment took half of
+ * everything every rival turned away. It was how a company that decided
+ * nothing at all was handed a thousand customers in its first period and ended
+ * a four-year season richer than it started: room was not a bet, it was a
+ * customer magnet, and the biggest empty plant won.
+ */
+describe("customers a rival turned away", () => {
+  const niche = nicheById(NICHES[0].id)!;
+  const econ = { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as any;
+
+  /** A field where the incumbents are full and one company has a vast empty plant. */
+  const field = (mine: Partial<Company>): Company[] => {
+    const incumbents = seedIncumbents(niche, "spill");
+    const me = {
+      ...startingCompany({ id: "me", name: "Mine", niche, seats: [...ROLES], officers: 1 }),
+      capacity: 5_000_000,
+      ...mine,
+    } as Company;
+    return [...incumbents, me];
+  };
+
+  it("cannot hand a market to a company nobody chose", () => {
+    /*
+     * Quality and brand on the floor, so it wins almost nothing on merit —
+     * and therefore has almost no allowance to be topped up against, however
+     * much room it is sitting on.
+     */
+    const out = allocate(field({ quality: 5, brand: 1, service: 5, price: 200 }), niche, 1, econ);
+    const mine = Object.values(out.held.me ?? {}).reduce((sum, n) => sum + n, 0);
+    const market = niche.segments.reduce((sum, s) => sum + s.size, 0);
+    expect(mine / market, "an empty plant is not a customer magnet").toBeLessThan(0.02);
+  });
+
+  it("still lets a company people would actually choose grow into it", () => {
+    const weak = allocate(field({ quality: 5, brand: 1, service: 5, price: 200 }), niche, 1, econ);
+    const strong = allocate(field({ quality: 80, brand: 70, service: 75 }), niche, 1, econ);
+    const total = (r: any) => Object.values(r.held.me ?? {}).reduce((sum: number, n: any) => sum + n, 0);
+    expect(total(strong), "the door a newcomer comes in through stays open").toBeGreaterThan(total(weak) * 3);
+  });
+});
+
+/**
+ * Every absolute money number belongs at the market's scale.
+ *
+ * `atScale` exists for exactly this and says so: the engine's thresholds were
+ * written for the seven catalogue markets, which are all worth about £400m a
+ * year, and a market Nova writes for one business can be a two-hundredth of
+ * that. A £150,000 threshold there is three times the founder's whole opening
+ * bank, so the lever is not expensive — it is inert.
+ *
+ * Six functions were found without it, one at a time, over a single sitting:
+ * `prOutcome`, `referralBrand`, `securityNext`, `dataNext`, `outageChance`,
+ * `nextTechDebt` and `staffQualityNext`. Rather than trust that the seventh
+ * will be noticed, this asserts the property for all of them at once: money a
+ * founder could actually spend has to move the number it is aimed at.
+ *
+ * The worst of them is the last. Training carries a staleness decay, so before
+ * this a founder who paid for training got staff *worse* than if they had not
+ * bothered — the decay landed and the spending bought nothing.
+ */
+describe("levers a founder can actually afford", () => {
+  /** About a period's spending for a company opening with £48,000. */
+  const AFFORDABLE = 4_000;
+  const STARTUP = 0.01;
+
+  it("moves security, data and tech debt on a founder's budget", () => {
+    expect(securityNext(0, AFFORDABLE, 0.25, STARTUP), "security").toBeGreaterThan(5);
+    expect(dataNext(0, AFFORDABLE, 0.25, STARTUP), "what is known about customers").toBeGreaterThan(5);
+    const cleared = 50 - nextTechDebt({ current: 50, paydown: AFFORDABLE, scale: STARTUP });
+    expect(cleared, "technical debt paid down").toBeGreaterThan(2);
+  });
+
+  it("does not punish a founder for training their staff", () => {
+    const before = 50;
+    const trained = staffQualityNext({
+      quality: before, established: 5, newHires: 0, recruiting: 0, training: AFFORDABLE, scale: STARTUP,
+    });
+    expect(trained, "paying for training makes the staff better, not worse").toBeGreaterThan(before);
+  });
+
+  it("leaves the catalogue markets exactly where they were", () => {
+    // Scale one is the identity, so none of the seven hand-written markets move.
+    expect(securityNext(0, 150_000, 0.25, 1)).toBe(securityNext(0, 150_000, 0.25));
+    expect(dataNext(0, 150_000, 0.25, 1)).toBe(dataNext(0, 150_000, 0.25));
+    expect(outageChance(60, 300_000, 1)).toBe(outageChance(60, 300_000));
+    expect(nextTechDebt({ current: 50, paydown: 70_000, scale: 1 })).toBe(nextTechDebt({ current: 50, paydown: 70_000 }));
   });
 });

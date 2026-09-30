@@ -26,7 +26,7 @@
  * to another table in the same market, where somebody wants them.
  */
 import { ROLES, type Company, type Role } from "./types";
-import { saturate } from "./market";
+import { atScale, saturate } from "./market";
 import { rng } from "./random";
 
 // ─── The people ──────────────────────────────────────────────────────────────
@@ -195,10 +195,13 @@ export function staffQualityNext(input: {
   newHires: number;
   recruiting: number;
   training: number;
+  /** The market's size, so what training and recruiting cost means the same everywhere. */
+  scale?: number;
 }): number {
-  const { quality, established, newHires, recruiting, training } = input;
-  const trained = Math.min(100, quality + saturate(Math.max(0, training), 150_000) * 14 - 1.5);
-  const hired = 35 + saturate(Math.max(0, recruiting), 100_000) * 50;
+  const { quality, established, newHires, recruiting, training, scale = 1 } = input;
+  // Both thresholds are absolute money and belong at the market's scale — see `atScale`.
+  const trained = Math.min(100, quality + saturate(Math.max(0, training), atScale(150_000, scale)) * 14 - 1.5);
+  const hired = 35 + saturate(Math.max(0, recruiting), atScale(100_000, scale)) * 50;
   const total = Math.max(0, established) + Math.max(0, newHires);
   if (total <= 0) return Math.max(0, Math.min(100, trained));
   return Math.max(0, Math.min(100, (established * trained + newHires * hired) / total));

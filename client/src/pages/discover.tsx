@@ -56,7 +56,7 @@ export default function Discover() {
    * the same three faces in "People who may interest you" and again in
    * "People" a scroll later, which reads as a bug.
    */
-  const { data: matches } = useQuery<{ matchedUserId: string }[]>({ queryKey: ["/api/matches"], enabled: browsing });
+  const { data: matches, isPending: matchesPending } = useQuery<{ matchedUserId: string }[]>({ queryKey: ["/api/matches"], enabled: browsing });
   const alreadyShown = new Set(browsing ? (matches ?? []).map((m) => m.matchedUserId) : []);
 
   const { data, isLoading, isFetching, isError } = useQuery<DiscoverSearchResponse>({
@@ -107,6 +107,8 @@ export default function Discover() {
           people={(data?.people ?? []).filter((p) => !alreadyShown.has(p.id))}
           counts={data?.counts}
           isLoading={isLoading}
+          /* The People list is filtered against these, so it waits for them. */
+          peopleWaiting={browsing && matchesPending}
           isError={isError}
           updateFor={updateFor}
         />

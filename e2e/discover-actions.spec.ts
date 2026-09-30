@@ -58,20 +58,25 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   // Connect from Discover, with a note. The card changes at once.
   const note = "Saw your habit tracker — I'm building something similar.";
   /*
-   * Searched for rather than browsed.
+   * Searched, not browsed — and for a duller reason than this comment used to
+   * give.
    *
-   * A plain /discover is a browse, and a browse leads with "People who may
-   * interest you" — a strip fed by /api/matches, which is deliberately
-   * `staleTime: 0` and regenerates on a stale read (match-strip.tsx). Anyone in
-   * the strip is filtered out of the People grid below it, so as the suite grows
-   * and newer accounts crowd into the match list, this fixture's card moves
-   * between the two lists and then out of both. The click resolved the button
-   * and then spent sixty seconds being told it had detached from the DOM.
+   * A browse shows the first 24 people the search returns, and by the end of a
+   * full suite this database holds 137 accounts. A fixture created halfway
+   * through is simply not on the page, and the locator never resolves at all.
    *
-   * A query turns browse mode off (isBrowsing, use-discover-filters.ts), so the
-   * strip is not rendered and the results are the search's — which is what makes
-   * this deterministic however many accounts exist. Nothing about what is being
-   * tested changes: these assertions are about what the card's buttons do.
+   * That is a different failure from the one this spec became known for, where
+   * the button resolved and then detached as the match strip re-filtered the
+   * grid underneath it. The two are indistinguishable from the red, which is
+   * how they were confused: a seven-spec reproduction hits the detach, and the
+   * full suite hits the volume.
+   *
+   * A query makes the fixture reachable whatever else exists, which is the only
+   * thing that holds at scale. It also turns the match strip off, so this spec
+   * does not cover the detach. That is fixed in
+   * client/src/components/discover/discover-results.tsx and is untested: there
+   * is no React test harness here to exercise it at the level it lives at, and
+   * a browse cannot be made reliable enough to carry it.
    */
   await page.goto("/discover?q=Bea+Builder");
   await page.getByTestId(`button-connect-${beaId}`).click();

@@ -333,6 +333,32 @@ export function segmentPush(company: Company, niche: Niche, segmentId: string): 
 }
 
 /** The share of the market a company can be considered by, once its regional push is counted. */
+/**
+ * How much overflow a company can take in, as a multiple of what it won by
+ * being chosen in the same segment in the same period.
+ *
+ * Deliberately loose, and bounded from below by the catalogue rather than
+ * chosen for the startup case. The property that does the work holds at any
+ * value: a company nobody chose this period wins nothing on merit, so it has
+ * no allowance and cannot be handed a market for owning an empty plant.
+ *
+ * The number only decides the middle, and the five-team catalogue seasons
+ * decide the number. Measured on `balance.test.ts`, which asserts that more
+ * than one of five teams finishes with a business worth something:
+ *
+ *     cap 4  ✗ one team in five survived
+ *     cap 5  ✗ one team in five survived
+ *     cap 6  ✓ (exactly on the boundary)
+ *     cap 8  ✓ chosen, for margin
+ *
+ * Those markets are fed by overflow more than anybody realised, which is worth
+ * knowing on its own and is written down in `docs/simulation-backlog.md`. It
+ * also means this is a partial fix: at eight, a four-year season of deciding
+ * nothing ends down £745 with its customers halved and a company worth a third
+ * of a played one — losing, but not painfully.
+ */
+export const SPILL_TOPUP_MAX = 8;
+
 export function regionalReach(company: Company, niche: Niche): number {
   if (company.kind === "incumbent") return 1;
   const total = [...regionWeights(company, niche).values()].reduce((sum, w) => sum + w, 0);
@@ -411,6 +437,12 @@ export function allocate(
   const shrank: AllocationResult["shrank"] = {};
   const turnedAway: AllocationResult["turnedAway"] = {};
   const spill: AllocationResult["spill"] = {};
+  /**
+   * What each company won by being chosen this period, per segment.
+   *
+   * Kept because the overflow below is bounded by it. See `SPILL_TOPUP_MAX`.
+   */
+  const wonOnMerit: Record<string, Record<string, number>> = {};
   for (const c of companies) { held[c.id] = {}; unserved[c.id] = 0; }
 
   /** Appeal per segment, kept so the spill pass uses the same preferences the year was decided on. */
@@ -514,11 +546,52 @@ export function allocate(
        * company held stopped falling however far it went.
        */
       const askedOf = priceFor(c, segment.id);
-      const ceiling = hasTier(c, segment.id)
-        ? expectationsFor(segment, year).priceCeiling
-        : marketCeiling;
+      /*
+       * Judged against what *these* people will pay, tier or no tier.
+       *
+       * The appeal side judges a list price against the dearest ceiling in the
+       * market, and the reason given there is a good one: who *chooses* you is
+       * a market-wide comparison, and marking a company down for pricing above
+       * its cheapest segment would mark down most companies.
+       *
+       * Staying is not choosing. This loop is already per segment, and the
+       * customers in it are the ones actually paying the bill — so the
+       * question is not "is this dear for the market" but "is this more than
+       * the people paying it can afford". Asked the market-wide way, a company
+       * could charge eighteen times what its largest segment references and
+       * those customers were shielded by the ceiling of a richer segment they
+       * were not in. Measured over sixteen quarters: putting the price up 20%
+       * every period ended at £274 in a market referencing £15, winning
+       * nothing and losing two customers a period, with five times the revenue
+       * of holding steady and a company worth ten times the best honest
+       * strategy in the game.
+       */
+      const ceiling = expectationsFor(segment, year).priceCeiling;
       const over = Math.max(0, askedOf / Math.max(1, ceiling) - 1);
-      const gouged = Math.min(0.85, over * 0.6);
+      /*
+       * And this one is not an annual rate.
+       *
+       * Every other rate here is a year's worth, divided by `per` so a quarter
+       * moves a quarter of it. That is right for shopping around: deciding to
+       * leave takes time. It is wrong for a price somebody cannot pay, and the
+       * line above already says so — "a few per cent over costs a few per
+       * cent, double the ceiling costs most of them" — which is what these
+       * numbers mean read as a period, and is not what they did.
+       *
+       * Scaled, an 85% *annual* ceiling removed only 21% of a segment in a
+       * quarter however absurd the price. Customers fell about a fifth a
+       * period while a price put up by half each period rose faster, so
+       * revenue — customers times price — climbed for ever. Measured over
+       * sixteen quarters: raising the price 50% every period ended at £10,389
+       * in a market that references £15, with twelve customers left, £124,668
+       * of annual revenue and a company worth 79 times the best honest
+       * strategy in the game. It was the dominant move by an enormous margin,
+       * and it made every other decision decoration.
+       *
+       * Past what you can afford you do not buy a worse one — you do not buy,
+       * and you do not take a year to not buy.
+       */
+      const unaffordable = Math.min(0.95, over * 0.6) * (1 - locked);
       // Every rate here is an annual one — a third of a segment a year is the
       // outer limit — so a quarter moves a quarter of it. Without this a
       // quarterly season churned its market four times as fast as a yearly one.
@@ -541,7 +614,8 @@ export function allocate(
       const was = Math.max(1, c.priceWas ?? priceFor(c, segment.id));
       const rise = Math.max(0, priceFor(c, segment.id) / was - 1);
       const resented = Math.min(0.2, rise * (1.3 - segment.loyalty) * 0.5);
-      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged, resented) * (1 - locked) * per;
+      const shopping = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), resented) * (1 - locked) * per;
+      const leaveRate = Math.max(shopping, unaffordable);
       /*
        * And last year's deal-chasers: customers a promotion won, who leave
        * faster than the rest once the deal is over.
@@ -665,6 +739,8 @@ export function allocate(
       const room = Math.max(0, Math.round(within) - already);
       const won = Math.min(Math.round(upForGrabs * share), room);
       held[id][segment.id] = already + won;
+      /* What this company won by being chosen, which is what bounds the overflow it can absorb below. */
+      (wonOnMerit[id] ??= {})[segment.id] = ((wonOnMerit[id] ?? {})[segment.id] ?? 0) + won;
 
       /*
        * Who these people were, for the year's report. The pool is one pool, so
@@ -734,6 +810,19 @@ export function allocate(
     const appeal = appealBySegment[segment.id] ?? {};
     spill[segment.id] = {};
 
+    /*
+     * Pass one: what every company would take, before anybody actually does.
+     *
+     * The allowance below is shared between everyone who turned somebody away
+     * this period, and a company can only spend it once. Applied as the
+     * rejections were walked, the first rival processed used the whole
+     * allowance up and the last one's customers had nowhere to go — an
+     * under-built company's overflow vanished or not depending on where its id
+     * happened to sit in an object. So the wanting is worked out first and the
+     * allowance shared out in proportion to it.
+     */
+    const wants: { from: string; to: string; wanted: number }[] = [];
+    const askedOf: Record<string, number> = {};
     for (const [from, count] of Object.entries(rejected)) {
       if (count <= 0) continue;
       const takers = companies
@@ -742,39 +831,69 @@ export function allocate(
         .filter((t) => t.weight > 0);
       const total = takers.reduce((sum, t) => sum + t.weight, 0);
       if (total <= 0) continue;
-
       /*
        * Scaled by how the rival compares with the company that turned them
        * away. Somebody who queued for Ember does not settle for a brand they
        * have never heard of just because it had a free table; they settle for
-       * the next thing they would actually have chosen, or they go home. The
-       * first version of this handed every overflow to whoever had room, and an
-       * idle team with a large empty warehouse became profitable in year three
-       * for having done nothing.
+       * the next thing they would actually have chosen, or they go home.
        */
       const theirs = appeal[from] ?? 0;
       for (const t of takers) {
         const willing = theirs > 0 ? Math.min(1, (appeal[t.id] ?? 0) / theirs) : 1;
         const wanted = Math.round(count * (t.weight / total) * willing);
-        /*
-         * And the same ceiling the allocation above uses.
-         *
-         * Somebody turned away by a rival is still a person living somewhere.
-         * Without this they went to whoever had the most empty room regardless
-         * of whether that company sells where they live — which is how a
-         * founder open in one region worth 9% of the market ended a period
-         * holding 21% of it: the allocation refused to hand them customers
-         * they could not reach, and the overflow handed them over anyway.
-         */
-        const taker = companies.find((c) => c.id === t.id)!;
-        const within = Math.round(segment.size * regionalReach(taker, niche) * regionalFit(taker, niche, segment.id));
-        const reachRoom = Math.max(0, within - (held[t.id][segment.id] ?? 0));
-        const taken = Math.min(wanted, room[t.id], reachRoom);
-        if (taken <= 0) continue;
-        room[t.id] -= taken;
-        held[t.id][segment.id] = (held[t.id][segment.id] ?? 0) + taken;
-        (spill[segment.id][from] ??= {})[t.id] = taken;
+        if (wanted <= 0) continue;
+        wants.push({ from, to: t.id, wanted });
+        askedOf[t.id] = (askedOf[t.id] ?? 0) + wanted;
       }
+    }
+
+    /**
+     * Each taker's slice of what it was asked for, once its allowance applies.
+     *
+     * The takers are only the companies with room left, so in a market whose
+     * incumbents are all full that set is one company — and it took `willing`
+     * of everything every rival turned away, however unknown it was. A company
+     * that decided *nothing at all* was handed a thousand customers in its
+     * first period this way, in segments it had a 0.6% claim on, and ended a
+     * four-year season richer than it started. Room was not a bet; it was a
+     * customer magnet, and the biggest empty plant won.
+     *
+     * Bounding the intake by what the company won on merit says the thing that
+     * is actually true: overflow tops a business up, it does not make one. A
+     * company nobody chose this period has nothing to top up. A company
+     * genuinely competing for the segment has a large allowance and never
+     * notices this line — which is why the five-team catalogue seasons are
+     * where they were, and why narrowing the door itself was not the answer:
+     * tried, it killed four teams in five. See `SPILL_TOPUP_MAX`.
+     */
+    const allowed: Record<string, number> = {};
+    for (const [id, asked] of Object.entries(askedOf)) {
+      const merit = wonOnMerit[id]?.[segment.id] ?? 0;
+      const allowance = Math.round(merit * SPILL_TOPUP_MAX);
+      allowed[id] = asked > 0 ? Math.min(1, allowance / asked) : 0;
+    }
+
+    for (const { from, to, wanted: asked } of wants) {
+      const wanted = Math.round(asked * (allowed[to] ?? 0));
+      if (wanted <= 0) continue;
+      /*
+       * And the same ceiling the allocation above uses.
+       *
+       * Somebody turned away by a rival is still a person living somewhere.
+       * Without this they went to whoever had the most empty room regardless
+       * of whether that company sells where they live — which is how a founder
+       * open in one region worth 9% of the market ended a period holding 21%
+       * of it: the allocation refused to hand them customers they could not
+       * reach, and the overflow handed them over anyway.
+       */
+      const taker = companies.find((c) => c.id === to)!;
+      const within = Math.round(segment.size * regionalReach(taker, niche) * regionalFit(taker, niche, segment.id));
+      const reachRoom = Math.max(0, within - (held[to][segment.id] ?? 0));
+      const taken = Math.min(wanted, room[to], reachRoom);
+      if (taken <= 0) continue;
+      room[to] -= taken;
+      held[to][segment.id] = (held[to][segment.id] ?? 0) + taken;
+      (spill[segment.id][from] ??= {})[to] = ((spill[segment.id][from] ?? {})[to] ?? 0) + taken;
     }
   }
 

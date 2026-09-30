@@ -11,8 +11,9 @@ import { describe, it, expect } from "vitest";
 import {
   assetEffects, ageAssets, stillHeld, marketListings, resaleValue, resolveBids, ownListing, biddableFunds,
 } from "@shared/simulation/assets";
+import { interestOn } from "@shared/simulation/finance";
 import {
-  distressOf, recoveryOptions, applyRecovery, reviewCovenant, climbing, COVENANT_YEARS,
+  distressOf, recoveryOptions, applyRecovery, reviewCovenant, climbing, COVENANT_YEARS, RESCUE_SHARE,
 } from "@shared/simulation/recovery";
 import { startingCompany } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -377,6 +378,26 @@ describe("the moves themselves", () => {
     expect(out.company.cash).toBeGreaterThan(0);
     expect(out.company.bankruptSince).toBeUndefined();
     expect(out.notes.join(" ")).toMatch(/third of the company/i);
+
+    /*
+     * And the third actually changes hands.
+     *
+     * This used to check only that the *note* mentioned a third, and nothing
+     * took one: the move handed over a million and a half, cleared the
+     * bankruptcy, and cost three points of reputation. Free money in the one
+     * situation where money is worth most, while the game said in words that
+     * it had cost a third of the company. The seasons are ranked on
+     * `founderValue`, which is worth times this share, so this is the line
+     * that makes it a last resort rather than a first one.
+     */
+    expect(out.company.founderShare).toBeCloseTo((c.founderShare ?? 1) * (1 - RESCUE_SHARE), 6);
+    expect(out.company.founderShare).toBeLessThan(c.founderShare ?? 1);
+  });
+
+  it("leaves a company rescued over and over with something to play for", () => {
+    let c = company({ cash: 0, creditLimit: 0, debt: 4_000_000, bankruptSince: 3 });
+    for (let i = 0; i < 12; i++) c = applyRecovery({ company: c, kind: "rescue_raise", year: 4 + i }).company;
+    expect(c.founderShare, "the same floor an ordinary raise has").toBe(0.05);
   });
 });
 
@@ -484,5 +505,39 @@ describe("the rivals at the auction", () => {
     const awards = resolveBids(listings, [...theirs, { ventureId: "me", listingId: lot.id, amount: high }],
       { me: high * 2, ...Object.fromEntries(rivals.map((r) => [r.id, high * 2])) });
     expect(awards[0].winnerId).toBe("me");
+  });
+});
+
+/**
+ * What the recovery moves promise, they have to deliver.
+ *
+ * Two of the four described a cost or a benefit that no code applied. The
+ * rescue raise said it took a third of the company and took nothing; the
+ * restructuring said the creditor agreed a lower rate and nothing read the
+ * relief it set. Both survived because the tests checked the wording.
+ */
+describe("a restructured debt costs less to carry", () => {
+  const owing = (over: Partial<Company> = {}): Company =>
+    ({ ...company({ debt: 2_000_000, cash: 0, creditLimit: 0 }), ...over }) as Company;
+
+  it("charges the lower rate the creditor agreed to", () => {
+    const before = interestOn(owing(), 0.06);
+    const after = interestOn(owing({ covenant: { since: 3, spendCap: 500_000, met: 0, rateRelief: 0.03 } }), 0.06);
+    expect(after.rate, "the rate actually falls").toBeLessThan(before.rate);
+    expect(before.rate - after.rate).toBeCloseTo(0.03, 6);
+    expect(after.interest, "and so does the bill").toBeLessThan(before.interest);
+  });
+
+  it("does not discount the rescue that came before it", () => {
+    // Emergency money is priced off what the company would otherwise pay.
+    const before = interestOn(owing({ emergencyDebt: 500_000 }), 0.06);
+    const after = interestOn(owing({ emergencyDebt: 500_000, covenant: { since: 3, spendCap: 500_000, met: 0, rateRelief: 0.03 } }), 0.06);
+    expect(after.emergencyRate).toBe(before.emergencyRate);
+  });
+
+  it("goes back to the ordinary rate once the covenant lifts", () => {
+    const under = interestOn(owing({ covenant: { since: 3, spendCap: 500_000, met: 0, rateRelief: 0.03 } }), 0.06);
+    const lifted = interestOn(owing({ covenant: undefined }), 0.06);
+    expect(lifted.rate).toBeGreaterThan(under.rate);
   });
 });

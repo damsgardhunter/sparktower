@@ -146,16 +146,37 @@ export interface CapacityBuild {
 }
 
 export function capacityBuild(
-  company: Pick<Company, "capacity"> & { buildFrom?: number; buildTo?: number },
+  company: Pick<Company, "capacity"> & { buildFrom?: number; buildTo?: number; customers?: Record<string, number> },
   target: number,
   per = 1,
 ): CapacityBuild {
   const current = Math.max(0, Math.round(company.capacity));
   const wanted = Math.max(0, Math.round(target));
 
+  /*
+   * You cannot cut below the people you are already serving.
+   *
+   * A cut is immediate, which is right — you hand the lease back and stop
+   * paying for it. But room is also what decides who gets turned away, so a
+   * target below the customer count threw out customers the company already
+   * had, and a target of nought threw out *all of them*: measured on a settled
+   * company, one period, 380 customers to zero, and no way back because a
+   * company with no customers wins nothing next period either. One number,
+   * typed once, ending a season.
+   *
+   * Nothing else in the game does that, and it is not a strategy anybody
+   * chose — it is a field that accepts nought. Downsizing is still a real
+   * decision and still immediate; it just cannot go further than the business
+   * that is actually there. The room keeps shrinking as customers leave, which
+   * is how leaving a market actually works.
+   */
+  const serving = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const floor = Math.max(0, Math.round(serving));
+
   // A cut is immediate, and it abandons whatever was being built.
   if (wanted <= current) {
-    return { now: wanted, next: wanted, building: 0, buildFrom: undefined, buildTo: undefined };
+    const cut = Math.max(wanted, Math.min(current, floor));
+    return { now: cut, next: cut, building: 0, buildFrom: undefined, buildTo: undefined };
   }
 
   /*

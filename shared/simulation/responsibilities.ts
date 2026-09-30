@@ -154,6 +154,145 @@ export const unlockYear = (role: Role, field: string): number => unlockOf.get(`$
 export const isUnlocked = (role: Role, field: string, period: number, periods = 1): boolean =>
   Math.floor((period - 1) / Math.max(1, periods)) + 1 >= unlockYear(role, field);
 
+/**
+ * The order one person meets the levers in, when there is nobody else at the table.
+ *
+ * ## Why a solo season needs its own schedule
+ *
+ * `UNLOCKS` above is written for five people. Each of them starts with three
+ * or four levers and ends the season running about a dozen, which is a job a
+ * person can hold in their head. A solo founder holds all five desks, so they
+ * start with **nineteen** — every seat's opening levers at once, on the first
+ * screen they ever see — and by the end of a four-year quarterly season they
+ * are looking at forty-nine. Measured, not guessed: `docs/simulation-playtest.md`.
+ *
+ * Nineteen decisions before you have made one is not a business; it is a
+ * spreadsheet with a start button. And the lumpiness is as bad as the size —
+ * year two hands a solo founder seven more in a single period, because seven
+ * different desks each got one.
+ *
+ * So a solo season reads the same schedule differently. Eight levers open it,
+ * and the rest arrive a few a period, in this order, spread across three
+ * quarters of the season so the last stretch is played rather than learned.
+ * Nothing is taken away and nothing arrives that a table would not also get:
+ * the list is filtered to the years the season is actually long enough to
+ * reach, exactly as the team schedule is.
+ *
+ * The eleven that open it are the decisions a business cannot be run without:
+ * where the period goes, who the company is for, what it charges, how much it
+ * can serve, two ways people hear about it, how it gets better, how it looks
+ * after people, who it employs, what it borrows and what it keeps back.
+ *
+ * That list is not a taste. It is what the desk's own tests already hold a
+ * solo founder's first period to — filing a brand budget, holding cash back,
+ * declaring a focus — and they are right: eight was an aesthetic preference,
+ * and it would have taken away decisions a first period genuinely makes.
+ *
+ * `focus` is in it for a second reason as well as the obvious one. It is what
+ * every other seat's period is aimed at, and it is the field a solo filing
+ * carries for the chief executive's desk — a founder's decision is validated
+ * against all five at once, so a period that cannot say where it is going is
+ * a period that files awkwardly.
+ */
+export const SOLO_ORDER: readonly string[] = [
+  // ── The first period: what a business cannot open without. ──
+  "focus", "positioning", "price", "capacityTarget",
+  "brandSpend", "performanceSpend", "featureSpend", "supportSpend",
+  "headcount", "borrow", "cashBuffer",
+  // ── The rest of what a table holds on day one. ──
+  "targetCities", "reliabilitySpend", "efficiencySpend",
+  "repay", "raiseAmount", "researchSpend", "techDebtPaydown", "celebritySpend",
+  // ── Year two for a table: planning, pricing properly, renting room. ──
+  "forecast", "tiers", "leaseCapacity", "engineerPay",
+  "borrowTerm", "securitySpend", "shockAnswer",
+  // ── Year three: the channels, the bets, and the offers that arrive. ──
+  "prSpend", "referralSpend", "featureBet", "featureMode", "dataSpend",
+  "trainingSpend", "recruitingSpend", "programme", "pace",
+  "annualDiscount", "holdBack", "deals", "dealVotes",
+  // ── Year four: expansion, and the sharper money. ──
+  "expand", "expandVote", "regionFocus", "segmentFocus", "promo",
+  "winbackSpend", "research", "costReview", "insurance", "dividendPct",
+  // ── Year five: refinements of things that have to exist first. ──
+  "openNiche", "automationTarget", "shiftCapacity", "stockTarget",
+  "sourcing", "terms", "factorPct", "refinance",
+  // ── Later still. ──
+  "buyback",
+];
+
+/** How many open the season, before anything is spread. */
+const SOLO_OPENING = 11;
+
+/**
+ * How much of the season is spent learning.
+ *
+ * The last quarter arrives with nothing new in it, on purpose: a lever handed
+ * over in the final period is a lever nobody gets to find out about, and a
+ * season should end on decisions the player already understands.
+ */
+const SOLO_RAMP = 0.75;
+
+/** The earliest year any desk gets this lever, for filtering and for order. */
+const soloYearOf = (field: string): number => {
+  let best = 1;
+  let found = false;
+  for (const u of UNLOCKS) {
+    if (u.field !== field) continue;
+    if (!found || u.year < best) { best = u.year; found = true; }
+  }
+  return found ? best : 1;
+};
+
+const soloCache = new Map<string, Map<string, number>>();
+
+/**
+ * The period each lever arrives in, for one person playing this season alone.
+ *
+ * `total` is how many decisions the whole season has and `periods` how many
+ * make a year. Both are needed: the years decide *which* levers a season is
+ * long enough to reach, and the periods decide how thinly the rest are spread.
+ */
+export function soloSchedule(total: number, periods = 1): ReadonlyMap<string, number> {
+  const per = Math.max(1, periods);
+  const span = Math.max(1, Math.round(total));
+  const key = `${span}:${per}`;
+  const cached = soloCache.get(key);
+  if (cached) return cached;
+
+  const years = Math.max(1, Math.ceil(span / per));
+  const reachable = SOLO_ORDER.filter((f) => soloYearOf(f) <= years);
+  const opening = reachable.slice(0, SOLO_OPENING);
+  const rest = reachable.slice(SOLO_OPENING);
+
+  const schedule = new Map<string, number>();
+  for (const f of opening) schedule.set(f, 1);
+  /*
+   * Everything else spread evenly from the second period to the end of the
+   * ramp. A season with no room to spread anything (a four-period yearly one,
+   * say) collapses to "period two", which is the honest answer: there is
+   * nowhere else to put them.
+   */
+  const last = Math.max(2, Math.round(span * SOLO_RAMP));
+  for (let i = 0; i < rest.length; i++) {
+    const at = rest.length <= 1 ? 2 : 2 + Math.round((i * (last - 2)) / (rest.length - 1));
+    schedule.set(rest[i], at);
+  }
+  soloCache.set(key, schedule);
+  return schedule;
+}
+
+/**
+ * Whether the founder has this lever yet, in a season they are playing alone.
+ *
+ * A lever the solo order does not mention is one only a table ever sees (see
+ * `LEVERS_FOR_A_TABLE`), and the desk filters those out separately — but
+ * answering `false` here as well means a crafted filing cannot reach one
+ * through a door the screen does not open.
+ */
+export const soloUnlocked = (field: string, period: number, total: number, periods = 1): boolean => {
+  const at = soloSchedule(total, periods).get(field);
+  return at !== undefined && period >= at;
+};
+
 /** What arrives next year, for the "coming up" line on the desk. */
 export const arrivingIn = (role: Role, period: number, periods = 1): string[] => {
   const year = Math.floor((period - 1) / Math.max(1, periods)) + 1;

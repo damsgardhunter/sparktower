@@ -26,7 +26,26 @@ export type Terms = (typeof TERMS_DAYS)[number];
  * — and the money arrives after the year it was earned. Cash on delivery is
  * the reverse: every pound now, and a little harder to sell.
  */
-export function termsOf(days: number | undefined | ""): { days: number; appeal: number; deferred: number } {
+export function termsOf(
+  days: number | undefined | "",
+  /**
+   * A period's share of a year — 1 yearly, 1/4 quarterly, 1/12 monthly.
+   *
+   * `deferred` is applied to a *period's* takings, and it used to be `d / 365`
+   * — a share of a *year's*. In a quarterly season that left ninety-day terms
+   * deferring a quarter of one quarter's sales, when ninety days is the whole
+   * quarter: the money was collected almost as fast as if the company billed
+   * on delivery. The working capital a long-terms company is supposed to be
+   * carrying was understated fourfold, and twelvefold in a monthly season.
+   *
+   * What that did to the lever: at ninety days a company won more customers,
+   * ended with *more* cash and *more* profit than one billing on delivery.
+   * Measured over sixteen quarters of dating apps, +51,024 of company value
+   * for no cost at all — strictly dominant, which the file this lives beside
+   * calls "a tax on not noticing it".
+   */
+  per = 1,
+): { days: number; appeal: number; deferred: number } {
   /*
    * Billing on delivery is the baseline, not a penalty: it is how every
    * company here has always billed, and a seat that never touches the lever —
@@ -40,8 +59,13 @@ export function termsOf(days: number | undefined | ""): { days: number; appeal: 
     days: d,
     // Four per cent more appealing at ninety days, and nothing at all on delivery.
     appeal: 1 + 0.04 * (d / 90),
-    // The share of a year's takings still owed when the year ends.
-    deferred: d / 365,
+    /*
+     * The share of *this period's* takings still owed when it ends, which is
+     * what the caller multiplies by a period's revenue. Capped at one: terms
+     * longer than the period itself mean everything is still outstanding, not
+     * more than everything.
+     */
+    deferred: Math.min(1, d / (365 * Math.max(0.01, per))),
   };
 }
 

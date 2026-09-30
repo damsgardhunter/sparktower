@@ -1,3 +1,5 @@
+import type { LogoStyleId } from "./../../shared/brand-kit";
+
 /**
  * Sixteen demo builders, one per headshot in attached_assets/headshots.
  *
@@ -36,6 +38,16 @@ export interface DemoProject {
   category: string;
   goal: "ship_mvp" | "systemize_business" | "run_company";
   subcategory: string;
+  /** The one line on the project's own page. Without it the overview is blank. */
+  oneLiner: string;
+  /** Why it exists, in the owner's words. The overview's second paragraph. */
+  mission: string;
+  /** Style for the generated logo and cover — see shared/brand-kit.ts. */
+  brandStyle: LogoStyleId;
+  techStack?: string[];
+  rolesNeeded?: string[];
+  teamSize?: number;
+  estimatedWeeks?: number;
 }
 
 export interface DemoBuilder {
@@ -89,7 +101,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Austin Community College", degree: "Associate", field: "Culinary Arts", startYear: "2012", endYear: "2014" }],
     projects: [
-      { title: "Shiftwork", description: "Rota software for restaurants with two to five sites. Staff set availability from their phone, the schedule warns you before it breaks labour law or your budget, and swaps settle without a group chat.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Shiftwork", description: "Rota software for restaurants with two to five sites. Staff set availability from their phone, the schedule warns you before it breaks labour law or your budget, and swaps settle without a group chat.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Rota software for restaurants that already have two sites and one spreadsheet.", mission: "Every schedule I ever built broke on a Thursday, and I found out on the floor. A rota is a promise to somebody's childcare, and software should treat it that way.", brandStyle: "name", techStack: ["React", "Node", "PostgreSQL"], rolesNeeded: ["Frontend Engineer"], teamSize: 3, estimatedWeeks: 16 },
     ],
   },
   {
@@ -117,8 +129,8 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
       { school: "University of Mumbai", degree: "BEng", field: "Mechanical Engineering", startYear: "1999", endYear: "2003" },
     ],
     projects: [
-      { title: "Laneways", description: "Freight planning for manufacturers too big for spreadsheets and too small for SAP. Tells you what a lane really costs once you count the delays, not what the rate card says.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
-      { title: "Keystone spare-parts line", description: "Turning our spare-parts desk into a business that runs without me: documented process, pricing rules, and someone other than me able to quote.", category: "Other", goal: "systemize_business", subcategory: "service" },
+      { title: "Laneways", description: "Freight planning for manufacturers too big for spreadsheets and too small for SAP. Tells you what a lane really costs once you count the delays, not what the rate card says.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Freight planning for manufacturers too big for spreadsheets and too small for SAP.", mission: "A rate card is not a cost. What a lane really costs shows up in the delays, the detention and the reorders, and nobody sells that view to a company our size.", brandStyle: "simple", techStack: ["Python", "PostgreSQL", "React"], rolesNeeded: ["Data Engineer"], teamSize: 4, estimatedWeeks: 24 },
+      { title: "Keystone spare-parts line", description: "Turning our spare-parts desk into a business that runs without me: documented process, pricing rules, and someone other than me able to quote.", category: "Other", goal: "systemize_business", subcategory: "service", oneLiner: "Turning a spare-parts desk into a business that runs without me.", mission: "The desk makes good margin and every quote goes through one person. That is not a business, it is a hobby with invoices.", brandStyle: "symmetric", techStack: [], rolesNeeded: ["Operations Lead"], teamSize: 2, estimatedWeeks: 12 },
     ],
   },
   {
@@ -146,7 +158,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
       { school: "Spelman College", degree: "BA", field: "English", startYear: "2008", endYear: "2012" },
     ],
     projects: [
-      { title: "Marginal", description: "Reading intervention grouping that takes a class's assessment data and gives a teacher three groups and what to do with each, in the time it takes to make coffee.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Marginal", description: "Reading intervention grouping that takes a class's assessment data and gives a teacher three groups and what to do with each, in the time it takes to make coffee.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Reading groups a teacher can act on before the coffee goes cold.", mission: "Teachers do not need another dashboard. They need the twenty minutes back, and the three groups that assessment data was always going to imply.", brandStyle: "artistic", techStack: ["TypeScript", "React"], rolesNeeded: ["Backend Engineer"], teamSize: 3, estimatedWeeks: 20 },
     ],
   },
   {
@@ -171,8 +183,8 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "University of Washington", degree: "BS", field: "Computer Science", startYear: "2012", endYear: "2016" }],
     projects: [
-      { title: "Sandbar", description: "A staging environment for payment webhooks. Replay any provider's events against your own endpoint, see what your code did, and stop testing money in production.", category: "Web App", goal: "ship_mvp", subcategory: "app" },
-      { title: "Ledgerline", description: "A small tool that reconciles what your payment provider says it sent you against what your bank actually received, and names the difference.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Sandbar", description: "A staging environment for payment webhooks. Replay any provider's events against your own endpoint, see what your code did, and stop testing money in production.", category: "Web App", goal: "ship_mvp", subcategory: "app", oneLiner: "A staging environment for payment webhooks, so nobody tests money in production.", mission: "Every payments team I have been on has one person who knows how to replay a webhook. That should be a button.", brandStyle: "symmetric", techStack: ["Go", "React", "PostgreSQL"], rolesNeeded: ["Founding Engineer"], teamSize: 2, estimatedWeeks: 12 },
+      { title: "Ledgerline", description: "A small tool that reconciles what your payment provider says it sent you against what your bank actually received, and names the difference.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Reconciles what your processor says it sent against what your bank received.", mission: "The difference between those two numbers is always somebody's afternoon. It should be a line in a report.", brandStyle: "name", techStack: ["TypeScript", "PostgreSQL"], rolesNeeded: [], teamSize: 1, estimatedWeeks: 8 },
     ],
   },
   {
@@ -200,7 +212,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
       { school: "University of Vermont", degree: "BA", field: "Psychology", startYear: "2004", endYear: "2008" },
     ],
     projects: [
-      { title: "Waitroom", description: "Appointment scheduling for independent practices, built around the receptionist rather than the calendar. Overbooking rules that know which appointment types actually run late.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Waitroom", description: "Appointment scheduling for independent practices, built around the receptionist rather than the calendar. Overbooking rules that know which appointment types actually run late.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Appointment scheduling built around the receptionist, not the calendar.", mission: "Software for clinics is written by people who have never watched a receptionist take three calls with a patient in front of them. I have been that receptionist.", brandStyle: "artistic", techStack: ["React", "Node"], rolesNeeded: ["Full-stack Engineer"], teamSize: 3, estimatedWeeks: 20 },
     ],
   },
   {
@@ -224,7 +236,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Università di Bologna", degree: "BSc", field: "Computer Engineering", startYear: "2010", endYear: "2014" }],
     projects: [
-      { title: "Chargeback Desk", description: "Dispute handling for merchants doing $1M–$20M a year: pulls the evidence together, files on time, and tells you which disputes are worth fighting.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Chargeback Desk", description: "Dispute handling for merchants doing $1M–$20M a year: pulls the evidence together, files on time, and tells you which disputes are worth fighting.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Dispute handling for merchants who are losing money they could win back.", mission: "Most disputes are lost on paperwork and deadlines, not on merit. That is an infrastructure problem wearing a legal costume.", brandStyle: "simple", techStack: ["Go", "PostgreSQL"], rolesNeeded: ["Engineer"], teamSize: 2, estimatedWeeks: 16 },
     ],
   },
   {
@@ -247,7 +259,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Cornell University", degree: "BS", field: "Hotel Administration", startYear: "2005", endYear: "2009" }],
     projects: [
-      { title: "Frontdesk", description: "A shift-handover and task tool for independent hotels. What happened overnight, what is outstanding, and who owns it — without the WhatsApp group.", category: "Web App", goal: "ship_mvp", subcategory: "app" },
+      { title: "Frontdesk", description: "A shift-handover and task tool for independent hotels. What happened overnight, what is outstanding, and who owns it — without the WhatsApp group.", category: "Web App", goal: "ship_mvp", subcategory: "app", oneLiner: "Shift handover for independent hotels, without the WhatsApp group.", mission: "What happened overnight, what is outstanding, and who owns it. Three questions every property answers badly at 7am.", brandStyle: "name", techStack: ["React", "Node"], rolesNeeded: ["Designer"], teamSize: 3, estimatedWeeks: 14 },
     ],
   },
   {
@@ -270,7 +282,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "University of Colorado Boulder", degree: "BS", field: "Finance", startYear: "2009", endYear: "2013" }],
     projects: [
-      { title: "Underwrite", description: "Industrial and multifamily underwriting that starts from the rent roll you were actually sent, not from a blank sheet. Assumptions you can defend in an investment committee.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Underwrite", description: "Industrial and multifamily underwriting that starts from the rent roll you were actually sent, not from a blank sheet. Assumptions you can defend in an investment committee.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Underwriting that starts from the rent roll you were actually sent.", mission: "Every acquisitions team rebuilds the same model from scratch under time pressure, badly. I have done it two hundred times.", brandStyle: "simple", techStack: ["TypeScript", "Python"], rolesNeeded: ["Engineer"], teamSize: 2, estimatedWeeks: 18 },
     ],
   },
   {
@@ -293,7 +305,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Pratt Institute", degree: "BFA", field: "Communications Design", startYear: "2010", endYear: "2014" }],
     projects: [
-      { title: "Fieldnote Studio", description: "Making a four-person brand studio run without the founder in every meeting: productised packages, a real pipeline, and someone else able to run a kickoff.", category: "Other", goal: "systemize_business", subcategory: "service" },
+      { title: "Fieldnote Studio", description: "Making a four-person brand studio run without the founder in every meeting: productised packages, a real pipeline, and someone else able to run a kickoff.", category: "Other", goal: "systemize_business", subcategory: "service", oneLiner: "A four-person brand studio that runs without the founder in every meeting.", mission: "A waiting list looks like success and behaves like a bottleneck. I want the studio to be a business, not a calendar.", brandStyle: "name", techStack: [], rolesNeeded: ["Account Manager"], teamSize: 5, estimatedWeeks: 12 },
     ],
   },
   {
@@ -316,7 +328,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Westchester Community College", degree: "Certificate", field: "Welding Technology", startYear: "1986", endYear: "1988" }],
     projects: [
-      { title: "Brenner Metalworks", description: "Getting forty years of quoting judgement out of my head and into something the next person can run: estimating rules, a real handover, and a shop that does not phone me on a Sunday.", category: "Other", goal: "systemize_business", subcategory: "other" },
+      { title: "Brenner Metalworks", description: "Getting forty years of quoting judgement out of my head and into something the next person can run: estimating rules, a real handover, and a shop that does not phone me on a Sunday.", category: "Other", goal: "systemize_business", subcategory: "other", oneLiner: "Forty years of quoting judgement, out of my head and into the shop.", mission: "My father started this in 1978 and the knowledge that runs it is in my head, which is a bad place for it. I am sixty-two.", brandStyle: "artistic", techStack: [], rolesNeeded: ["Operations Manager"], teamSize: 3, estimatedWeeks: 26 },
     ],
   },
   {
@@ -342,7 +354,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
       { school: "Université Paris-Saclay", degree: "BSc", field: "Cognitive Science", startYear: "2007", endYear: "2010" },
     ],
     projects: [
-      { title: "Plainly", description: "A readability and comprehension check for interfaces that carry bad news: reads your actual screens and tells you which sentence a worried person will misread.", category: "Web App", goal: "ship_mvp", subcategory: "app" },
+      { title: "Plainly", description: "A readability and comprehension check for interfaces that carry bad news: reads your actual screens and tells you which sentence a worried person will misread.", category: "Web App", goal: "ship_mvp", subcategory: "app", oneLiner: "A comprehension check for interfaces that carry bad news.", mission: "Most design tooling assumes a calm user with time. I design for the other one — the person reading a result they are frightened of.", brandStyle: "symmetric", techStack: ["TypeScript", "React"], rolesNeeded: ["Engineer"], teamSize: 2, estimatedWeeks: 14 },
     ],
   },
   {
@@ -368,8 +380,8 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
       { school: "University of Delhi", degree: "BSc", field: "Mathematics", startYear: "2011", endYear: "2015" },
     ],
     projects: [
-      { title: "Nearcast", description: "Demand forecasting for businesses with one location and no data team. Connects to your point of sale and tells you what next week looks like, in units you order in.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
-      { title: "Seasonality", description: "A free tool that takes two years of sales history and shows you your real seasonal pattern, separated from the growth trend.", category: "Web App", goal: "ship_mvp", subcategory: "app" },
+      { title: "Nearcast", description: "Demand forecasting for businesses with one location and no data team. Connects to your point of sale and tells you what next week looks like, in units you order in.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Demand forecasting for businesses with one location and no data team.", mission: "Small businesses forecast by taking last year and adding ten per cent. The gap between that and a real model is enormous and nobody serves the middle.", brandStyle: "symmetric", techStack: ["Python", "React"], rolesNeeded: ["Founding Engineer"], teamSize: 2, estimatedWeeks: 16 },
+      { title: "Seasonality", description: "A free tool that takes two years of sales history and shows you your real seasonal pattern, separated from the growth trend.", category: "Web App", goal: "ship_mvp", subcategory: "app", oneLiner: "Your real seasonal pattern, separated from your growth trend.", mission: "Two years of sales history contains the answer to most planning questions. It just needs the trend taken out of it.", brandStyle: "simple", techStack: ["Python"], rolesNeeded: [], teamSize: 1, estimatedWeeks: 6 },
     ],
   },
   {
@@ -392,7 +404,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "University of Minnesota", degree: "MSW", field: "Social Work", startYear: "1999", endYear: "2001" }],
     projects: [
-      { title: "Lakeside Thrift", description: "Making three donation-funded shops run on one system: what arrived, what is worth pricing up, what sells, and which volunteer shift actually covers the floor.", category: "Other", goal: "systemize_business", subcategory: "retail" },
+      { title: "Lakeside Thrift", description: "Making three donation-funded shops run on one system: what arrived, what is worth pricing up, what sells, and which volunteer shift actually covers the floor.", category: "Other", goal: "systemize_business", subcategory: "retail", oneLiner: "Three donation-funded shops, one system.", mission: "Retail software assumes you bought your inventory. Ours arrives in bin bags, and the shops fund the food programme.", brandStyle: "artistic", techStack: [], rolesNeeded: ["Volunteer Coordinator"], teamSize: 4, estimatedWeeks: 16 },
     ],
   },
   {
@@ -415,7 +427,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Portland State University", degree: "BA", field: "Communications", startYear: "2012", endYear: "2016" }],
     projects: [
-      { title: "Alder & Ash", description: "Opening a third coffee shop without the second one's mistakes: the opening checklist, the hiring bar, and the numbers that say whether the site works before the lease is signed.", category: "food", goal: "run_company", subcategory: "restaurant" },
+      { title: "Alder & Ash", description: "Opening a third coffee shop without the second one's mistakes: the opening checklist, the hiring bar, and the numbers that say whether the site works before the lease is signed.", category: "food", goal: "run_company", subcategory: "restaurant", oneLiner: "A third coffee shop, without the second one's mistakes.", mission: "The second shop nearly killed the first, because everything that worked was in my head and my head was in the other shop.", brandStyle: "name", techStack: [], rolesNeeded: ["Store Manager"], teamSize: 4, estimatedWeeks: 20 },
     ],
   },
   {
@@ -438,8 +450,8 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "Texas A&M University", degree: "BS", field: "Kinesiology", startYear: "2009", endYear: "2013" }],
     projects: [
-      { title: "Driftwatch", description: "Retention software for gyms and studios: tells an owner who has quietly stopped coming, this week, while a text still fixes it.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
-      { title: "Ironbound Strength", description: "Taking a 310-member gym from one coach's memory to something a second location could copy.", category: "Other", goal: "systemize_business", subcategory: "service" },
+      { title: "Driftwatch", description: "Retention software for gyms and studios: tells an owner who has quietly stopped coming, this week, while a text still fixes it.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Tells a gym owner who has quietly stopped coming, while a text still fixes it.", mission: "We grew on retention, not marketing — people stayed because somebody noticed. I built that noticing in spreadsheets for eight years.", brandStyle: "symmetric", techStack: ["TypeScript", "PostgreSQL"], rolesNeeded: ["Engineer"], teamSize: 2, estimatedWeeks: 14 },
+      { title: "Ironbound Strength", description: "Taking a 310-member gym from one coach's memory to something a second location could copy.", category: "Other", goal: "systemize_business", subcategory: "service", oneLiner: "A 310-member gym that a second location could copy.", mission: "Everything good here is one coach's memory. That does not open a second site.", brandStyle: "artistic", techStack: [], rolesNeeded: ["Head Coach"], teamSize: 4, estimatedWeeks: 18 },
     ],
   },
   {
@@ -462,7 +474,7 @@ export const DEMO_BUILDERS: DemoBuilder[] = [
     ],
     education: [{ school: "UCLA", degree: "BA", field: "Economics", startYear: "2011", endYear: "2015" }],
     projects: [
-      { title: "Returnly", description: "Return analytics for DTC brands: which SKU, which size, which page, and what one change would cost you least to fix.", category: "SaaS", goal: "ship_mvp", subcategory: "saas" },
+      { title: "Returnly", description: "Return analytics for DTC brands: which SKU, which size, which page, and what one change would cost you least to fix.", category: "SaaS", goal: "ship_mvp", subcategory: "saas", oneLiner: "Return analytics for DTC brands: which SKU, which size, which page.", mission: "Returns were eating eleven per cent of my revenue and nobody could tell me why. I built the answer for myself and three founders asked for it.", brandStyle: "simple", techStack: ["TypeScript", "Python"], rolesNeeded: ["Engineer"], teamSize: 2, estimatedWeeks: 12 },
     ],
   },
 ];
