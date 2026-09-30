@@ -11,31 +11,42 @@ three sections on purpose:
   re-investigating the same false positive, and because two of the findings
   below recommended changes that would have made the product worse.
 
-Last reviewed: **30 September 2026.**
+Last reviewed: **30 September 2026.** Production verified live the same day (see gap 3).
 
 ---
 
 ## Open
 
-### 1. Sixteen write routes that no test names
+### 1. Routes no test names — a working checklist
 
-`summarizeUntestedRoutes` reports 36 of 499 routes named by no test file, 17 of
-them writes; one is now done (see *Closed*), and finding a real bug in the
-first one looked at is the argument for doing the rest. A mention is not a test, but a route no test names is untested.
-The ones that carry money or privacy:
+`summarizeUntestedRoutes` is the source of this list; re-run it rather than
+trusting the numbers below. As of 30 September: **33 of 499 routes named by no
+test, 15 of them writes** (down from 36/17). Two of the first three looked at
+held a real defect, which is the argument for continuing.
 
-| Route | Why it matters |
-|---|---|
-| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue |
-| `POST /api/projects/:id/backing/badge-preview` | spends money on an image |
-| `GET /api/stripe/connect-onboarding` | the payout path |
-| `GET /api/stripe/connect-dashboard` | the payout path |
-| `GET /api/merch-orders/:orderId/print/:face.png` | renders a paid order |
+Ranked by what a silent failure would cost:
 
-Closing it means an integration test per route, in the shape of
-`apple-purchase.test.ts`: the properties the route's own comment claims, each
-one asserted, and each one checked against the bug it describes by reverting
-the fix and watching the test fail.
+| Route | Why it matters | State |
+|---|---|---|
+| `PATCH /api/backings/:id/privacy` | a backer's anonymity | **done** — found a bug |
+| `GET /api/merch-orders/:orderId/print/:face.png` | renders what a backer paid for | **done** |
+| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | next |
+| `POST /api/projects/:id/backing/badge-preview` | spends money on an image | next |
+| `GET /api/stripe/connect-onboarding` | the payout path | |
+| `GET /api/stripe/connect-dashboard` | the payout path | |
+| `POST /api/documents/:docId/tighten` | AI write over a document | |
+| `GET /api/documents/:docId/pdf` | what a customer downloads | |
+| `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
+| `POST /api/projects/:id/{pitch-deck,pitch-critique,pricing-analysis,readiness-score,mock-interview}` | five AI spends in one file | |
+| `POST /api/projects/:id/ai/{detect-gaps,summarize-progress}` | AI spend | |
+| `POST /api/projects/:id/personas/generate`, `roadmap/next-actions`, `kanban/reorder` | AI spend / board order | |
+| `POST /api/games/idea-options` | AI spend | |
+| the remaining reads (`feed/my-projects`, `health-checks`, `task-history`, `investor-personas`, `looking-for-options`, `resume-status`, `fill-quote`, `layout-report`, `nova-briefing`, `rebuild-quote`, `reports{/:year}`, `scenes/:index/image`, `stripe/publishable-key`) | lower cost of failure | |
+
+The shape that has worked twice now: assert the properties the route's *own
+comment* claims, then check each assertion against the bug it describes by
+breaking the route and watching the test fail. Both defects so far were found
+that way, and one test passed vacuously until a deliberate control caught it.
 
 ### 2. `projects` is the one surface with no kill switch, and that is a decision to make
 
@@ -53,11 +64,37 @@ Three options, none of which should be picked by a test:
 
 Recorded in `route-guards.test.ts` as `NO_API_OF_ITS_OWN` so it stays visible.
 
-### 3. Deploy-time verification has never been run against production
+### 3. Deploy verification — the public half is now observed, the private half is not
 
-`npm run check:env` and `npm run check:live` exist and are documented in
-`ops/deploy.md`. Neither has been run against the real production environment
-in this work. Everything about the deploy is currently reasoned, not observed.
+`npm run check:live` was run against production on 30 September and passed
+every check:
+
+```
+Checking https://sparktower.app
+  ✓ /_health answers — 200 in 485ms
+  ✓ /_ready answers — 200 in 120ms
+  ✓ database reachable — ok
+  ✓ migrations applied — every migration in the repo has run
+  ✓ the site publishes its own address — publishes https://sparktower.app
+  database round trip: 2ms
+```
+
+That settles the three `fatal` env rules, two directly and one by inference:
+`DATABASE_URL` works, `PUBLIC_URL` is the canonical domain and the site agrees,
+and `SESSION_SECRET` must be set and strong because `assertSecretsAtBoot()`
+throws otherwise — a process that is up has already passed it.
+
+**Still not observed:** the `degraded` variables, which by design let the
+process boot with a feature off — `RESEND_API_KEY`/`EMAIL_FROM` (without them
+nobody who signs up can be confirmed), `STRIPE_SECRET_KEY`, `PRIVATE_OBJECT_DIR`,
+`AI_INTEGRATIONS_OPENAI_API_KEY`. None can be checked from outside. Two ways
+to close it, both needing the owner's own credentials:
+
+1. Sign in as the owner and read `GET /api/admin/deployment`, which reports
+   build identity, readiness and `set: true|false` per variable, plus a
+   `missingRequired` list.
+2. Run `npm run check:env` in the Render shell, where the production
+   environment actually is.
 
 ### 4. Four E2E specs fail locally and pass in CI
 
@@ -103,6 +140,7 @@ statically. Worth doing, not urgent now that the sweep exists.
 | The mobile 2FA screen offered recovery codes the product had removed: a button POSTing to a route that never existed, a `recoveryCodesLeft` field the server never sent, and a promise of a way back in that could not be kept | `3a674b2f` | `mobile-api-paths.test.ts` (every `/api/...` literal under `mobile/` resolves to a mounted route; the 2FA status shape matches the route's own `res.json`) |
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
 | No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| `GET /api/merch-orders/:orderId/print/:face.png` had no test, and its central claim — renders from the order's artwork snapshot, never the campaign's live config, so a creator changing their logo cannot change what somebody already bought — was enforced by nothing. No defect found; the `Cache-Control: immutable` header is only honest because of that property, so the two are now asserted together | this change | `merch-print-file.test.ts` (asserted against the regression: reading live config fails it. A control test also caught the first version passing vacuously, because the `front` face draws a fixed tagline and cannot vary — only `back` renders the name) |
 | `PATCH /api/backings/:id/privacy` read `Boolean(req.body.isAnonymous)`, so a request that never mentioned the field — empty body, misspelled key, a retry that lost it — came out `false` and published the name of a backer who had chosen not to be listed, silently and with a 200 | this change | `backing-privacy.test.ts` (the flag must be said, not inferred; anonymity leaves the public wall and stays on the creator's roster; neither a stranger nor the project owner can change it) |
 
 ---
