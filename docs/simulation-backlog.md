@@ -2350,41 +2350,61 @@ eight or better.
 Worth remembering before reading the next alarming sweep: a strategy that
 cannot do something a player obviously would is not evidence about the market.
 
-### Open: filing nothing out-scores deliberate play in four of the seven
-Ranked by what the company is finally worth, median over eight seeds, with
-events on:
+### Withdrawn: "filing nothing out-scores deliberate play"
+Recorded here earlier the same day, with the cause given as `valuation =
+revenue x 1.2 + assets - debt` having no term for profit. Both halves were
+wrong and the correction is worth more than the claim was.
 
-    restaurant_chain   doing nothing ranks 1st of 8
-    drone_delivery     doing nothing ranks 2nd
-    project_saas       doing nothing ranks 2nd
-    podcasts           doing nothing ranks 3rd
-    mmos               doing nothing ranks 5th
-    construction       6th
-    dating_apps        7th
+**The measurement was mine, not the game's.** Every strategy in that sweep cut
+its plant toward what it currently served. Run the same strategy with the same
+spending and no plant cut:
 
-In all fourteen markets Nova wrote, doing nothing ranks **last**. So this is a
-property of the hand-written markets, not of the engine, and it is the same
-complaint as "doing nothing is the most profitable strategy" — which earlier
-work closed on *profit* and never checked on *value*, the number the game
-actually ranks people by.
+    restaurant_chain, median of eight seeds, events on
+    grower, cutting the plant     revenue 329,350/qtr   profit -26,616   value 1,580,881
+    grower, keeping it            revenue 904,872/qtr   profit +39,316   value 4,343,384
+    filing nothing                revenue 363,566/qtr   profit +28,679   value 1,745,117
 
-`defaultDraft` fills in only a price and the plant it already has, so this
-really is filing nothing rather than accepting good defaults.
+Filing nothing was not beating deliberate play. It was beating seven strategies
+that had each capped themselves below what they could sell, and it keeps the
+plant it opened with because `defaultDraft` carries the capacity target
+forward. With one plan in the pool that manages its plant, filing nothing falls
+from first of eight to between second and fourth of nine, and remains **last in
+all fourteen markets Nova wrote**.
 
-### Open: undercutting wins almost everywhere
-`cheap` — price at four fifths of the cheapest segment, spend on performance —
-has the best median end value in **ten of twelve** markets tested, including
-most of Nova's. One strategy dominating every market is the same shape as a
-market with one answer.
+**And a profit term does not fix it, because there was nothing to fix.** Tried,
+measured over twelve markets: adding cash at face value makes filing nothing
+rank *first* in five of seven catalogue markets, because a passive company
+keeps the opening bank while active ones spend theirs. Adding earnings at four
+or eight times moves nothing — in those markets a passive company genuinely has
+both the higher revenue and the positive profit, so no formula built on those
+two can rank it below. The scoring function is not what was wrong.
 
-Both of these probably have one cause: `valuation = revenue x 1.2 + assets -
-debt` has no term for profit, so the score rewards volume and is indifferent to
-whether the volume pays. Undercutting maximises revenue; spending that does not
-move revenue far enough destroys value; and a company that files nothing keeps
-its revenue while spending nothing to hold it. That is already recorded above
-as cost-cutting levers scoring zero, and this is the same defect seen from the
-other end. It wants its own pass, because changing what a season is scored on
-moves every balance measurement in this document.
+The lesson is the same one as the catalogue pass above, twice in one day: a
+strategy that cannot do what a player obviously would is not evidence about the
+game. Both times the harness was the finding.
+
+### Open: keeping room is worth more than any decision in the catalogue
+What the correction turned up instead. Identical spending, the only difference
+being whether the plant is cut toward what is served:
+
+    dating_apps 2.94x   drone_delivery 4.62x   podcasts 4.34x
+    restaurant_chain 2.75x   construction 2.29x   project_saas 3.11x   mmos 3.45x
+    cairnwait 1.31x   kilnshare 1.32x
+
+Keeping capacity is worth between 2.3x and 4.6x the company's final value in
+every hand-written market, and 1.3x in the markets Nova writes. A company can
+win several times what it holds in a period, so the plant — not appeal, price,
+product or spend — is what decides the season, and the sensible-looking act of
+retiring idle plant is punished harder than any pricing mistake.
+
+It is **not** the overflow: `SPILL_TOPUP_MAX` at 8, 4, 2 and 1 leaves the ratio
+at 4.62, 4.62, 4.61 and 4.70. It is the capacity ceiling on merit wins, and it
+says idle capacity is priced too cheaply against the growth it enables — in the
+catalogue markets only, which is where the plants are large in absolute terms.
+
+Worth doing next, and worth doing carefully: idle cost is also what makes a
+thin-margin market punishing (see drone delivery above), so this is a single
+number pulling two ways.
 
 ### Open: owning something for a whole year makes the year worse
 The effects reach the market — a company holding a patent and a distribution
