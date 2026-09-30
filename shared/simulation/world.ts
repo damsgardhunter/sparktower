@@ -45,12 +45,27 @@ import { rng } from "./random";
  * reference of £400m quietly cut its opening bank by four per cent — a
  * balance change nobody asked for, in a market that was already the hardest.
  *
- * Floored as well as capped: below a hundredth of the reference the numbers
- * stop reading like a business and start reading like pocket money, and a
- * market that small is one Nova should not have written.
+ * Floored as well as capped, because somewhere below this the numbers stop
+ * reading like a business. Where that is, though, was set a long way above
+ * where it needed to be.
+ *
+ * At a hundredth of the reference, a market Nova wrote for a real project —
+ * £235,000 a year, a booking site for spare kiln firings — opened its founder
+ * with £47,773, which is **20% of everything that market turns over in a
+ * year**. A company in one of the seven catalogue markets opens with 1.5% of
+ * its market. The floor was not protecting the numbers; it was handing a
+ * founder thirteen times the relative wealth of a catalogue table, in the
+ * markets Nova is specifically asked to write small.
+ *
+ * Measured down to a ten-thousandth: no figure goes non-finite, no season
+ * breaks, and the same market plays to the same quality and roughly the same
+ * customers at every floor tried. At a five-hundredth that founder opens with
+ * £15,485 — 6.6% of the market — which is a bootstrapped business rather than
+ * pocket money or a windfall. Markets above the floor are untouched: only one
+ * of the three written for real projects was below it at all.
  */
 export const REFERENCE_POTENTIAL = 350_000_000;
-export const MARKET_SCALE_MIN = 0.01;
+export const MARKET_SCALE_MIN = 0.002;
 
 export function marketScale(niche: Pick<Niche, "segments">): number {
   const scale = marketPotential(niche) / REFERENCE_POTENTIAL;

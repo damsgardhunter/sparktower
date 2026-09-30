@@ -78,8 +78,27 @@ export function buildMarketPrompt(input: {
             "the cap is not a reason to pretend otherwise; it is the scale this engine plays at.",
           ].join("\n"),
       "",
-      "SEGMENTS are the dimensions that make the game theirs. Two to five groups who want different",
-      "things and disagree about price. The five weights are 0 to 1 and should differ between",
+      /*
+       * Named and counted, the way the incumbents are.
+       *
+       * This used to ask for "two to five groups" and a model asked for a range
+       * takes the floor: three markets written from three real projects came
+       * back with two segments and three regions every time — the minimum of
+       * both. Two segments is two positioning choices, two price tiers and a
+       * market that plays the same shape whatever the business is. The
+       * incumbents block below has always said "exactly four, not three, not
+       * five" and named the four, and it gets four every time.
+       */
+      "SEGMENTS are the dimensions that make the game theirs. Exactly four groups — not two, not",
+      "three — who want different things and disagree about price. Four because two is a coin flip",
+      "and the whole game is choosing who you are for.",
+      "  Most trades have roughly these four, in their own words: the many small buyers who feel",
+      "  every pound; the solid middle who will pay for something that works; the large buyer with",
+      "  procurement, a security review and the deepest pockets; and the awkward one nobody serves",
+      "  properly — a niche with an odd requirement, or people using something not built for this.",
+      "  If this trade genuinely has a different four, write those instead. Do not pad to four with",
+      "  two halves of the same group.",
+      "The five weights are 0 to 1 and should differ between",
       "segments — a market where everyone weighs everything the same has no decisions in it.",
       "  priceSensitivity: how much a higher price puts them off.",
       "  qualityFocus: how much they notice the product being better.",
@@ -88,8 +107,12 @@ export function buildMarketPrompt(input: {
       "  loyalty: how hard they are to move once they have chosen. This is the incumbents' moat.",
       "  referencePrice: what this segment considers a normal price, in whole US dollars.",
       "",
-      `REGIONS: ${MIN_REGIONS} to ${MAX_REGIONS} places this market exists, with weights that sum to 1 and an entry cost each.`,
+      startup
+        ? "REGIONS: five or six places this market exists, with weights that sum to 1 and an entry cost each."
+        : `REGIONS: ${MIN_REGIONS} to ${MAX_REGIONS} places this market exists, with weights that sum to 1 and an entry cost each.`,
       "They can be countries, cities, or kinds of place — whatever this business actually thinks in.",
+      "Five or six because where to go next is a decision, and three places is barely one. Make them",
+      "differ: one obvious home, one big and expensive, one small and cheap, and the rest in between.",
       "segmentMix says who over-indexes where: 1.3 means a third more of that segment than average.",
       "",
       startup
