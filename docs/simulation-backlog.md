@@ -2540,6 +2540,36 @@ The trade is stated plainly: a season started before the rules keeps a market
 that may be hard or unplayable. That is the right side to err on, and it stops
 mattering as those seasons finish.
 
+### Open, and a decision rather than a defect: `opening.ts` is finished and unwired
+169 lines that nothing imports. Checked rather than assumed — it is not dead
+code left behind by something removed, it is a feature that was written and
+never connected. `Opening`, `Standing`, `OPENING_BANDS`, `positionFor` and
+`atStanding` appear nowhere else in the repo, there is no column for the choice
+and no control in the desk.
+
+It also works. Run against a funded dating-apps company:
+
+    progress 0.05   cash 0          credit 200,000    score 20   "An idea, and the work so far"
+    progress 0.30   cash 480,000    credit 500,000    score 32   "Building it"
+    progress 0.60   cash 1,200,000  credit 1,000,000  score 45   "Something people use"
+    progress 0.95   cash 2,100,000  credit 1,600,000  score 55   "Trading"
+
+What it does is open a season *where a project actually is* rather than funded
+and level — its own comment argues the case better than this does: "a
+simulation that hands them six million pounds is teaching them to run a company
+that is not theirs."
+
+Finishing it is four things, none of them hard: a column for the choice, a
+control that offers it, a `Standing` derived from the project's progress, and a
+call to `atStanding` after `startingCompany` in `buildWorld`. It is left here
+rather than done because which seasons should open this way is a product
+question, and rather than deleted because deleting a working feature somebody
+designed is not a decision a cleanup gets to make.
+
+No tests were added. Testing code nothing calls pins behaviour that has never
+had to be right; the measurement above is the evidence it works, and the tests
+belong with the wiring.
+
 ### Open: keeping room still decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served, keeping it is worth **2.3x to 4.6x** the company's final value
