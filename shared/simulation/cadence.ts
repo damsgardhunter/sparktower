@@ -140,7 +140,18 @@ export function inPeriodWords(text: string, periods: number): string {
     .replace(/\bthe year\b/g, `the ${word}`)
     .replace(/\bthis year's\b/g, `this ${word}'s`)
     .replace(/\bin a year\b/g, `in a ${word}`)
-    .replace(/\ba year\b(?! from now)/g, `a ${word}`);
+    /*
+     * A rate is not a duration, and this used to rewrite both.
+     *
+     * "an emergency loan … at 30.1% a year" came out as "30.1% a quarter",
+     * which is the same annual rate reported as four times what it is — and
+     * twelve times, in a monthly season. The rate itself is annual and
+     * correctly so; only the words were wrong, which is the worst kind of
+     * wrong, because the number looks deliberate.
+     *
+     * Anything with a percentage in front of it is left alone.
+     */
+    .replace(/(?<!%\s)\ba year\b(?! from now)/g, `a ${word}`);
 }
 
 /** Which year of the season a period falls in, counting from one. */
