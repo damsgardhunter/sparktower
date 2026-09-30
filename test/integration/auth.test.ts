@@ -259,6 +259,32 @@ describe("mobile: tokens", () => {
       .post("/api/auth/mobile/refresh")
       .send({ refreshToken: tablet.body.refreshToken });
     expect(tabletAgain.status).toBe(200);
+
+    /*
+     * And signing the phone out again does not move the record of when it went.
+     *
+     * `revokedAt` is the only answer to "when did that session end", which is
+     * the question asked about a device somebody reports lost. Nothing about
+     * access changes on a second sign-out — a revoked token stays revoked — so
+     * this is about the record rather than the lock. An app retrying a failed
+     * sign-out, or a stolen token replayed by whoever took it, used to move the
+     * timestamp to the replay.
+     */
+    const { db } = await import("../../server/db");
+    const { mobileRefreshTokens } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const crypto = await import("node:crypto");
+    const hash = crypto.createHash("sha256").update(phone.body.refreshToken).digest("hex");
+    const [first] = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.tokenHash, hash));
+    expect(first.revokedAt, "the first sign-out stamped it").toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 15));
+    await request(app).post("/api/auth/mobile/logout").send({ refreshToken: phone.body.refreshToken }).expect(200);
+
+    const [second] = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.tokenHash, hash));
+    expect(second.revokedAt?.getTime(), "the second did not overwrite it").toBe(first.revokedAt?.getTime());
+    /* Still revoked, which is the part that actually matters. */
+    expect((await request(app).post("/api/auth/mobile/refresh").send({ refreshToken: phone.body.refreshToken })).status).toBe(401);
   });
 });
 
