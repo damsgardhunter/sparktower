@@ -29,6 +29,28 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
+  /*
+   * Ten seconds for a single assertion, not Playwright's default five.
+   *
+   * The default is tuned for a locator that is either there or wrong. Most
+   * waits in this suite are neither: they are "the SPA has finished routing
+   * and hydrated the next screen", after a sign-in, a logout or a second-factor
+   * round trip, against a dev-server build. Five seconds is close enough to
+   * that boundary that `mfa-sign-in` failed on `button-login` in one run and on
+   * `app-header` in the next, with the awaited element present in the failure
+   * snapshot both times — it had arrived just after the assertion gave up.
+   *
+   * `retries: 1` under CI had been hiding it: the spec failed and passed on the
+   * retry, so the pipeline was green while the same spec failed every time it
+   * was run locally, where there are no retries. A flake masked by a retry is
+   * worse than a red build, because the thing everybody trusts stops being
+   * evidence.
+   *
+   * This weakens nothing. An assertion that would fail still fails; it is only
+   * given longer to notice that it passes. The per-test budget stays 60s, so a
+   * genuinely stuck screen still fails the test rather than hanging the run.
+   */
+  expect: { timeout: 10_000 },
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
   use: {
     baseURL: E2E_BASE_URL,

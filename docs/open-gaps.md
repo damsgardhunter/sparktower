@@ -108,14 +108,7 @@ to close it, both needing the owner's own credentials:
 2. Run `npm run check:env` in the Render shell, where the production
    environment actually is.
 
-### 4. Four E2E specs fail locally and pass in CI
-
-`discover-actions`, `explore-loop`, `mfa-sign-in`, `safety-review` failed in a
-local Playwright run; the same specs pass in CI. Treating them as
-environmental is an inference, not a diagnosis — nobody has read the failures.
-`ci-stability.md` is the place for the answer.
-
-### 5. Access control is correct but held together by convention
+### 4. Access control is correct but held together by convention
 
 There is no defect here — see *Checked and not a gap* — but twelve different
 access helpers do this job with no shared type and no common middleware:
@@ -130,7 +123,7 @@ is the part that matters. Unifying the helpers would additionally make the
 property *readable* — and would have saved four failed attempts to determine it
 statically. Worth doing, not urgent now that the sweep exists.
 
-### 6. Product and simulation
+### 5. Product and simulation
 
 - A tier priced past its own segment's ceiling still floors at 10% appeal, so
   raising a price past every buyer can still win customers.
@@ -152,6 +145,7 @@ statically. Worth doing, not urgent now that the sweep exists.
 | The mobile 2FA screen offered recovery codes the product had removed: a button POSTing to a route that never existed, a `recoveryCodesLeft` field the server never sent, and a promise of a way back in that could not be kept | `3a674b2f` | `mobile-api-paths.test.ts` (every `/api/...` literal under `mobile/` resolves to a mounted route; the 2FA status shape matches the route's own `res.json`) |
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
 | No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
+| Four E2E specs failed locally and passed in CI, and the reason was two separate things. `testDatabaseUrl` consulted `TEST_DATABASE_URL` for the default suffix only, so every session got its own `*_test` database and then all shared one `project_e2e` that each run truncates — three of the four. The fourth was a real flake that `retries: 1` had been hiding: the awaited element arrived just after Playwright's default 5s assertion timeout, so the spec failed every local run and passed CI on the retry | this change | `test-database-url.test.ts` (the E2E database is derived from the pinned base, and CI's resolution is unchanged); the flake verified by three consecutive local passes where it had failed every time |
 | `POST /api/projects/:id/backing/badge-preview` took an image permit and never recorded it, so `freeRunUsed` was never true and **every press was the free one** — unlimited `images.edit` calls for nothing, on the route whose own comment says it was "the one picture nobody paid for". Every other image route records its run; this one did not | this change | `badge-preview.test.ts` (the second preview is refused; a typo does not spend the free image; owner-only) |
 | `POST /api/projects/:id/backing/submit-review` had no test: the door into the payout review queue, where a project with no Stripe account must not be reviewable, an approved campaign must not be knocked back to pending by its own creator, and a rejected one must be able to return without the old reviewer notes | this change | `backing-submit-review.test.ts` (all four properties; removing the four checks fails exactly four tests) |
 | `GET /api/merch-orders/:orderId/print/:face.png` had no test, and its central claim — renders from the order's artwork snapshot, never the campaign's live config, so a creator changing their logo cannot change what somebody already bought — was enforced by nothing. No defect found; the `Cache-Control: immutable` header is only honest because of that property, so the two are now asserted together | this change | `merch-print-file.test.ts` (asserted against the regression: reading live config fails it. A control test also caught the first version passing vacuously, because the `front` face draws a fixed tagline and cannot vary — only `back` renders the name) |
