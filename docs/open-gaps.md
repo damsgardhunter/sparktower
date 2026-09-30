@@ -21,9 +21,9 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 `summarizeUntestedRoutes` is the source of this list; re-run it rather than
 trusting the numbers below. As of 30 September: **33 of 499 routes named by no
-test, 13 of them writes** (down from 36/17). Two of the first seven looked at
-held a real defect — one of them unpaid AI spend — which is the argument for
-continuing.
+test, 12 of them writes** (down from 36/17). Three of the first eight looked
+at held a real defect — unpaid AI spend, a published backer, and a model reply
+rewriting a page nobody asked about — which is the argument for continuing.
 
 Ranked by what a silent failure would cost:
 
@@ -35,8 +35,8 @@ Ranked by what a silent failure would cost:
 | `POST /api/projects/:id/backing/badge-preview` | spends money on an image | **done** — found a bug |
 | `GET /api/stripe/connect-onboarding` | the payout path | **done** |
 | `GET /api/stripe/connect-dashboard` | the payout path | **done** |
-| `POST /api/documents/:docId/tighten` | AI write over a document | next |
-| `GET /api/documents/:docId/pdf` | what a customer downloads | |
+| `POST /api/documents/:docId/tighten` | AI write over a document | **done** — found a bug |
+| `GET /api/documents/:docId/pdf` | what a customer downloads | next |
 | `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
 | `POST /api/projects/:id/{pitch-deck,pitch-critique,pricing-analysis,readiness-score,mock-interview}` | five AI spends in one file | |
 | `POST /api/projects/:id/ai/{detect-gaps,summarize-progress}` | AI spend | |
@@ -146,6 +146,7 @@ statically. Worth doing, not urgent now that the sweep exists.
 | `env-contract.md` filed the OpenAI key as required to boot when it is `degraded`, recorded the wrong production `PUBLIC_URL`, and omitted `PUBLIC_URL` from the fatal table | `9574b24b` | `env-requirements.test.ts` (the documented fatal table equals the `fatal` rules; the address matches the runbook) |
 | No test proved a stranger cannot read a private project; the only check walked 5 of 200 project-scoped routes | `d6ec1474` | `project-access-sweep.test.ts` (all 200 routes swept as a stranger against a private project; the project stub asserted field by field) |
 | Four E2E specs failed locally and passed in CI, and the reason was two separate things. `testDatabaseUrl` consulted `TEST_DATABASE_URL` for the default suffix only, so every session got its own `*_test` database and then all shared one `project_e2e` that each run truncates — three of the four. The fourth was a real flake that `retries: 1` had been hiding: the awaited element arrived just after Playwright's default 5s assertion timeout, so the spec failed every local run and passed CI on the retry | this change | `test-database-url.test.ts` (the E2E database is derived from the pinned base, and CI's resolution is unchanged); the flake verified by three consecutive local passes where it had failed every time |
+| `POST /api/documents/:docId/tighten` applied the model's reply by block id across the whole document, so an id belonging to a page nobody asked about was written anyway. One hallucinated id away from rewriting a builder's prose on an unselected page — silently, with no undo, since the original is replaced. `pageIndex` in particular promises one page | this change | `document-tighten.test.ts` (a reply is only honoured for the blocks it was shown; also: a document that fits costs nothing, and a failed rewrite is not a partial save) |
 | `POST /api/projects/:id/backing/badge-preview` took an image permit and never recorded it, so `freeRunUsed` was never true and **every press was the free one** — unlimited `images.edit` calls for nothing, on the route whose own comment says it was "the one picture nobody paid for". Every other image route records its run; this one did not | this change | `badge-preview.test.ts` (the second preview is refused; a typo does not spend the free image; owner-only) |
 | `POST /api/projects/:id/backing/submit-review` had no test: the door into the payout review queue, where a project with no Stripe account must not be reviewable, an approved campaign must not be knocked back to pending by its own creator, and a rejected one must be able to return without the old reviewer notes | this change | `backing-submit-review.test.ts` (all four properties; removing the four checks fails exactly four tests) |
 | `GET /api/merch-orders/:orderId/print/:face.png` had no test, and its central claim — renders from the order's artwork snapshot, never the campaign's live config, so a creator changing their logo cannot change what somebody already bought — was enforced by nothing. No defect found; the `Cache-Control: immutable` header is only honest because of that property, so the two are now asserted together | this change | `merch-print-file.test.ts` (asserted against the regression: reading live config fails it. A control test also caught the first version passing vacuously, because the `front` face draws a fixed tagline and cannot vary — only `back` renders the name) |
