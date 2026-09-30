@@ -215,10 +215,25 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   let parsed: any;
   try {
     const raw = completion.choices[0].message.content ?? "";
-    parsed = parseModelJson(raw);
+    /* "answer" rather than the default "response", so the sentence a person reads is the one this route always showed. */
+    parsed = parseModelJson(raw, "answer");
   } catch (err) {
     console.error("Nova assist parse failed (%s):", String(surface).replace(/[\r\n]+/g, " ").slice(0, 60), err);
-    return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });
+    /*
+     * The typed refusal, like the other two catches in this file.
+     *
+     * This wrote the 502 by hand with a message and no `code`, so a client
+     * branching on `model_unreadable` — which every other AI route here sends —
+     * could not tell "the model had a bad day, try again" from "this is broken".
+     * The sweep test did not catch it because it reads the *status* out of the
+     * catch, and the status was always right.
+     *
+     * `parseModelJson` is the only thing in the try, and it throws
+     * ModelResponseError, so this is the unreadable-answer path in practice;
+     * anything else that ever lands here gets the route's own 500 rather than
+     * being mislabelled as the model's fault.
+     */
+    return respondToAiError(res, err, "Nova couldn't read that answer. Nothing was charged — try again.");
   }
 
   await storage.deductCredits(userId, CREDIT_COSTS.novaAssist);
