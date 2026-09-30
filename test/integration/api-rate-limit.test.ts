@@ -60,6 +60,27 @@ describe("the floor under the API", () => {
     expect(refused!.body.code).toBe("rate_limited");
     /* A client has to be able to tell this apart from being logged out or blocked. */
     expect(refused!.body.message).toMatch(/minute/i);
+
+    /*
+     * And in the same shape every other limit refuses in.
+     *
+     * The phone reads `retryAfterSeconds` out of the body and has no fallback
+     * to the header, so a refusal without it leaves a mobile user with "too
+     * many requests" and no idea for how long. The web client would have
+     * managed — it falls back to `Retry-After`, which the library does set —
+     * which is exactly why this was easy to miss.
+     */
+    expect(refused!.body.retryAfterSeconds, "the phone reads this and nothing else").toBeGreaterThan(0);
+    expect(refused!.body.retryAfterSeconds).toBeLessThanOrEqual(60);
+    expect(refused!.body.retryAfterMinutes).toBe(Math.ceil(refused!.body.retryAfterSeconds / 60));
+    expect(Number(refused!.headers["retry-after"]), "and the header, for anything that reads that instead").toBeGreaterThan(0);
+
+    /*
+     * `action` is absent on purpose: it names which metered action ran out and
+     * this floor is not one of them. A fake value would be a wrong answer in a
+     * field somebody may group by.
+     */
+    expect(refused!.body.action).toBeUndefined();
   }, 120_000);
 
   /*

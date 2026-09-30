@@ -113,10 +113,34 @@ function whoIsAsking(req: Request): string {
   return `ip:${ipKeyGenerator(req.ip ?? "")}`;
 }
 
+/**
+ * Refused in the shape everything else here refuses in.
+ *
+ * `refuseWithRetry` (server/moderation.ts) answers every other limit with the
+ * wait in the body as well as in the header, and both clients were written
+ * against that. The web one falls back to `Retry-After` when the body has no
+ * number — the library does set it, checked — but the phone does not: it reads
+ * `body.retryAfterSeconds` and nothing else, so a refusal from this floor left
+ * a mobile user with "too many requests" and no idea for how long.
+ *
+ * `action` is the one field of that contract missing here, and it is missing on
+ * purpose. It names which metered action ran out, and this floor is not one of
+ * them — it sits underneath all of them, counting requests rather than
+ * comments or sign-ins. Naming a fake one to satisfy a type would put a wrong
+ * answer in a field somebody may one day group by.
+ *
+ * The wait comes from the limiter's own reckoning rather than the window
+ * length, so it says how long is actually left rather than starting the minute
+ * again on every refusal.
+ */
 const refuse = (req: Request, res: Response) => {
+  const resetAt = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+  const seconds = Math.max(1, Math.ceil(((resetAt?.getTime() ?? Date.now() + WINDOW_MS) - Date.now()) / 1000));
   res.status(429).json({
     message: "That's a lot of requests in a short time. Give it a minute.",
     code: "rate_limited",
+    retryAfterSeconds: seconds,
+    retryAfterMinutes: Math.ceil(seconds / 60),
   });
 };
 

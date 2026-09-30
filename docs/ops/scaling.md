@@ -174,13 +174,33 @@ has state in process memory that two instances would not share.
    truth — two instances means two caches and slightly more work, not
    incorrect behaviour. Fine to leave.
 
+5. **The API-wide floor** ([api-rate-limit.ts](../../server/api-rate-limit.ts))
+   is `express-rate-limit`, which keeps its counts in the process. Two
+   instances means two allowances, so the real ceiling is the number in that
+   file multiplied by however many instances are running — 600 anonymous
+   requests a minute becomes 1,200 across two, and nothing says so at the time.
+
+   This is deliberate and it is not the same problem as the three above. The
+   floor exists to protect *reads*, which are the requests too numerous and too
+   cheap to be worth a database round trip each; putting its counting in
+   Postgres would add a write to every read and cost more than the thing it
+   prevents. It is a coarse backstop under the per-action limits, not the limit
+   itself, and a backstop that is twice as loose is still a backstop.
+
+   What it means in practice: size that number per instance rather than for the
+   fleet, and divide it if the fleet grows. If the floor ever needs to be exact
+   across instances it wants a shared counter (Redis, or the store interface
+   `express-rate-limit` already takes) — worth doing when reads are the thing
+   under pressure, and not before.
+
 ### What is already ready
 
 Worth knowing, because it is the expensive half and it is done:
 
 - **Sessions are in Postgres**, so any instance can serve any user.
-- **Rate limiting is in Postgres**, so limits are global rather than per
-  instance.
+- **Per-action rate limiting is in Postgres**, so the limits that matter — the
+  ones on signing in, commenting, posting, uploading, spending credits — are
+  global rather than per instance.
 - **Object storage is external**, so uploads are not tied to a disk.
 
 ### Order of operations
