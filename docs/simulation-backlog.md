@@ -2384,8 +2384,8 @@ strategy that cannot do what a player obviously would is not evidence about the
 game. Both times the harness was the finding.
 
 ### Open: keeping room is worth more than any decision in the catalogue
-What the correction turned up instead. Identical spending, the only difference
-being whether the plant is cut toward what is served:
+Identical spending, the only difference being whether the plant is cut toward
+what is served:
 
     dating_apps 2.94x   drone_delivery 4.62x   podcasts 4.34x
     restaurant_chain 2.75x   construction 2.29x   project_saas 3.11x   mmos 3.45x
@@ -2394,63 +2394,62 @@ being whether the plant is cut toward what is served:
 Keeping capacity is worth between 2.3x and 4.6x the company's final value in
 every hand-written market, and 1.3x in the markets Nova writes. A company can
 win several times what it holds in a period, so the plant — not appeal, price,
-product or spend — is what decides the season, and the sensible-looking act of
-retiring idle plant is punished harder than any pricing mistake.
+product or spend — is what decides the season, and retiring idle plant is
+punished harder than any pricing mistake.
 
-It is **not** the overflow: `SPILL_TOPUP_MAX` at 8, 4, 2 and 1 leaves the ratio
-at 4.62, 4.62, 4.61 and 4.70. It is the capacity ceiling on merit wins, and it
-says idle capacity is priced too cheaply against the growth it enables — in the
-catalogue markets only, which is where the plants are large in absolute terms.
+**Not the overflow, and not the price of idle room.** Both were swept:
 
-Worth doing next, and worth doing carefully: idle cost is also what makes a
-thin-margin market punishing (see drone delivery above), so this is a single
-number pulling two ways.
+    SPILL_TOPUP_MAX  8 → 4.62x   4 → 4.62x   2 → 4.61x   1 → 4.70x
+    IDLE_RATE     0.08 → 4.62x  0.15 → 4.27x  0.25 → 4.65x  0.40 → 2.49x
+                                 (5 failures)  (16)         (21)
+
+Five times the idle price still leaves the ratio at 2.49x while breaking
+twenty-one tests, so the cost of holding room is not what is mispriced. What is
+left is the ceiling itself: `allocate` caps merit wins at capacity, and a
+company with room can win several times its holdings in one period, so the
+option on that capacity is worth far more than any plausible rent on it. The
+lever is the *growth rate* a company can absorb, which nothing currently
+bounds, and that is a design change rather than a constant.
+
+Worth knowing before touching it: idle cost is also what makes a thin-margin
+market punishing (drone delivery, above), so it is one number pulling two ways.
 
 ### Open: owning something for a whole year makes the year worse
-The effects reach the market — a company holding a patent and a distribution
-deal wins 25,118 customers at the allocation against 15,338 without them. Run
-the same two companies through a whole year and it inverts, and not
-monotonically:
-
-    plain    23,050 customers · revenue 507,100
-    patent   13,166 customers · revenue 289,652
-    deal     11,929 customers · revenue 262,438
-    both     15,129 customers · revenue 332,838
-
-**The cause is now known.** It is not the incumbents reacting — holding their
-capacity response flat changes none of these numbers, and blinding them to the
-player entirely changes none of them either. Not capacity, not unit cost, not
-appeal: merit wins are correctly monotonic in quality, 7,189 against 8,324. The
-whole inversion is in the overflow, of which plain receives 15,861 and the
-patent company 4,842.
+A company holding a patent and a distribution deal wins 25,118 customers at the
+allocation against 15,338 without them, and finishes the year with **fewer**
+customers than the same company owning nothing. Merit wins are monotonic; the
+whole inversion is in the overflow.
 
 Customers a full rival turns away are shared among the companies with room, in
-proportion to `appeal² × reach × fit`, **with no regard to how much room each
-one actually has**:
+proportion to `appeal² × reach × fit`, **with no regard for how much room each
+one has**. A rival 105 customers short of its own capacity took 96.9% of the
+claim on 45,695 people, kept its 105, and the other ~44,000 evaporated instead
+of passing to the newcomer with room for 27,373 — and it only had room because
+the *stronger* newcomer had taken enough on merit to leave it short.
 
-    plain:   takers = [player]                           player share 1.0000
-    patent:  takers = [inc_pairwise (room 105), player]  pairwise share 0.9692
+**A fix is written and measured, and it is one test away.** Weighting each
+claim by the share of the rejected a company could actually hold
+(`weight × min(1, room / count)`) — a single-pass change, not a redistribution
+— makes the year monotonic:
 
-A rival with room for 105 people takes 96.9% of the claim on 45,695 turned
-away, keeps its 105, and the other ~44,000 evaporate instead of passing to the
-newcomer with room for 27,373. What put that rival among the takers was the
-*stronger* player winning enough on merit to leave it 105 short of capacity —
-so a 105-customer difference cost the player ~11,000 customers.
+    plain 23,253 · deal 28,288 · patent 30,458 · both 36,533
 
-A fix was written and measured: share the overflow in passes, so a company that
-fills up drops out and its remainder goes to the others. It makes the four
-numbers monotonic — 31,084 / 32,842 / 42,827 / 50,642 — and it is **not
-landed**, because the constants around it were tuned against the leak. With it
-in, no setting of `SPILL_TOPUP_MAX` satisfies everything at once:
+At `SPILL_TOPUP_MAX` 2–3 it also *fixes* two things the earlier water-filling
+attempt broke: a passive company goes back to losing money, and a bought region
+is worth its price again. Winnability holds, with the year's events on.
 
-    TOPUP 3    passive company stops profiting, bought region worth its price
-               again — premium team finishes 13.9m against a 16.1m bar
-    TOPUP 5-8  premium clears the bar — passive company profits again, and a
-               bought region multiplies customers by exactly 1.00 because the
-               plant is full either way
+What it costs is one test: `balance.test.ts`, four teams in one market, needs
+two of three also-rans above 4% of market potential. The swing team reaches
+**14.79m against a 16.08m bar — 8.7% short**, where on the tree today it clears
+by 8%. Every lever was swept and none of them move it: `SPILL_TOPUP_MAX` 2
+through 8, the spill's appeal exponent at 1, 1.5 and 2, and dating apps' open
+share at 0.16 through 0.22. It is the fix itself, not its tuning — with the
+leak closed, customers a rival turns away go to whoever can actually use them
+instead of vanishing, and in a crowded market that concentrates on the
+strongest company. The also-rans end about 15% poorer.
 
-That bar was only 8% clear before any of this work, so the crowded-market test
-has very little room to absorb a change of this size. What is left is
-re-deriving the spill economy around the fix rather than finding the bug, and
-it wants its own pass with the crowded season in front of it.
-
+So this is now a judgement rather than a puzzle: **is a crowded market
+concentrating more the right price for owning good things not making your year
+worse?** The bar it misses was itself calibrated against an engine where a
+share of every overflow disappeared. Not taken unilaterally, and not shipped
+red.
