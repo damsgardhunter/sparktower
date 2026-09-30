@@ -442,12 +442,25 @@ export function botDecision(input: {
    * in its opening region for the whole season; so did two in six in drone
    * delivery and one in six in MMOs.
    *
-   * A sixth of what the company has, which is the same fraction the game
-   * already calls a sensible price for a first region (`OPENING_BUDGET`), and
-   * it still comes out of the purse afterwards so a bot cannot choose four big
-   * things in one period.
+   * A sixth of what the company has was still short of the price of a region.
+   * Measured with the rivals holding the share their market is actually
+   * written with, a dating-apps bot finished the season sitting on £120,850 in
+   * the bank next to a £50,000 entry it had never been allowed to consider: a
+   * sixth of its headroom was £18,000, so the cheapest region in the game
+   * stayed out of reach however much money it had. Half the bots in three of
+   * seven markets never left the region they opened in.
+   *
+   * How much of the balance sheet goes behind it is the difference between the
+   * two kinds of bot, which is why it is not one number. Opening a region is a
+   * deliberate expansion — one of the things a person does and a filler does
+   * not — so a survivor puts a third of what it has behind it and a filler
+   * stays timid. Raised for both alike it worked, and cost the thing it was
+   * measured against: fillers expanded as readily as survivors and the gap
+   * between playing well and going through the motions closed from 13 points
+   * to 6. It still comes out of the purse afterwards, so neither can choose
+   * four big things in one period.
    */
-  const capital = headroom(company) * 0.15;
+  const capital = headroom(company) * (skill === "survivor" ? 0.35 : 0.15);
   const affordOnce = (cost: number) => cost > 0 && cost <= Math.max(purse, capital);
 
   const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);

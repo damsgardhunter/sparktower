@@ -152,6 +152,18 @@ export interface Niche {
   segments: Segment[];
   /** The companies already here, holding the share a team has to take. */
   incumbents: IncumbentSeed[];
+  /**
+   * How much of this market has no supplier at all, as a share of it.
+   *
+   * The room a newcomer has, and the one number that decides whether a market
+   * can be entered. Unset means `TRULY_OPEN_SHARE`, which is what almost every
+   * market wants; it is here because it was previously impossible to say. The
+   * named rivals' shares looked like the knob and were not — whatever they
+   * left over above this share was handed to the fragmented tail, so writing
+   * the rivals smaller moved customers from one holder to another and left a
+   * newcomer exactly as much room as before.
+   */
+  openShare?: number;
   /** Where this market exists. A company only sells where it has opened. */
   cities: City[];
   /**

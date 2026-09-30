@@ -67,7 +67,7 @@ const LOOKS: Record<string, MarketLook> = {
     Icon: Package,
     tint: "bg-sky-500/10 border-sky-500/30",
     ink: "text-sky-600 dark:text-sky-400",
-    shape: "A clinic pays twenty-eight times a novelty order, and never switches",
+    shape: "A clinic pays eleven times a novelty order, and never switches",
   },
   podcasts: {
     Icon: Mic,

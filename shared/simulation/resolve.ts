@@ -1203,6 +1203,15 @@ export function resolveYear(
 
   /* 3. The market decides. */
   const allocation = allocate(withIncumbents, niche, world.year, nextEconomy, periods);
+  if (process.env.SIM_DEBUG) {
+    console.log(`[dbg] demand=${(nextEconomy as any).demand} year=${world.year} periods=${periods}`);
+    for (const c of withIncumbents) {
+      const w = Object.values(allocation.held[c.id] ?? {}).reduce((s: number, n: any) => s + n, 0);
+      const start = Object.values(c.customers ?? {}).reduce((s: number, n: any) => s + Number(n||0), 0);
+      if (c.kind === "player") console.log("[dbg]PLAYER " + JSON.stringify({ ...c, customers: start, assets: (c.assets??[]).length }));
+      else console.log(`[dbg]   ${String(c.id).padEnd(14)} q=${c.quality} b=${c.brand} s=${c.service} price=${c.price} cap=${c.capacity} held0=${Math.round(start)} -> ${Math.round(w)}`);
+    }
+  }
 
   /*
    * Win-back: last year's leavers, brought back from whoever took them — the
@@ -1639,6 +1648,8 @@ export function resolveYear(
     }
 
     let emergencyDrawn = 0;
+    /** Bills there was neither cash nor credit to pay. Booked as debt below, and a line on the bridge. */
+    let unpaidBills = 0;
     // Repayment clears the expensive money first.
     let emergencyDebt = company.kind === "player" ? applyRepayment(company.emergencyDebt ?? 0, repaid) : 0;
     if (cash < 0) {
@@ -1691,6 +1702,7 @@ export function resolveYear(
         const unpaid = -cash;
         debt += unpaid;
         if (company.kind === "player") emergencyDebt += unpaid;
+        unpaidBills = unpaid;
         cash = 0;
         notesFor[company.id] = [
           ...(notesFor[company.id] ?? []),
@@ -1897,6 +1909,15 @@ export function resolveYear(
       if (repaid > 0) lines.push({ label: "Repaid", amount: -repaid });
       if (raised > 0) lines.push({ label: "Raised from investors", amount: raised });
       if (emergencyDrawn > 0) lines.push({ label: "Drawn on credit to stay solvent", amount: emergencyDrawn });
+      /*
+       * The bills above are on the bridge as though they were paid, and the
+       * ones there was no money for were not. Without this line the year's
+       * movements ended below zero while the bank balance read nought, and the
+       * bridge — whose whole job is to show where the money went — was out by
+       * exactly the amount the company failed to pay. The money did not move;
+       * the obligation did, into `debt`.
+       */
+      if (unpaidBills > 0) lines.push({ label: "Bills there was no money to pay", amount: unpaidBills });
 
       accounts[company.id] = {
         opening,

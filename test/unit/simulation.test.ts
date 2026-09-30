@@ -255,8 +255,17 @@ describe("the emergency loan", () => {
    * cover. (It used to start with ten thousand and survive only because a plan
    * cut to nothing by the cash floor still bought a whole year's brand and
    * quality — see step 0 in resolve.ts.)
+   *
+   * Raised from 300,000 when `seedIncumbents` began scaling each rival's
+   * per-segment hold back to the share the niche is written with. The rivals
+   * had been holding more of some segments than the market said they owned,
+   * and a newcomer's first year earned correspondingly less, which put the
+   * hole past what one rescue covers. The premise here is the *size of the
+   * hole*, not the size of the market, so the fixture moves and the behaviour
+   * being asserted does not. Its pair below — a hole too big to cover — still
+   * goes bankrupt, so the two still bracket the rule.
    */
-  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 300_000, creditLimit: 20_000 });
+  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 900_000, creditLimit: 20_000 });
 
   it("keeps a company solvent the first time its cash runs out", () => {
     const { reports } = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]);

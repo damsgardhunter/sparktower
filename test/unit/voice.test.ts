@@ -201,13 +201,13 @@ describe("what the picker claims about each market", () => {
   };
 
   const WORDS: Record<string, number> = {
-    four: 4, fifteen: 15, "twenty-seven": 27, "twenty-eight": 28, three: 3,
+    four: 4, eleven: 11, fifteen: 15, "twenty-seven": 27, three: 3,
   };
 
   it("states a multiple the segments actually support", () => {
     const claims: [string, string][] = [
       ["dating_apps", "four"],
-      ["drone_delivery", "twenty-eight"],
+      ["drone_delivery", "eleven"],
       ["podcasts", "twenty-seven"],
       ["restaurant_chain", "three"],
       ["construction", "fifteen"],

@@ -37,7 +37,7 @@
  * feature is explaining what happened to the people it happened to, not
  * deciding it.
  */
-import type { Company, Economy, Niche, IncumbentPosture } from "./types";
+import type { Company, Economy, Niche, IncumbentPosture, Segment } from "./types";
 import { appealFor, saturate } from "./market";
 import { between } from "./random";
 
@@ -234,24 +234,121 @@ export const INCUMBENT_SHARE_SPREAD = 0.16;
  * Drawn from the season now, so entering a market means finding out what is
  * already in it.
  */
-export function seedIncumbents(niche: Niche, seasonId = ""): Company[] {
-  return niche.incumbents.map((seed) => {
+/**
+ * How big the market actually is in the season's first year, as a multiple of
+ * the sizes the niche was written with.
+ *
+ * The rivals are seated holding a fixed 90% of `segment.size`, but the segment
+ * only contains `size * economy.demand` people, and the opening economy is
+ * drawn anywhere in `1 ± 0.12`. Seated against the written size, any season
+ * drawing below 0.90 began **over-subscribed**: `allocate` sizes the unowned
+ * pool as demand minus what is held, so that pool opened negative, clamped to
+ * zero, and never reopened. A founder in such a season won nothing at all — in
+ * every segment, every period, at every level of spending, with no signal
+ * saying why. Two of six sampled seeds were unwinnable for this reason alone.
+ *
+ * Seating them against the demand that actually exists keeps the written tenth
+ * open whatever the economy does. It is done here, once, rather than as a
+ * per-period correction in `allocate`: the crowding is a property of the
+ * opening position, and a rule that re-applied every period would recycle a
+ * tenth of the market twelve times a year at a monthly cadence and once at a
+ * yearly one, which is exactly the stock-as-flow mistake `cadence.ts` exists
+ * to prevent.
+ */
+export function seedIncumbents(niche: Niche, seasonId = "", openingDemand = 1): Company[] {
+  /*
+   * Who is biggest varies by season. *How much is already held* does not.
+   *
+   * Each rival's share used to be drawn independently, up or down by a sixth,
+   * and the total moved with them. A market written at 80% held — legal, the
+   * band in `custom-market.ts` allows up to 88% — came out anywhere between
+   * 76% and 86% depending on the season's seed. At 76% a founder playing well
+   * finished with 145 customers; at 86%, in the same market with the same
+   * decisions, **zero, at every level of spending tried**. Whether the season
+   * could be played at all was a draw nobody bounded, and the band that exists
+   * to answer "is there room in this market" was checked before it.
+   *
+   * The variation is worth keeping — a season where the discounter is unusually
+   * big is a different game from one where the fortress is — so the draws stay
+   * and are renormalised to the total the market was written with. Who holds
+   * what moves; how much is left does not.
+   */
+  const written = niche.incumbents.reduce((sum, i) => sum + i.startingShare, 0);
+  const drawn = niche.incumbents.map((seed) =>
+    Math.max(0.02, seed.startingShare * between(`${seasonId}:${seed.id}:share`, 1 - INCUMBENT_SHARE_SPREAD, 1 + INCUMBENT_SHARE_SPREAD)));
+  const total = drawn.reduce((sum, n) => sum + n, 0);
+  const keepTotal = total > 0 ? written / total : 1;
+
+  /**
+   * How well each rival's posture suits each segment.
+   *
+   * A fortress holds the loyal, a brawler the price-led, an innovator the ones
+   * who notice quality. That is the variety worth having, and it was being
+   * applied without ever being scaled back — the comment below this said
+   * "then scale to the share the niche says they own", and nothing did.
+   *
+   * `fit` averages about 1.1, so four rivals written to hold 80% of a market
+   * between them actually held 91% of every segment. A market cleaned and
+   * checked against a band that allows at most 88% came out over it, and when
+   * the economy dipped ten per cent there was nothing unowned left at all: a
+   * founder playing well won **zero customers in sixteen quarters**, at every
+   * level of spending, because the pool they were competing for was empty
+   * before they started.
+   */
+  const fitOf = (seed: Niche["incumbents"][number], segment: Segment) =>
+    seed.posture === "innovator" ? 0.6 + segment.qualityFocus * 0.8
+    : seed.posture === "brawler" ? 0.6 + segment.priceSensitivity * 0.8
+    : seed.posture === "fortress" ? 0.6 + segment.loyalty * 0.8
+    : 0.6 + (1 - segment.loyalty) * 0.5;
+
+  /*
+   * Scaled across the market, not segment by segment.
+   *
+   * Normalising each segment on its own would make the rivals hold exactly the
+   * written share of every one of them, and that is worse than it sounds: a
+   * market with no soft segment has no flank to attack, and the weak flank is
+   * how a newcomer gets in. The variation is the feature. What was broken was
+   * that nothing bounded it — holdings ran from 91% to 113% of a segment, and
+   * anything above demand is a segment that is over-subscribed before the
+   * season starts, where `allocate` offers a newcomer nothing at any price.
+   *
+   * So the whole market is scaled to the share the niche is written with, and
+   * segments still differ: some soft, some hard, none closed.
+   */
+  const rawFor = (segment: Segment) =>
+    niche.incumbents.reduce((sum, seed, i) => sum + drawn[i] * keepTotal * fitOf(seed, segment), 0);
+  const people = niche.segments.reduce((sum, s) => sum + s.size, 0);
+  const weighted = niche.segments.reduce((sum, s) => sum + rawFor(s) * s.size, 0);
+  const toWritten = weighted > 0 ? (written * people) / weighted : 1;
+
+  /**
+   * And no segment is held so tightly that nobody can enter it.
+   *
+   * The cap sits above the written average on purpose, so the hard segments
+   * stay hard — it only stops one running away to where there is nothing left
+   * to win.
+   */
+  const backToWritten = new Map<string, number>();
+  for (const segment of niche.segments) {
+    const raw = rawFor(segment);
+    const held = raw * toWritten;
+    backToWritten.set(segment.id, held > SEGMENT_HOLD_MAX ? (SEGMENT_HOLD_MAX / raw) : toWritten);
+  }
+
+  return niche.incumbents.map((seed, i) => {
     const vary = (axis: string, value: number) =>
       Math.max(5, Math.min(99, value + between(`${seasonId}:${seed.id}:${axis}`, -INCUMBENT_SPREAD, INCUMBENT_SPREAD)));
     const quality = vary("quality", seed.quality);
     const brand = vary("brand", seed.brand);
     const service = vary("service", seed.service);
-    const startingShare = Math.max(0.02, seed.startingShare * between(`${seasonId}:${seed.id}:share`, 1 - INCUMBENT_SHARE_SPREAD, 1 + INCUMBENT_SHARE_SPREAD));
+    const startingShare = drawn[i] * keepTotal;
     const customers: Record<string, number> = {};
     for (const segment of niche.segments) {
-      // Weight their hold by how well the segment suits their posture, then
-      // scale to the share the niche says they own.
-      const fit =
-        seed.posture === "innovator" ? 0.6 + segment.qualityFocus * 0.8
-        : seed.posture === "brawler" ? 0.6 + segment.priceSensitivity * 0.8
-        : seed.posture === "fortress" ? 0.6 + segment.loyalty * 0.8
-        : 0.6 + (1 - segment.loyalty) * 0.5;
-      customers[segment.id] = Math.round(segment.size * startingShare * fit);
+      // Weighted by how well the segment suits their posture, and then — this
+      // is the part that was missing — scaled to the share the niche says the
+      // rivals own between them. See `fitOf` above.
+      const fit = fitOf(seed, segment) * (backToWritten.get(segment.id) ?? 1);
+      customers[segment.id] = Math.round(segment.size * openingDemand * startingShare * fit);
     }
     const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
     const price = niche.segments[0].referencePrice * seed.priceIndex;
@@ -291,6 +388,18 @@ export function seedIncumbents(niche: Niche, seasonId = ""): Company[] {
 export const TRULY_OPEN_SHARE = 0.1;
 
 /**
+ * The most of any one segment the rivals may hold, as a share of its demand.
+ *
+ * Above the written average, so that segments still vary in how hard they are;
+ * below 1, so that none of them is closed. See `seedIncumbents`.
+ */
+export const SEGMENT_HOLD_MAX = 0.95;
+
+/** How much of a market nobody supplies. `TRULY_OPEN_SHARE` unless the market says otherwise. */
+export const openShareOf = (niche: Niche): number =>
+  typeof niche.openShare === "number" && niche.openShare > 0 ? niche.openShare : TRULY_OPEN_SHARE;
+
+/**
  * The rest of the market: everybody too small to name.
  *
  * The world used to contain the named rivals and nothing else, so every
@@ -314,14 +423,15 @@ export const TRULY_OPEN_SHARE = 0.1;
  * point — a fragmented tail is the easiest share in the market to take, and it
  * should still have to be taken.
  */
-export function seedFragmentedTail(niche: Niche, seasonId = ""): Company | null {
+export function seedFragmentedTail(niche: Niche, seasonId = "", openingDemand = 1): Company | null {
   const named = niche.incumbents.reduce((sum, i) => sum + i.startingShare, 0);
-  const share = 1 - named - TRULY_OPEN_SHARE;
+  const share = 1 - named - openShareOf(niche);
   /* Nothing to seat: the named rivals already hold all but the open tenth. */
   if (share <= 0.02) return null;
 
   const customers: Record<string, number> = {};
-  for (const segment of niche.segments) customers[segment.id] = Math.round(segment.size * share);
+  // Against the demand there is, not the size on paper. See `seedIncumbents`.
+  for (const segment of niche.segments) customers[segment.id] = Math.round(segment.size * openingDemand * share);
   const held = Object.values(customers).reduce((sum, n) => sum + n, 0);
   const price = niche.segments[0].referencePrice;
 

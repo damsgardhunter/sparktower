@@ -481,10 +481,13 @@ export function allocate(
 
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
+    /** What is held after the market shrank, before anybody churns. What `open` is measured against. */
+    let heldAfterShrink = 0;
     for (const c of companies) {
       const started = c.customers[segment.id] ?? 0;
       if (started <= 0) continue;
       const current = shrinkRatio < 1 ? Math.floor(started * shrinkRatio) : started;
+      heldAfterShrink += current;
       if (current < started) shrank[segment.id][c.id] = started - current;
 
       const mine = appeal[c.id];
@@ -670,7 +673,13 @@ export function allocate(
      * its first year. Separating them makes a period's opportunity a quarter
      * of a year's, which is the whole of what it should be.
      */
-    const heldBefore = Math.min(heldAtStart, demand);
+    /*
+     * Measured after the shrink, not before it. Taken from `heldAtStart` this
+     * handed the contraction straight back to the incumbents: they shed
+     * customers, and the pool those customers should have fallen into was
+     * still being sized as though they had not.
+     */
+    const heldBefore = Math.min(heldAfterShrink, demand);
     const alreadyHeld = companies.reduce((sum, c) => sum + (held[c.id][segment.id] ?? 0), 0);
     const open = Math.max(0, demand - heldBefore);
     /*

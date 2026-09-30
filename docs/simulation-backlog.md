@@ -2156,3 +2156,176 @@ commitment straight away, before the vote. The table may vote it down and the
 money stays. Overstating what a year might cost is the safe side of a meter
 that exists to stop a company filing a year it cannot pay for, so both the web
 and the phone count it that way — but it is a choice, not an oversight.
+
+## Whether a market can be entered at all
+
+### Closed: rivals held more of a market than it was written with
+`seedIncumbents` weighted each rival's hold by how well a segment suited its
+posture, and the comment said it then scaled the result back to the share the
+niche says they own. Nothing did. `fit` averages about 1.1, so what was written
+as 90% was seated anywhere from 84% to **113%** of a segment depending on the
+market and the season's seed.
+
+Above 100% is the part that mattered. `allocate` sizes the unowned pool as
+demand minus what is held, so a segment seated over demand opened with a
+negative pool, clamped to zero, and stayed shut: a founder playing well won
+**zero customers in sixteen quarters, in every segment, at every level of
+spending**, with nothing on screen saying why. Two of six sampled season seeds
+in one Nova market were unwinnable for this reason alone, and restaurant chains
+seated its rivals holding 102% of the market in an ordinary season.
+
+Now scaled across the market to the written share, with a cap
+(`SEGMENT_HOLD_MAX`) so no single segment runs over. Segments still vary — some
+soft, some hard — because the weak flank is how a newcomer gets in. What is
+gone is the segment that was shut before anyone arrived.
+
+### Closed: a below-trend economy closed the market completely
+Rivals were seated against the sizes a market is *written* with, while a
+segment contains `size * economy.demand` people and the opening economy is
+drawn anywhere in `1 ± 0.12`. Any season drawing below 0.90 therefore opened
+over-subscribed, with the same dead result as above.
+
+Fixed asymmetrically, in `buildWorld`: a bad economy shrinks what the rivals
+hold, a good one does not grow it. Both halves earn their place. Seating them
+against demand in a *boom* took the newcomer's opening away instead — the pool
+a founder enters against halved, from 21.8% of the market to 11.2%, and a
+five-team season that left several companies standing left one. A boom's new
+demand is genuinely unserved, and it should go up for grabs.
+
+### Closed: the open share was not a knob
+`TRULY_OPEN_SHARE` claims a tenth of a market has no supplier, but only the
+fragmented tail respected it: the tail is seeded as "everything the named
+rivals left over, above the open share", so writing the rivals *smaller* simply
+handed the difference to the tail and left a newcomer exactly as much room as
+before. A market's room could not be adjusted at all.
+
+Markets can now say (`niche.openShare`), and dating apps says a sixth, which is
+the room it has always actually had.
+
+### Closed: a bot could not afford the cheapest region in the game
+A one-off was judged against 15% of headroom. A dating-apps bot finished a
+season holding £120,850 next to a £50,000 entry it had never been allowed to
+consider. Now a third for a survivor, and still a sixth for a filler — raised
+for both alike it worked and closed the gap between playing well and going
+through the motions from 13 points to 6, which is the other thing being
+measured.
+
+### Closed: the cash bridge did not add up for a company that ran out
+When there is neither cash nor credit, the shortfall becomes debt and the bank
+balance is floored at zero. The bridge had no line for it, so the year's
+movements ended below zero while the balance read nought — out by exactly what
+the company failed to pay. Found by another session running the suite against
+an uncommitted tree, which is worth saying because nobody had run it yet.
+
+### Closed: every company opened with room for a region it would never hold
+The opening plant was sized against `market * home.weight * TRULY_OPEN_SHARE`
+— every customer in the home region with no supplier, which is the whole pool
+every company in the season competes for. Sizing one company's plant against
+all of it assumes that company wins the lot, which allocation never lets
+anybody do: a newcomer takes about a twentieth of its region's pool in the
+first period.
+
+Idle room is not free, and this is what it cost. In drone delivery a founder
+opened with room for 38,214, served 1,662, and paid **£72,725 a quarter in idle
+capacity** — the largest single line in the accounts, seven times the revenue,
+more than marketing and product together, and incurred before any decision was
+taken. The markets where it was fatal are the ones with the thinnest
+contribution per customer, because there the plant costs more than the
+customers can ever bring in.
+
+Measured over ten markets and eight season seeds, best of four spend rates:
+
+    before   beaten by doing nothing  8 seasons · bankrupt  5 seasons
+    after    beaten by doing nothing  0         · bankrupt  0
+
+`PLANT_SHARE_OF_POOL` is the ceiling coming down to meet the `breakEven` floor
+that was already there. Three fifths, and not less: sized off break-even alone
+the plant stops being related to the opportunity, and a company that buys a
+second region cannot use it — measured, buying one multiplied customers by
+exactly 1.00, because the plant was full either way.
+
+Worth keeping in mind for the next market that reads as unwinnable: what looked
+like a market problem was a cost handed to every company at birth, and it was
+invisible because `idleCapacity` is not one of the lines anybody reads first.
+
+### Closed: drone delivery's biggest segment was priced below what a business costs
+The largest segment in a market is the one the opening defaults size a company
+against. Drone delivery's was novelty orders at £25 against a £10 unit cost, so
+break-even was 9,333 customers — **9.3% of the unowned pool of a home region**,
+where every other market in the catalogue sits between 1.8% and 3.8%. It was
+the only market where paying your people needed more customers than the market
+could realistically hand you.
+
+What that did to a season was worse than making it hard. Outside a boom, the
+worth of a season by how much of its cash the founder spent each period:
+
+    spend    0%      2%      4%      6%      9%     12%
+    worth   48,840  63,840  75,360   8,307      0    0 (bankrupt)
+
+A cliff between 4% and 6%, with nothing on screen to say it was there. At £65 —
+which lands break-even at 2.5% of the pool, between dating apps and podcasts —
+the same sweep rises to a peak at 9% and tapers: a best answer in the middle
+and a price for overreaching, like the other six markets.
+
+It also closed the bot problem this document previously described as separate.
+Survivor bots there went from **0 of 6** ever affording a second region to 6 of
+6, and `bot-play.test.ts` now asserts the rule across every market again rather
+than excluding this one. The bots were not spending badly; they were in a
+market that could not pay for the spending.
+
+Two things worth carrying forward. `voice.test.ts` caught the market's own copy
+still claiming a clinic pays "twenty-eight times a novelty order" when the
+segments now say eleven — prose about the numbers goes stale when the numbers
+move, and that test is the reason it did not ship that way. And the diagnostic
+that found this is a good one to reuse: **break-even as a share of the home
+region's reachable pool**, compared across markets. The outlier was visible at
+a glance and nothing else in the catalogue was close.
+
+### Open: owning something for a whole year makes the year worse
+The effects reach the market — a company holding a patent and a distribution
+deal wins 25,118 customers at the allocation against 15,338 without them. Run
+the same two companies through a whole year and it inverts, and not
+monotonically:
+
+    plain    23,050 customers · revenue 507,100
+    patent   13,166 customers · revenue 289,652
+    deal     11,929 customers · revenue 262,438
+    both     15,129 customers · revenue 332,838
+
+**The cause is now known.** It is not the incumbents reacting — holding their
+capacity response flat changes none of these numbers, and blinding them to the
+player entirely changes none of them either. Not capacity, not unit cost, not
+appeal: merit wins are correctly monotonic in quality, 7,189 against 8,324. The
+whole inversion is in the overflow, of which plain receives 15,861 and the
+patent company 4,842.
+
+Customers a full rival turns away are shared among the companies with room, in
+proportion to `appeal² × reach × fit`, **with no regard to how much room each
+one actually has**:
+
+    plain:   takers = [player]                           player share 1.0000
+    patent:  takers = [inc_pairwise (room 105), player]  pairwise share 0.9692
+
+A rival with room for 105 people takes 96.9% of the claim on 45,695 turned
+away, keeps its 105, and the other ~44,000 evaporate instead of passing to the
+newcomer with room for 27,373. What put that rival among the takers was the
+*stronger* player winning enough on merit to leave it 105 short of capacity —
+so a 105-customer difference cost the player ~11,000 customers.
+
+A fix was written and measured: share the overflow in passes, so a company that
+fills up drops out and its remainder goes to the others. It makes the four
+numbers monotonic — 31,084 / 32,842 / 42,827 / 50,642 — and it is **not
+landed**, because the constants around it were tuned against the leak. With it
+in, no setting of `SPILL_TOPUP_MAX` satisfies everything at once:
+
+    TOPUP 3    passive company stops profiting, bought region worth its price
+               again — premium team finishes 13.9m against a 16.1m bar
+    TOPUP 5-8  premium clears the bar — passive company profits again, and a
+               bought region multiplies customers by exactly 1.00 because the
+               plant is full either way
+
+That bar was only 8% clear before any of this work, so the crowded-market test
+has very little room to absorb a change of this size. What is left is
+re-deriving the spill economy around the fix rather than finding the bug, and
+it wants its own pass with the crowded season in front of it.
+
