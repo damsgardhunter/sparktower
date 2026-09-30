@@ -37,6 +37,12 @@ jobs:
         working-directory: packages/nova-core
         run: npm ci && npm run build
 
+      # The core's own suite, since both published packages are built on it and
+      # a fault in it ships inside them.
+      - name: Test the shared core
+        working-directory: packages/nova-core
+        run: npm test
+
       - name: Build
         working-directory: packages/nova-mcp
         run: npm ci && npm run typecheck && npm run build
@@ -73,9 +79,28 @@ jobs:
         working-directory: packages/nova-core
         run: npm ci && npm run build
 
+      # The core's own suite, since both published packages are built on it and
+      # a fault in it ships inside them.
+      - name: Test the shared core
+        working-directory: packages/nova-core
+        run: npm test
+
       - name: Build
         working-directory: packages/nova-vscode
         run: npm ci && npm run typecheck && npm run build
+
+      # The tests too, not only the typecheck.
+      #
+      # This workflow rebuilt and typechecked and then published, on the
+      # understanding that ci.yml had already run the tests for this commit.
+      # That holds for a tag on a commit that went through CI and not for one
+      # pushed anywhere else — and publishing is the one thing here that cannot
+      # be taken back, since npm unpublish is restricted after a day. Cheap
+      # enough to not rely on the coincidence: the suite is `vitest run` with no
+      # database behind it.
+      - name: Test
+        working-directory: packages/nova-vscode
+        run: npm test
 
       - name: The tag matches the version
         working-directory: packages/nova-vscode

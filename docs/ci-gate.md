@@ -28,13 +28,17 @@ Verified against GitHub on 16 September 2026 (`gh api repos/{owner}/{repo}/branc
 | Setting | State | What that means |
 |---|---|---|
 | Required checks | the 7 above | A pull request can't merge until all seven are green. |
-| Enforce for administrators | **off** | **An owner's push to `main` lands without the checks running first.** Every push today is one of those: CI reports afterwards, in the Actions tab. |
-| Branch up to date before merge (`strict`) | off | A PR may merge on checks that ran against a slightly older `main`. Deliberate: with one person shipping, the risk is small and it avoids rebasing every open PR on each push. |
+| Enforce for administrators | **on** | Nobody can push to `main`, owner included. Everything goes through a pull request and waits for the seven. |
+| Branch up to date before merge (`strict`) | off | A PR may merge on checks that ran against a slightly older `main`. See the note below — the reason this was acceptable has changed. |
 | Force pushes / branch deletion | off | History can't be rewritten or the branch removed. |
 
-So the honest description is: **the gate binds pull requests, and advises the owner.** A contributor cannot merge anything red. The owner can — and does, on every direct push — which is the right trade while one person ships and the wrong one once other people depend on the site.
+So the honest description is: **the gate binds everybody.** Nothing red reaches `main`, and there is no direct push left to make — a branch and a pull request is the only route, for the owner as much as anyone.
 
-**Before real users**, enforcement for administrators goes on, and everything moves through pull requests. It's a step in `docs/release-checklist.md` with the command, and `node scripts/check-branch-protection.mjs --launch` fails until it's done.
+This page said the opposite until today, and said it in the row somebody would read first. Administrator enforcement was turned on and the table was not updated, so the document described a repository that had already stopped existing. An audit read it and reported, correctly for what it was given, that an owner could bypass the gate. Worth remembering that this file is evidence to anybody who cannot run `gh` against the repository, and a stale row here is a wrong answer given confidently.
+
+**That launch step is done.** `docs/release-checklist.md` has it, and `node scripts/check-branch-protection.mjs --launch` passes.
+
+**What `strict` off now costs.** It was off because one person was shipping, so two pull requests merging against slightly different versions of `main` was a small risk. That is no longer the shape of the work: three sessions have been committing to one branch on the same afternoon, and a PR that went green against a `main` three commits older can merge into a `main` it was never tested against. Nothing has broken on it yet. The fix is one setting, and the cost is rebasing open pull requests on every push — worth weighing now rather than after the first merge that breaks a test neither PR could see.
 
 **Verifying it.** `node scripts/check-branch-protection.mjs` reads the protection through `gh` and fails on a missing required check, on force pushes being allowed, or on `main` being deletable; `--launch` also fails while administrators are exempt. CI can't run either: reading branch protection needs an administrator's token, which CI's own token isn't.
 
