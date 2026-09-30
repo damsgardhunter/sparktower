@@ -429,6 +429,27 @@ export function botDecision(input: {
   const afford = (cost: number) => cost > 0 && cost <= purse;
   const commit = (cost: number) => { purse = Math.max(0, purse - cost); };
 
+  /**
+   * What the company could put behind a one-off, measured against the balance
+   * sheet rather than against a period's spending.
+   *
+   * `purse` is a *period's* discretionary budget, and comparing a capital cost
+   * against it is the same mistake as charging a year's rate for a quarter.
+   * Opening a region is paid once, out of what the company has — so a bot in a
+   * market where entry costs more than a quarter's marketing could never open
+   * one however much money it was sitting on. In construction every bot filled
+   * its plant by period six, held £908,000 against a £400,000 entry, and stayed
+   * in its opening region for the whole season; so did two in six in drone
+   * delivery and one in six in MMOs.
+   *
+   * A sixth of what the company has, which is the same fraction the game
+   * already calls a sensible price for a first region (`OPENING_BUDGET`), and
+   * it still comes out of the purse afterwards so a bot cannot choose four big
+   * things in one period.
+   */
+  const capital = headroom(company) * 0.15;
+  const affordOnce = (cost: number) => cost > 0 && cost <= Math.max(purse, capital);
+
   const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
   const room = Math.max(0, Number(company.capacity) || 0) + assetEffects(company.assets ?? []).capacity;
   const load = room > 0 ? held / room : 0;
@@ -761,11 +782,11 @@ export function botDecision(input: {
    */
   if (role === "cmo" && niche && Array.isArray(draft.targetCities)) {
     const open: string[] = draft.targetCities.map(String);
-    const shut = niche.cities.filter((c) => !open.includes(c.id) && afford(c.entryCost));
+    const shut = niche.cities.filter((c) => !open.includes(c.id) && affordOnce(c.entryCost));
     if (load > 0.8 && shut.length > 0) {
       const biggest = [...shut].sort((a, b) => b.weight - a.weight)[0];
       const chosen = call(decisionSeed({ ventureId, year, role, field: "_open" }), biggest, shut);
-      if (chosen && afford(chosen.entryCost)) {
+      if (chosen && affordOnce(chosen.entryCost)) {
         commit(chosen.entryCost);
         draft.targetCities = [...open, chosen.id];
       }

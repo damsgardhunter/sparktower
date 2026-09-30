@@ -27,7 +27,6 @@ import { buildWorld } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { defaultDraft } from "@shared/simulation/levers";
-import { botDecision } from "@shared/simulation/bots";
 import { OPENING_BUDGET } from "@shared/simulation/season";
 import { ROLES, type Role, type TeamDecisions, type World } from "@shared/simulation/types";
 
@@ -111,31 +110,6 @@ describe("levers that are always the right answer", () => {
   });
 });
 
-describe("bots, once they have opened", () => {
-  const niche = nicheById("dating_apps")!;
-
-  it.fails("should put a region up for the table at some point in a season", () => {
-    /*
-     * `bots.ts` files an empty `expand` every period and deletes `expandVote`,
-     * so a bot never proposes a region and never votes on a person's. Bot-run
-     * companies grow only through the marketing seat's `targetCities`.
-     *
-     * Measured: a bot that opened in a region holding 2.0% of its market sat
-     * on that one region for twenty-four quarters and finished worth nothing,
-     * with £1.7m in the bank at period four and a region announced at £35,000.
-     * It was not that it could not leave. Nothing ever tried.
-     */
-    const world = buildWorld({
-      seasonId: "known-bots", niche, cadence: "quarterly",
-      teams: [{ id: "b", name: "b", seats: [...ROLES] as Role[], botRun: true }],
-    });
-    const bot = world.companies.find((c) => c.id === "b")!;
-    const proposals = Array.from({ length: 24 }, (_, i) =>
-      botDecision({ ventureId: "b", year: i + 1, role: "coo", company: bot as any, niche, rivals: [], skill: "survivor" }).expand);
-    expect(proposals.filter(Boolean).length, "a bot never proposes a region, in a whole season").toBeGreaterThan(0);
-  });
-
-});
 
 describe("the two doors into a new region", () => {
   it.fails("should both charge a company for reach it has not earned", () => {

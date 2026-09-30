@@ -14,7 +14,10 @@ import { appealFor } from "@shared/simulation/market";
 import { startingCompany } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById, NICHES } from "@shared/simulation/niches";
-import { ROLES, type Company } from "@shared/simulation/types";
+import { ROLES, type Company, type Role, type TeamDecisions } from "@shared/simulation/types";
+import { buildWorld } from "@shared/simulation/season";
+import { resolveYear } from "@shared/simulation/resolve";
+import { botDecision } from "@shared/simulation/bots";
 
 const niche = nicheById("dating_apps")!;
 const newcomer = () => startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] });
@@ -112,5 +115,52 @@ describe("where to sell", () => {
     const big = { ...niche.cities[1], id: "big", weight: 0.2, segmentMix: { [seg.id]: 0.2 } } as any;
     // Three times the concentration in a region a quarter the size still wins.
     expect(regionsWorthKeeping([small, big], seg, 1)).toEqual(["small"]);
+  });
+});
+
+/**
+ * A bot company has to be able to leave the region it was given.
+ *
+ * A bot never puts the announced region to the table — `expand` is filed empty
+ * and `expandVote` deleted, on purpose, because a bot table voting with itself
+ * is noise. Bot companies grow through the marketing seat's `targetCities`,
+ * on their own purse, and that purse was the problem: it is a *period's*
+ * discretionary spending, and a region's entry cost is a one-off paid out of
+ * the balance sheet. Comparing the two is the same mistake as charging a
+ * year's rate for a quarter.
+ *
+ * What it cost: in construction every bot filled its plant by period six, sat
+ * on £908,000 against a £400,000 entry, and stayed where it started for the
+ * whole season. Six of six stuck, with two of six in drone delivery and one in
+ * six in MMOs. Judged against what the company actually has, three of
+ * forty-two stay put — which is a company that did not grow, not a company
+ * that could not.
+ */
+describe("a bot that has filled its region", () => {
+  it("can pay to open another one", () => {
+    for (const n of NICHES) {
+      const niche = nicheById(n.id)!;
+      let moved = 0;
+      for (const id of ["b1", "b2", "b3", "b4", "b5", "b6"]) {
+        let world = buildWorld({
+          seasonId: "grow", niche, cadence: "quarterly",
+          teams: [{ id, name: id, seats: [...ROLES] as Role[], botRun: true }],
+        });
+        let previous: any;
+        for (let p = 1; p <= 16; p++) {
+          const me: any = world.companies.find((c) => c.id === id)!;
+          const filed: any = { companyId: id };
+          for (const r of ROLES) {
+            filed[r] = botDecision({ ventureId: id, year: p, role: r, company: me, previous: previous?.[r], niche, rivals: [], skill: "survivor" });
+          }
+          const out = resolveYear({ ...world, year: p }, [filed as TeamDecisions], undefined, { withoutEvent: true });
+          previous = filed;
+          world = out.world;
+        }
+        const me: any = world.companies.find((c) => c.id === id)!;
+        if ((me.cities ?? []).length > 1) moved++;
+      }
+      expect(moved, `${n.id}: only ${moved} of 6 bots ever left the region they opened in`).toBeGreaterThan(3);
+    }
   });
 });
