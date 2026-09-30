@@ -21,7 +21,7 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 `summarizeUntestedRoutes` is the source of this list; re-run it rather than
 trusting the numbers below. As of 30 September: **33 of 499 routes named by no
-test, 15 of them writes** (down from 36/17). Two of the first five looked at
+test, 13 of them writes** (down from 36/17). Two of the first seven looked at
 held a real defect — one of them unpaid AI spend — which is the argument for
 continuing.
 
@@ -33,9 +33,9 @@ Ranked by what a silent failure would cost:
 | `GET /api/merch-orders/:orderId/print/:face.png` | renders what a backer paid for | **done** |
 | `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | **done** |
 | `POST /api/projects/:id/backing/badge-preview` | spends money on an image | **done** — found a bug |
-| `GET /api/stripe/connect-onboarding` | the payout path | next |
-| `GET /api/stripe/connect-dashboard` | the payout path | next |
-| `POST /api/documents/:docId/tighten` | AI write over a document | |
+| `GET /api/stripe/connect-onboarding` | the payout path | **done** |
+| `GET /api/stripe/connect-dashboard` | the payout path | **done** |
+| `POST /api/documents/:docId/tighten` | AI write over a document | next |
 | `GET /api/documents/:docId/pdf` | what a customer downloads | |
 | `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
 | `POST /api/projects/:id/{pitch-deck,pitch-critique,pricing-analysis,readiness-score,mock-interview}` | five AI spends in one file | |
@@ -85,7 +85,18 @@ That settles the three `fatal` env rules, two directly and one by inference:
 and `SESSION_SECRET` must be set and strong because `assertSecretsAtBoot()`
 throws otherwise — a process that is up has already passed it.
 
-**Still not observed:** the `degraded` variables, which by design let the
+**The quickest answer is already in the logs.** Every boot prints a
+`[preflight]` line naming each feature that is off for want of configuration,
+so the last production boot has already said which of these are missing —
+search the Render logs for `[preflight]`.
+
+**Made durable rather than left to log retention:** a production boot with
+features off now also reports down the same channel as a 500
+(`ERROR_WEBHOOK_URL`), naming the variables and what they break. A line at
+boot is the quietest possible place for "nobody who signs up can be
+confirmed", and it is gone when the retention window rolls.
+
+**Still not observed by me:** the `degraded` variables, which by design let the
 process boot with a feature off — `RESEND_API_KEY`/`EMAIL_FROM` (without them
 nobody who signs up can be confirmed), `STRIPE_SECRET_KEY`, `PRIVATE_OBJECT_DIR`,
 `AI_INTEGRATIONS_OPENAI_API_KEY`. None can be checked from outside. Two ways

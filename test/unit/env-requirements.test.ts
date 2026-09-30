@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { checkEnvironment, ENV_RULES } from "@shared/env-requirements";
-import { formatPreflight, preflight } from "../../server/preflight";
+import { assertEnvironmentAtBoot, formatPreflight, preflight } from "../../server/preflight";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -249,5 +249,55 @@ describe("the deploy page and the rules it describes", () => {
     const row = section.split("\n").find((l) => l.startsWith("| `PUBLIC_URL`"));
     expect(row, "docs/env-contract.md no longer has a PUBLIC_URL row").toBeTruthy();
     expect(row, `the runbook says production is ${canonical}`).toContain(`\`${canonical}\``);
+  });
+});
+
+/*
+ * A production boot that came up with features off has to say so somewhere
+ * that outlives the boot.
+ *
+ * It was a single `console.log`. On a platform that is a line in a log nobody
+ * is reading at the time, gone when retention rolls — and `RESEND_API_KEY`
+ * missing is not cosmetic: every confirm-your-email link goes to the server
+ * log instead of the person, so nobody who signs up can post, comment,
+ * message or invite. The site is up and the front door is shut.
+ *
+ * The fatal path is not exercised here on purpose: it calls `process.exit`,
+ * and a test that trips it takes the runner with it.
+ */
+describe("a production boot with features off", () => {
+  const withoutEmail = () => {
+    const env: Record<string, string | undefined> = { ...HEALTHY };
+    delete env.RESEND_API_KEY;
+    delete env.EMAIL_FROM;
+    return env;
+  };
+
+  it("announces which features, down the channel that already exists for things nobody is watching", () => {
+    const seen: { features: string[]; detail: string }[] = [];
+    assertEnvironmentAtBoot(withoutEmail(), (features, detail) => seen.push({ features, detail }));
+
+    expect(seen.length, "exactly one notice, at boot").toBe(1);
+    expect(seen[0].features, "names the variable, so the fix is obvious").toContain("RESEND_API_KEY");
+    expect(seen[0].detail, "and carries what it breaks, not just the name").toMatch(/email|confirm|sign|link/i);
+  });
+
+  it("says nothing when production has everything it needs", () => {
+    const seen: string[][] = [];
+    assertEnvironmentAtBoot({ ...HEALTHY }, (features) => seen.push(features));
+    expect(seen, "a healthy boot is not worth waking anyone for").toEqual([]);
+  });
+
+  /*
+   * A laptop has no email provider, no object storage and no Stripe keys, and
+   * is meant to look exactly like this. A warning that fires every morning is
+   * one people learn to scroll past, which is how the real one gets missed.
+   */
+  it("says nothing outside production, where looking like this is the point", () => {
+    const seen: string[][] = [];
+    const env = withoutEmail();
+    env.NODE_ENV = "development";
+    assertEnvironmentAtBoot(env, (features) => seen.push(features));
+    expect(seen).toEqual([]);
   });
 });
