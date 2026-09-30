@@ -698,6 +698,24 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
      */
     const schema = files.filter((f) => f.content && /(^|\/)(schema|models?)\b|(^|\/)(migrations|prisma)\//.test(f.path) && /\.(ts|js|py|rb|sql|prisma)$/.test(f.path));
     const sensitiveRe = /(password|secret|token|api_?key|access_?key|private_?key|credential)/i;
+    /**
+     * The type a column was declared with, however the file declares it.
+     *
+     * `name: text("col")` in an ORM schema, `"col" text` in a CREATE TABLE,
+     * `ADD COLUMN "col" text` in an alter, `col String` in Prisma.
+     */
+    const typeOf = (line: string): string =>
+      (/:\s*(\w+)\s*\(/.exec(line)?.[1]
+        ?? /\bADD COLUMN\s+"?[A-Za-z0-9_]+"?\s+(\w+)/i.exec(line)?.[1]
+        ?? /^\s*"?[A-Za-z0-9_]+"?\s+(\w+)/.exec(line)?.[1]
+        ?? "").toLowerCase();
+
+    /**
+     * The types a credential could actually be stored in: text of some kind, or
+     * raw bytes. Deliberately not integer, bigint, numeric, real, boolean,
+     * serial, timestamp or date — see the note where this is used.
+     */
+    const HOLDS_TEXT = new Set(["varchar", "text", "char", "citext", "uuid", "jsonb", "json", "bytea", "string", "bytes"]);
     // A name that already says what's stored (…Hash, sealed…, …_encrypted), or a column about a credential rather than the credential itself (revokedAt, expiresAt, mfaEnabledAt).
     const safeNameRe = /(hash|hashed|digest|sealed|encrypted|_enc\b|revoked|expires|_at\b|Required|Enabled|Count|Id\b)/i;
     /** The field's own name, so the check can ask whether the code seals *this* column. */
@@ -721,6 +739,22 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
           || /^\s*\w+\s+(String|Bytes|Json)\b/.test(line);
         if (!isColumn) continue;
         if (!sensitiveRe.test(line) || safeNameRe.test(line)) continue;
+        /*
+         * A credential is a string. It is never a count.
+         *
+         * `token` is the word that does the damage: anything metering a
+         * language model has `prompt_tokens`, `completion_tokens` and
+         * `cached_tokens`, and all three are integers holding how many were
+         * spent. This check told the owner of one to rename them `*_sealed`
+         * and pass them through an encryption helper — advice that would make
+         * the schema describe a number as a sealed secret, for three columns
+         * that could not hold one if they tried.
+         *
+         * A number, a flag or a date cannot carry a password or a key, so the
+         * shape of the column answers this before the name has to. Only the
+         * types that hold text are asked about.
+         */
+        if (!HOLDS_TEXT.has(typeOf(line))) continue;
         if (sealedElsewhere(fieldOf(line))) continue;
         raw.push(f.path);
         break;
