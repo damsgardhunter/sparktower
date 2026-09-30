@@ -1835,30 +1835,16 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       const task = await storage.updateKanbanTask(req.params.taskId, updates);
 
       if (movingToDone) {
-        // A task on the path is a pace signal; the projection moves on it.
-        await onPathTaskDone(task).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
         /*
-         * The first step this project has ever finished, named once.
-         *
-         * It is the step in the growth loop where a new account stops being a
-         * signup and starts being a builder, and it is invisible in `api.write`
-         * — one PATCH among thousands. Counted from the board rather than from
-         * a flag, so it stays true for a project that finished its first step
-         * long before anybody thought to measure it.
+         * A task on the path is a pace signal; the projection moves on it —
+         * and this is also where the first step of a project is counted, which
+         * is why the browser's own session travels with it. The counting lives
+         * in `onPathTaskDone` because five other things finish path tasks and
+         * none of them come through here; see `recordFirstPathStep`.
          */
-        void (async () => {
-          const onPath = (t: any) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:"));
-          if (!onPath(task)) return;
-          const all = await storage.getProjectKanbanTasks(existingTask.projectId).catch(() => []);
-          const done = (all as any[]).filter((t) => t.status === "done" && onPath(t));
-          if (done.length !== 1) return;
-          await recordActivity({
-            name: PATH_FUNNEL_EVENTS.firstStep,
-            userId, visitorId: req.visitorId || "unknown", sessionId: req.sessionId || "unknown",
-            path: req.originalUrl, projectId: existingTask.projectId,
-            props: sanitizePathFunnelProps({ projectId: existingTask.projectId }),
-          });
-        })().catch(() => {});
+        await onPathTaskDone(task, {
+          userId, visitorId: req.visitorId, sessionId: req.sessionId, path: req.originalUrl,
+        }).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
         /*
          * Finishing a task unblocks whatever was waiting on it.
          *

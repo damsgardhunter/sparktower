@@ -135,6 +135,61 @@ describe("what the loop writes down", () => {
     expect(still.length, "the first step happens once").toBe(1);
   }, 180_000);
 
+  /*
+   * The half of "finished their first step" that was never counted.
+   *
+   * Six things finish a path task and only one of them is the task board. This
+   * measurement lived in the board's PATCH route, so the funnel counted people
+   * who dragged a card and nobody else — and for a run_company project it
+   * counted almost nobody, because those steps close by filing a check-in or
+   * adding a teammate, never by touching the board.
+   *
+   * `completeRunMilestone` is that path, used directly here because that is how
+   * the product uses it: the rhythm routes call it as a side effect of doing
+   * something else entirely.
+   */
+  it("counts a first step finished away from the task board", async () => {
+    const app = await getTestApp();
+    const me = await builder(app, "Rhy");
+    const project = (await me.agent.post("/api/projects").send({
+      title: `Rhythm ${Date.now()}-${n}`, description: "A company that files its numbers rather than dragging cards.",
+      category: "Other", goal: "run_company", subcategory: "restaurant",
+    })).body;
+
+    const tasks = (await me.agent.get(`/api/projects/${project.id}/kanban`)).body as any[];
+    const step = tasks.find((t) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:RUN.")));
+    expect(step, "a run_company path has backbone steps on it").toBeTruthy();
+    const milestoneId = (step.tags as string[]).find((x) => x.startsWith("backbone:"))!.slice("backbone:".length);
+
+    const { completeRunMilestone } = await import("../../server/company-rhythm-jobs");
+    expect(await completeRunMilestone(project.id, milestoneId, me.id), "the milestone closed").toBe(true);
+
+    await expect.poll(async () => (await db.select().from(activityEvents)
+      .where(and(eq(activityEvents.name, PATH_FUNNEL_EVENTS.firstStep), eq(activityEvents.projectId, project.id)))).length,
+      { timeout: 5_000 }).toBe(1);
+
+    /* Attributed to the person whose action closed it, not left anonymous. */
+    const [event] = await db.select().from(activityEvents)
+      .where(and(eq(activityEvents.name, PATH_FUNNEL_EVENTS.firstStep), eq(activityEvents.projectId, project.id)));
+    expect(event.userId).toBe(me.id);
+    /*
+     * And a session of its own. The funnel counts distinct sessions per stage,
+     * so a shared sentinel for every job-closed step would collapse them all
+     * into one and undercount the thing this test exists for.
+     */
+    expect(event.sessionId).toBe(`path:${project.id}`);
+
+    /* Still once: a second milestone closed the same way does not count again. */
+    const another = tasks.find((t) => t.id !== step.id && (t.tags ?? []).some((x: string) => x.startsWith("backbone:RUN.")));
+    if (another) {
+      const secondId = (another.tags as string[]).find((x) => x.startsWith("backbone:"))!.slice("backbone:".length);
+      await completeRunMilestone(project.id, secondId, me.id);
+      const still = await db.select().from(activityEvents)
+        .where(and(eq(activityEvents.name, PATH_FUNNEL_EVENTS.firstStep), eq(activityEvents.projectId, project.id)));
+      expect(still.length, "the first step happens once, however it was finished").toBe(1);
+    }
+  }, 180_000);
+
   it("counts the funnel for the owner, in the order it happens", async () => {
     const app = await getTestApp();
     const owner = await builder(app, "Ows");

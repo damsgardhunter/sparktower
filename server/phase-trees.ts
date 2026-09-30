@@ -35,6 +35,8 @@ import { MONEY_POSITION_MILESTONE } from "@shared/phase-trees/systemize";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
 import { tidyProse } from "./prose-style";
+import { recordActivity } from "./analytics";
+import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 
 /** Tags let the actor and tier ride on the existing task row. */
 export const tagsFor = (m: ResolvedMilestone) => [
@@ -671,10 +673,74 @@ export function planShape(main: ResolvedMilestone[], tasks: { status: string; ta
 }
 
 /** Called from the task board when a task on the path is finished. */
-export async function onPathTaskDone(task: { id: string; projectId: string; title: string; tags: string[] | null; estimateHours: number | null; startedAt: Date | null; completedAt: Date | null; completedById?: string | null }) {
+/**
+ * Who was looking, when a finished step came from a request.
+ *
+ * Optional, because most of them do not. An audit applying its catch-up, Nova's
+ * operations and the run-company rhythm all finish steps with nobody's browser
+ * involved, and those are still first steps.
+ */
+export interface PathStepSeenBy {
+  userId?: string | null;
+  visitorId?: string;
+  sessionId?: string;
+  path?: string;
+}
+
+/**
+ * The first step this project has ever finished, counted once, wherever it was
+ * finished from.
+ *
+ * It lived in the task board's PATCH route, which is one of six ways a path
+ * task becomes done — the others being `saveWork`, `updateTaskWithPath`,
+ * `reconcileMilestones`, Nova's operations and `completeRunMilestone`. So the
+ * growth funnel's "finished their first step" counted people who dragged a
+ * card and nobody else, and for a run_company project it counted almost
+ * nobody: those steps close by filing a check-in or adding a teammate, never
+ * by touching the board.
+ *
+ * This is the same bug the comment under `updateTaskWithPath` describes, in the
+ * same place, for a different consequence — that one was about the path failing
+ * to advance, this one about the measurement failing to notice.
+ *
+ * Counted from the board rather than from a flag, so it stays true for a
+ * project that finished its first step long before anybody thought to measure
+ * it. `done.length !== 1` is what makes it once: the row is already written
+ * when this runs, so exactly one finished path task means this was it.
+ */
+async function recordFirstPathStep(task: { projectId: string; completedById?: string | null }, seen?: PathStepSeenBy): Promise<void> {
+  const all = await storage.getProjectKanbanTasks(task.projectId).catch(() => []);
+  const onPath = (t: any) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:"));
+  const done = (all as any[]).filter((t) => t.status === "done" && onPath(t) && !isArchivedPath(t.tags));
+  if (done.length !== 1) return;
+
+  const userId = seen?.userId ?? task.completedById ?? null;
+  /*
+   * A step finished by a job has no session, and the funnel counts sessions.
+   * One synthetic id per project rather than one shared "server" — a project
+   * has exactly one first step, so this is exactly one session, where a shared
+   * sentinel would collapse every server-side completion into a single one and
+   * undercount the very thing this is here to fix.
+   */
+  const synthetic = `path:${task.projectId}`;
+  await recordActivity({
+    name: PATH_FUNNEL_EVENTS.firstStep,
+    userId,
+    visitorId: seen?.visitorId || userId || synthetic,
+    sessionId: seen?.sessionId || synthetic,
+    path: seen?.path ?? `/projects/${task.projectId}`,
+    projectId: task.projectId,
+    props: sanitizePathFunnelProps({ projectId: task.projectId }),
+  });
+}
+
+export async function onPathTaskDone(task: { id: string; projectId: string; title: string; tags: string[] | null; estimateHours: number | null; startedAt: Date | null; completedAt: Date | null; completedById?: string | null }, seen?: PathStepSeenBy) {
   if (isArchivedPath(task.tags)) return;
   const backboneId = backboneIdOf(task.tags) ?? parentOf(task.tags);
   if (!backboneId && !injectedPhaseOf(task.tags)) return;
+  // Counted here rather than at one of the six call sites, so every way of
+  // finishing a step is counted and none of them is counted twice.
+  void recordFirstPathStep(task, seen).catch((e) => console.error("[phase-trees] first-step count failed (non-fatal):", e));
   // The retention loop's way back: the rest of the team hears the path moved, and what's next.
   void afterPathStepDone(task);
   const started = task.startedAt ? new Date(task.startedAt).getTime() : null;
