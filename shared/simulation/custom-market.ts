@@ -519,10 +519,17 @@ export const ROOM_FOR_A_BUSINESS = 70;
  *
  * Measured, the difference is not small: holding both to the same bar lifted a
  * sea-swimming app's prices 246-fold, from GBP 1 a year to GBP 246. Splitting
- * them gets the same eight markets to the same place with a 20-fold lift, and
+ * them gets the same eight markets to the same place with a 35-fold lift, and
  * it is the open share doing the work instead.
+ *
+ * Raised from 25 to 28 when `allocate` stopped losing the overflow. Closing
+ * that leak took `SPILL_TOPUP_MAX` from 8 to 3, and the two smallest markets
+ * lived on that top-up: parish-council minutes lost three of its eight
+ * playable seeds. Twenty-eight is the least that gives them back, and it is
+ * chosen against what it costs the fiction — at 40 the same swimming app goes
+ * to GBP 121 a year, which is not a swimming app any more.
  */
-export const PRICE_ROOM_FOR_A_BUSINESS = 25;
+export const PRICE_ROOM_FOR_A_BUSINESS = 28;
 export const OPEN_SHARE_MAX = 0.35;
 
 export function openShareFor(input: { segments: Segment[]; cities: City[]; baseUnitCost: number }): number {
@@ -579,8 +586,14 @@ export function pricedForABusiness(input: { segments: Segment[]; cities: City[];
   const reach = people * home * openShare;
   if (reach <= 0) return segments;
 
+  /*
+   * Twelve passes, not four. Raising the prices raises what the market is
+   * worth, which raises what its people cost, so each pass only closes part of
+   * the gap — and four of them stopped about 5% short of the bar rather than
+   * at it. Converging properly is what lets the bar mean what it says.
+   */
   let lifted = 1;
-  for (let pass = 0; pass < 4; pass++) {
+  for (let pass = 0; pass < 12; pass++) {
     const biggest = [...segments].sort((a, b) => b.size - a.size)[0];
     if (!biggest || biggest.referencePrice <= 0) break;
     const payroll = officerCost({ officers: 1, scale: marketScale({ segments }) });

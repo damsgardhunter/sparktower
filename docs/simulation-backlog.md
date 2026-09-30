@@ -2444,20 +2444,50 @@ company, and every also-ran came down about 15%. All four teams still finish
 with real companies — 471,887 / 1,250,246 / 73,351 / 87,212 customers, none
 bankrupt — so what the bar stands for is unchanged.
 
-### Open: the smallest generated markets pay for it
-Measured across fourteen Nova markets, eight seeds, eight strategies, events
-on: two got worse. Quorumcast fell from eight seeds with a profitable plan to
-**five of eight**, and hearthmap from eight to seven. The other twelve are
-unchanged and nothing anywhere goes bankrupt.
+### Closed: the smallest generated markets paid for it, and have been paid back
+Closing the overflow leak took `SPILL_TOPUP_MAX` from 8 to 3, and the two
+smallest generated markets lived on that top-up. Measured over eight seeds and
+eight strategies, seeds with a plan that turns a profit:
 
-Both are among the smallest markets written, and both lived on the top-up that
-came down from 8 to 3. Whether that is the right price for the inversion above
-is a real question and the answer is not obvious.
+    quorumcast   8/8 → 5/8 with events off, 8/8 → 7/8 with them on
+    hearthmap    8/8 → 7/8 with events off, 8/8 → 8/8 with them on
 
-It is also a gap in the guards: `every-market-winnable.test.ts` walks `NICHES`,
-which is the seven hand-written markets only. Nothing in the suite exercises a
-generated market, so this regression is visible in a harness and invisible to
-CI. That is worth closing before the next change to the overflow.
+`PRICE_ROOM_FOR_A_BUSINESS` from 25 to 28 gives them back — 8/8 with events on
+for every generated market, which is the condition real play runs in. Twenty-
+eight is the least that does it, and the reason not to go further is what it
+costs the fiction: at 40 the sea-swimming app's prices go to £121 a year, which
+is not a swimming app any more. At 28 it is £35.
+
+`pricedForABusiness` also now converges in twelve passes rather than four.
+Raising prices raises what a market is worth, which raises what its people
+cost, so each pass closes only part of the gap; four of them stopped about 5%
+short of the bar rather than at it.
+
+### Closed: no test exercised a market Nova wrote
+`every-market-winnable.test.ts` walked `NICHES` — the seven hand-written
+markets — and was most of the balance contract in this repo. It had never once
+touched a generated market, which is how the regression above went through CI
+green and was only caught by a scratch harness.
+
+It now builds four markets through the same `buildCustomMarket` the server
+uses, so `openShareFor` and `pricedForABusiness` are exercised rather than
+assumed: a marketplace whose biggest segment is its cheapest, a consumer app
+whose biggest segment pays about what it costs to serve, a public-sector B2B
+market with few buyers and six regions, and one with real money in it. They are
+small on purpose — every market generated from a real brief came back under
+£33m a year and most under £700,000, which the hand-written seven cannot stand
+in for.
+
+A fourth property is asserted for these that the catalogue markets are not held
+to: **the season can be run at a profit**. That is what the overflow change
+cost, and the other three — wins customers, stays solvent, beats filing nothing
+— all passed throughout it.
+
+**Two harness lessons in one day, both of which produced wrong numbers.** The
+5/8 above was measured with events *off* while a second harness measured the
+same market at 7/8 with them on, and the two were compared as though they were
+the same thing. Before quoting a number from a scratch harness: check what it
+is holding constant.
 
 ### Open: keeping room still decides the catalogue season
 The growth bound was tried and is not shipped. Capping how many customers a
