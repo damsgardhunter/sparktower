@@ -20,7 +20,7 @@ import { Btn, ErrorNote, ErrorState, Field, Loading, errText } from "../src/comp
 import { Group, MenuRow } from "../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../src/components/Sheet";
 
-interface MfaStatus { required: boolean; enabled: boolean; verified: boolean; recoveryCodesLeft: number }
+interface MfaStatus { required: boolean; enabled: boolean; verified: boolean }
 
 /**
  * Two-factor authentication, on the phone.
@@ -32,6 +32,18 @@ interface MfaStatus { required: boolean; enabled: boolean; verified: boolean; re
  *
  * There's no QR code here because there's nothing to scan from — the key is
  * copyable, and "open in your authenticator app" hands it to the app directly.
+ *
+ * There are no recovery codes, and this screen used to imply there were. The
+ * product dropped them — the six digits are the only way in and a lost phone
+ * is a conversation with an admin — and the web page was rewritten to say so
+ * while this screen was not. It kept a `recoveryCodesLeft` field the status
+ * route does not return (rendering "undefined recovery codes left" to anyone
+ * with 2FA on), read a `recoveryCodes` array off an enable response that does
+ * not carry one, and offered a "New recovery codes" button that POSTed to
+ * `/api/auth/mfa/recovery-codes` — a route that has never existed, so it
+ * answered 404 every time. The wording now matches the web page's, because
+ * that wording is the point: someone turning 2FA on here was being told they
+ * had a way back in, and they did not.
  */
 export default function Security() {
   const qc = useQueryClient();
@@ -39,7 +51,6 @@ export default function Security() {
   const { data: status, isLoading, error: statusError, refetch } = useQuery<MfaStatus>({ queryKey: ["mfa-status"], queryFn: () => api<MfaStatus>("/api/auth/mfa/status") });
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [code, setCode] = useState("");
-  const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["mfa-status"] });
@@ -51,15 +62,9 @@ export default function Security() {
   });
 
   const enable = useMutation({
-    mutationFn: () => api<{ recoveryCodes: string[] }>("/api/auth/mfa/enable", { method: "POST", body: { code: code.trim() } }),
-    onSuccess: async (r) => { setCodes(r.recoveryCodes); setSetup(null); setError(null); await refresh(); },
+    mutationFn: () => api<{ enabled: boolean }>("/api/auth/mfa/enable", { method: "POST", body: { code: code.trim() } }),
+    onSuccess: async () => { setSetup(null); setError(null); await refresh(); },
     onError: (e) => setError(errText(e, "That code isn't right.")),
-  });
-
-  const regenerate = useMutation({
-    mutationFn: () => api<{ recoveryCodes: string[] }>("/api/auth/mfa/recovery-codes", { method: "POST", body: {} }),
-    onSuccess: async (r) => { setCodes(r.recoveryCodes); await refresh(); },
-    onError: (e) => setError(errText(e, "Couldn't make new codes.")),
   });
 
   const copy = (text: string, what: string) => {
@@ -110,7 +115,7 @@ export default function Security() {
           <MenuRow
             icon={status.enabled ? "shield-checkmark" : "shield-outline"}
             title={status.enabled ? "On" : "Off"}
-            subtitle={status.enabled ? `${status.recoveryCodesLeft} recovery code${status.recoveryCodesLeft === 1 ? "" : "s"} left` : "Not set up yet"}
+            subtitle={status.enabled ? "A code from your authenticator app is required to sign in" : "Not set up yet"}
             tint={status.enabled ? colors.success : colors.textSecondary}
             right={<View />}
           />
@@ -139,37 +144,17 @@ export default function Security() {
           </Group>
         )}
 
-        {codes && (
-          <Group title="Recovery codes" footer="Save these somewhere safe. Each one signs you in once if you lose your phone. They won't be shown again.">
-            <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm }}>
-              {codes.map((c) => (
-                <Text key={c} selectable style={{ color: colors.text, fontSize: font.base, fontFamily: "Courier" }}>{c}</Text>
-              ))}
-              <Btn label="Copy all" variant="outline" onPress={() => copy(codes.join("\n"), "Recovery codes")} />
-            </View>
-          </Group>
+        {/*
+          * The same sentence as the web page, and for the same reason: it is the
+          * whole trade, so it is said plainly rather than left to be discovered
+          * by someone who has just lost their phone.
+          */}
+        {status.enabled && (
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular, paddingHorizontal: spacing.lg }} testID="text-mfa-lost-phone">
+            The 6-digit code from your app is the only way in — there are no recovery codes.
+            If you lose your phone, an admin resets 2FA on your account once they've confirmed it's you.
+          </Text>
         )}
-
-        {status.enabled && !codes && (
-          <View style={{ paddingHorizontal: spacing.lg }}>
-            <Btn
-              label="New recovery codes"
-              variant="outline"
-              loading={regenerate.isPending}
-              disabled={!status.verified}
-              onPress={() => regenerate.mutate()}
-            />
-            {!status.verified && (
-              <Text style={{ color: colors.textTertiary, fontSize: font.sm, fontFamily: fontFamily.regular, marginTop: spacing.sm }}>
-                This sign-in didn't use your authenticator code. Sign out and back in to make new codes.
-              </Text>
-            )}
-          </View>
-        )}
-
-        <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular, paddingHorizontal: spacing.lg }}>
-          Lost your phone and your recovery codes? Contact support — we can turn it off once we know it's you.
-        </Text>
 
         <Password />
       </ScrollView>
