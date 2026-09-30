@@ -257,7 +257,64 @@ describe("kill switches", () => {
   it("covers most of the write surface, and says how much", () => {
     const writes = live.filter((r) => r.write);
     const gatedWrites = writes.filter((r) => r.surface).length;
-    // Not every write belongs to a feature switch (projects, tasks, milestones are the product itself).
+    // Not every write belongs to a feature switch (`projects` is the product itself).
     expect(gatedWrites / writes.length, `only ${gatedWrites}/${writes.length} writes behind a switch`).toBeGreaterThan(0.5);
+  });
+
+  /*
+   * Every route that spends money can be turned off on its own.
+   *
+   * There is already a brake over all of it: `requireCredits` checks the
+   * platform's daily spend ceiling before charging and before the model is
+   * called, so aggregate runaway spend is bounded whatever happens here. What
+   * that brake cannot do is stop *one* feature. It is all or nothing for
+   * everybody, and the alternative to it was a deploy.
+   *
+   * Fifteen of the fifty-six costly routes had no switch of their own, and the
+   * gaps were not obscure: the per-project Nova chat (`/api/chat` was listed
+   * and `/api/projects/:id/chat` was not), writing and auditing path loops,
+   * both AI kanban routes, the brand kit, every route of the decision
+   * simulator, and the résumé review. A feature that starts producing
+   * rubbish, or costing more than it earns, should be one toggle rather than a
+   * release.
+   */
+  it("lets every route that costs money be turned off on its own", () => {
+    const bare = live.filter((r) => r.cost && !r.surface).map(label);
+    expect(bare, `costly routes with no kill switch — add a prefix to SURFACE_API_PREFIXES:\n  ${bare.join("\n  ")}`).toEqual([]);
+  });
+
+  /*
+   * A switch in the console that reaches nothing on the server.
+   *
+   * The test above this block only walks `SURFACE_API_PREFIXES`, so a surface
+   * missing from that table entirely was never asked the question. Three were:
+   * `tasks` ("Most-used surface in the product"), `milestones`, and `projects`.
+   * The first two now own their routes. An admin reading the console saw a
+   * toggle, turned it off under an incident, and the API carried on serving —
+   * which is worse than having no toggle, because it is believed.
+   *
+   * `projects` stays deliberately empty and is named here rather than left to
+   * be rediscovered. Its prefix would be `/api/projects`, which is every
+   * project route in the product and every other project surface with it, so
+   * the switch would not mean "projects off" but "the whole product off". That
+   * is a decision for the owner, not a default.
+   */
+  const NO_API_OF_ITS_OWN: Record<string, string> = {
+    projects: "the object everything else hangs off: /api/projects would take the entire product down, so the switch is client-only until someone decides otherwise",
+  };
+
+  it("gives every surface in the console either real routes or a written reason", () => {
+    const unreachable = SURFACES
+      .filter((s) => !(SURFACE_API_PREFIXES[s.id]?.length))
+      .filter((s) => !NO_API_OF_ITS_OWN[s.id])
+      .map((s) => `${s.id} ("${s.label}")`);
+    expect(unreachable, `these switches change nothing on the server — give them a prefix, or a reason in NO_API_OF_ITS_OWN:\n  ${unreachable.join("\n  ")}`).toEqual([]);
+  });
+
+  it("only excuses surfaces that really do own no routes", () => {
+    for (const id of Object.keys(NO_API_OF_ITS_OWN)) {
+      expect(SURFACES.some((s) => s.id === id), `${id} is excused but is not a surface`).toBe(true);
+      expect(SURFACE_API_PREFIXES[id] ?? [], `${id} has prefixes now, so drop it from NO_API_OF_ITS_OWN`).toEqual([]);
+    }
   });
 });
