@@ -1949,7 +1949,27 @@ function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCost
   const ordering = Math.round(capacityNext) > Math.round(capacity)
     ? capacityRisk({ capacity: capacityNext, forecast: live, price, idleCostPerUnit })
     : null;
-  const overbuilding = ordering?.verdict === "idle";
+  /*
+   * Judged on its own threshold, not on `capacityRisk`'s "idle" verdict.
+   *
+   * That verdict fires above 1.3x the top of the range, which is the right
+   * line for the room a company *has* against the demand it is about to meet.
+   * It is the wrong line for room being *ordered*, because ordered room opens
+   * next period, into a market that has grown and into reach the company may
+   * have just bought — and room is the ceiling on what can be won at all.
+   *
+   * Measured on a freight market over sixteen quarters, identical decisions
+   * apart from this one number: a plant held at 1.25x what the company serves
+   * finishes with 115 customers and never turns a profit; at 2x it finishes
+   * with 510, profitable, and worth five and a half times as much. Warning at
+   * 1.3x would have told that founder their only winning move was a mistake.
+   *
+   * Three times the top of the range still catches what this is for — a
+   * founder who ordered 3,000 seats against 87 customers, which is 34x — and
+   * leaves building ahead of demand alone.
+   */
+  const ORDER_FAR_TOO_MUCH = 3;
+  const overbuilding = !!ordering && capacityNext > Math.max(1, live.high) * ORDER_FAR_TOO_MUCH;
   /*
    * The verdict in two words and a line, with an icon: colour is never the
    * only thing saying whether this is fine.
@@ -2038,7 +2058,7 @@ function ForecastCard({ forecast, voice, price, capacity, capacityNext, idleCost
             <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-amber-600" data-testid="text-overbuilding">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               <span>
-                You're ordering room for {Math.round(capacityNext).toLocaleString()} — about {Math.max(2, Math.round(capacityNext / Math.max(1, live.high)))}× the most this {period.one} could bring.
+                You're ordering room for {Math.round(capacityNext).toLocaleString()} — about {Math.max(3, Math.round(capacityNext / Math.max(1, live.high)))}× the most this {period.one} could bring.
                 {" "}Unless demand grows into it, {ordering!.idleAtLow.toLocaleString()} of it sits empty at {money(ordering!.idleCostAtLow)} a {period.one}.
               </span>
             </p>
