@@ -209,5 +209,6 @@ export function parseMarket(raw: string, fallbackId: string): Niche | null {
   } catch {
     return null;
   }
-  return buildCustomMarket(parsed, fallbackId);
+  /* Nova has just written it, so this is the one moment the market may be changed. */
+  return buildCustomMarket(parsed, fallbackId, { fresh: true });
 }

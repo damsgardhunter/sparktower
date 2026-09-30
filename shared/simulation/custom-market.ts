@@ -608,7 +608,43 @@ export function pricedForABusiness(input: { segments: Segment[]; cities: City[];
   return segments;
 }
 
-export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | null {
+/**
+ * Whether this is a market being written for the first time, or one being read
+ * back.
+ *
+ * `openShareFor` and `pricedForABusiness` do not clamp a market, they *change*
+ * it — they open it up and they raise its prices until a business is possible
+ * in it. Every other rule here is a bound, and running a bound twice is
+ * harmless; running these twice is not the danger either, because both stop
+ * once their bar is met. The danger is running them at all on a season that is
+ * already being played.
+ *
+ * A season stores its market and `marketOf` rebuilds it through this function
+ * on **every read**, deliberately, because the row may have been written by an
+ * older version. That was safe while this only clamped. Measured against
+ * markets stored before these rules existed, a read would have moved them:
+ *
+ *     kiln firings     prices x6.3   open share 0.10 -> 0.35
+ *     sea swimming     prices x35.0
+ *     parish minutes   prices x4.9
+ *     shift swapping   prices x1.0   open share 0.10 -> 0.21
+ *
+ * A company that had priced at 20 against a reference of 15 would come back to
+ * find itself priced at 20 against 95 — cheap beyond anything it chose, with
+ * every expectation and ceiling in its market moved, in the middle of a season
+ * it was halfway through. Nobody gets to change the game under the people
+ * playing it.
+ *
+ * So the two transformations happen when a market is written and never again.
+ * A read gets all the validation and none of the rewriting, which means a
+ * season keeps the market it started with and a new one gets the rules.
+ */
+export interface BuildOptions {
+  /** True when Nova has just written this market and it has never been played. */
+  fresh?: boolean;
+}
+
+export function buildCustomMarket(raw: unknown, fallbackId: string, options: BuildOptions = {}): Niche | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
 
@@ -625,9 +661,13 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
   if (!incumbents) return null;
 
   const baseUnitCost = affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments);
-  const openShare = openShareFor({ segments, cities, baseUnitCost });
-  /* And priced so the customers a founder can reach can pay for the business. */
-  const priced = pricedForABusiness({ segments, cities, baseUnitCost, openShare });
+  /*
+   * Written once, then kept. A market being read back carries whatever it was
+   * given when it was written — see `BuildOptions`.
+   */
+  const written = typeof (m.openShare) === "number" && (m.openShare as number) > 0 ? (m.openShare as number) : null;
+  const openShare = options.fresh ? openShareFor({ segments, cities, baseUnitCost }) : (written ?? TRULY_OPEN_SHARE);
+  const priced = options.fresh ? pricedForABusiness({ segments, cities, baseUnitCost, openShare }) : segments;
   return {
     id: slug(m.id ?? m.name, fallbackId),
     name: str(m.name, 80, "Your market"),

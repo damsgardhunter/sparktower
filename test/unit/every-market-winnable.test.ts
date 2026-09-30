@@ -205,7 +205,7 @@ const GENERATED: Array<{ id: string; raw: Record<string, unknown> }> = [
 describe("a market Nova wrote can be won too", () => {
   for (const { id, raw } of GENERATED) {
     describe(id, () => {
-      const niche = buildCustomMarket(raw, id);
+      const niche = buildCustomMarket(raw, id, { fresh: true });
       const seasons = niche
         ? [false, true].flatMap((withEvents) => SEEDS.map((seed) => {
             const nothing = play(niche, seed, 0, withEvents);

@@ -631,7 +631,7 @@ describe("a market you can run a business in", () => {
         id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
         quality: 50, brand: 50, service: 50, priceIndex: 1,
       })),
-    }, "kiln")!;
+    }, "kiln", { fresh: true })!;
     expect(tiny, "the market was refused outright").toBeTruthy();
     expect(tiny.openShare!, "a market this small was left at a tenth").toBeGreaterThan(TRULY_OPEN_SHARE);
     expect(tiny.openShare!, "no incumbents left in it").toBeLessThanOrEqual(OPEN_SHARE_MAX);
@@ -658,12 +658,74 @@ describe("a market you can run a business in", () => {
         id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
         quality: 50, brand: 50, service: 50, priceIndex: 1,
       })),
-    }, "swim")!;
+    }, "swim", { fresh: true })!;
     const biggest = [...free.segments].sort((a, b) => b.size - a.size)[0];
     expect(biggest.referencePrice - free.baseUnitCost, "the biggest segment still earns nothing").toBeGreaterThan(1);
     /* And the shape Nova wrote survives: the keen still pay more than the casual. */
     const casual = free.segments.find((s) => s.id === "casual")!;
     const keen = free.segments.find((s) => s.id === "keen")!;
     expect(keen.referencePrice / casual.referencePrice, "who pays more than whom was rewritten").toBeCloseTo(3, 0);
+  });
+});
+
+/**
+ * A season keeps the market it started with.
+ *
+ * `marketOf` rebuilds a season's market through `buildCustomMarket` on every
+ * read, deliberately, because the stored row may have been written by an older
+ * version of this code. That is safe while the cleaner only *clamps* — run a
+ * bound twice and nothing moves.
+ *
+ * `openShareFor` and `pricedForABusiness` are not bounds. They open a market up
+ * and raise its prices until a business is possible in it, and applying them to
+ * a season already in flight would move it under the people playing it.
+ * Measured against markets stored before those rules existed, a read would have
+ * done this:
+ *
+ *     kiln firings     prices x6.3   open share 0.10 -> 0.35
+ *     sea swimming     prices x35.0
+ *     parish minutes   prices x4.9
+ *
+ * A company that priced at 20 against a reference of 15 would come back to find
+ * itself priced at 20 against 95, with every expectation and ceiling in its
+ * market moved, halfway through a season.
+ */
+describe("a market that is already being played", () => {
+  const written = {
+    name: "Kiln hire", premise: "Spare firings, booked by the shelf.", baseUnitCost: 5,
+    segments: [
+      { id: "solo", name: "Solo hobbyists", size: 3000, referencePrice: 15, growth: 0.04, priceSensitivity: 0.6, qualityFocus: 0.4, brandFocus: 0.3, serviceFocus: 0.4, loyalty: 0.3 },
+      { id: "groups", name: "Collectives", size: 2000, referencePrice: 25, growth: 0.03, priceSensitivity: 0.5, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.5, loyalty: 0.4 },
+    ],
+    regions: [1, 2, 3, 4, 5].map((i) => ({ id: `r${i}`, name: `R${i}`, weight: i === 1 ? 0.3 : 0.175, entryCost: 500, note: "" })),
+    incumbents: [0.3, 0.2, 0.15].map((startingShare, i) => ({
+      id: `riv${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
+      quality: 50, brand: 50, service: 50, priceIndex: 1,
+    })),
+  };
+
+  it("is opened up and priced when it is first written", () => {
+    const fresh = buildCustomMarket(written, "kiln", { fresh: true })!;
+    expect(fresh.openShare!, "a market small enough to be unplayable was left at a tenth").toBeGreaterThan(TRULY_OPEN_SHARE);
+    expect(fresh.segments[0].referencePrice, "prices were not raised to where a business is possible")
+      .toBeGreaterThan(written.segments[0].referencePrice);
+  });
+
+  it("is not touched again when it is read back", () => {
+    const stored = buildCustomMarket(written, "kiln", { fresh: true })!;
+    const reread = buildCustomMarket(stored, "kiln")!;
+    expect(reread.segments.map((s) => s.referencePrice), "a season's prices moved on a read")
+      .toEqual(stored.segments.map((s) => s.referencePrice));
+    expect(reread.openShare, "a season's open share moved on a read").toBe(stored.openShare);
+  });
+
+  it("leaves a season stored before the rules existed exactly as it was", () => {
+    /* No `openShare`, prices as Nova first wrote them: the shape of an older row. */
+    const old = buildCustomMarket(written, "kiln")!;
+    expect(old.segments.map((s) => s.referencePrice), "an in-flight season was repriced")
+      .toEqual(written.segments.map((s) => s.referencePrice));
+    const again = buildCustomMarket(old, "kiln")!;
+    expect(again.segments.map((s) => s.referencePrice), "reading it twice moved it")
+      .toEqual(written.segments.map((s) => s.referencePrice));
   });
 });

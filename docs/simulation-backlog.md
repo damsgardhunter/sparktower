@@ -2508,6 +2508,38 @@ fails one case, and taking cash from the oldest week instead of the newest
 fails another. A test that passes against the bug it was written for is worth
 nothing, and two of the findings in this document were exactly that.
 
+### Closed: a season in flight would have been repriced under the players
+`marketOf` rebuilds a season's market through `buildCustomMarket` on every
+read — deliberately, because the stored row may have been written by an older
+version of this code. That is safe while the cleaner only *clamps*: run a bound
+twice and nothing moves.
+
+`openShareFor` and `pricedForABusiness` are not bounds. They open a market up
+and raise its prices until a business is possible in it. Measured against
+markets stored before those rules existed, the next read would have done this:
+
+    kiln firings     prices x6.3   open share 0.10 -> 0.35
+    sea swimming     prices x35.0
+    parish minutes   prices x4.9
+    shift swapping   prices x1.0   open share 0.10 -> 0.21
+
+A company that priced at 20 against a reference of 15 would come back to find
+itself priced at 20 against 95 — cheap beyond anything it chose, every
+expectation and ceiling in its market moved, halfway through a season it was
+playing. Nobody gets to change the game under the people playing it.
+
+Both transformations now happen when a market is *written* and never again
+(`BuildOptions.fresh`, set by `parseMarket`). A read gets all of the validation
+and none of the rewriting, so a season keeps the market it started with and a
+new one gets the rules. The round trip was checked first and is stable —
+building twice moves nothing — so the risk was only ever across versions, which
+is exactly the case a rebuild-on-read is there to handle and the one it could
+not handle here.
+
+The trade is stated plainly: a season started before the rules keeps a market
+that may be hard or unplayable. That is the right side to err on, and it stops
+mattering as those seasons finish.
+
 ### Open: keeping room still decides the catalogue season
 Identical spending, the only difference being whether the plant is cut toward
 what is served, keeping it is worth **2.3x to 4.6x** the company's final value

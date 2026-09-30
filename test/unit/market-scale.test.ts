@@ -267,7 +267,7 @@ describe("who holds a market nobody named", () => {
       id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
       quality: 50, brand: 50, service: 50, priceIndex: 1,
     })),
-  }, "f")!;
+  }, "f", { fresh: true })!;
 
   const total = (n: typeof fragmented) => n.segments.reduce((s, x) => s + x.size, 0);
   const holds = (c: { customers: Record<string, number> } | null) =>
