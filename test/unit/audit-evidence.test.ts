@@ -170,6 +170,43 @@ describe("the test inventory a close read gets", () => {
     expect(prompts[0]).toContain("### server/moderation.ts");
   });
 
+  /*
+   * The moderation read has to be shown the web's screens, not only the phone's.
+   *
+   * It was given `summarizeMobileScreens` after a read said it could not confirm
+   * the phone could report, and a person took that for a gap. The same sentence
+   * then came back from the other side: "the moderation UI on web is not
+   * evidenced here" — because the review queue is deliberately web-only, and the
+   * web inventory was the one this area never got.
+   *
+   * Both halves or neither. An area asked whether a chain is complete cannot
+   * answer from a list with one app missing.
+   */
+  it("shows the moderation read both apps' screens, since the queue lives on one and the reporting on the other", async () => {
+    const files = [
+      { path: "client/src/App.tsx", size: 10, content: `
+        import AdminReports from "@/pages/admin-reports";
+        <Route path="/admin/reports" component={AdminReports} />` },
+      { path: "client/src/pages/admin-reports.tsx", size: 10, content: `fetch("/api/admin/reports");` },
+      { path: "mobile/app/admin/reports.tsx", size: 10, content: `fetch("/api/admin/reports");` },
+      { path: "server/moderation.ts", size: 10, content: "// the queue" },
+    ];
+    prompts.length = 0;
+    await deepReadArea(ent, { area: "moderation", status: "built", summary: "", evidence: [] } as any, files as any, null);
+    /*
+     * The inventory, not the instructions.
+     *
+     * Every deep-read prompt ends with a paragraph naming the MOBILE SCREENS and
+     * WEB SCREENS lists, so `toContain("WEB SCREENS")` passes whether or not the
+     * list was ever attached — which is what the first version of this test did,
+     * and it passed against the bug it was written for. The inventory header
+     * carries a count in brackets; the instruction does not.
+     */
+    expect(prompts[0], "the web queue has to be visible to a read that judges the chain").toContain("WEB SCREENS (");
+    expect(prompts[0]).toMatch(/\/admin\/reports\s+\[/);
+    expect(prompts[0], "and the phone, which is where reporting happens").toContain("MOBILE SCREENS (");
+  });
+
   it("follows a screen's own components, so a screen that renders one isn't read as having no data", () => {
     const out = summarizeMobileScreens([
       // The common shape: the route renders a component, and the component fetches.

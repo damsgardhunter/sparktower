@@ -248,9 +248,23 @@ export async function deepReadArea(
      * web-only, which is a different sentence from "not found".)
      */
     entry.area === "mobile" || entry.area === "moderation" ? summarizeMobileScreens(files) : null,
-    // The web's routes with their gating: for auth, because "which screens does a signed-out
-    // person reach" is the question; for mobile, because the two apps are only comparable together.
-    entry.area === "auth" || entry.area === "mobile" ? summarizeWebScreens(files) : null,
+    /*
+     * The web's routes with their gating: for auth, because "which screens does
+     * a signed-out person reach" is the question; for mobile, because the two
+     * apps are only comparable together; and for moderation, for the reason the
+     * comment above gives from the other side.
+     *
+     * That note says the review queue is deliberately web-only. The moderation
+     * read was then given the phone's screens and not the web's — so the one
+     * inventory that could show the queue was the one this area never got, and
+     * the read reported that the web moderation UI "is not evidenced here". It
+     * is `client/src/pages/admin-reports.tsx`, routed at `/admin/reports`, and a
+     * browser test drives it from the queue through the action to the undo.
+     *
+     * Fixing the mobile half and leaving the web half is how a reader gets the
+     * same wrong answer twice from opposite directions.
+     */
+    entry.area === "auth" || entry.area === "mobile" || entry.area === "moderation" ? summarizeWebScreens(files) : null,
     // Both ends of the app's sign-in, so "same auth as the web" is checked rather than taken from a comment.
     entry.area === "mobile" && coverage ? summarizeAuthEndpoints(coverage.rows) : null,
     // The chain's last step: where hidden content and suspended accounts are filtered out of reads.
