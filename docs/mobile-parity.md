@@ -91,14 +91,33 @@ What each claim turned out to be, with where the evidence is:
   those names in the phone's own kit — which is not the same thing as agreeing
   with the web's, and nobody has checked.
 
-### Partial, and unmeasured
+### Measured, and both now closed
 
-The two "partly present" rows above are the honest state: the phone has a screen
-for each and it is smaller than the web's. Nobody has compared them feature by
-feature, so neither "done" nor "missing" is true, and writing either would put
-this list back in the state this audit found it in. Measuring them is a job in
-itself — and worth more than it sounds, because a half-ported screen is the one
-kind of gap a line count cannot settle.
+Both "partly present" rows were compared feature by feature rather than by length,
+and in both cases the line difference turned out to be density with exactly one
+real gap behind it.
+
+**The document builder**: twenty-seven of the web's twenty-eight capabilities were
+already on the phone — adding and deleting blocks and pages, chapter dividers, the
+accent colour, running headers, footers, page numbers, columns, filling one block
+or all, retrying failed fills, the fill quote, the overflow warning, tightening,
+the layout report, the page count, replanning with feedback, publishing to a
+folder, opening the PDF. The twenty-eighth was **undo**, and it was the one that
+mattered: a restructure is a model call that can drop a section the builder wrote,
+so the phone had shipped the destructive half of that pair and not the recovery.
+Built. One thing is deliberately different and should stay that way: the phone
+opens the *saved* PDF rather than the live render, because
+`/api/documents/:id/pdf` needs a session a browser tab does not carry.
+
+**Contests**: the phone had the communities list, join and leave, and the featured
+card — and never asked for `/api/contests` at all, so a contest somebody had
+actually opened was invisible on the phone and could not be entered from it. Built:
+the open contests, the entry count against any cap, the prize, and Enter.
+
+The lesson for the next row like these: a line count cannot settle a half-ported
+screen, and it is also not evidence of one. Compare the endpoints each side calls
+and the actions each side offers — an afternoon, against the week a port would
+have cost.
 
 ## The rule worth keeping
 

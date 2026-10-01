@@ -15,6 +15,27 @@ interface Community {
 
 const ICONS: Record<string, IconName> = { user: "person", sparkles: "sparkles", layers: "layers", rocket: "rocket", "hand-coins": "cash", store: "storefront" };
 const KEY = ["communities"];
+const CONTESTS_KEY = ["contests"];
+
+/**
+ * A contest, as `GET /api/contests` returns it. Mirrors the web's shape in
+ * `client/src/pages/contests.tsx`.
+ */
+interface Contest {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  status: "upcoming" | "active" | "judging" | "completed";
+  prize: string | null;
+  maxParticipants: number | null;
+  participantCount: number;
+  isParticipant: boolean;
+}
+
+/* The two a person can still get into. Judging and completed are history. */
+const OPEN_STATUSES: Contest["status"][] = ["upcoming", "active"];
 
 /**
  * Contests and Communities — the web's /contests. Contests are empty on purpose
@@ -26,6 +47,16 @@ export default function ContestsAndCommunities() {
   const { notice, show, clear } = useNotice();
   const { data: communities, isLoading } = useQuery({ queryKey: KEY, queryFn: () => api<Community[]>("/api/communities") });
   /*
+   * The real contests, which this screen did not ask for at all: it showed the
+   * communities list and the featured card, so a contest somebody had actually
+   * opened was invisible on the phone and could not be entered from it.
+   */
+  const { data: contests, isLoading: contestsLoading } = useQuery({
+    queryKey: CONTESTS_KEY,
+    queryFn: () => api<Contest[]>("/api/contests"),
+  });
+  const openContests = (contests ?? []).filter((c) => OPEN_STATUSES.includes(c.status));
+  /*
    * Joining and leaving write the row straight into the cache on success, so a
    * failure changed nothing at all on screen: the button stopped spinning, the
    * label still said "Join", and there was no way to tell a refused request
@@ -36,6 +67,19 @@ export default function ContestsAndCommunities() {
     mutationFn: (c: Community) => api<Community>(`/api/communities/${c.slug}/join`, { method: c.joined ? "DELETE" : "POST" }),
     onSuccess: (updated) => qc.setQueryData<Community[]>(KEY, (list) => list?.map((c) => (c.id === updated.id ? updated : c))),
     onError: (e, c) => show({ tone: "error", text: errText(e, c.joined ? `Couldn't leave ${c.name}. You're still a member.` : `Couldn't join ${c.name}. Try again.`) }),
+  });
+  const enter = useMutation({
+    mutationFn: (c: Contest) => api(`/api/contests/${c.id}/join`, { method: "POST" }),
+    /*
+     * Refetched rather than patched into the cache: entering changes the entry
+     * count as well as your own state, and the count is what tells the next person
+     * whether a capped contest still has room.
+     */
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: CONTESTS_KEY }); show({ text: "You're entered.", tone: "success" }); },
+    /* Said out loud, for the reason the comment above `toggle` gives: a silent
+       failure leaves a button that still says "Enter" and no way to tell a refusal
+       from a tap that did not land. */
+    onError: (e, c) => show({ tone: "error", text: errText(e, `Couldn't enter ${c.title}. Try again.`) }),
   });
   const label = { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.8, textTransform: "uppercase" as const };
 
@@ -58,6 +102,58 @@ export default function ContestsAndCommunities() {
 
         <View style={{ paddingHorizontal: spacing.lg }}>
           <Text style={label}>Contests</Text>
+          {/*
+            * Open contests first, then the standing offer. A contest somebody can
+            * enter this week outranks one that has not opened yet, however much
+            * larger the prize — and the featured card is deliberately not in this
+            * list, because it is not a row in `contests` at all.
+            */}
+          <View style={{ paddingTop: spacing.md, gap: spacing.md }} testID="list-contests">
+            {contestsLoading ? <Loading /> : openContests.map((c) => {
+              const full = c.maxParticipants != null && c.participantCount >= c.maxParticipants;
+              const busy = enter.isPending && enter.variables?.id === c.id;
+              return (
+                <View
+                  key={c.id}
+                  testID={`contest-${c.id}`}
+                  style={{ backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, gap: spacing.sm }}
+                >
+                  <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "flex-start" }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{c.title}</Text>
+                      <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
+                        {c.status === "active" ? "Open now" : "Opening soon"} · {c.category} · {c.difficulty}
+                      </Text>
+                    </View>
+                    {c.prize ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, borderRadius: radius.pill, borderWidth: 1, borderColor: `${colors.warning}66`, backgroundColor: `${colors.warning}1A`, paddingHorizontal: spacing.sm, paddingVertical: 3 }}>
+                        <Icon name="trophy" size={12} color={colors.warning} />
+                        <Text style={{ color: colors.warning, fontSize: font.xs, fontFamily: fontFamily.semibold }}>{c.prize}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text numberOfLines={3} style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>{c.description}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xs }}>
+                    <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
+                      {c.participantCount.toLocaleString()}{c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered
+                    </Text>
+                    {user ? (
+                      <Btn
+                        small
+                        label={c.isParticipant ? "Entered" : full ? "Full" : "Enter"}
+                        icon={c.isParticipant ? "checkmark" : undefined}
+                        variant={c.isParticipant ? "outline" : "primary"}
+                        disabled={c.isParticipant || full}
+                        loading={busy}
+                        onPress={() => enter.mutate(c)}
+                        testID={c.isParticipant ? `button-entered-${c.id}` : `button-enter-${c.id}`}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
           <View style={{ paddingTop: spacing.md, paddingBottom: spacing.md }}>
             <FeaturedContestCard />
           </View>
