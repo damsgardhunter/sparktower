@@ -2231,12 +2231,48 @@ The guard now asks only that a falling season leaves a business standing, and
 keeps the full claim for flat and rising ones. "Beaten by filing nothing" counts
 in the sweeps are high for the same reason and are not a fault.
 
-### Worth a look, found on the way: there are six economies
-Across sixteen season ids there are **six distinct demand trajectories**, each
-the same wave at a different phase. Two seasons in three therefore share their
-economy with another seed, exactly, to three decimals. Whether that is enough
-variety for a season to feel like its own is a design question nobody has asked;
-it is cheap to widen if the answer is no.
+### Open, with the fix written: there are only seven economies, and the comment says otherwise
+`economyFor` offsets each season's position in the business cycle by
+`seed % 7`, against a cycle nine years long. That is seven possible phases
+however many seasons exist — so the line beside it, "offset per season, so no
+two seasons sit at the same point in it", is not true. Measured across sixteen
+season ids there were **six distinct demand trajectories**, two seasons in three
+sharing theirs with another exactly, to three decimals.
+
+The fix is one line — read a prime modulus as a fraction of the cycle rather
+than a whole number of years in it, `((seed % 10_007) / 10_007) * 9` — and it
+works: forty distinct trajectories across forty season ids, sixteen across the
+sixteen that previously gave six. The cycle's length and depth are untouched;
+only where a season starts in it.
+
+**It is not landed, because it reshuffles every season's economy.** Four balance
+properties fail with it in, and they are not ones a constant fixes:
+
+    a company that decides nothing loses money     now +1,953,348
+    survivor beats filler in project_saas          18,840,128 against 20,135,449
+    dating_apps, a rising monthly season            spending beat by holding
+    drone_delivery, with events                     spending beat by holding
+
+The pattern is that with more of the cycle represented, more seasons land in
+shapes where building the business does not pay — troughs that never recover
+inside the season, peaks that fade early. That is the same question as the
+falling-season rule above, asked of six more shapes, and it wants measuring
+before it is answered. Widening the variety and re-deriving those four
+properties should be done together.
+
+### Closed by measurement: quorumcast's two dead seeds
+The one market not 8/8 under a real economy. It is 8/8 **with the year's events
+on**, which is how every season actually runs — `tickSeason` passes no options,
+so events are never off outside a test. With them off it is 6 of 8, the two
+seeds being `m` and `w`, both of which *rise*; they open in a trough and a
+market of 8,000 people never clears break-even before it lifts.
+
+Raising `PRICE_ROOM_FOR_A_BUSINESS` from 28 to 40 fixes them, and the suite stays
+green either way. It is not worth it: the bar is what lifts a generated market's
+prices, and 40 takes the sea-swimming app from £35 a year to £121, which is not
+a swimming app. Paying that to fix a condition that does not occur in play is
+the wrong trade. Recorded rather than fixed, with the number to raise if the
+judgement changes.
 
 ### Withdrawn pending that: the monthly season length
 A monthly season was going to go from two simulated years to four, with the

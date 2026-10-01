@@ -121,8 +121,8 @@ const RATES = [0.06, 0.12];
  * So on a falling season the claim is only that there is still a business at the
  * end of it. On a flat or rising one, building it has to pay.
  */
-const falls = (seed: string) =>
-  economyFor(seed, 16, 4).demand < economyFor(seed, 1, 4).demand - 0.02;
+const falls = (seed: string, periods = 4, spans = 16) =>
+  economyFor(seed, spans, periods).demand < economyFor(seed, 1, periods).demand - 0.02;
 
 describe("every market can be won", () => {
   for (const niche of NICHES) {
@@ -202,7 +202,8 @@ describe("every market can be won", () => {
          * profit.
          */
         for (const { seed, best, nothing } of seasons) {
-          if (falls(seed.split(" ")[0])) {
+          const monthly = seed.includes("monthly");
+          if (falls(seed.split(" ")[0], monthly ? 12 : 4, monthly ? 24 : 16)) {
             /* Still a business — just one where the right move was to sit on the money. */
             expect(best.worth, `${niche.id} on seed "${seed}": a falling season left nothing worth having`).toBeGreaterThan(0);
             continue;
@@ -321,7 +322,8 @@ describe("a market Nova wrote can be won too", () => {
 
       it("pays better than filing nothing, where the economy is not falling away", () => {
         for (const { seed, best, nothing } of seasons) {
-          if (falls(seed.split(" ")[0])) {
+          const monthly = seed.includes("monthly");
+          if (falls(seed.split(" ")[0], monthly ? 12 : 4, monthly ? 24 : 16)) {
             expect(best.worth, `${id} on seed "${seed}": a falling season left nothing worth having`).toBeGreaterThan(0);
             continue;
           }
