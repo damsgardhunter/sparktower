@@ -152,7 +152,7 @@ What each claim turned out to be, with where the evidence is:
   | File | Routes | On the phone |
   |---|---|---|
   | `company-routes.ts` | 14 | **2 of 14** — the list and one company, read-only, 2026-10-01 |
-  | `challenge-routes.ts` | 12 | no — sponsored challenges, both sides |
+  | `challenge-routes.ts` | 12 | **5 of 12** — the builder's side, 2026-10-01 |
   | `company-season-routes.ts` | 11 | no — private training seasons, simulation seats |
   | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |
   | `scouting-routes.ts` | 4 | no |
@@ -169,6 +169,23 @@ What each claim turned out to be, with where the evidence is:
   Being findable is a privacy control and reads as one, because the server
   defaults it off (`open: row?.open ?? false`) and nobody should be in a
   recruiting pool they did not opt into. Editing the role list is on the web.
+
+  **Built third: sponsored challenges, the builder's side** (`app/challenges.tsx`,
+  `app/challenge/[id].tsx`): browse by state, read the brief, accept the terms,
+  enter, withdraw. The company's seven routes — create, close entries, judge,
+  announce — are a desk job.
+
+  `verifiedDomain` is on every card because the server puts it there for that
+  reason: "it is the one fact that tells an entrant who is actually asking — a
+  name can be anything, and a domain has been checked". `prizeHeld` is shown
+  rather than `prize` alone, because that is the row's real state and "the claim
+  the whole escrow exists to let the page make"; when nothing is held the screen
+  says so.
+
+  `ENTRY_LIMITS` is restated on the phone, as the moderation codes are, and
+  checked against `shared/challenges.ts` — a pitch one character under the floor
+  is a 400 the entrant reads as "couldn't send that", so the form enforces the
+  same number and says how many characters are missing before the tap.
 
   **Built second: the list and one company** (`app/companies.tsx`,
   `app/company/[id].tsx`). Read-only on purpose. What a phone is for here is

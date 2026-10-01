@@ -453,3 +453,77 @@ describe("the weekly rhythm on the phone", () => {
     expect(screen).toMatch(/are on the web/);
   });
 });
+
+/**
+ * Sponsored challenges — the builder's side.
+ *
+ * A company posts a brief with a prize and builders enter. The company's half
+ * (create, close entries, judge, announce) is seven routes and a desk job; this
+ * is the other five.
+ */
+describe("challenges on the phone", () => {
+  const list = read("mobile/app/challenges.tsx");
+  const detail = read("mobile/app/challenge/[id].tsx");
+  const shared = read("shared/challenges.ts");
+  const routes = read("server/challenge-routes.ts");
+
+  it("browses, reads one, and enters it", () => {
+    expect(list).toMatch(/\/api\/challenges\?status=/);
+    expect(detail).toMatch(/\/api\/challenges\/\$\{[^}]*\}`/);
+    expect(detail, "it should POST an entry").toMatch(/\/enter`/);
+  });
+
+  /*
+   * The limits are restated on the phone because Metro will not resolve
+   * `@shared` — the same bargain `mobile-restatements.test.ts` strikes for the
+   * moderation codes. This one matters because a pitch one character under the
+   * floor is a 400 the entrant reads as "couldn't send that", so the form has
+   * to enforce the same number and say so before the tap.
+   */
+  it("enforces the server's own entry limits", () => {
+    const serverLimits = /ENTRY_LIMITS = \{([\s\S]*?)\} as const;/.exec(shared);
+    const phoneLimits = /ENTRY_LIMITS = \{([\s\S]*?)\} as const;/.exec(detail);
+    expect(serverLimits, "ENTRY_LIMITS moved in shared/challenges.ts").toBeTruthy();
+    expect(phoneLimits, "the phone no longer restates ENTRY_LIMITS").toBeTruthy();
+
+    const numbers = (block: string, key: string) => {
+      const m = new RegExp(`${key}:\\s*\\{([^}]*)\\}`).exec(block);
+      return m ? [...m[1].matchAll(/(\w+):\s*(\d+)/g)].map((x) => `${x[1]}=${x[2]}`).sort() : null;
+    };
+    for (const key of ["title", "pitch"]) {
+      expect(
+        numbers(phoneLimits![1], key),
+        `the phone's ${key} limit has drifted from the server's`,
+      ).toEqual(numbers(serverLimits![1], key));
+    }
+  });
+
+  it("says how many characters are missing rather than refusing after the tap", () => {
+    expect(detail).toMatch(/more characters needed/);
+  });
+
+  /*
+   * The server refuses an entry that has not accepted the terms. Showing the
+   * terms rather than linking to them is the point: accepting something you
+   * were not given is not accepting.
+   */
+  it("shows the company's terms and requires accepting them", () => {
+    expect(routes, "the server still demands it").toMatch(/acceptTerms !== true/);
+    expect(detail, "the terms are rendered, not linked").toMatch(/\{c\.terms\}/);
+    expect(detail, "and the switch gates the button").toMatch(/accepted/);
+  });
+
+  /*
+   * `prizeHeld` is the row's real state rather than the company's description
+   * of it — "the claim the whole escrow exists to let the page make". A screen
+   * that showed `prize` alone would be repeating a promise instead of a fact.
+   */
+  it("shows what is actually held in escrow, not just what was promised", () => {
+    expect(detail).toMatch(/prizeHeld/);
+    expect(detail, "and says plainly when nothing is held").toMatch(/No prize is held/);
+  });
+
+  it("is reachable, behind the companies switch", () => {
+    expect(more).toMatch(/go\("\/challenges"\)/);
+  });
+});
