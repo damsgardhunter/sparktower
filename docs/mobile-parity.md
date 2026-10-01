@@ -62,54 +62,43 @@ layout and by the hook that answers the spacing, with a test.
 
 ## Missing on the phone
 
-### Everything from this round of web work
+**Audited 2026-10-01, and most of this section was wrong.** Five entries
+described features the phone already had, one of them 651 lines of it. That is a
+worse failure than having no list: the list's own closing rule warns about
+discovering in six months that the phone is a different product, but a stale list
+sends somebody to rebuild what is already there, and this one nearly did — the
+decision simulator was about to be ported on the strength of a line saying "the
+phone needs the screens".
 
-- [ ] **The decision simulator.** "What happens if I hire twelve people?" —
-  month by month on the owner's own numbers. Server-side and shared-pure
-  already (`shared/simulation/decision-sim.ts`), so the phone needs the screens
-  and nothing else. The engine, the baseline reader and the levers all run
-  unchanged.
-- [ ] **Ten Years From Now, for a real company.** The phone has the *game*
-  (`mobile/app/game/`), not the version that values the project you own.
-- [ ] **The customer console.** Reasonably last: it is an operator tool, and an
-  operator has a laptop.
+What each claim turned out to be, with where the evidence is:
 
-### Older gaps
+| Was listed as missing | Actually |
+|---|---|
+| The decision simulator | **Present.** `app/sim/business.tsx`, 651 lines, calling all four `decision-sim` endpoints the server offers |
+| Ten Years From Now, for a real company | **Present.** Same file — it POSTs `/decision-sim/ten-years` with an allocation |
+| The path (`/path` on web) | **Built just now**, `app/path.tsx` |
+| Discover as a destination | **Present**, and larger than the web's: 438 lines against 118 |
+| The document builder | **Partly present.** `app/project/[id]/documents/[docId].tsx` plus `manage/tools/Documents.tsx`, 553 lines against the web's 1,212 |
+| Leaderboard | **Present**, `app/(tabs)/leaderboard.tsx`. The web has no `pages/leaderboard.tsx` at all, so the comparison in the old entry was to something that does not exist |
+| Contests | **Partly present**, 99 lines against 188 |
 
-- [x] ~~**The path**~~ Done, at `app/path.tsx`, and smaller than it looked: the
-  phone already rendered every project's next step — `ContinuePathCard` maps the
-  whole list, not just the first — it simply had nowhere to be sent to. The card
-  sits behind whatever else is on the feed that day and hides itself entirely when
-  the list is empty, which is right on a feed and wrong for a destination. So the
-  screen reuses the same rows (two answers to "what next" would disagree within a
-  week), turns the card's own heading off, and owns the empty state the card is
-  right to refuse.
-- [ ] **The document builder.**
-- [ ] **Discover** as a destination — the phone has search and matches, not the
-  combined surface the web sidebar leads with.
-- [ ] **Leaderboard, contests, challenges, companies** — partially or not at
-  all.
+### Genuinely still missing
 
-### The kit
+- [ ] **The customer console.** Nothing on the phone, and still reasonably last:
+  it is an operator tool and an operator has a laptop.
+- [ ] **The rest of `client/src/components/nova/`**: `LiveDot` and `Glance` have
+  no phone counterpart. `Working` now does, and `Pill` and `Block` exist under
+  those names in the phone's own kit — which is not the same thing as agreeing
+  with the web's, and nobody has checked.
 
-- [x] ~~`Working`~~ Done, and in use on the codebase audit, which previously
-  showed the stage as a sentence in small grey text — so a read sitting in
-  "reading" for ninety seconds looked exactly like one that had stopped. Which
-  segment is filled and what the wait is called come from `src/workingView.ts`,
-  mirrored against `client/src/lib/working-view.ts`, and the stage labels from
-  `src/auditStages.ts`, mirrored against `client/src/lib/audit-status.ts`.
-- [ ] The rest of `client/src/components/nova/`: `LiveDot`, `Glance`, `Pill`,
-  `Block`. Smaller than `Working` was and worth doing when a screen needs them
-  rather than in advance.
-- [x] ~~**No error boundary.**~~ Done. Two levels, as on the web, through
-  expo-router's own convention: a layout that exports a component called
-  `ErrorBoundary` gets it wrapped around that segment, so a tab screen that throws
-  keeps the tab bar and one tap gets you somewhere that works, and the root layout
-  is the backstop for a throw in the shell. The fallback is shared between that
-  convention and the class (`ErrorScreen`), so there is one of it; the reporting
-  is the web's payload to the web's endpoint. Worth knowing: a blank screen is
-  worse on a phone than on the web, where there is at least a reload button —
-  here the only way out was force-quitting the app.
+### Partial, and unmeasured
+
+The two "partly present" rows above are the honest state: the phone has a screen
+for each and it is smaller than the web's. Nobody has compared them feature by
+feature, so neither "done" nor "missing" is true, and writing either would put
+this list back in the state this audit found it in. Measuring them is a job in
+itself — and worth more than it sounds, because a half-ported screen is the one
+kind of gap a line count cannot settle.
 
 ## The rule worth keeping
 
@@ -117,3 +106,10 @@ A feature is not done because the web has it. Either build both, or write the
 gap down here on the day — the cost of this list is one line per feature, and
 the cost of not having it is discovering in six months that the phone is a
 different product.
+
+And the other half, learned the hard way above: **cross a line off on the day
+too.** An entry that is wrong is not merely out of date, it is an instruction to
+do work that has already been done, and it is believed precisely because it is
+written down. If a claim here cannot be checked in a minute, it should say where
+the evidence is — a file and a line count — so the next person can tell whether
+it is still true without reading the whole app.
