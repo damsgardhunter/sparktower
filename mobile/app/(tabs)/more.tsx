@@ -112,6 +112,13 @@ export default function More() {
         )}
 
         <Group title="Build">
+          {/*
+            * The path is the retention loop's home, and the phone had the list
+            * (ContinuePathCard on the feed) with nowhere to be sent to — behind
+            * whatever else was on the feed that day, and hidden entirely when
+            * empty. This is its address.
+            */}
+          <MenuRow icon="compass" title="Your path" subtitle="Every project's next step, on one screen" tint={colors.primary} onPress={() => go("/path")} testID="more-path" />
           {on("sprints") && <MenuRow icon="people" title="Simulations" subtitle="Invent a company in half an hour, or run one for a fortnight" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {/*
             * "Practice sprint" used to sit here, pointing at /sprint/practice.

@@ -76,8 +76,14 @@ layout and by the hook that answers the spacing, with a test.
 
 ### Older gaps
 
-- [ ] **The path** (`/path` on web) — the retention loop's home. The phone has
-  `manage/[id]` but no cross-project path screen.
+- [x] ~~**The path**~~ Done, at `app/path.tsx`, and smaller than it looked: the
+  phone already rendered every project's next step — `ContinuePathCard` maps the
+  whole list, not just the first — it simply had nowhere to be sent to. The card
+  sits behind whatever else is on the feed that day and hides itself entirely when
+  the list is empty, which is right on a feed and wrong for a destination. So the
+  screen reuses the same rows (two answers to "what next" would disagree within a
+  week), turns the card's own heading off, and owns the empty state the card is
+  right to refuse.
 - [ ] **The document builder.**
 - [ ] **Discover** as a destination — the phone has search and matches, not the
   combined surface the web sidebar leads with.
