@@ -22,6 +22,7 @@
  */
 import type { Express } from "express";
 import { pool } from "./db";
+import { connectionBudget } from "./connection-budget";
 import { redact } from "./error-reporting";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireOwner } from "./platform-roles";
@@ -181,6 +182,14 @@ export function registerDeploymentRoutes(app: Express) {
          * platform sees, and be honest that the shallow one proves very little.
          */
         health: { ok: true, note: "This process is running and answered. /_health asks nothing else." },
+        /*
+         * The number the scaling plan turns on, reported by the thing that
+         * knows it rather than read off a dashboard — and it stays right when
+         * the database tier changes. Exceeding max_connections does not slow
+         * the site down, it refuses connections, so the cost of guessing is an
+         * outage at peak traffic.
+         */
+        connections: await connectionBudget(),
         ready,
         env,
         missingRequired: env.filter((e) => e.required && !e.set).map((e) => e.name),
