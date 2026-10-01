@@ -285,3 +285,58 @@ describe("the security overview on the phone", () => {
     expect(screen, "and the screen has to say where they are").toMatch(/on the web console/);
   });
 });
+
+/**
+ * The first slice of the Companies surface.
+ *
+ * Fifty-five routes across seven files had no phone caller at all: company
+ * accounts, private training seasons, sponsored challenges, scouting, domain
+ * verification. The slice that landed first is the one that stands alone —
+ * being scouted — because it needs no company page to exist and it is the half
+ * that is actually phone-shaped: a company decides to recruit somebody at a
+ * desk, and the person being recruited answers from wherever they are.
+ */
+describe("being scouted, on the phone", () => {
+  const screen = read("mobile/app/talent.tsx");
+  const routes = read("server/talent-routes.ts");
+
+  it("reads the profile and the invitations", () => {
+    expect(screen).toMatch(/\/api\/talent\/me/);
+    expect(screen).toMatch(/\/api\/talent\/invites/);
+  });
+
+  /*
+   * The point of the screen. An invitation that cannot be answered from the
+   * phone is the state this was built to end.
+   */
+  it("can answer one", () => {
+    expect(screen, "it should POST an answer").toMatch(/invites\/\$\{[^}]*\}\/answer/);
+    expect(screen, "the route takes a boolean and nothing else").toMatch(/accept/);
+  });
+
+  /*
+   * `profileShape` defaults `open` to false, so nobody is in a recruiting pool
+   * they did not opt into. The screen has to read as a privacy control rather
+   * than as a setting, and it has to be the server's value rather than a local
+   * default that could disagree with it.
+   */
+  it("treats being findable as a privacy control", () => {
+    expect(routes, "the server defaults it off").toMatch(/open:\s*row\?\.open\s*\?\?\s*false/);
+    expect(screen, "and the switch reflects the server's value").toMatch(/value=\{p\.open\}/);
+    expect(screen, "and says what off means").toMatch(/Nobody can find you/);
+  });
+
+  /*
+   * Accepting opens a direct conversation, which is a different thing from
+   * being on a list. Said before the tap rather than discovered after it.
+   */
+  it("says what accepting does before the tap", () => {
+    expect(screen).toMatch(/message you directly/);
+  });
+
+  it("is reachable, and behind the companies switch", () => {
+    const row = more.split("\n").find((l) => l.includes('go("/talent")'));
+    expect(row, "nothing in the More tab opens /talent").toBeTruthy();
+    expect(more, "the row should sit behind the companies surface").toMatch(/on\("companies"\)/);
+  });
+});

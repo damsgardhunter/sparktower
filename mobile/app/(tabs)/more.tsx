@@ -37,6 +37,18 @@ export default function More() {
     refetchInterval: 5 * 60_000,
   });
 
+  /*
+   * Just the count, for the badge on "Being scouted". The screen itself reads
+   * the invitations; this is the one number the menu needs.
+   */
+  const { data: scouting } = useQuery({
+    queryKey: ["talent-waiting"],
+    queryFn: async () => {
+      const r = await api<{ invites: { status: string }[] }>("/api/talent/invites");
+      return { waiting: (r.invites ?? []).filter((i) => i.status === "sent").length };
+    },
+  });
+
   // Analytics is the platform owner's alone; the server answers { owner } (and 404s every analytics route otherwise).
   const { data: access } = useQuery({
     queryKey: ["analytics-access"],
@@ -142,6 +154,23 @@ export default function More() {
           {on("matches") && <MenuRow icon="people-circle" title="Matches" subtitle="Builders who fit what you're looking for" tint={colors.primary} onPress={() => go("/matches")} testID="more-matches" />}
           {on("leaderboard") && <MenuRow icon="trophy" title="Leaderboard" subtitle="Builder Index and top projects" tint="#CA8A04" onPress={() => go("/(tabs)/leaderboard")} testID="more-leaderboard" />}
           {on("messages") && <MenuRow icon="chatbubbles" title="Messages" subtitle="Your conversations" tint={colors.info} onPress={() => go("/(tabs)/messages")} />}
+          {/*
+            * Behind the `companies` switch, because being scouted is the other
+            * side of a company recruiting and that switch covers `/api/talent`.
+            * Badged when somebody is waiting on an answer: an invitation nobody
+            * sees is the thing this screen exists to prevent.
+            */}
+          {on("companies") && (
+            <MenuRow
+              icon="people"
+              title="Being scouted"
+              subtitle="Whether companies can find you, and who has asked"
+              tint={colors.novaEmerald}
+              badge={scouting?.waiting ? scouting.waiting : null}
+              onPress={() => go("/talent")}
+              testID="more-talent"
+            />
+          )}
         </Group>
 
         {isReviewer && (

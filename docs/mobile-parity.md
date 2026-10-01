@@ -145,6 +145,36 @@ What each claim turned out to be, with where the evidence is:
   along with the response shape — the phone cannot import the server's types, so
   every interface on it is a copy, and a copy drifts.
 
+- [ ] **The Companies surface — 54 of 55 routes still have no phone caller.**
+  Measured by family rather than by screen name, which is the only signal that
+  separates a missing feature from a renamed one:
+
+  | File | Routes | On the phone |
+  |---|---|---|
+  | `company-routes.ts` | 14 | no — the company itself, members, invite links, audit |
+  | `challenge-routes.ts` | 12 | no — sponsored challenges, both sides |
+  | `company-season-routes.ts` | 11 | no — private training seasons, simulation seats |
+  | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |
+  | `scouting-routes.ts` | 4 | no |
+  | `company-verification-routes.ts` | 3 | no |
+  | `feed-routes.ts` (company posts) | 3 | no |
+
+  **Built first: being scouted** (`mobile/app/talent.tsx`). It is the slice that
+  stands on its own — you do not run a company to be recruited by one — and the
+  half that is actually phone-shaped: a company decides to recruit somebody at a
+  desk with a track record open in front of them, and the person being recruited
+  answers from wherever they are. Until now they could not. The invitation
+  existed, the route existed, and the phone had no way to see or answer it.
+
+  Being findable is a privacy control and reads as one, because the server
+  defaults it off (`open: row?.open ?? false`) and nobody should be in a
+  recruiting pool they did not opt into. Editing the role list is on the web.
+
+  The natural next slice is **viewing a company and its weekly rhythm** —
+  `GET /api/companies`, `GET /api/companies/:id`, `/api/projects/:id/rhythm` —
+  because everything else in the surface needs somewhere to live. Creating and
+  administering a company is a desk job and can stay one.
+
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.
 - [x] **`LiveDot` and `Glance`** — built 2026-10-01
