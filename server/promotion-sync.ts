@@ -13,6 +13,7 @@
  * timeout, and a size cap — these URLs come from other people's HTML.
  */
 import { eq } from "drizzle-orm";
+import { JOB, withJobLock } from "./job-lock";
 import { db } from "./db";
 import { safeFetch, type Fetched } from "./safe-fetch";
 import { promotionSettings, promotionSources } from "@shared/schema";
@@ -150,6 +151,13 @@ export function syncAllPromotions(fetcher: Fetcher = guardedFetch, concurrency =
 
 export function startPromotionJobs(): void {
   if (process.env.NODE_ENV === "test" || process.env.PROMOTION_SYNC === "off") return;
-  setTimeout(() => void syncAllPromotions().catch((e) => console.error("[promotions] sync failed:", e)), 3 * 60_000).unref();
-  setInterval(() => void syncAllPromotions().catch((e) => console.error("[promotions] sync failed:", e)), 24 * 60 * 60_000).unref();
+  /*
+   * One instance syncs. Every web process running this means re-fetching every
+   * promotion once per instance and spending somebody else's rate-limit budget
+   * to arrive at the same answer.
+   */
+  const sync = () => void withJobLock(JOB.promotions, syncAllPromotions)
+    .catch((e) => console.error("[promotions] sync failed:", e));
+  setTimeout(sync, 3 * 60_000).unref();
+  setInterval(sync, 24 * 60 * 60_000).unref();
 }
