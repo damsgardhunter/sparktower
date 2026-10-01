@@ -153,6 +153,13 @@ export default function More() {
           <MenuRow icon="card" title="Plans & credits" subtitle={plan ? `You're on ${plan.name}` : "Compare plans"} onPress={() => go("/pricing")} testID="more-pricing" />
           <MenuRow icon="settings" title="Settings" subtitle="Account, security and sign-in" tint={colors.textSecondary} onPress={() => go("/settings")} testID="more-settings" />
           <MenuRow icon="help-circle" title="Help & about" subtitle="How SparkTower works" tint={colors.textSecondary} onPress={() => go("/settings?section=help")} />
+          {/*
+            * The web puts this in every footer; the phone has no footer, so it
+            * sits here. Not behind a surface flag: a way to say "this is broken"
+            * that can itself be switched off is the one feature you want left on
+            * when something is.
+            */}
+          <MenuRow icon="bug" title="Report a problem" subtitle="Something broken? Tell us" tint={colors.warning} onPress={() => go("/report-problem")} testID="more-report-problem" />
         </Group>
 
         <Group>

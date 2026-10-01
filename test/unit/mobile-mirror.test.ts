@@ -30,6 +30,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import * as phone from "../../mobile/src/components/sim/desk";
+import { connectionName as phoneName, searchConnections as phoneSearchConnections } from "../../mobile/src/connectionSearch";
+import { connectionName as webName, searchConnections } from "../../client/src/lib/connection-search";
+import { CROP as phoneCrop } from "../../mobile/src/profileCrop";
+import { CROP_PRESETS } from "../../client/src/lib/image-crop";
+import * as phoneProblem from "../../mobile/src/problemReport";
+import * as webProblem from "@shared/problem-reports";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
 import { fixedCosts, SALARY, EXECUTIVE } from "@shared/simulation/decisions";
@@ -390,5 +396,153 @@ describe("the numbers the phone copies by hand", () => {
   it("agree with the engine's", () => {
     expect(phone.SEVERANCE).toBe(SEVERANCE);
     for (const pct of [undefined, 80, 100, 115, 130, 150]) expect(phone.payCost(pct)).toBeCloseTo(payEffect(pct as any).cost, 10);
+  });
+});
+
+/**
+ * Finding somebody to message, on both clients.
+ *
+ * Messages has a picker over your connections, and the matching behind it is
+ * written twice: `client/src/lib/connection-search.ts` and
+ * `mobile/src/connectionSearch.ts`. The phone's copy had already drifted before
+ * either was extracted — it matched the name and the headline but not the
+ * username, and left the list in the order the server sent it, which is by when
+ * each connection was made. Neither suite could see it, because each only ever
+ * saw its own half: the web had no picker at all, and the phone's was a filter
+ * written inline in a screen.
+ *
+ * The failure is quiet in the worst way. A search that has stopped looking at
+ * usernames returns nothing for a handle typed from memory, and "no connection
+ * by that name" is indistinguishable from "that person never connected with you".
+ */
+describe("searching your connections", () => {
+  const row = (over: { firstName?: string; lastName?: string; displayName?: string; username?: string; headline?: string }) => ({
+    user: { firstName: over.firstName, lastName: over.lastName },
+    profile: (over.displayName || over.username || over.headline)
+      ? { displayName: over.displayName, username: over.username, headline: over.headline }
+      : undefined,
+  });
+
+  /*
+   * Everybody here has a name. The one place the two sides differ on purpose is
+   * the fallback for somebody who has none: the phone's `personName` refuses to
+   * print an email and says "Builder", the web prints the address before "User".
+   * That is a deliberate rule on the phone, and the email is redacted from
+   * anybody else's account before it leaves the server anyway — so excluding
+   * nameless rows here excludes the known difference and nothing else.
+   */
+  const people = [
+    row({ displayName: "Zara Ferreira", username: "zaraf", headline: "Designer, mostly mobile" }),
+    row({ displayName: "Ada Marchetti", username: "adam", headline: "Backend and data" }),
+    row({ firstName: "Nils", lastName: "Ferreira" }),
+    row({ displayName: "Quinn", username: "qq", headline: "Design systems" }),
+    row({ firstName: "Bo", lastName: "Adams", headline: "Ships on Fridays" }),
+  ];
+
+  it("matches and orders the same rows as the web app", () => {
+    for (const query of [
+      "", "   ", "a", "ada", "ADA MARCH", "ferreira", "zaraf", "qq",
+      "design", "Design Systems", "ships", "bo", "nils",
+      "nobody-by-that-name", "@", "  ferreira  ",
+    ]) {
+      const onWeb = searchConnections(people as any, query).map((c) => webName(c as any));
+      const onPhone = phoneSearchConnections(people, query).map((c) => phoneName(c));
+      expect(onPhone, `query ${JSON.stringify(query)}`).toEqual(onWeb);
+    }
+  });
+
+  /* The two drifts that were actually there, named so a revert fails loudly. */
+  it("matches a username on both, which the phone used not to", () => {
+    expect(phoneSearchConnections(people, "zaraf").map(phoneName)).toEqual(["Zara Ferreira"]);
+    expect(searchConnections(people as any, "zaraf").map((c) => webName(c as any))).toEqual(["Zara Ferreira"]);
+  });
+
+  it("sorts by name on both, not by when the connection was made", () => {
+    const byName = ["Ada Marchetti", "Bo Adams", "Nils Ferreira", "Quinn", "Zara Ferreira"];
+    expect(phoneSearchConnections(people, "").map(phoneName)).toEqual(byName);
+    expect(searchConnections(people as any, "").map((c) => webName(c as any))).toEqual(byName);
+  });
+
+  it("leaves the caller's array alone on both, since the query cache owns it", () => {
+    const original = [...people];
+    phoneSearchConnections(people, "");
+    searchConnections(people as any, "");
+    expect(people).toEqual(original);
+  });
+});
+
+/**
+ * The shape a profile picture is cut to, on both clients.
+ *
+ * Both crop before uploading — the web with its own cropper, the phone by handing
+ * the job to the native crop UI — and both store the result, so the ratio is
+ * baked into the file rather than applied when it is shown. Which means a cover
+ * framed 4:1 on one client and 16:9 on the other would land differently in the
+ * same band, and nothing would fail: both would look deliberate, and only side
+ * by side would either look wrong.
+ *
+ * Not a mirror of logic, then, but of a number that has to be the same number.
+ */
+describe("the shape a profile picture is cut to", () => {
+  it("is the same on the phone as on the web", () => {
+    expect(phoneCrop.avatar[0] / phoneCrop.avatar[1], "a round avatar is square").toBe(CROP_PRESETS.avatar.aspect);
+    expect(phoneCrop.cover[0] / phoneCrop.cover[1], "the cover band is 4:1").toBe(CROP_PRESETS.cover.aspect);
+  });
+
+  /*
+   * And that the web's own frame still matches the band it is framing. The band
+   * is `aspect-[4/1]` in client/src/pages/landing.tsx's sibling, the profile
+   * page; a preset that stopped agreeing with it would put the cropper back to
+   * promising a framing the page does not keep.
+   */
+  it("keeps the web preset square for the avatar and four-to-one for the cover", () => {
+    expect(CROP_PRESETS.avatar.outWidth).toBe(CROP_PRESETS.avatar.outHeight);
+    expect(CROP_PRESETS.cover.outWidth / CROP_PRESETS.cover.outHeight).toBe(4);
+  });
+});
+
+/**
+ * What counts as a problem report, on both clients.
+ *
+ * The server answers 400 with a sentence meant to be shown verbatim, and both
+ * clients check the same rule first so a message too short to be useful does not
+ * cost a round trip to be told so. Which means the rule is written twice, and the
+ * refusal *wording* is written twice with it.
+ *
+ * This caught a real drift while it was being written: the phone's copy had the
+ * ceiling at 2,000 characters against the server's 1,000. The failure that would
+ * have caused is the quiet kind — a long report passes on the phone, the button
+ * enables, the person sends it, and the server rejects it with a message about a
+ * limit the screen had just told them they were inside.
+ */
+describe("what counts as a problem report", () => {
+  it("has the same bounds on the phone as on the server", () => {
+    expect(phoneProblem.PROBLEM_MESSAGE_MIN).toBe(webProblem.PROBLEM_MESSAGE_MIN);
+    expect(phoneProblem.PROBLEM_MESSAGE_MAX).toBe(webProblem.PROBLEM_MESSAGE_MAX);
+  });
+
+  it("accepts and refuses the same messages, with the same words", () => {
+    const max = webProblem.PROBLEM_MESSAGE_MAX;
+    for (const input of [
+      "", "   ", "a", "abc", "abcd", "  abcd  ", "the save button does nothing",
+      "x".repeat(max - 1), "x".repeat(max), "x".repeat(max + 1), "x".repeat(max * 2),
+      undefined, null, 42, {}, [], true,
+    ] as unknown[]) {
+      const onPhone = phoneProblem.readProblemMessage(input);
+      const onServer = webProblem.readProblemMessage(input);
+      expect(onPhone, `input ${JSON.stringify(input)?.slice(0, 40)}`).toEqual(onServer);
+    }
+  });
+
+  /* The path is stored so a report can be reproduced; both sides strip it the same. */
+  it("reduces a path to a path the same way", () => {
+    for (const input of [
+      "/project/123", "/project/123?tab=brief", "/project/123#notes", "/",
+      "relative", "https://evil.test/x", "//evil.test", "", "  /spaced  ",
+      "/" + "x".repeat(400), undefined, null, 7,
+    ] as unknown[]) {
+      expect(phoneProblem.readProblemPath(input), `input ${JSON.stringify(input)?.slice(0, 40)}`)
+        .toBe(webProblem.readProblemPath(input));
+    }
   });
 });

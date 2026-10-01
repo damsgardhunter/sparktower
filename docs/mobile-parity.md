@@ -11,6 +11,38 @@ where they simply do not exist.
 
 ## Fixed just now
 
+### Three things the phone and the web had drifted on
+
+- **Searching your connections for someone to message.** The phone had this
+  before the web did, which is the drift running the other way for once — and its
+  copy had quietly stopped agreeing. It matched the display name and the headline
+  but not the **username**, so a handle typed from memory returned nothing, and it
+  left the list in the order the server sent (by when each connection was made)
+  rather than by name. Both sides now use a pure module —
+  `mobile/src/connectionSearch.ts` against `client/src/lib/connection-search.ts` —
+  and `mobile-mirror.test.ts` runs the two on the same rows. The one deliberate
+  difference is the nameless fallback: `personName` refuses to print an email on a
+  phone and says "Builder".
+- **Choosing which part of a photo survives.** Both clients cut a profile photo
+  to a circle and a cover to a wide band, and the phone cut the middle without
+  asking. It now opens the native crop UI, at the same ratios the web's cropper
+  frames (1:1 and 4:1, `mobile/src/profileCrop.ts` mirrored against
+  `CROP_PRESETS`). Worth knowing: `aspect` is Android-only, so on iOS the frame is
+  square whatever is asked for and a cover is cropped vertically afterwards. The
+  choice of *region* is the part that matters and that part works; the shape of
+  the frame does not match the web there.
+- **"Is there a problem? Report it."** The web puts it in every footer. The phone
+  had nothing, so the one person who could tell you a screen was broken had no way
+  to. It is now a row in More and a screen at `/report-problem`, which takes a
+  `?path=` so a caller can say where somebody was. Deliberately not behind a
+  surface flag: a way to say "this is broken" that can itself be switched off is
+  the one feature you want left on when something is. Its validator is mirrored
+  too, and that mirror immediately earned itself — the phone's copy had the
+  ceiling at 2,000 characters against the server's 1,000, which would have let a
+  long report pass on the phone and be refused by the server for exceeding a limit
+  the screen had just said it was inside.
+
+
 The profile header — your cover, your face, your three numbers — was on **every
 tab**, because the layout set it as the default header and only the menu
 overrode it. It is the top of *Home*: it is what you see when you open the app

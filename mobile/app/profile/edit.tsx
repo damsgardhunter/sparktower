@@ -162,7 +162,7 @@ export default function EditProfile() {
       if (field === "clearAvatar") { await api("/api/profile", { method: "POST", body: { avatarUrl: null } }); return "Profile photo removed."; }
       if (field === "clearCover") { await api("/api/profile", { method: "POST", body: { coverUrl: null } }); return "Cover photo removed."; }
       if (!profile) throw new Error("Save your name first, then add photos.");
-      const path = await pickAndUploadImage();
+      const path = await pickAndUploadImage(field === "avatarUrl" ? "avatar" : "cover");
       if (!path) return null;
       await api("/api/profile", { method: "POST", body: { [field]: path } });
       return field === "avatarUrl" ? "Profile photo updated." : "Cover photo updated.";

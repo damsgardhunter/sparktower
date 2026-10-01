@@ -7,6 +7,7 @@ import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Empty, ErrorState, Icon, IconButton, Loading, Segments, TAB_BAR_SPACE, errText } from "../../src/components/ui";
 import { Sheet } from "../../src/components/Sheet";
 import { inboxTime, personAvatar, personName, useConnections } from "../../src/networkData";
+import { searchConnections } from "../../src/connectionSearch";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
 import { usePlainHeaderSpace } from "../../src/components/AppHeader";
 
@@ -168,10 +169,16 @@ export default function Messages() {
           />
         </View>
         {connections.isLoading ? <Loading /> : (() => {
-          const needleWho = who.trim().toLowerCase();
-          const people = (connections.data ?? [])
-            .map((row) => ({ row, name: personName(row.user, row.profile) }))
-            .filter(({ name, row }) => !needleWho || name.toLowerCase().includes(needleWho) || (row.profile?.headline ?? "").toLowerCase().includes(needleWho));
+          const needleWho = who.trim();
+          /*
+           * `searchConnections` rather than a filter written here: it also matches
+           * the username, which this screen used not to, and sorts by name, which
+           * it used not to either. Its web counterpart is
+           * `client/src/lib/connection-search.ts` and `mobile-mirror.test.ts` runs
+           * both on the same rows.
+           */
+          const people = searchConnections(connections.data ?? [], needleWho)
+            .map((row) => ({ row, name: personName(row.user, row.profile) }));
           if (!people.length) {
             return (
               <Empty

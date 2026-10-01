@@ -15,7 +15,7 @@
  * never connected with you".
  */
 import { describe, it, expect } from "vitest";
-import { connectionName, searchConnections } from "../../client/src/pages/messages";
+import { connectionName, searchConnections } from "../../client/src/lib/connection-search";
 
 type Row = Parameters<typeof searchConnections>[0][number];
 
