@@ -27,7 +27,7 @@ import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
-import { migrationState } from "./migration-state";
+import { migrationState, pendingMigrationWarning } from "./migration-state";
 import { isPoolTimeout } from "./db";
 
 /**
@@ -227,11 +227,24 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
          * reading the log or the owner-only deployment page anyway, and both
          * carry the count and the command.
          */
-        console.warn(
-          `[ready] ${migrations.pending} migration(s) not applied to this database ` +
-          `(${migrations.applied} of ${migrations.expected}). Run: npm run db:migrate`,
-        );
-        return { status: 503, body: { ready: false, database: "ok", migrations: "behind", ms: Date.now() - started } };
+        /*
+         * The same sentence the boot warning uses, from the same function, so
+         * the two cannot describe one state two ways — and so an operator
+         * reading `/_ready` is told whether the gap is indexes or columns rather
+         * than being left to guess from a count.
+         */
+        console.warn(pendingMigrationWarning(migrations).replace("[schema]", "[ready]"));
+        return {
+          status: 503,
+          body: {
+            ready: false, database: "ok", migrations: "behind",
+            /* Named here too: a 503 with a count is a question, a 503 with "indexes-only" is an answer. */
+            pending: migrations.pending,
+            pendingKind: migrations.pendingKind ?? null,
+            pendingMigrations: migrations.pendingTags ?? [],
+            ms: Date.now() - started,
+          },
+        };
       }
       return { status: 200, body: { ready: true, database: "ok", migrations: "ok", ms: Date.now() - started } };
     } catch (err) {
