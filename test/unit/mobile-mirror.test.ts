@@ -39,6 +39,9 @@ import { workingView as phoneWorkingView, WORKING_CURRENT_WIDTH as phoneCurrentW
 import { workingView, WORKING_CURRENT_WIDTH, WORKING_MIN_WIDTH, WORKING_UNSTARTED_LABEL } from "../../client/src/lib/working-view";
 import { auditStageLabel as phoneAuditStageLabel, AUDIT_STAGES as phoneAuditStages } from "../../mobile/src/auditStages";
 import { auditStageLabel } from "../../client/src/lib/audit-status";
+import * as phoneBuild from "../../mobile/src/buildStages";
+import { buildThrough, buildProgress, buildStepLine, buildElapsedSeconds, buildStageLabel, STAGE_ORDER } from "../../client/src/lib/build-status";
+import { BUILD_STAGE_COPY, BUILD_STEP_CAP } from "@shared/nova-build";
 import * as webProblem from "@shared/problem-reports";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
@@ -614,5 +617,93 @@ describe("what a Nova wait draws", () => {
     for (const id of ["fetching", "reading", "saving", "", "unknown", null, undefined]) {
       expect(phoneAuditStageLabel(id), String(id)).toBe(auditStageLabel(id));
     }
+  });
+});
+
+/**
+ * A whole-business build in flight, on both clients.
+ *
+ * The phone could *start* this and then showed nothing: the button fired, a toast
+ * said "Nova is building it", and the app was silent for the length of a forty-
+ * step job — no stage, no step count, no completion, and no error if the run died.
+ * From the buyer's side that is indistinguishable from a fourteen-dollar outcome
+ * that silently failed, which makes this the most expensive thing in the product
+ * to get wrong and the one the phone said least about.
+ *
+ * Now both read the same run and have to describe it the same way. Two of these
+ * rules are the kind that look like details and are not:
+ *
+ *   - **Steps left for the builder count as gone through.** `stepsForYou` is a
+ *     decision Nova researched and deliberately left open — work done, not work
+ *     skipped. Excluding it stalls the bar on a run that is still working.
+ *   - **A fraction only during `building`.** The other three stages are seconds
+ *     each and know nothing about their own position, so a number there would be
+ *     invented, and an invented number that looks precise is worse than an
+ *     honest unknown.
+ */
+describe("a whole-business build in flight", () => {
+  const run = (over: Partial<{ stage: string; stepsDone: number; stepsForYou: number; stepsFailed: number; stepsTotal: number; currentTitle: string | null; elapsedSeconds: number; startedAt: string }> = {}) => ({
+    id: "r1", stage: "building", stageLabel: "Working through your path",
+    stepsDone: 10, stepsForYou: 3, stepsFailed: 1, stepsTotal: 28,
+    currentTitle: "Writing your pricing page",
+    startedAt: new Date("2026-10-01T12:00:00Z").toISOString(), elapsedSeconds: 600,
+    ...over,
+  }) as any;
+
+  it("lists the same stages, with the same words", () => {
+    expect(phoneBuild.BUILD_STAGES).toEqual([...STAGE_ORDER]);
+    expect(phoneBuild.BUILD_STAGE_COPY).toEqual(BUILD_STAGE_COPY);
+    expect(phoneBuild.BUILD_STEP_CAP, "how many steps one purchase covers").toBe(BUILD_STEP_CAP);
+    for (const stage of [...STAGE_ORDER, "", "unknown", null, undefined]) {
+      expect(phoneBuild.buildStageLabel(stage as any), String(stage)).toBe(buildStageLabel(stage as any));
+    }
+  });
+
+  it("counts the same steps as gone through", () => {
+    for (const over of [
+      {}, { stepsForYou: 0 }, { stepsFailed: 0 }, { stepsDone: 0, stepsForYou: 0, stepsFailed: 0 },
+      { stepsDone: 28, stepsForYou: 0, stepsFailed: 0 },
+    ]) {
+      expect(phoneBuild.buildThrough(run(over))).toBe(buildThrough(run(over)));
+    }
+    /* Named, because dropping either term is the bug that stalls the bar. */
+    expect(buildThrough(run({ stepsDone: 10, stepsForYou: 3, stepsFailed: 1 }))).toBe(14);
+  });
+
+  it("offers the same fraction, and the same refusal to invent one", () => {
+    for (const stage of [...STAGE_ORDER, "unknown"]) {
+      for (const over of [{ stepsTotal: 28 }, { stepsTotal: 0 }, { stepsDone: 999, stepsTotal: 28 }]) {
+        const r = run({ stage, ...over });
+        expect(phoneBuild.buildProgress(r), `${stage} ${JSON.stringify(over)}`).toBe(buildProgress(r));
+      }
+    }
+    expect(buildProgress(run({ stage: "reading" })), "no fraction outside building").toBeNull();
+    expect(buildProgress(null)).toBeNull();
+    expect(phoneBuild.buildProgress(null)).toBeNull();
+  });
+
+  it("names the same step, clamped to the total", () => {
+    for (const over of [{}, { stepsTotal: 0 }, { stepsDone: 28, stepsForYou: 0, stepsFailed: 0 }]) {
+      expect(phoneBuild.buildStepLine(run(over))).toBe(buildStepLine(run(over)));
+    }
+    expect(buildStepLine(run()), "counted from one").toBe("step 15 of 28");
+    expect(buildStepLine(run({ stepsDone: 28, stepsForYou: 0, stepsFailed: 0 })), "never one past the end").toBe("step 28 of 28");
+  });
+
+  it("agrees on the elapsed time, and never runs it backwards", () => {
+    const started = new Date("2026-10-01T12:00:00Z").toISOString();
+    for (const [elapsedSeconds, now] of [
+      [600, Date.parse(started) + 700_000],
+      [600, Date.parse(started) + 100_000],
+      [0, Date.parse(started)],
+      [600, Number.NaN],
+    ] as const) {
+      const r = run({ elapsedSeconds, startedAt: started });
+      expect(phoneBuild.buildElapsedSeconds(r, now), `${elapsedSeconds} @ ${now}`).toBe(buildElapsedSeconds(r, now));
+    }
+    /* The clock is ahead of the last poll, so the number ticks rather than stepping. */
+    expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 700_000)).toBe(700);
+    /* And a stale poll never drags it back. */
+    expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 100_000)).toBe(600);
   });
 });

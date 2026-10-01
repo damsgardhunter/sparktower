@@ -11,6 +11,7 @@ import { LiveDot, Working } from "@/components/nova";
 import { formatElapsed } from "@/lib/audit-status";
 import {
   useBuildStatus, quietBuildErrors, buildStageLabel, buildStatusKey, STAGE_ORDER,
+  buildThrough, buildProgress, buildStepLine, buildElapsedSeconds,
 } from "@/lib/build-status";
 
 /** The build's stages with the words shown for each, from the same list the status hook reads. */
@@ -96,9 +97,14 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
      * the server sent, so the seconds move between polls instead of jumping
      * three at a time.
      */
-    const elapsed = Math.max(running.elapsedSeconds, Math.round((now - Date.parse(running.startedAt)) / 1000));
-    // Failures count as steps gone through too, or the bar stops moving on a run that is still working.
-    const through = running.stepsDone + running.stepsForYou + running.stepsFailed;
+    /*
+     * In `@/lib/build-status` rather than here, because the phone has to agree
+     * with it — see test/unit/mobile-mirror.test.ts. The rules are unchanged:
+     * failures and steps left for the builder both count as gone through, and a
+     * fraction is only offered while the building stage is running.
+     */
+    const elapsed = buildElapsedSeconds(running, now);
+    const through = buildThrough(running);
     return (
       <div className="rounded-lg border border-primary/30 p-4 space-y-2" data-testid="nova-build-running">
         <Working
@@ -110,11 +116,11 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
            * figure; the others breathe at the shared default rather than
            * inventing one. See `progress` in the component.
            */
-          progress={running.stage === "building" && running.stepsTotal ? through / running.stepsTotal : null}
+          progress={buildProgress(running)}
           meta={
             <>
               {running.stepsTotal > 0 && (
-                <span className="tabular-nums" data-testid="text-build-count">step {Math.min(through + 1, running.stepsTotal)} of {running.stepsTotal}</span>
+                <span className="tabular-nums" data-testid="text-build-count">{buildStepLine(running)}</span>
               )}
               <span className="tabular-nums" data-testid="text-build-elapsed">· {formatElapsed(elapsed)}</span>
             </>

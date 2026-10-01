@@ -41,6 +41,56 @@ export const buildStageLabel = (stage: string | null | undefined) =>
     : "Working through your path";
 
 /** What each project's build last looked like, so a finish is acted on once however many copies are mounted. */
+/**
+ * Steps gone through, which is not the same as steps Nova finished.
+ *
+ * `stepsForYou` counts steps Nova researched and deliberately left open — a
+ * decision with three real options on it is work done, not work skipped — and
+ * failures count too. Excluding either stalls the bar on a run that is still
+ * working, which on the one screen where "is it stuck?" is the only question
+ * reads as stuck.
+ */
+export function buildThrough(running: Pick<NonNullable<BuildRunStatus["running"]>, "stepsDone" | "stepsForYou" | "stepsFailed">): number {
+  return (running.stepsDone ?? 0) + (running.stepsForYou ?? 0) + (running.stepsFailed ?? 0);
+}
+
+/**
+ * How far through the run, 0–1, or null to let the bar breathe at its default.
+ *
+ * Only during `building`, and that is deliberate: the other three stages are a
+ * handful of seconds each and nothing in them knows its own position, so a
+ * fraction there would be invented. `Working` draws an unknown position honestly;
+ * a made-up one that looks precise is the worse of the two.
+ */
+export function buildProgress(running: NonNullable<BuildRunStatus["running"]> | null): number | null {
+  if (!running || running.stage !== "building" || !running.stepsTotal) return null;
+  return Math.max(0, Math.min(1, buildThrough(running) / running.stepsTotal));
+}
+
+/**
+ * Which step it is on, counting from one — "step 19 of 28".
+ *
+ * Clamped to the total so the last step does not announce itself as one past the
+ * end, which it would on a run where every step has been gone through and the
+ * row has not been closed yet.
+ */
+export function buildStepLine(running: NonNullable<BuildRunStatus["running"]> | null): string | null {
+  if (!running || !running.stepsTotal) return null;
+  return `step ${Math.min(buildThrough(running) + 1, running.stepsTotal)} of ${running.stepsTotal}`;
+}
+
+/**
+ * The elapsed time to show, which keeps moving between polls.
+ *
+ * The server's `elapsedSeconds` is as of the last response, three seconds ago at
+ * best. Taking the larger of that and the clock means the number ticks instead of
+ * stepping, and never goes backwards if the two disagree.
+ */
+export function buildElapsedSeconds(running: Pick<NonNullable<BuildRunStatus["running"]>, "elapsedSeconds" | "startedAt">, now: number): number {
+  const fromClock = Math.round((now - Date.parse(running.startedAt)) / 1000);
+  return Math.max(running.elapsedSeconds ?? 0, Number.isFinite(fromClock) ? fromClock : 0);
+}
+
 export interface BuildMark {
   runningId: string | null;
   lastId: string | null;
