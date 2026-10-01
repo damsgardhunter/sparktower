@@ -400,3 +400,56 @@ describe("companies on the phone", () => {
     expect(more).toMatch(/on\("companies"\)/);
   });
 });
+
+/**
+ * The week, on a Run project.
+ *
+ * The piece of the Companies surface that most wanted to be on a phone: a
+ * weekly check-in is three numbers and two sentences, done on a Sunday evening
+ * or between two other things, and it was only possible at a desk.
+ */
+describe("the weekly rhythm on the phone", () => {
+  const screen = read("mobile/app/rhythm/[id].tsx");
+  const project = read("mobile/app/project/[id].tsx");
+  const shared = read("shared/company-rhythm.ts");
+
+  it("reads the week and files it", () => {
+    expect(screen).toMatch(/\/rhythm`/);
+    expect(screen, "it should PUT the week's check-in").toMatch(/rhythm\/checkins\/\$\{[^}]*\}/);
+    expect(screen).toMatch(/method:\s*"PUT"/);
+  });
+
+  /*
+   * The server distinguishes "nobody counted" from zero — `cleanNumbers`
+   * accepts null — and a form that sent 0 for an empty box would file a bad
+   * week as a counted one.
+   */
+  it("keeps an empty box different from a zero", () => {
+    expect(shared, "the server still accepts null").toMatch(/finite numbers or null/);
+    expect(screen, "an empty box has to become null, not 0").toMatch(/\?\s*null\s*:\s*Number\(/);
+    expect(screen, "and the screen should say so").toMatch(/not the same as zero/);
+  });
+
+  /*
+   * `metricsForProject` decides which numbers a project tracks, and sorts them
+   * deliberately because jsonb does not keep key order. The phone must render
+   * what it is given rather than deciding for itself — a restaurant tracks
+   * covers, an agency does not.
+   */
+  it("renders the project's own metrics rather than a list of its own", () => {
+    expect(screen, "it should map over what the server sent").toMatch(/d\.metrics\.map/);
+    expect(screen, "and show which way is good, since a bare number has to be remembered").toMatch(/better === "up"/);
+    expect(screen, "no hardcoded metric ids").not.toMatch(/"covers"|"foodCost"/);
+  });
+
+  it("is reachable from the project it belongs to, and only on the Run path", () => {
+    expect(project, "nothing opens the rhythm").toMatch(/\/rhythm\/\$\{id\}/);
+    expect(project, "a ship_mvp project has no week to file").toMatch(/goal === "run_company"/);
+  });
+
+  it("leaves the configuration on the web", () => {
+    const writesConfig = /rhythm\/(settings|goals)/.test(screen);
+    expect(writesConfig, "choosing metrics and goals is a desk job").toBe(false);
+    expect(screen).toMatch(/are on the web/);
+  });
+});

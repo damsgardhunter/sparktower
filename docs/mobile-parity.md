@@ -183,7 +183,22 @@ What each claim turned out to be, with where the evidence is:
   and one bug — the server's own comment says it is computed there "so every tab
   reads one answer instead of restating the rule".
 
-- [ ] **The weekly rhythm** — `/api/projects/:id/rhythm` and its six siblings:
+- [x] **The weekly rhythm — the week itself** — built 2026-10-01
+  (`app/rhythm/[id].tsx`), reached from `app/project/[id].tsx` and only on the
+  Run path, because a `ship_mvp` project has no week to file. Filing the numbers
+  and marking a recurring job done are on the phone; choosing which numbers to
+  track, editing the jobs, the quarter goals and the monthly report are
+  configuration and stay on the web.
+
+  Two details that are the screen rather than decoration. The metrics are
+  rendered from what the server sends, in the order it sends them — jsonb does
+  not keep key order so `metricsForProject` sorts them deliberately, and a
+  restaurant tracks covers where an agency does not, so this screen must never
+  be the thing that decides. And an empty box files `null` rather than `0`,
+  because the server keeps that difference: zero covers is a bad week, no answer
+  is a week nobody counted.
+
+- [ ] **The rest of the rhythm** — `/api/projects/:id/rhythm` and its siblings:
   the check-in, the recurring jobs, the monthly report. The phone calls none of
   them, which the family-level survey above *missed*, because these live under
   `/api/projects` rather than `/api/companies` and that family is touched. A
