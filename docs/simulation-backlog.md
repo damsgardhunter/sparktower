@@ -2157,6 +2157,36 @@ money stays. Overstating what a year might cost is the safe side of a meter
 that exists to stop a company filing a year it cannot pay for, so both the web
 and the phone count it that way — but it is a choice, not an oversight.
 
+## Closed: the three ways out of a company had almost no tests
+`release`, `leave` and `standings` had one, three and three references between
+them across the whole integration suite, against fifty-odd for the desk — and
+they are the routes that run when somebody changes their mind. Getting them
+wrong leaves a person stuck in a company they walked away from, or four people
+playing a season with an empty chair nobody told them about.
+
+Nine cases now, and the reason they are worth having is that the right answer
+*changes* part-way through a season:
+
+  - **Releasing a seat** works only while the table is still arguing. The fifth
+    claim ends it — the room leaves `claiming` for `naming` the moment every
+    chair is taken — so the test claims four of five to reach the window at all,
+    which is the thing a reader would get wrong. Once the season runs it is a
+    409 with `wrong_phase`, and the seat is left exactly as it was, which is
+    what matters to the other four.
+  - **Leaving before the first year** gives the seat up, and a room the last
+    person walks out of is retired rather than left standing empty.
+  - **Leaving a running season** cannot unmake the company, so the chair goes to
+    one of that venture's own bots: the person is out, the seat is still there,
+    and all five are filled — asserted by joining `users` and checking the new
+    occupant really is a bot rather than the seat merely existing.
+  - **Standings** rank every company in the market in order of what each side
+    owns, include the asker's own, and 404 for somebody else's company.
+
+Coverage went from 1, 3 and 3 references to 4, 5 and 7. Run alongside the lobby
+and responsibilities files rather than alone, because these share a market and a
+season with them and a helper that assumes it owns the room is the standing trap
+in this suite.
+
 ## The measurements themselves, 30 Sept 2026
 
 ### Closed: an event's cost multiplier compounded for every period it lasted
