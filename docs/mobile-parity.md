@@ -98,10 +98,18 @@ What each claim turned out to be, with where the evidence is:
   (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
   reasoning about `unknown`: dashed and blue, never red, because "nobody has
   checked" is a question and `bad` is an answer.
-- [ ] **Ten semantic pills still pick their colour by hand.** Twelve were
-  converted, in the five files where *every* `<Pill>` was semantic, so one import
-  swap converted the lot: `admin/surfaces`, `admin/analytics`, `admin/safety`,
-  `investor/interview`, `sim/index`.
+- [ ] **Six semantic pills still pick their colour by hand.** Sixteen were
+  converted: twelve in the five files where *every* `<Pill>` was semantic, so one
+  import swap converted the lot — `admin/surfaces`, `admin/analytics`,
+  `admin/safety`, `investor/interview`, `sim/index` — and four more in
+  `admin/reports`, where all four pills turned out to be states once read: what
+  was reported, why, what was done, and whether the author is suspended.
+
+  `sim/[id]` was looked at and deliberately left: of its three pills, one is a
+  state and two are tinted with *brand* colours (`primary`, `novaEmerald`) for a
+  venture's niche and its product. Those are decoration keyed to something that
+  is not a severity, and the web's tone set has no brand tone — so converting
+  them would flatten them to `neutral`, which is a downgrade rather than parity.
 
   The rest are in files with mixed usage — `DeskKit` (6 of 15 semantic),
   `MarketKit` (3 of 4), `admin/reports` (3 of 4), `sim/[id]` (1 of 3) — where

@@ -4,6 +4,7 @@
  * banner. Drawn here so Discover, Matches, Search and Invitations look alike.
  */
 import type { ReactNode } from "react";
+import { NovaRing } from "./nova/NovaRing";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
@@ -89,7 +90,15 @@ export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, rea
 }) {
   const cover = assetUri(coverUrl, 640);
   return (
-    <View style={[n.gridCard, { width }]}>
+    /*
+     * The soft ring, as `client/src/components/user-card.tsx` wears it. Its
+     * comment is the argument, and it applies more here than there: a person
+     * and a project are "the same kind of object to somebody browsing — a named
+     * thing that opens when you press it", and a builder in a plain bordered box
+     * beside gradient-edged ones "read as the lesser result". `ProjectCard` is
+     * now rung, so leaving this one flat would create exactly that.
+     */
+    <NovaRing strength="soft" radius={radius.md} style={{ width }} innerStyle={n.gridCard}>
       <Pressable onPress={onOpen} style={({ pressed }) => [{ alignItems: "center" }, pressed && { opacity: 0.8 }]} accessibilityRole="button" accessibilityLabel={`Open ${name}'s profile`}>
         <View style={n.cover}>
           {cover
@@ -126,7 +135,7 @@ export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, rea
           <Icon name="close" size={16} color="#FFFFFF" />
         </Pressable>
       )}
-    </View>
+    </NovaRing>
   );
 }
 
@@ -359,7 +368,8 @@ const n = StyleSheet.create({
   badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary },
   badgeText: { color: colors.primary, fontSize: 10, fontFamily: fontFamily.semibold },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 6 },
-  gridCard: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: "hidden", justifyContent: "space-between" },
+  /* No border or radius: the ring draws one and owns the other. */
+  gridCard: { overflow: "hidden", justifyContent: "space-between", flex: 1 },
   cover: { height: 56, alignSelf: "stretch", overflow: "hidden", backgroundColor: colors.primarySoft },
   gridAvatar: { marginTop: -38 },
   gridBody: { alignItems: "center", paddingHorizontal: spacing.sm, paddingTop: spacing.xs, paddingBottom: spacing.sm, gap: 3, alignSelf: "stretch" },

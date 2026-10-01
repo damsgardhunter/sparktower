@@ -139,6 +139,13 @@ describe("the Continue your path card", () => {
 describe("cards that wear the ring on both", () => {
   const pairs: { what: string; web: string; phone: string }[] = [
     { what: "a project card", web: "client/src/components/project-card.tsx", phone: "mobile/src/components/ProjectCard.tsx" },
+    /*
+     * The web's user-card comment is the argument for this pair: a person and a
+     * project are the same kind of object to somebody browsing, and the one in a
+     * plain box beside gradient-edged ones reads as the lesser result. Ringing
+     * the project card and not this one would manufacture that.
+     */
+    { what: "a person card", web: "client/src/components/user-card.tsx", phone: "mobile/src/components/NetworkCards.tsx" },
   ];
 
   for (const { what, web, phone } of pairs) {
