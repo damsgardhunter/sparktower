@@ -18,6 +18,8 @@
     "db:reconcile": "tsx script/reconcile-migrations.ts",
     "db:catch-up": "tsx script/catch-up-migrations.ts",
     "db:verify": "tsx script/verify-migrations.ts",
+    "reputation:gap": "tsx script/reputation-gap.ts",
+    "reputation:max": "tsx script/seed-max-reputation.ts",
     "mfa:reset": "tsx script/reset-mfa.ts",
     "stripe:seed": "tsx --env-file=.env server/seed-stripe.ts",
     "test": "vitest run",

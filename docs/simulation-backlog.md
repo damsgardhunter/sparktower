@@ -2157,6 +2157,49 @@ money stays. Overstating what a year might cost is the safe side of a meter
 that exists to stop a company filing a year it cannot pay for, so both the web
 and the phone count it that way — but it is a choice, not an oversight.
 
+## Every market has a route for every kind of player, 30 Sept 2026
+
+`every-market-winnable.test.ts` asks whether *a* competent founder can build
+something. That is the floor, and not the same question as whether the market is
+worth entering for the person you actually are. A market with one answer is a
+puzzle somebody solves once.
+
+So: seven archetypes — undercut, go premium, lead on product, grow hard, spend
+out of revenue, price by segment, keep your powder dry — against every market,
+each free to choose how hard it spends, median of several seeds, real economy,
+events on. The weakest archetype as a share of the best:
+
+    before   premium 1% in construction · 6% in drone delivery · 13% in podcasts
+             undercut 8% in construction
+    after    no archetype below 25% of the best in any market
+
+**Both fixes were to how the strategy was expressed, not to the game.** Premium
+had been written as a single list price at nine tenths of the dearest segment —
+which in construction, whose segments run 900, 3,800 and 14,000, is 12,600
+charged to everybody, and prices out all but a rounding error of the market.
+Undercut had the same error mirrored: one price at four fifths of the *cheapest*
+segment, charging the client who would have paid 14,000 a price of 720 and
+throwing away almost everything the market is worth.
+
+Tiers are what the engine provides for pricing by segment, and they arrive in
+year two with help text that says what they do. Expressed through tiers, both
+archetypes have a route in every market. So the engine was right and the
+measurement was wrong — the fifth time this week.
+
+**The one real asymmetry, and it looks deliberate.** The cautious player is
+profitable on eight seeds of eight in every market and goes bankrupt in none,
+but lands at 21–34% of the best and beats filing nothing in only one or two
+seeds of eight in the larger markets. Caution preserves and does not build,
+which is a reasonable thing for the game to say, and it is the only archetype
+that behaves that way.
+
+Worth carrying forward for the product rather than the engine: in year one a
+player has a single list price and nothing else, so a wide-spread market
+punishes a positioning choice made with the only instrument available. Tiers
+arrive in year two, which bounds it — but anybody writing desk copy for year one
+in construction or podcasts should know that "put the price up" and "undercut
+them" are both near-fatal there until tiers exist.
+
 ## Closed: the three ways out of a company had almost no tests
 `release`, `leave` and `standings` had one, three and three references between
 them across the whole integration suite, against fifty-odd for the desk — and
