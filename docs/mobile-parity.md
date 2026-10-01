@@ -86,10 +86,33 @@ What each claim turned out to be, with where the evidence is:
 
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.
-- [ ] **The rest of `client/src/components/nova/`**: `LiveDot` and `Glance` have
-  no phone counterpart. `Working` now does, and `Pill` and `Block` exist under
-  those names in the phone's own kit — which is not the same thing as agreeing
-  with the web's, and nobody has checked.
+- [x] **`LiveDot` and `Glance`** — built 2026-10-01
+  (`mobile/src/components/nova/`). `Glance` is the web's own phone layout rather
+  than a new design: the web is `grid-cols-1` with ruled columns only from `sm`,
+  so it is already a stack at this width, and `GlanceAction`'s label is
+  `sm:hidden` — visible at exactly the width the phone file is for. `LiveDot`
+  keeps its ping and stops it dead when inactive, which is also where `Working`'s
+  refusal of an `Animated` loop stops applying: there, the stage name and the
+  elapsed time already carry the state, and here the dot is the only signal.
+- [ ] **One `Pill`, with the web's tones.** Checked, and the answer was worse
+  than "nobody has checked": the phone has **three** components called `Pill` —
+  `MoreKit`, `FeaturedContest`, `profile/kit` — and not one of them has a tone
+  system. The web's takes `good | warn | bad | info | neutral | unknown`. So the
+  phone cannot agree with the web's by construction, and the three probably do
+  not agree with each other. The work is one `Pill` with the web's tones and
+  three sets of call sites migrated onto it; it is worth doing on its own rather
+  than inside another change, because it touches every screen that shows a
+  status.
+- [ ] **`Block` is two different components sharing a name.** The phone's, in
+  `ProjectBits`, is a titled section with an action. The web's is a surface
+  primitive. Deciding which one the phone wants is the work, and it is not
+  obvious — the phone may want both, under two names.
+
+Both open items are held by
+[`nova-kit-parity.test.ts`](../../test/unit/nova-kit-parity.test.ts): anything
+the web exports and the phone lacks must carry a written reason, a reason for
+something since built fails, and a reason for something the web has dropped
+fails too — so the list cannot rot in either direction.
 
 ### Measured, and both now closed
 
