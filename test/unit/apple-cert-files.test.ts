@@ -44,7 +44,14 @@ describe("which files the Apple receipt check will trust", () => {
     const escapes = [
       "../secrets.cer",
       "../../etc/shadow.cer",
-      "..%2Fsecrets.cer".replace("%2F", "/"),
+      /*
+       * A separator that arrived encoded and was decoded by something upstream.
+       * Written decoded, because that is the string this function would be
+       * handed — the previous version built it with `.replace("%2F", "/")`,
+       * which CodeQL rightly flags as replacing only the first occurrence, and
+       * which produced the same string as the line above it anyway.
+       */
+      "..%2F../secrets.cer".replaceAll("%2F", "/"),
       "subdir/evil.cer",
       "/etc/passwd.cer",
       "..\\windows\\evil.cer",
