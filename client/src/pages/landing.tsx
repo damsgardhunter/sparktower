@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, Eye, EyeOff, Loader2, Globe, Handshake, ArrowRight, Trophy, Heart, Scale } from "lucide-react";
+import { Zap, Eye, EyeOff, Loader2, ArrowRight, Heart } from "lucide-react";
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -180,10 +180,10 @@ export default function LandingPage() {
           <div className="rounded-[1.75rem] p-[2px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
             <div className="rounded-[1.65rem] bg-white overflow-hidden grid md:grid-cols-[1.15fr_1fr]">
 
-              <ChallengePanel />
+              <PitchPanel />
 
               {/* The box that gets you in. Sign up first: a landing page is for people who don't have an account yet. */}
-              <div className="p-6 sm:p-10 flex flex-col justify-center border-t md:border-t-0 md:border-l border-gray-100" data-testid="panel-auth">
+              <div id="start" className="scroll-mt-28 p-6 sm:p-10 flex flex-col justify-center border-t md:border-t-0 md:border-l border-gray-100" data-testid="panel-auth">
                 <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
                 <p className="mt-6 text-center text-xs text-gray-400 leading-relaxed">
                   Free to start. No card, no credits spent until you ask Nova for something.
@@ -202,59 +202,8 @@ export default function LandingPage() {
         <div className="max-w-5xl mx-auto">
 
           <div className="max-w-3xl mx-auto text-center">
-            <span className="inline-flex items-center gap-2 rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-gray-500" data-testid="badge-contest-status">
-              <Trophy className="h-3.5 w-3.5" style={{ color: NOVA_GRADIENT[2] }} />
-              The contest hasn't started yet
-            </span>
-            <h2 className="mt-5 text-3xl md:text-4xl font-bold tracking-tight text-black">
-              The $50B challenge, and where it actually stands
-            </h2>
-            <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
-              The offer is real and it is not open yet. Handing over a majority of a company is a
-              promotion with a prize, and that means written rules, eligibility, judging and a
-              promotion agreement drafted by lawyers who do this for a living. We are finding
-              those lawyers and writing those rules now.
-            </p>
-          </div>
-
-          <div className="mt-10 grid gap-4 md:grid-cols-3">
-            {[
-              {
-                icon: Scale,
-                title: "Rules, so nobody can cheat",
-                body: "What counts as a company built here, what counts as $50 billion, who verifies it, and what stops someone bolting SparkTower onto a business they already had. Ambiguity is how a prize like this gets fought over instead of won.",
-              },
-              {
-                icon: Globe,
-                title: "Open wherever you are",
-                body: "Anyone, anywhere. That is the hardest part to write, not the easiest: prize promotions are governed country by country, and \"open to everyone\" has to survive the places with the strictest rules rather than ignore them.",
-              },
-              {
-                icon: Handshake,
-                title: "A promotion agreement, in writing",
-                body: "An offer this size is worth nothing as a sentence on a landing page. It needs a document that binds the company, survives a change of ownership, and says exactly what a winner receives.",
-              },
-            ].map((item) => (
-              <div key={item.title} className="rounded-2xl border border-gray-200 p-5" data-testid={`card-contest-${item.title.split(" ")[0].toLowerCase()}`}>
-                <item.icon className="h-5 w-5" style={{ color: NOVA_GRADIENT[1] }} />
-                <h3 className="mt-3 font-bold text-black">{item.title}</h3>
-                <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">{item.body}</p>
-              </div>
-            ))}
-          </div>
-
-          <p className="mt-6 text-center text-sm text-gray-500 max-w-2xl mx-auto">
-            This takes a while, and we would rather say so than open something we would have to
-            change halfway through. Nothing you build before the rules land is wasted: the contest
-            will be judged on companies, and a company takes longer to build than a rulebook takes
-            to write.
-          </p>
-
-          {/* --- Meanwhile: the part you can do today ------------------------------- */}
-
-          <div className="mt-20 max-w-3xl mx-auto text-center">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-black">
-              So start building now
+              How it works
             </h2>
             <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
               Make an account, tell Nova what you're thinking about, and it turns the idea into a
@@ -458,7 +407,7 @@ function TaglineBanner() {
 }
 
 /**
- * The left half: what you get, and the offer that makes people stop scrolling.
+ * The left half: the pitch, and what the product actually is.
  *
  * Built out of the product's own shapes rather than a stock photograph — a
  * project card, a believer badge, a path step, Nova's tower — because a
@@ -466,45 +415,62 @@ function TaglineBanner() {
  * and because these stay true when the product changes. They overlap and tilt
  * so the panel reads as depth rather than a list.
  *
- * The challenge is the headline and deliberately not a link: there is no
- * contest row behind it yet (`contests` is empty), and sending somebody to an
- * empty page is worse than telling them it's coming.
+ * This used to lead with the $50B contest: build the first fifty-billion-dollar
+ * company here and take a majority of SparkTower. It was the most arresting
+ * thing on the page and the least useful, because the next sentence had to
+ * admit the contest was not open — the rules, the eligibility and the promotion
+ * agreement were still being drafted. A headline whose own explainer begins
+ * "the offer is real and it is not open yet" asks a visitor to care about
+ * something they cannot do, in the one place they are deciding whether to sign
+ * up for something they can.
+ *
+ * So the pitch is the ambition without the prize attached, and the call to
+ * action is the form already sitting beside it. The contest still exists on its
+ * own pages; it is simply no longer the first thing anybody reads.
  */
-function ChallengePanel() {
+function PitchPanel() {
   return (
-    <div className="relative p-6 sm:p-10 overflow-hidden bg-gradient-to-br from-gray-50 to-white" data-testid="panel-challenge">
+    <div className="relative p-6 sm:p-10 overflow-hidden bg-gradient-to-br from-gray-50 to-white" data-testid="panel-pitch">
       {/* A wash of the gradient behind the cards, so they have something to lift off. */}
       <div aria-hidden className="pointer-events-none absolute -right-24 -top-24 w-[28rem] h-[28rem] rounded-full opacity-20 blur-3xl" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
 
       <div className="relative z-10">
-        <span
-          className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-white shadow-lg"
-          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
-          data-testid="badge-challenge"
-        >
-          <Trophy className="h-3.5 w-3.5" />
-          The Contest
-        </span>
-
-        <h1 className="mt-5 text-3xl sm:text-4xl md:text-[2.75rem] font-bold tracking-tight leading-[1.08] text-black" data-testid="text-hero-headline">
-          Build a $50B company.
-          <br />
+        <h1 className="text-3xl sm:text-4xl md:text-[2.75rem] font-bold tracking-tight leading-[1.08] text-black" data-testid="text-hero-headline">
+          What if the next billion-dollar company was{" "}
           <span
             className="bg-clip-text text-transparent"
             style={{ backgroundImage: NOVA_GRADIENT_CSS }}
           >
-            Take most of mine.
+            yours?
           </span>
         </h1>
 
-        <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed max-w-md">
-          The first builder who takes a project from SparkTower to a $50 billion company
-          takes home a majority stake in SparkTower itself. One contest, one winner,
-          no entry fee — start a project and you are in it.
+        <p className="mt-5 text-base sm:text-lg font-semibold text-black leading-snug max-w-md" data-testid="text-hero-lead">
+          Every company starts somewhere. Start yours on SparkTower.
         </p>
 
-        <a href="#how-it-works" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:gap-2.5 transition-all" data-testid="link-challenge-details">
-          How it works <ArrowRight className="h-4 w-4" />
+        <p className="mt-3 text-[15px] sm:text-base text-gray-600 leading-relaxed max-w-md" data-testid="text-hero-sub">
+          Turn your idea into a business with AI guidance, plans that adapt to you, and people to
+          build alongside.
+        </p>
+
+        {/*
+          * An anchor rather than a button, and it points at the form that is
+          * already on this card.
+          *
+          * On a wide screen the form sits beside this panel, so the link barely
+          * moves the page — which is the point: the thing it asks for is already
+          * visible. Below `md` the two columns stack and the form is off-screen
+          * underneath, which is exactly where somebody who has just read this
+          * needs sending.
+          */}
+        <a
+          href="#start"
+          className="mt-6 inline-flex items-center gap-1.5 rounded-lg px-5 py-2.5 text-sm font-semibold text-white border-0 shadow-lg hover:opacity-90 transition-opacity"
+          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          data-testid="link-start-building"
+        >
+          Start building <ArrowRight className="h-4 w-4" />
         </a>
       </div>
 
