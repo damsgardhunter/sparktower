@@ -1,5 +1,5 @@
 import { PinnedBadges } from "@/components/pinned-badges";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 import { RailCard, RailRow, RailDivider } from "@/components/rail-card";
+import { ImageCropDialog } from "@/components/image-crop-dialog";
 import {
   Camera, Eye, Users, Bookmark, FolderKanban, Award, Loader2,
   MapPin, TrendingUp, Sparkles,
@@ -52,6 +53,7 @@ function coverGradient(seed: string): string {
 export function ProfileRailCard() {
   const { toast } = useToast();
   const coverInput = useRef<HTMLInputElement>(null);
+  const [pendingCover, setPendingCover] = useState<File | null>(null);
   const { uploadFile, isUploading } = useUpload();
 
   const { data, isLoading } = useQuery<ProfileSummary>({
@@ -71,16 +73,34 @@ export function ProfileRailCard() {
     onError: () => toast({ title: "Couldn't save that cover photo", variant: "destructive" }),
   });
 
-  const handleCover = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
+  /*
+   * Picking a file only opens the cropper. Two things were wrong with uploading
+   * it straight off: the band is a wide strip and a phone photo is not, so the
+   * middle of it was taken without anybody being asked — and there was no size
+   * check at all here, so a full-resolution photo past the upload limit came
+   * back as a bare "Upload failed" with nothing saying why.
+   */
+  const pickCover = (file: File) => {
+    if (!file.type.startsWith("image/") && !/\.(heic|heif)$/i.test(file.name)) {
       toast({ title: "Images only", description: "Pick a JPG or PNG.", variant: "destructive" });
       return;
     }
+    if (file.size > 40 * 1024 * 1024) {
+      toast({ title: "That photo is too big", description: "Keep it under 40MB.", variant: "destructive" });
+      return;
+    }
+    setPendingCover(file);
+  };
+
+  /* The cropped JPEG, which is small and the right shape by construction. */
+  const handleCover = async (file: File) => {
     try {
       const result = await uploadFile(file);
       if (!result?.objectPath) throw new Error("no path");
       coverMutation.mutate(result.objectPath);
+      setPendingCover(null);
     } catch {
+      setPendingCover(null);
       toast({ title: "Upload failed", variant: "destructive" });
     }
   };
@@ -132,7 +152,21 @@ export function ProfileRailCard() {
           type="file"
           accept="image/*"
           className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCover(f); }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) pickCover(f);
+            /* Cleared so picking the same file twice still fires a change. */
+            e.target.value = "";
+          }}
+          data-testid="input-rail-cover"
+        />
+        <ImageCropDialog
+          file={pendingCover}
+          preset="cover"
+          open={pendingCover !== null}
+          busy={isUploading || coverMutation.isPending}
+          onCancel={() => setPendingCover(null)}
+          onCropped={(cropped) => void handleCover(cropped)}
         />
       </div>
 

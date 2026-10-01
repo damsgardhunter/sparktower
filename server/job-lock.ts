@@ -27,6 +27,28 @@
  * duplicate runs an hour apart — which is exactly the guarantee these jobs
  * need, because each one is due-driven: the rows carry when they were last
  * done, so a skipped tick is picked up by the next.
+ *
+ * ## Before you put PgBouncer in front of Postgres
+ *
+ * `pg_try_advisory_lock` is a *session* lock: it is held by the connection
+ * until that connection unlocks it or closes. In PgBouncer's **transaction**
+ * pooling mode a client is only pinned to a server connection for the length
+ * of a transaction, so the connection this holds the lock on is not reliably
+ * the one the unlock arrives on — and the lock can be left held on a server
+ * connection that is handed to somebody else. The scaling plan calls for
+ * PgBouncer in transaction mode at ~2,000 concurrent, so this matters there
+ * and not before.
+ *
+ * Two ways through it, when that day comes:
+ *
+ *   - point this pool at the **direct** database URL rather than the pooler.
+ *     Two or three connections for the jobs is not what the pooler is for.
+ *   - or switch to `pg_advisory_xact_lock`, which is released at commit and is
+ *     safe under transaction pooling — at the cost of holding a transaction
+ *     open for the whole job, which for the Nova refresh is minutes.
+ *
+ * The first is the better trade. `withLock` in simulation-tick.ts has the same
+ * property and wants the same treatment at the same time.
  */
 import { pool } from "./db";
 

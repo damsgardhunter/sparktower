@@ -459,9 +459,16 @@ export default function Profile() {
           * set anywhere else in the app was stored and then never shown here —
           * which read as the upload having failed. The gradient is now the
           * fallback rather than the only option.
+          *
+          * `aspect-[4/1]`, not a fixed height, because that is the shape the
+          * crop dialog frames. It was `h-32`, which at this card's width is
+          * nearer 8:1 — so a cover arrived here and had half its height taken
+          * off centre, and the taller the photo the worse it read. A band whose
+          * shape is a measurement rather than a round number is the only way the
+          * cropper's promise survives contact with the page.
           */}
         <div
-          className="h-32 bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20 bg-cover bg-center"
+          className="aspect-[4/1] bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20 bg-cover bg-center"
           style={profile?.coverUrl ? { backgroundImage: `url(${profile.coverUrl})` } : undefined}
           data-testid="profile-cover"
         />
@@ -523,7 +530,8 @@ export default function Profile() {
                             label="Profile photo"
                             value={profile?.avatarUrl}
                             onChange={(p) => imageMutation.mutate({ avatarUrl: p })}
-                            hint="Square works best."
+                            hint="Any shape — you choose the square that's kept."
+                            crop="avatar"
                             testId="upload-avatar"
                           />
                           <ImageUploadField
@@ -531,7 +539,8 @@ export default function Profile() {
                             value={profile?.coverUrl}
                             onChange={(p) => imageMutation.mutate({ coverUrl: p })}
                             aspect="wide"
-                            hint="Wide banner behind your avatar."
+                            hint="Any shape — you choose the strip that's kept."
+                            crop="cover"
                             testId="upload-cover"
                           />
                         </div>
