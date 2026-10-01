@@ -102,7 +102,7 @@ import {
   type TierId,
   PAY_ENDPOINTS,
 } from "@shared/plans";
-import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
+import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects, devUnlimited } from "./wallet";
 import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
 import { requireImages, buyImagePass, imagePassActive } from "./images";
 
@@ -7087,12 +7087,33 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const sub = await storage.getUserSubscription(userId);
       const ent = await getUserEntitlements(userId);
       const privateProjectsUsed = await storage.countPrivateProjects(userId);
+      /*
+       * A developer's account is unlimited *here* as well as at the charge.
+       *
+       * `requireCredits` has honoured `devUnlimited` for a while, so nothing was
+       * ever billed on these accounts — but this endpoint worked its answer out
+       * from the month's allowance alone, and the whole client state derives
+       * from this answer. So the allowance ran out at 25 actions, `creditState`
+       * read "out", and every screen offered to sell more of something that was
+       * already free: a bypass that stopped the charge and forgot to tell the
+       * interface, which looks from the outside exactly like a bypass that does
+       * not work.
+       *
+       * Same two gates as the charge: only outside production, and only for an
+       * account whose flag was set through a route that 404s there.
+       */
+      const devFree = process.env.NODE_ENV !== "production" && await devUnlimited(userId);
+      const unlimited = devFree || sub.creditsLimit === Infinity;
+      /* -1 is the client's Infinity, and what `creditState` reads as "no ceiling". */
+      const creditsLimit = unlimited ? -1 : sub.creditsLimit;
+      const creditsRemaining = unlimited ? -1 : sub.creditsRemaining;
       res.json({
         ...sub,
         // JSON has no Infinity; the client treats -1 as unlimited.
-        creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit,
-        creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining,
-        unlimited: sub.creditsLimit === Infinity,
+        creditsLimit,
+        creditsRemaining,
+        unlimited,
+        devUnlimited: devFree,
         fairUseCap: sub.creditsLimit === Infinity ? FAIR_USE_MONTHLY_CAP : null,
         entitlements: {
           ...ent,
@@ -7102,8 +7123,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         privateProjectsUsed,
         creditCosts: CREDIT_COSTS,
         // The revenue loop's trigger: "low" offers "Upgrade to keep generating" before a generate fails.
-        creditState: creditState({ creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining, creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit, unlimited: sub.creditsLimit === Infinity }),
-        lowCreditsAt: sub.creditsLimit === Infinity ? null : lowCreditsAt(sub.creditsLimit),
+        creditState: creditState({ creditsRemaining, creditsLimit, unlimited }),
+        lowCreditsAt: unlimited ? null : lowCreditsAt(sub.creditsLimit),
         // A subscription payment that failed (until one goes through), or was refunded in full.
         billingIssue: await billingIssueFor(userId),
         /*
