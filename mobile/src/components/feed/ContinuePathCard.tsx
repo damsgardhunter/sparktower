@@ -152,7 +152,17 @@ export function ContinuePathCard({ onNotice, heading = true }: {
   if (!items.length) return null;
 
   return (
-    <Box padded={false} style={{ borderColor: primaryTint(0.3) }} testID="continue-path-card">
+    /*
+     * The Nova gradient outline, as the web gives this card.
+     *
+     * `client/src/components/continue-path-card.tsx` puts `nova-ring nova-glow`
+     * on the lead step and `nova-ring-soft` on the rest. The phone groups every
+     * step into one box rather than one card each, so the lit ring goes on the
+     * group — the same "this is the thing to look at" the web is making, in the
+     * shape the phone's layout already has. It replaces a flat border tinted to
+     * 30% primary, which was the nearest a plain border could get.
+     */
+    <Box padded={false} ring="nova" testID="continue-path-card">
       {heading && (
         <View style={s.head}>
           <Ionicons name="compass-outline" size={14} color={colors.primary} />

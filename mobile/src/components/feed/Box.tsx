@@ -17,16 +17,59 @@ export const BOX_BORDER = colors.border;
 /** The primary at the web's /5, /10, /30 and /40 opacities. */
 export const primaryTint = (alpha: number) => `rgba(151,69,181,${alpha})`;
 
+/**
+ * The Nova gradient outline, as a prop rather than a wrapper.
+ *
+ * The web does this with a class (`.nova-ring` / `.nova-ring-soft` in
+ * `client/src/index.css`) and its comment says why: "so the look spreads by
+ * adding a class, not by wrapping every card in a padded gradient div". A
+ * phone has no CSS gradient borders, so the padded-gradient-div *is* the
+ * technique — but it belongs here, once, rather than at forty call sites.
+ *
+ * Built the same way the web builds it: the gradient fills the outer element
+ * and a surface-coloured inner element sits on top, inset by the border width,
+ * so the gradient shows only as an outline and the corners stay round.
+ *
+ * `nova` is the full-strength ring the web gives the one thing on a screen that
+ * should draw the eye; `soft` is the same gradient at 45%, for secondary cards.
+ * The hexes are `colors.novaGreen/Emerald/Purple`, which are the web's own
+ * values — `nova-gradient-parity.test.ts` fails if the two ever drift.
+ */
+const RING_WIDTH = { nova: 1.5, soft: 1 } as const;
+/** Typed as the tuple expo-linear-gradient wants: at least two stops. */
+const RING_COLORS: Record<"nova" | "soft", readonly [string, string, ...string[]]> = {
+  nova: [colors.novaGreen, colors.novaEmerald, colors.novaPurple],
+  /* The web's `.nova-ring-soft`: the same three at 0.45 alpha. */
+  soft: ["rgba(74,222,128,0.45)", "rgba(16,185,129,0.45)", "rgba(168,85,247,0.45)"],
+};
+
 export function Box({
-  children, style, padded = true, testID,
+  children, style, padded = true, testID, ring,
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   /** Off for boxes whose first child is full-bleed (a cover band, a divided list). */
   padded?: boolean;
   testID?: string;
+  /** The Nova gradient outline. `nova` is the lit one, `soft` the quieter one. */
+  ring?: "nova" | "soft";
 }) {
-  return <View style={[s.box, padded && s.padded, style]} testID={testID}>{children}</View>;
+  if (!ring) return <View style={[s.box, padded && s.padded, style]} testID={testID}>{children}</View>;
+
+  const width = RING_WIDTH[ring];
+  return (
+    <LinearGradient
+      colors={RING_COLORS[ring]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 0 }}
+      style={[s.ring, { padding: width }, ring === "nova" && s.ringGlow, style]}
+      testID={testID}
+    >
+      <View style={[s.ringInner, { borderRadius: radius.sm - width }, padded && s.padded]}>
+        {children}
+      </View>
+    </LinearGradient>
+  );
 }
 
 /** A module's title row, with an optional "See all". */
@@ -118,6 +161,23 @@ const s = StyleSheet.create({
   box: {
     backgroundColor: colors.surface, marginHorizontal: spacing.sm, borderRadius: radius.sm,
     borderWidth: 1, borderColor: BOX_BORDER, overflow: "hidden",
+  },
+  /*
+   * The ring carries the margin and the radius the plain box carries, so a card
+   * does not move or change shape when it gains one. No border: the gradient is
+   * the border.
+   */
+  ring: { marginHorizontal: spacing.sm, borderRadius: radius.sm },
+  ringInner: { backgroundColor: colors.surface, overflow: "hidden" },
+  /*
+   * The web's `.nova-glow` throws two shadows, green to the left and purple to
+   * the right. React Native allows one shadow colour per view, so this is the
+   * purple half — the side that reads as "lit" rather than as a drop shadow.
+   * Said plainly because it is a deliberate approximation, not an oversight.
+   */
+  ringGlow: {
+    shadowColor: colors.novaPurple, shadowOpacity: 0.35, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
   padded: { padding: spacing.md },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginBottom: 4 },
