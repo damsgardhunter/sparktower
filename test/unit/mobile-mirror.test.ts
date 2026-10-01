@@ -35,6 +35,10 @@ import { connectionName as webName, searchConnections } from "../../client/src/l
 import { CROP as phoneCrop } from "../../mobile/src/profileCrop";
 import { CROP_PRESETS } from "../../client/src/lib/image-crop";
 import * as phoneProblem from "../../mobile/src/problemReport";
+import { workingView as phoneWorkingView, WORKING_CURRENT_WIDTH as phoneCurrentWidth, WORKING_MIN_WIDTH as phoneMinWidth, WORKING_UNSTARTED_LABEL as phoneUnstarted } from "../../mobile/src/workingView";
+import { workingView, WORKING_CURRENT_WIDTH, WORKING_MIN_WIDTH, WORKING_UNSTARTED_LABEL } from "../../client/src/lib/working-view";
+import { auditStageLabel as phoneAuditStageLabel, AUDIT_STAGES as phoneAuditStages } from "../../mobile/src/auditStages";
+import { auditStageLabel } from "../../client/src/lib/audit-status";
 import * as webProblem from "@shared/problem-reports";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
@@ -543,6 +547,72 @@ describe("what counts as a problem report", () => {
     ] as unknown[]) {
       expect(phoneProblem.readProblemPath(input), `input ${JSON.stringify(input)?.slice(0, 40)}`)
         .toBe(webProblem.readProblemPath(input));
+    }
+  });
+});
+
+/**
+ * What a Nova wait draws, on both clients.
+ *
+ * The phone showed the stage as a sentence in small grey text — "reading ·
+ * 1:05" — which says which of three phases is running and not that there are
+ * three. A read sitting in "reading" for ninety seconds therefore looked exactly
+ * like one that had stopped. It now draws the web's segmented bar, which means
+ * both clients answer "which segment is filled" and "what is this wait called",
+ * and a disagreement would show the same run at two different states.
+ *
+ * The waits are the longest thing in the product and the phone's are longer than
+ * the web's, same model call over a worse connection — so this is the mirror most
+ * likely to be looked at while something is going wrong.
+ */
+describe("what a Nova wait draws", () => {
+  const stages = [
+    { id: "fetching", label: "Fetching your code" },
+    { id: "reading", label: "Nova is reading it" },
+    { id: "saving", label: "Saving what it found" },
+  ];
+
+  it("agrees on the bar and the label at every stage", () => {
+    const progresses = [undefined, null, 0, 0.01, 0.5, 1, 2, -1, Number.NaN, Number.POSITIVE_INFINITY];
+    for (const current of [undefined, null, "", "fetching", "reading", "saving", "not-a-stage"]) {
+      for (const saying of [undefined, null, "Uploading the zip"]) {
+        for (const progress of progresses) {
+          const onWeb = workingView(stages, current, saying, progress);
+          const onPhone = phoneWorkingView(stages, current, saying, progress);
+          expect(onPhone, `current=${current} saying=${saying} progress=${progress}`).toEqual(onWeb);
+        }
+      }
+    }
+  });
+
+  /* The three rules that make the bar honest, asserted on both rather than described. */
+  it("draws an unrecognised stage as nothing started, not as the first one finished", () => {
+    for (const view of [workingView(stages, "not-a-stage"), phoneWorkingView(stages, "not-a-stage")]) {
+      expect(view.index).toBe(-1);
+      expect(view.widths).toEqual([0, 0, 0]);
+      expect(view.label).toBe(WORKING_UNSTARTED_LABEL);
+    }
+    expect(phoneUnstarted).toBe(WORKING_UNSTARTED_LABEL);
+  });
+
+  it("fills the finished stages and part-fills the current one", () => {
+    for (const view of [workingView(stages, "saving"), phoneWorkingView(stages, "saving")]) {
+      expect(view.widths).toEqual([100, 100, WORKING_CURRENT_WIDTH]);
+    }
+    expect(phoneCurrentWidth).toBe(WORKING_CURRENT_WIDTH);
+  });
+
+  it("floors a known progress, so a stage that has just begun reads as begun", () => {
+    for (const view of [workingView(stages, "reading", null, 0), phoneWorkingView(stages, "reading", null, 0)]) {
+      expect(view.widths[1]).toBe(WORKING_MIN_WIDTH);
+    }
+    expect(phoneMinWidth).toBe(WORKING_MIN_WIDTH);
+  });
+
+  /* And the words a stage is given, which both clients look up separately. */
+  it("names each stage the same way on both", () => {
+    for (const id of ["fetching", "reading", "saving", "", "unknown", null, undefined]) {
+      expect(phoneAuditStageLabel(id), String(id)).toBe(auditStageLabel(id));
     }
   });
 });

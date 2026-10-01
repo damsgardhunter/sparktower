@@ -181,20 +181,12 @@ export interface AuditStatus {
 }
 
 /*
- * Word for word from client/src/lib/audit-status.ts.
- *
- * `reading` said "Reading the code" here and "Nova is reading it" on the web,
- * so the same audit described itself differently depending on which screen you
- * watched it from — and this file's own fallback below already says "Nova is
- * reading it", which meant the stage label and the label for no stage at all
- * disagreed within one file.
+ * The stage labels now live in `./auditStages`, which imports nothing — so
+ * `mobile-mirror.test.ts` can compare them with the web's, which it could not do
+ * through this file: the hooks above reach for React Native and the test runner
+ * cannot parse that. Re-exported here because this is where callers look.
  */
-export const AUDIT_STAGE_LABEL: Record<string, string> = {
-  fetching: "Fetching the code",
-  reading: "Nova is reading it",
-  saving: "Saving what it found",
-};
-export const auditStageLabel = (stage: string | null | undefined) => AUDIT_STAGE_LABEL[stage ?? ""] ?? "Nova is reading it";
+export { AUDIT_STAGE_LABEL, AUDIT_STAGES, auditStageLabel } from "./auditStages";
 
 /** "1:05", "42s". */
 export function formatElapsed(seconds: number) {

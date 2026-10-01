@@ -86,11 +86,15 @@ layout and by the hook that answers the spacing, with a test.
 
 ### The kit
 
-- [ ] `client/src/components/nova/` has `Working`, `Loading`, `LiveDot`,
-  `Glance`, `Pill` and `Block`. The phone has the *idea* in one place —
-  `SeasonProgress` in `SimKit` — and a bare `ActivityIndicator` everywhere
-  else. A phone `Working` reading the same stage lists is the piece that would
-  pay for itself fastest: the waits are longer on a phone, not shorter.
+- [x] ~~`Working`~~ Done, and in use on the codebase audit, which previously
+  showed the stage as a sentence in small grey text — so a read sitting in
+  "reading" for ninety seconds looked exactly like one that had stopped. Which
+  segment is filled and what the wait is called come from `src/workingView.ts`,
+  mirrored against `client/src/lib/working-view.ts`, and the stage labels from
+  `src/auditStages.ts`, mirrored against `client/src/lib/audit-status.ts`.
+- [ ] The rest of `client/src/components/nova/`: `LiveDot`, `Glance`, `Pill`,
+  `Block`. Smaller than `Working` was and worth doing when a screen needs them
+  rather than in advance.
 - [x] ~~**No error boundary.**~~ Done. Two levels, as on the web, through
   expo-router's own convention: a layout that exports a component called
   `ErrorBoundary` gets it wrapped around that segment, so a tab screen that throws
