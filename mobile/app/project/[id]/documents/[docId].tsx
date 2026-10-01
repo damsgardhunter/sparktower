@@ -73,6 +73,12 @@ function DocumentBuilder() {
   const [replanFeedback, setReplanFeedback] = useState("");
   const [folder, setFolder] = useState("docs");
   const [approach, setApproach] = useState<string | null>(null);
+  /*
+   * Whether a restructure can be taken back. Read from the document's own
+   * `pagesHistory` so a screen opened fresh on a document that was restructured
+   * yesterday still offers it, rather than only within the session that did it.
+   */
+  const [canUndo, setCanUndo] = useState(false);
   const [savedFile, setSavedFile] = useState<{ name: string; folder: string; url?: string } | null>(null);
   const hydratedFor = useRef<string | null>(null);
 
@@ -90,6 +96,14 @@ function DocumentBuilder() {
     hydratedFor.current = doc.id;
     const h = hydrate(doc);
     setTitle(h.title); setPages(h.pages); setSettings(h.settings); setDirty(false);
+    /*
+     * Also on first load, not only after a mutation: a document restructured
+     * yesterday has history and must still offer the way back when the screen is
+     * opened fresh today. This effect does not go through `applyServer`, so
+     * setting it there alone would have limited Undo to the session that caused
+     * the restructure — which is the session least likely to need it.
+     */
+    setCanUndo((((doc as any).pagesHistory as unknown[]) ?? []).length > 0);
   }, [doc]);
 
   const invalidateLists = () => {
@@ -98,6 +112,7 @@ function DocumentBuilder() {
   const applyServer = (d: ProjectDocument) => {
     const h = hydrate(d);
     setPages(h.pages); setDirty(false);
+    setCanUndo((((d as any).pagesHistory as unknown[]) ?? []).length > 0);
     qc.setQueryData(docKey, d);
     qc.invalidateQueries({ queryKey: ["document", docId, "layout"] });
     qc.invalidateQueries({ queryKey: ["subscription"] });
@@ -159,6 +174,31 @@ function DocumentBuilder() {
     mutationFn: async () => { await flush(); return api<{ document: ProjectDocument; approach: string }>(`/api/documents/${docId}/replan`, { method: "POST", body: { feedback: replanFeedback } }); },
     onSuccess: (r) => { applyServer(r.document); setPageIndex(0); setApproach(r.approach); setSheet(null); setReplanFeedback(""); notify("Restructured — your written content was carried across"); },
     onError: (e) => fail(e, "Couldn't restructure"),
+    ...busy,
+  });
+  /**
+   * Put the structure back the way it was before the last restructure.
+   *
+   * The reason this matters more than it looks, in the web's own words: a
+   * restructure is a model call that can drop a section the builder wrote, and
+   * without this the only way back is to retype it. The phone had the restructure
+   * and not the way back, which made the riskier half of the pair the only half
+   * it shipped.
+   *
+   * The server keeps a short history and swaps the current pages into it, so
+   * undoing twice returns — which is why the toast says so.
+   */
+  const undo = useMutation({
+    mutationFn: async () => {
+      await flush();
+      return api<{ document: ProjectDocument }>(`/api/documents/${docId}/undo`, { method: "POST" });
+    },
+    onSuccess: (r) => {
+      applyServer(r.document);
+      setPageIndex(0);
+      notify("Put back — the structure before the last restructure. Undo again to return.");
+    },
+    onError: (e) => fail(e, "There's nothing to go back to"),
     ...busy,
   });
   const tighten = useMutation({
@@ -252,6 +292,21 @@ function DocumentBuilder() {
             )}
             <Cost credits={pending > 0 ? (quote?.cost ?? pending) : (quote?.totalBlocks ?? 0)} />
             <Btn small variant="outline" icon="git-network-outline" label="Restructure" disabled={aiBusy > 0} onPress={() => setSheet("replan")} />
+            {/*
+              * Only when there is something to go back to. Beside Restructure
+              * rather than buried in a menu, because the moment somebody wants it
+              * is the moment just after pressing the button next to it.
+              */}
+            {canUndo && (
+              <Btn
+                small variant="ghost" icon="arrow-undo-outline"
+                label={undo.isPending ? "Putting it back…" : "Undo restructure"}
+                loading={undo.isPending}
+                disabled={aiBusy > 0}
+                onPress={() => undo.mutate()}
+                testID="button-doc-undo-replan"
+              />
+            )}
             <Btn small variant="outline" icon="cloud-upload-outline" label="Save to Files" onPress={() => setSheet("publish")} />
           </Row>
         </View>
