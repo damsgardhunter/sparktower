@@ -84,6 +84,25 @@ What each claim turned out to be, with where the evidence is:
 
 ### Genuinely still missing
 
+- [ ] **Four of the web's five missing admin consoles.** Measured by whether the
+  phone calls the route at all, which is the only reliable signal — a path
+  comparison flags renames and by-design absences as gaps:
+
+  | Web screen | Route the phone never calls | State |
+  |---|---|---|
+  | `/admin/revenue` | — | **done** 2026-10-01 |
+  | `/admin/ai-spend` | `/api/admin/ai-spend` | missing |
+  | `/admin/console` | `/api/admin/console` | missing |
+  | `/admin/problems` | `/api/admin/problem-reports` | missing |
+  | `/admin/security` | `/api/admin/security` | missing |
+
+  Each new one needs a row in the Admin group of `(tabs)/more.tsx` or it is dead
+  code that typechecks, and owner-only routes need `access?.owner` on the row or
+  the row is a door onto "not found". Both are held by
+  [`admin-console-parity.test.ts`](../../test/unit/admin-console-parity.test.ts),
+  along with the response shape — the phone cannot import the server's types, so
+  every interface on it is a copy, and a copy drifts.
+
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.
 - [x] **`LiveDot` and `Glance`** — built 2026-10-01

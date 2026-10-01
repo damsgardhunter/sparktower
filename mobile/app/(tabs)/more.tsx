@@ -153,6 +153,12 @@ export default function More() {
             <MenuRow icon="cash" title="Backing review" subtitle="Campaigns waiting on a decision and payouts" tint={colors.warning} onPress={() => go("/admin/backing")} />
             <MenuRow icon="toggle" title="Surfaces" subtitle="Kill switches for each feature area" tint={colors.textSecondary} onPress={() => go("/admin/surfaces")} />
             {access?.owner && <MenuRow icon="analytics" title="Analytics" subtitle="Visits, signups and what people do" tint={colors.novaPurple} onPress={() => go("/admin/analytics")} />}
+            {/*
+              * Owner-only, like Analytics and for the same reason: the route
+              * answers 404 to anybody else, so showing the row to a reviewer
+              * would be offering a door that opens onto "not found".
+              */}
+            {access?.owner && <MenuRow icon="wallet" title="Revenue" subtitle="Collected, owed, and what's actually ours" tint={colors.success} onPress={() => go("/admin/revenue")} testID="more-revenue" />}
           </Group>
         )}
 
