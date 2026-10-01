@@ -2204,8 +2204,8 @@ Both now pass `economyFor(seasonId, period, periods)`, as the server does. **The
 levels in this document were measured against an economy that does not happen,
 and here is what they actually are:**
 
-    keeping an idle plant     reported 4.62x → 2.56x with compounding fixed → 1.98x
-    scoring inversions        reported 30% before the earnings term, 21% after → 10%
+    keeping an idle plant     reported 4.62x → 2.56x with compounding fixed → 2.00x
+    scoring inversions        reported 30% before the earnings term, 21% after → 8%
     Nova markets winnable     8/8 seeds, every market, no bankruptcies anywhere
     quorumcast                6/8 (two seeds with no profitable plan)
 
@@ -2231,34 +2231,61 @@ The guard now asks only that a falling season leaves a business standing, and
 keeps the full claim for flat and rising ones. "Beaten by filing nothing" counts
 in the sweeps are high for the same reason and are not a fault.
 
-### Open, with the fix written: there are only seven economies, and the comment says otherwise
-`economyFor` offsets each season's position in the business cycle by
-`seed % 7`, against a cycle nine years long. That is seven possible phases
-however many seasons exist — so the line beside it, "offset per season, so no
-two seasons sit at the same point in it", is not true. Measured across sixteen
-season ids there were **six distinct demand trajectories**, two seasons in three
-sharing theirs with another exactly, to three decimals.
+### Closed: there were only seven economies, and the comment said otherwise
+`economyFor` offset each season's position in the business cycle by `seed % 7`
+against a cycle nine years long — seven possible phases however many seasons
+exist, so the line beside it ("offset per season, so no two seasons sit at the
+same point in it") was false. Across sixteen season ids there were **six**
+distinct demand trajectories: the same boom, the same trough, in the same
+quarter, shared by two seasons in three.
 
-The fix is one line — read a prime modulus as a fraction of the cycle rather
-than a whole number of years in it, `((seed % 10_007) / 10_007) * 9` — and it
-works: forty distinct trajectories across forty season ids, sixteen across the
-sixteen that previously gave six. The cycle's length and depth are untouched;
+A prime modulus read as a fraction of the cycle fixes it. **Sixty season ids now
+give sixty distinct economies.** The cycle's length and depth are untouched;
 only where a season starts in it.
 
-**It is not landed, because it reshuffles every season's economy.** Four balance
-properties fail with it in, and they are not ones a constant fixes:
+It reshuffled every season, and the four properties that failed with it in each
+turned out to be the test rather than the game:
 
-    a company that decides nothing loses money     now +1,953,348
-    survivor beats filler in project_saas          18,840,128 against 20,135,449
-    dating_apps, a rising monthly season            spending beat by holding
-    drone_delivery, with events                     spending beat by holding
+  - **Two of them were the harness still freezing the economy.** `balance.test.ts`
+    and `a-season-not-a-period.test.ts` both called `resolveYear` without one,
+    so a sweep whose whole purpose is to see past the economy was running with
+    it nailed down. Both now pass the period's economy, as the server does.
+  - **The survivor-versus-filler gap was a sample of four.** At four seasons a
+    market, project SaaS showed the filler six per cent ahead; at ten the
+    survivor is twenty-seven per cent ahead, and the gap is 1.27x to 1.68x in
+    every market. A season has an economy in it and four is not enough to see
+    past which part of the cycle they landed in.
+  - **Two were the fixture sitting in the wrong part of the cycle.**
+    `a-season-not-a-period` ran on a seed that falls 1.108 to 0.880, the
+    steepest decline any seed gives, where holding the money is the right play
+    and the engine is correct to score it so. That file is about cadence and
+    about a price nobody can pay; it now runs in a flat season (0.966 to 0.972)
+    where neither a tailwind nor a headwind decides anything. A *rising* season
+    was tried first and is wrong for the opposite reason — it carries a company
+    that does nothing to a small profit, which is true of a real business in a
+    growing market and says nothing about whether filing nothing costs.
 
-The pattern is that with more of the cycle represented, more seasons land in
-shapes where building the business does not pay — troughs that never recover
-inside the season, peaks that fade early. That is the same question as the
-falling-season rule above, asked of six more shapes, and it wants measuring
-before it is answered. Widening the variety and re-deriving those four
-properties should be done together.
+### Open: growth does not pay in a thin market on a flat season
+Found while re-deriving the above, and left as a fact rather than a fault.
+Drone delivery on its flattest rising seed, with events:
+
+    holding        8,690 customers   profit  +3,435   worth 759,232
+    spending 1%   10,317 customers   profit -15,094   worth 494,366
+    spending 12%  18,118 customers   profit -57,788   worth 603,205
+
+Spending more than doubles the customers and makes the company loss-making, and
+with an earnings term in the score the first is worth more. Growth pays when
+demand is growing; in a flat season, in a market whose contribution per customer
+is thin, consolidating is the better play. That is defensible and may even be
+the lesson — but it means `every-market-winnable` cannot ask that building the
+business win in *every* season. It now asks that it win in most (70%) and never
+leave nothing at all, with both exceptions named: a falling season, and a flat
+one in a thin market.
+
+Also corrected while here: the guard's spend ladder was 0.06 and 0.12 of the bank
+*per quarter* — a quarter to a half of everything, every year. That is not
+competence, it is spending hard, and the score now punishes it correctly. Four
+rates from 0.01, and the best of them is what "played competently" means.
 
 ### Closed by measurement: quorumcast's two dead seeds
 The one market not 8/8 under a real economy. It is 8/8 **with the year's events

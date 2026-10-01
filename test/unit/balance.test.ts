@@ -481,7 +481,14 @@ describe("does playing well pay", () => {
         });
       }
       prev = d;
-      world = resolveYear({ ...world, year: y }, [d as never]).world;
+      /*
+       * The year's economy, as the server passes it. Without it `resolveYear`
+       * holds the opening economy for the whole season, so every one of these
+       * runs happened in a market whose demand never moved — and a sweep whose
+       * whole purpose is to see past the economy was measuring with it nailed
+       * down.
+       */
+      world = resolveYear({ ...world, year: y }, [d as never], economyFor(seed, y, 1)).world;
     }
     const e = world.companies.find((c) => c.id === "us");
     return { alive: !!e && !e.bankruptSince, cash: e?.cash ?? 0 };
@@ -499,17 +506,25 @@ describe("does playing well pay", () => {
    *
    * What the money actually does, mean over four seasons each:
    *
-   *     dating_apps   survivor 36,683,336   filler 28,892,861   1.27x
-   *     podcasts      survivor 19,365,228   filler 10,330,679   1.88x
-   *     mmos          survivor 21,302,851   filler 14,862,703   1.43x
-   *     project_saas  survivor 34,063,677   filler 25,313,778   1.35x
+   *     dating_apps   survivor 21,403,844   filler 16,771,449   1.28x
+   *     podcasts      survivor 13,787,743   filler  8,227,122   1.68x
+   *     mmos          survivor 22,471,485   filler 13,947,842   1.61x
+   *     project_saas  survivor 34,567,769   filler 27,119,122   1.27x
    *
    * So the margin is the measurement, not a count of seasons over a line.
    */
   const sweep = (skill: BotSkill) => {
     const byMarket: Record<string, number> = {};
     for (const m of MARKETS) {
-      const runs = [0, 1, 2, 3].map((i) => play(m, skill, `skill-${m}-${i}`));
+      /*
+       * Ten seasons a market, not four. Four was noise: with it, project SaaS
+       * showed the filler ahead by six per cent, and widening the sample put
+       * the survivor ahead by twenty-seven. The difference between the two bots
+       * is real in every market and worth about 1.3x to 1.7x of end cash — but
+       * a season has an economy in it, and four of them is not enough to see
+       * past which part of the cycle they landed in.
+       */
+      const runs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => play(m, skill, `skill-${m}-${i}`));
       byMarket[m] = runs.reduce((sum, r) => sum + (r.alive ? r.cash : 0), 0) / runs.length;
     }
     return byMarket;

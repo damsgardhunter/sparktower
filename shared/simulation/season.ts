@@ -127,7 +127,23 @@ export function economyFor(seasonId: string, period: number, periods = 1): {
    * monthly one in nine months, which is not a business cycle, it is weather.
    */
   const year = (period - 1) / Math.max(1, periods) + 1;
-  const phase = (year + (seed % 7)) * ((Math.PI * 2) / 9);
+  /*
+   * The offset is a position in the cycle, not a whole number of years into it.
+   *
+   * It was `seed % 7` against a nine-year cycle, which gives seven possible
+   * phases however many seasons there are — so the line above claiming "no two
+   * seasons sit at the same point in it" was not true. Measured across sixteen
+   * season ids there were **six** distinct demand trajectories, two seasons in
+   * three sharing theirs with another exactly, to three decimals: the same
+   * boom, the same trough, in the same quarter.
+   *
+   * A prime modulus read as a fraction of the cycle gives a continuous offset,
+   * so forty season ids produce forty trajectories and two seasons coinciding
+   * is a coincidence rather than a certainty. The cycle's length and depth are
+   * unchanged — only where a given season starts in it.
+   */
+  const offset = ((seed % 10_007) / 10_007) * 9;
+  const phase = (year + offset) * ((Math.PI * 2) / 9);
   const wave = Math.sin(phase);
   const nextWave = Math.sin(phase + (Math.PI * 2) / 9);
 
