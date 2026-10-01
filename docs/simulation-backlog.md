@@ -2157,6 +2157,56 @@ money stays. Overstating what a year might cost is the safe side of a meter
 that exists to stop a company filing a year it cannot pay for, so both the web
 and the phone count it that way — but it is a choice, not an oversight.
 
+## The measurements themselves, 30 Sept 2026
+
+### Open, and it comes before everything else: the harness has been feeding the engine the wrong economy
+`resolveYear(world, decisions, economy, options)` takes the year's economy. Left
+undefined it falls back to `world.economy`, and that is not a safe default:
+
+  - `world.economy` is the economy **as stored after the last period**, which
+    already carries that period's weather. `resolveYear` then applies the new
+    weather on top of it, so a market event's multiplier is re-applied for every
+    period it stays in force. A twelve per cent freight shock becomes 1.12^12
+    across a monthly year: unit cost went from 6 to **25.79** by year two, the
+    company was serving customers at four times what they paid, and it went
+    bankrupt. Quarterly it is 1.12^4, which is milder and equally wrong.
+  - With events off it is a different error and just as bad — the year-one
+    economy is frozen and repeated for the whole season, so demand never moves.
+
+The server never hits either, because `tickSeason` passes
+`economyFor(seasonId, period, periods)` every time. **Every sweep in this
+document taken from a scratch harness did**, and so does
+`every-market-winnable.test.ts`.
+
+That matters for what is written above. It does not invalidate the defects —
+those were found by comparing two runs under identical conditions, and a
+mistake present in both does not create a 29x recall or a market seated above
+its own demand. It does cast doubt on the *levels*: how often a market is
+winnable, how much the plant is worth, where filing nothing ranks.
+
+Passing a fresh economy, as the server does, immediately fails five cases that
+pass today, in markets and cadences that had looked settled. That is the real
+state and it should be fixed before any further balance conclusions are drawn
+from this harness.
+
+Two things to do, in order. Make the default safe — either store the unweathered
+base on the world so `resolveYear` can rebuild rather than re-apply, or require
+the economy and let the type system find the callers. Then re-run the sweeps
+with it and re-derive the levels.
+
+### Withdrawn pending that: the monthly season length
+A monthly season was going to go from two simulated years to four, with the
+real-time tick halved so forty-eight decisions still take the twenty-four days
+twenty-four used to. The measurement behind it — building the business is worth
+1.00x at two years and 1.49x at four — was taken through the harness described
+above, with a frozen economy. It is not evidence yet.
+
+The shape of the finding survives: two years is flat, four is not, and it is
+time in market rather than the rhythm, since a quarterly season cut to two
+years is just as flat and shortening the lags moves nothing at any speed. What
+does not survive is the confidence to change a product default on it. Re-measure
+with a real economy first.
+
 ## Whether a market can be entered at all
 
 ### Closed: rivals held more of a market than it was written with
