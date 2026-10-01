@@ -27,6 +27,8 @@ const SCRIPTS = [
    */
   "script/reputation-gap.ts",
   "script/seed-max-reputation.ts",
+  /* And this one imports the seeder for `assertIsCreator`, which is the guard being relied on. */
+  "script/seed-demo-social.ts",
 ];
 
 describe("command-line scripts", () => {

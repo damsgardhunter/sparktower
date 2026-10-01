@@ -1,5 +1,15 @@
 /**
- * Drives one account to 100 in every pillar of the builder index.
+ * Drives the creator's account to 100 in every pillar of the builder index.
+ *
+ * ## Who it will do this for
+ *
+ * One account: the creator's. Not "an admin", and not whoever is named on the
+ * command line — see `assertIsCreator`. A fabricated 100 is the strongest claim
+ * the product can make about a person, it feeds the public profile, the
+ * leaderboard and co-founder matching, and the moment a second account can be
+ * given one the score stops meaning anything for everybody. The creator's own
+ * profile is a different case, because nobody is deceived about who owns the
+ * platform they are looking at.
  *
  * ## What this is for
  *
@@ -66,6 +76,46 @@ function assertLocal(url: string): void {
   );
 }
 
+/**
+ * The creator: the earliest-created account holding `platform_role = 'admin'`.
+ *
+ * Deliberately not "any admin". Admin is a role the platform can hand out —
+ * support, moderation, a reviewer — and every one of those grants would
+ * otherwise become a licence to mint a perfect reputation. Who founded the
+ * platform cannot be granted retroactively, so the earliest admin is a fact
+ * about history rather than a permission anybody can be given, and a later
+ * grant can never displace it.
+ *
+ * Returns null rather than throwing when there is no admin at all, so the
+ * caller fails closed with something explanatory.
+ */
+export async function creatorId(): Promise<string | null> {
+  const row = await one(sql`
+    select id from users
+    where platform_role = 'admin' and deleted_at is null
+    order by created_at asc, id asc
+    limit 1`);
+  return row.id ? String(row.id) : null;
+}
+
+/** Throws unless `targetId` is that account. The whole point of the script having a target at all. */
+export async function assertIsCreator(targetId: string): Promise<void> {
+  const creator = await creatorId();
+  if (!creator) {
+    throw new Error(
+      "No admin account exists on this database, so there is no creator to seed.\n"
+      + "This script will only ever raise the creator's own score.",
+    );
+  }
+  if (creator !== targetId) {
+    throw new Error(
+      "Refusing: this script only seeds the creator's own account.\n"
+      + "A fabricated 100 on anybody else's profile is a claim about a real person "
+      + "that the leaderboard and co-founder matching will repeat as fact.",
+    );
+  }
+}
+
 /** Every step is "how short are we, and what fixes it" — which is what makes a second run a no-op. */
 interface Step {
   what: string;
@@ -103,6 +153,8 @@ async function main(): Promise<number> {
     return 1;
   }
   const me = user.id;
+  /* Before the dry run, not just before `--apply`: the plan itself is a recipe. */
+  await assertIsCreator(me);
 
   const before = reputationFrom(await gather(me));
   console.log(`\n${user.email} (@${user.username ?? "—"}) — index ${before.builderIndex} `
