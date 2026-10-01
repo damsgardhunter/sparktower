@@ -2265,22 +2265,30 @@ turned out to be the test rather than the game:
     that does nothing to a small profit, which is true of a real business in a
     growing market and says nothing about whether filing nothing costs.
 
-### Open: growth does not pay in a thin market on a flat season
-Found while re-deriving the above, and left as a fact rather than a fault.
-Drone delivery on its flattest rising seed, with events:
+### Withdrawn: growth does pay, and the one case where it does not is a windfall
+Recorded as a fact about thin-margin markets. It was neither thin margins nor a
+flat season. On genuinely flat seasons — seeds whose demand moves by half a
+point across sixteen quarters — spending the most on offer is the best play in
+**every** market, and by a lot:
 
-    holding        8,690 customers   profit  +3,435   worth 759,232
-    spending 1%   10,317 customers   profit -15,094   worth 494,366
-    spending 12%  18,118 customers   profit -57,788   worth 603,205
+    dating_apps 7.4x   drone_delivery 37.7x   podcasts 43.1x   restaurant_chain 3.3x
+    construction 29.1x   project_saas 5.2x   mmos 63.6x
 
-Spending more than doubles the customers and makes the company loss-making, and
-with an earnings term in the score the first is worth more. Growth pays when
-demand is growing; in a flat season, in a market whose contribution per customer
-is thin, consolidating is the better play. That is defensible and may even be
-the lesson — but it means `every-market-winnable` cannot ask that building the
-business win in *every* season. It now asks that it win in most (70%) and never
-leave nothing at all, with both exceptions named: a falling season, and a flat
-one in a thin market.
+The case that looked broken was drone delivery on one seed, and the cause is the
+year's events. With them off, spending beats holding 2.2x there, as everywhere.
+With them on, the *holding* company's value rises from 65,286 to 759,232,
+because that seed draws "the category is suddenly fashionable" twice and its
+customers go from 2,232 to 8,690.
+
+The windfall multiplies both companies by about 3.9x — it does not favour the
+idle one. What it does is make the money the other one spent redundant: the
+growth it bought arrived free. So in a season with a large positive demand
+event, spending on growth is waste, and holding wins. That is a defensible
+lesson rather than a fault, and it is only visible at all because events are
+always on in play.
+
+Worth keeping for the next person: measuring anything about "does playing well
+pay" on a single seed will find the events on that seed, not the property.
 
 Also corrected while here: the guard's spend ladder was 0.06 and 0.12 of the bank
 *per quarter* — a quarter to a half of everything, every year. That is not
