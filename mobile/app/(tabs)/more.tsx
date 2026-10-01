@@ -159,6 +159,9 @@ export default function More() {
               * would be offering a door that opens onto "not found".
               */}
             {access?.owner && <MenuRow icon="wallet" title="Revenue" subtitle="Collected, owed, and what's actually ours" tint={colors.success} onPress={() => go("/admin/revenue")} testID="more-revenue" />}
+            {access?.owner && <MenuRow icon="flash" title="AI spend" subtitle="What the model costs, and against what brake" tint={colors.novaEmerald} onPress={() => go("/admin/ai-spend")} testID="more-ai-spend" />}
+            {/* requireAdmin, not requireOwner — a reviewer may look somebody up. */}
+            <MenuRow icon="search" title="Support console" subtitle="Look somebody up, and what was done to them" tint={colors.info} onPress={() => go("/admin/console")} testID="more-console" />
           </Group>
         )}
 

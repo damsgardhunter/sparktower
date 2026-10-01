@@ -91,10 +91,35 @@ What each claim turned out to be, with where the evidence is:
   | Web screen | Route the phone never calls | State |
   |---|---|---|
   | `/admin/revenue` | — | **done** 2026-10-01 |
-  | `/admin/ai-spend` | `/api/admin/ai-spend` | missing |
-  | `/admin/console` | `/api/admin/console` | missing |
+  | `/admin/ai-spend` | — | **done** 2026-10-01 |
+  | `/admin/console` | — | **lookup done** 2026-10-01; acting is not on the phone |
   | `/admin/problems` | `/api/admin/problem-reports` | missing |
   | `/admin/security` | `/api/admin/security` | missing |
+
+  **AI spend** is built around the four questions `server/ai-spend-routes.ts`
+  says a launch day asks — today against the brake, which parts are dear, who is
+  spending it and had they paid, and whether the caching is working — rather
+  than as a port of the web's charts. A phone is where somebody looks during a
+  launch when they are not at a desk. Changing the cap and the cost per credit
+  stays on the web, because the live re-costed pricing ladder is the point of
+  that control and does not fit; reading the cap is the urgent half and it is
+  here.
+
+  **The support console** looks people up and shows what has already been done
+  to them, which is the half a phone is for: somebody writes in, you are not at
+  a desk. It does not act. `/api/admin/console/actions` reports
+  `maxGrantCents`, `maxGrantPerDayCents` and `grantedTodayCents`, so acting
+  includes putting money on a balance, capped per operator per day — and a
+  mis-tap on a phone is a different accident from a mis-click at a desk. A grant
+  is recoverable only in the sense that money can be taken off a balance after
+  somebody has seen it.
+
+- [ ] **Acting from the support console**: suspend, restore, grant credit,
+  issue a day pass. Wanted eventually, and wants its own change: a confirmation
+  that names the person and the amount, the per-operator daily remainder shown
+  before the field rather than after the refusal, and the reason the server
+  already requires. The test pairs the two halves, so if the actions arrive the
+  line telling people they are elsewhere fails until it goes.
 
   Each new one needs a row in the Admin group of `(tabs)/more.tsx` or it is dead
   code that typechecks, and owner-only routes need `access?.owner` on the row or
