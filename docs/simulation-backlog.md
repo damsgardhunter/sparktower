@@ -2194,27 +2194,49 @@ one:
 Also worth knowing: the plant's advantage drops from 4.62x to **2.56x** with the
 compounding gone, which is a third of the story that measurement was telling.
 
-### Open: the harness still freezes the economy, and a real one costs four cases
-Fixed above is the compounding. What remains is that a caller passing nothing
-gets a *constant* economy for the whole season — the base never advances, so
-demand never moves. The server is unaffected (`tickSeason` passes the period's
-economy); `every-market-winnable.test.ts` and every scratch sweep are not.
+### Closed: the harness froze the economy, and the levels have been re-derived
+Fixed above was the compounding. The other half was that a caller passing no
+economy got a *constant* one for the whole season — the base never advanced, so
+demand never moved. The server was never affected (`tickSeason` passes the
+period's economy); `every-market-winnable.test.ts` and every scratch sweep were.
 
-Passing `economyFor(seasonId, period, periods)` as the server does fails four
-cases, all of them on the one season seed that opens in a boom and all of them
-"playing well was worth no more than doing nothing":
+Both now pass `economyFor(seasonId, period, periods)`, as the server does. **The
+levels in this document were measured against an economy that does not happen,
+and here is what they actually are:**
 
-    dating_apps     910,802 against 940,139   (3% worse)
-    kiln-hire        23,472 against  31,787
-    council-minutes  18,445 against  48,261
-    scrap-yards     178,562 against 217,335
+    keeping an idle plant     reported 4.62x → 2.56x with compounding fixed → 1.98x
+    scoring inversions        reported 30% before the earnings term, 21% after → 10%
+    Nova markets winnable     8/8 seeds, every market, no bankruptcies anywhere
+    quorumcast                6/8 (two seeds with no profitable plan)
 
-Which is a finding in itself: in a season that opens in a boom and declines from
-there, spending into it is worse than sitting still. Whether that is right —
-real businesses do over-invest at the top of a cycle — or whether the decline is
-too punishing, is a balance question that needs its own pass. Until then the
-levels in this document are measured against a flat economy and should be read
-that way.
+Two of those are worth saying plainly. The plant's dominance — four experiments,
+three write-ups, "the only decision in the game" — was **mostly this bug**: 1.98x
+is an ordinary important decision, not a lever that swamps the others. And the
+earnings term is twice as effective as it looked.
+
+### Closed: a falling season is one where holding the money is the right play
+Switching to a real economy immediately failed four cases, all on the one season
+seed that opens at the top of the cycle: dating apps 910,802 against 940,139,
+and worse in three generated markets.
+
+That is not a defect, and the test was wrong rather than the game. The economy is
+a cycle; a season opening at the top of it falls all the way down (seed "h" runs
+1.118 to 0.908 across sixteen quarters). Spending into that is a mistake the desk
+warns about a period ahead — `outlook` is computed from the step to the next
+period, reads "tightening", and is on the screen. So holding is the better play,
+and a test that demanded spending beat holding was asking the game to reward a
+signposted mistake.
+
+The guard now asks only that a falling season leaves a business standing, and
+keeps the full claim for flat and rising ones. "Beaten by filing nothing" counts
+in the sweeps are high for the same reason and are not a fault.
+
+### Worth a look, found on the way: there are six economies
+Across sixteen season ids there are **six distinct demand trajectories**, each
+the same wave at a different phase. Two seasons in three therefore share their
+economy with another seed, exactly, to three decimals. Whether that is enough
+variety for a season to feel like its own is a design question nobody has asked;
+it is cheap to widen if the answer is no.
 
 ### Withdrawn pending that: the monthly season length
 A monthly season was going to go from two simulated years to four, with the

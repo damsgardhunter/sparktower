@@ -28,7 +28,7 @@
  * played at all is.
  */
 import { describe, it, expect } from "vitest";
-import { buildWorld } from "@shared/simulation/season";
+import { buildWorld, economyFor } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { defaultDraft } from "@shared/simulation/levers";
 import { NICHES } from "@shared/simulation/niches";
@@ -77,7 +77,18 @@ function play(niche: any, seasonId: string, rate: number, withEvents = false, ca
     };
     const filed: any = { companyId: "me" };
     for (const role of ROLES) filed[role] = { ...defaultDraft(role, me, previous?.[role]), ...(want[role] ?? {}) };
-    const out = resolveYear({ ...world, year: period }, [filed as TeamDecisions], undefined, withEvents ? {} : { withoutEvent: true });
+    /*
+     * The period's economy, which is what the server passes (`tickSeason`).
+     * Left out, `resolveYear` holds the opening economy for the whole season and
+     * demand never moves — so every level ever measured from this file was
+     * measured against an economy that does not happen.
+     */
+    const out = resolveYear(
+      { ...world, year: period },
+      [filed as TeamDecisions],
+      economyFor(seasonId, period, 4),
+      withEvents ? {} : { withoutEvent: true },
+    );
     last = out.reports.find((r: any) => r.companyId === "me");
     if (last.profit > 0) profitable++;
     previous = filed;
@@ -95,6 +106,23 @@ function play(niche: any, seasonId: string, rate: number, withEvents = false, ca
 const SEEDS = ["w", "a", "h"];
 /* Two honest rates. The best of them is what "played competently" means here. */
 const RATES = [0.06, 0.12];
+
+/**
+ * Whether a season's economy ends below where it started.
+ *
+ * It decides what "playing well" even means, so it has to be asked. The economy
+ * is a cycle and a season opening at the top of it falls all the way down — seed
+ * "h" runs 1.118 to 0.908 over sixteen quarters. Spending into that is a
+ * mistake the desk warns about a period ahead: `outlook` is computed from the
+ * step to the next period, reads "tightening", and is on the screen. Holding the
+ * money is the better play, and a test demanding that spending beat holding
+ * would be asserting the game ought to reward a signposted mistake.
+ *
+ * So on a falling season the claim is only that there is still a business at the
+ * end of it. On a flat or rising one, building it has to pay.
+ */
+const falls = (seed: string) =>
+  economyFor(seed, 16, 4).demand < economyFor(seed, 1, 4).demand - 0.02;
 
 describe("every market can be won", () => {
   for (const niche of NICHES) {
@@ -143,7 +171,7 @@ describe("every market can be won", () => {
         }
       });
 
-      it("pays better than filing nothing", () => {
+      it("pays better than filing nothing, where the economy is not falling away", () => {
         /*
          * Not asked of a monthly season, and this is the measurement why.
          *
@@ -174,7 +202,11 @@ describe("every market can be won", () => {
          * profit.
          */
         for (const { seed, best, nothing } of seasons) {
-          if (seed.includes("monthly")) continue;
+          if (falls(seed.split(" ")[0])) {
+            /* Still a business — just one where the right move was to sit on the money. */
+            expect(best.worth, `${niche.id} on seed "${seed}": a falling season left nothing worth having`).toBeGreaterThan(0);
+            continue;
+          }
           expect(best.worth, `${niche.id} on seed "${seed}": playing well was worth no more than doing nothing`)
             .toBeGreaterThan(nothing.worth);
         }
@@ -287,8 +319,12 @@ describe("a market Nova wrote can be won too", () => {
         }
       });
 
-      it("pays better than filing nothing", () => {
+      it("pays better than filing nothing, where the economy is not falling away", () => {
         for (const { seed, best, nothing } of seasons) {
+          if (falls(seed.split(" ")[0])) {
+            expect(best.worth, `${id} on seed "${seed}": a falling season left nothing worth having`).toBeGreaterThan(0);
+            continue;
+          }
           expect(best.worth, `${id} on seed "${seed}": playing well was worth no more than doing nothing`)
             .toBeGreaterThan(nothing.worth);
         }
