@@ -162,6 +162,16 @@ export default function More() {
             */}
           {on("companies") && (
             <MenuRow
+              icon="business"
+              title="Companies"
+              subtitle="The companies you act for, and what each can do"
+              tint={colors.primary}
+              onPress={() => go("/companies")}
+              testID="more-companies"
+            />
+          )}
+          {on("companies") && (
+            <MenuRow
               icon="people"
               title="Being scouted"
               subtitle="Whether companies can find you, and who has asked"

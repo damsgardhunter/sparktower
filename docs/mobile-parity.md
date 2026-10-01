@@ -151,7 +151,7 @@ What each claim turned out to be, with where the evidence is:
 
   | File | Routes | On the phone |
   |---|---|---|
-  | `company-routes.ts` | 14 | no — the company itself, members, invite links, audit |
+  | `company-routes.ts` | 14 | **2 of 14** — the list and one company, read-only, 2026-10-01 |
   | `challenge-routes.ts` | 12 | no — sponsored challenges, both sides |
   | `company-season-routes.ts` | 11 | no — private training seasons, simulation seats |
   | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |
@@ -170,10 +170,30 @@ What each claim turned out to be, with where the evidence is:
   defaults it off (`open: row?.open ?? false`) and nobody should be in a
   recruiting pool they did not opt into. Editing the role list is on the web.
 
-  The natural next slice is **viewing a company and its weekly rhythm** —
-  `GET /api/companies`, `GET /api/companies/:id`, `/api/projects/:id/rhythm` —
-  because everything else in the surface needs somewhere to live. Creating and
-  administering a company is a desk job and can stay one.
+  **Built second: the list and one company** (`app/companies.tsx`,
+  `app/company/[id].tsx`). Read-only on purpose. What a phone is for here is
+  knowing which companies you are in, who else is in them, and whether the one
+  you lead can actually do things yet — which is the verification state, and
+  `publicCompany` puts it on the wire precisely so a screen can say what is
+  missing. Creating a company, editing it, managing members and running a season
+  are forms with consequences and stay on the web.
+
+  The company page reads `me.powers` rather than working the permissions out
+  itself, because two implementations of a permission rule is one implementation
+  and one bug — the server's own comment says it is computed there "so every tab
+  reads one answer instead of restating the rule".
+
+- [ ] **The weekly rhythm** — `/api/projects/:id/rhythm` and its six siblings:
+  the check-in, the recurring jobs, the monthly report. The phone calls none of
+  them, which the family-level survey above *missed*, because these live under
+  `/api/projects` rather than `/api/companies` and that family is touched. A
+  reminder that "the phone never calls this family" finds whole absences and not
+  partial ones.
+
+  It is the best next slice and probably the most useful thing left on the phone:
+  a weekly check-in is a recurring task somebody does away from a desk, and it
+  needs no company page to reach it — the rhythm belongs to a *project* on the
+  Run path, so it hangs off `app/project/[id].tsx`, which already exists.
 
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.

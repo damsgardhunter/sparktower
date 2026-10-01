@@ -340,3 +340,63 @@ describe("being scouted, on the phone", () => {
     expect(more, "the row should sit behind the companies surface").toMatch(/on\("companies"\)/);
   });
 });
+
+/**
+ * Companies on the phone: the list, and one company.
+ *
+ * `GET /api/companies/:id` carries a comment calling its shape the one "every
+ * tab relies on", and the part that matters most is `me.powers` — what this
+ * person may do, worked out on the server "so every tab reads one answer
+ * instead of restating the rule". The phone has to read that answer rather than
+ * derive its own, because two implementations of a permission rule is one
+ * implementation and one bug.
+ */
+describe("companies on the phone", () => {
+  const list = read("mobile/app/companies.tsx");
+  const detail = read("mobile/app/company/[id].tsx");
+  const routes = read("server/company-routes.ts");
+
+  it("reads the list and one company", () => {
+    expect(list).toMatch(/"\/api\/companies"/);
+    expect(detail).toMatch(/\/api\/companies\/\$\{[^}]*\}/);
+  });
+
+  /*
+   * `publicCompany` is what both screens are given. Every field it puts on the
+   * wire should be read by one of them or the shape is bigger than the need —
+   * and `verifiedDomain`/`verifiedAt` especially, since the server's comment
+   * says they are there so a screen can explain why a company cannot post
+   * challenges.
+   */
+  it("reads the verification the server deliberately puts on the wire", () => {
+    const shape = /const publicCompany[\s\S]*?\n\}\);/.exec(routes);
+    expect(shape, "publicCompany changed shape").toBeTruthy();
+    for (const field of ["verifiedDomain", "verifiedAt", "verifiedMethod"]) {
+      expect(shape![0], `${field} should still be on the wire`).toContain(field);
+      expect(
+        new RegExp(`\\.${field}\\b`).test(list + detail),
+        `the server sends ${field} so a screen can explain what is missing; neither screen reads it`,
+      ).toBe(true);
+    }
+  });
+
+  /*
+   * The permission rule, read rather than reimplemented. A phone that worked
+   * out its own answer would be a second rule to keep in step.
+   */
+  it("asks the server what the viewer may do", () => {
+    expect(detail, "it should read me.powers").toMatch(/me\.powers/);
+    expect(detail, "and say that is where the answer comes from").toMatch(/one answer instead of restating/);
+  });
+
+  it("does not change a company from the phone", () => {
+    const writes = /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(list + detail);
+    expect(writes, "members, seasons and challenges are forms with consequences; they are on the web").toBe(false);
+    expect(list + detail, "and the screens have to say so").toMatch(/on the web/);
+  });
+
+  it("is reachable, behind the companies switch", () => {
+    expect(more, "nothing in the More tab opens /companies").toMatch(/go\("\/companies"\)/);
+    expect(more).toMatch(/on\("companies"\)/);
+  });
+});
