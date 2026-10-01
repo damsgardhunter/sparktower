@@ -6,6 +6,7 @@
  * on the browse list. Your own projects add where Nova's path stands.
  */
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { NovaRing } from "./nova/NovaRing";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Icon, Meta, Progress, Row } from "./ui";
 import { ProjectLogo } from "./ProjectBits";
@@ -33,7 +34,17 @@ export function ProjectCard({ project, onPress, follow, update, path, onContinue
   const active = project.status === "active";
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [s.card, pressed && { backgroundColor: "#FAFAFA" }]} testID={`card-project-${project.id}`}>
+    /*
+     * The soft Nova ring, as `client/src/components/project-card.tsx` wears it
+     * (`nova-ring-soft`). The web also carries `nova-hover-glow`, which has no
+     * meaning on a touch screen and is left off rather than approximated.
+     *
+     * The ring takes the margin and the radius the card used to carry, so the
+     * card neither moves nor changes shape by gaining one, and it replaces the
+     * hairline border rather than sitting outside it.
+     */
+    <NovaRing strength="soft" radius={radius.md} style={s.ring}>
+      <Pressable onPress={onPress} style={({ pressed }) => [s.card, pressed && s.pressed]} testID={`card-project-${project.id}`}>
       <Row gap={spacing.md} center>
         <ProjectLogo title={project.title} uri={project.logoUrl} size={40} />
         <Row center gap={6} style={{ flex: 1 }}>
@@ -99,7 +110,8 @@ export function ProjectCard({ project, onPress, follow, update, path, onContinue
       ) : null}
 
       {follow ? <View style={{ alignSelf: "flex-start" }}>{follow}</View> : null}
-    </Pressable>
+      </Pressable>
+    </NovaRing>
   );
 }
 
@@ -112,10 +124,17 @@ function Badge({ label, bg, fg }: { label: string; bg: string; fg: string }) {
 }
 
 const s = StyleSheet.create({
+  /* The ring carries what the border and the margin used to. */
+  ring: { marginHorizontal: spacing.sm },
   card: {
-    backgroundColor: colors.surface, marginHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md + 2, gap: spacing.md,
   },
+  /*
+   * The pressed wash was `#FAFAFA`, a light-mode value that flashed near-white
+   * on a dark card. `surfaceRaised` is the theme's own one step up from the
+   * card, so it reads as a press in either scheme.
+   */
+  pressed: { backgroundColor: colors.surfaceRaised },
   title: { flexShrink: 1, fontSize: font.lg + 1, fontFamily: fontFamily.bold, color: colors.text },
   desc: { fontSize: font.sm + 1, lineHeight: 20, minHeight: 40, color: colors.textSecondary, fontFamily: fontFamily.regular },
   outline: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },

@@ -25,6 +25,7 @@
  *     theme, held to the web's values by `nova-gradient-parity.test.ts`.
  */
 export { LiveDot } from "./LiveDot";
+export { NovaRing } from "./NovaRing";
 export { Glance, GlanceStat, GlanceAction } from "./Glance";
 export { NovaIntro } from "./NovaIntro";
 export { Working, type WorkingStage } from "../Working";

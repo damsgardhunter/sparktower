@@ -101,8 +101,9 @@ describe("the gradient the web and the phone both draw", () => {
     const alphas = soft.map((c) => /\/\s*([\d.]+)\s*\)/.exec(c)?.[1]);
     expect(alphas, "the web's soft ring is three translucent stops").toEqual(["0.45", "0.45", "0.45"]);
 
-    const box = read("mobile/src/components/feed/Box.tsx");
-    const phoneAlphas = [...box.matchAll(/rgba\(\s*[\d\s,]+?,\s*([\d.]+)\s*\)/g)].map((m) => m[1]);
+    /* The stops live in the ring itself; Box only asks for one. */
+    const ring = read("mobile/src/components/nova/NovaRing.tsx");
+    const phoneAlphas = [...ring.matchAll(/rgba\(\s*[\d\s,]+?,\s*([\d.]+)\s*\)/g)].map((m) => m[1]);
     expect(phoneAlphas.length, "the phone's soft ring is three translucent stops").toBeGreaterThanOrEqual(3);
     expect(new Set(phoneAlphas.slice(0, 3)), "the phone's soft ring is a different strength").toEqual(new Set(["0.45"]));
   });
@@ -124,4 +125,26 @@ describe("the Continue your path card", () => {
     const card = read("mobile/src/components/feed/ContinuePathCard.tsx");
     expect(card, "the phone's path card should take the ring Box offers").toMatch(/ring="(nova|soft)"/);
   });
+});
+
+/**
+ * The cards the web rings, rung on the phone too.
+ *
+ * The web uses `.nova-ring*` sixty-seven times; the phone had it nowhere. These
+ * are the pairs where the same card exists on both, so "the phone looks like the
+ * website" is checkable rather than a matter of opinion. The web also carries
+ * `nova-hover-glow` on these, which has no meaning on a touch screen and is
+ * deliberately not approximated.
+ */
+describe("cards that wear the ring on both", () => {
+  const pairs: { what: string; web: string; phone: string }[] = [
+    { what: "a project card", web: "client/src/components/project-card.tsx", phone: "mobile/src/components/ProjectCard.tsx" },
+  ];
+
+  for (const { what, web, phone } of pairs) {
+    it(`${what} is rung on the web and on the phone`, () => {
+      expect(read(web), `${web} no longer wears the ring — this pair needs rechecking`).toMatch(/nova-ring/);
+      expect(read(phone), `${phone} should wear the phone's ring`).toMatch(/NovaRing|ring="(nova|soft)"/);
+    });
+  }
 });
