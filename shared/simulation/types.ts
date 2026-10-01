@@ -688,6 +688,16 @@ export interface World {
   /** The macro climate — it moves on its own and nobody controls it. */
   economy: Economy;
   /**
+   * The same economy with no weather on it, which is what a market event's
+   * multipliers are applied to.
+   *
+   * `economy` is what everything reads and it already carries whatever weather
+   * is in force. Applying this period's weather to *that* re-applied the last
+   * period's as well, so an event compounded for every period it lasted. Absent
+   * on a world written before this existed, and `economy` is the fallback.
+   */
+  economyBase?: Economy;
+  /**
    * Niches companies have gone and found during this season.
    *
    * Stored on the world rather than on the market, because the market is

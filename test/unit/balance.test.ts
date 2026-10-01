@@ -487,23 +487,41 @@ describe("does playing well pay", () => {
     return { alive: !!e && !e.bankruptSince, cash: e?.cash ?? 0 };
   };
 
+  /**
+   * How much money a season of this skill ends with, market by market.
+   *
+   * It used to count seasons that finished above the £6m they started with, and
+   * that stopped measuring anything once `resolveYear` was given the right
+   * economy. A company here ends with £10m to £36m, so the threshold is
+   * saturated: both skills clear it together, four of four in dating apps and
+   * two of four in the rest, **identically**. The gap it used to report was the
+   * weather-compounding bug hurting the weaker bot more, not skill.
+   *
+   * What the money actually does, mean over four seasons each:
+   *
+   *     dating_apps   survivor 36,683,336   filler 28,892,861   1.27x
+   *     podcasts      survivor 19,365,228   filler 10,330,679   1.88x
+   *     mmos          survivor 21,302,851   filler 14,862,703   1.43x
+   *     project_saas  survivor 34,063,677   filler 25,313,778   1.35x
+   *
+   * So the margin is the measurement, not a count of seasons over a line.
+   */
   const sweep = (skill: BotSkill) => {
-    let richer = 0, runs = 0;
+    const byMarket: Record<string, number> = {};
     for (const m of MARKETS) {
-      for (let i = 0; i < 4; i++) {
-        const r = play(m, skill, `skill-${m}-${i}`);
-        runs++;
-        // Started on £6m: ending above it is the plainest test of a good season.
-        if (r.alive && r.cash > 6_000_000) richer++;
-      }
+      const runs = [0, 1, 2, 3].map((i) => play(m, skill, `skill-${m}-${i}`));
+      byMarket[m] = runs.reduce((sum, r) => sum + (r.alive ? r.cash : 0), 0) / runs.length;
     }
-    return richer / runs;
+    return byMarket;
   };
 
   it("pays a survivor better than a filler, and by a margin worth the name", () => {
     const good = sweep("survivor");
     const weak = sweep("filler");
-    // A real gap, not noise. Measured at ~13 points over 84 seasons a side.
-    expect(good).toBeGreaterThan(weak + 0.1);
+    /* In every market, not on average: an average lets one runaway carry three failures. */
+    for (const m of MARKETS) {
+      expect(good[m], `${m}: playing it well ended no richer than going through the motions`)
+        .toBeGreaterThan(weak[m] * 1.15);
+    }
   }, 120_000);
 });

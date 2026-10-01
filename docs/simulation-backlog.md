@@ -2159,40 +2159,62 @@ and the phone count it that way — but it is a choice, not an oversight.
 
 ## The measurements themselves, 30 Sept 2026
 
-### Open, and it comes before everything else: the harness has been feeding the engine the wrong economy
-`resolveYear(world, decisions, economy, options)` takes the year's economy. Left
-undefined it falls back to `world.economy`, and that is not a safe default:
+### Closed: an event's cost multiplier compounded for every period it lasted
+`world.economy` is the economy *after* last period's weather was applied, and
+`resolveYear` used it as the base to apply this period's weather to. So a market
+event was re-applied for every period it stayed in force. A twelve per cent
+freight shock became 1.12^12 across a monthly year: unit cost went from 6 to
+**25.79** by the second year, the company was serving customers at four times
+what they paid, and it went bankrupt. Quarterly it is 1.12^4 — milder and
+equally wrong.
 
-  - `world.economy` is the economy **as stored after the last period**, which
-    already carries that period's weather. `resolveYear` then applies the new
-    weather on top of it, so a market event's multiplier is re-applied for every
-    period it stays in force. A twelve per cent freight shock becomes 1.12^12
-    across a monthly year: unit cost went from 6 to **25.79** by year two, the
-    company was serving customers at four times what they paid, and it went
-    bankrupt. Quarterly it is 1.12^4, which is milder and equally wrong.
-  - With events off it is a different error and just as bad — the year-one
-    economy is frozen and repeated for the whole season, so demand never moves.
+The world now carries `economyBase`, the weather-free economy weather is applied
+*to*, and `economy` stays the weathered one everything reads. A caller that
+supplies an economy is still believed, which is what lets a test build a world
+with a chosen economy and have it respected.
 
-The server never hits either, because `tickSeason` passes
-`economyFor(seasonId, period, periods)` every time. **Every sweep in this
-document taken from a scratch harness did**, and so does
-`every-market-winnable.test.ts`.
+A first attempt derived the base instead — `economyFor(seasonId, year, periods)`
+whenever the caller passed nothing — and that was wrong in a way worth recording:
+it overrode the deliberate `{ demand: 1 }` worlds that a dozen tests build, and
+broke thirteen of them. The bug was never that the stored economy was the wrong
+*trajectory*; it was that weather was applied twice.
 
-That matters for what is written above. It does not invalidate the defects —
-those were found by comparing two runs under identical conditions, and a
-mistake present in both does not create a 29x recall or a market seated above
-its own demand. It does cast doubt on the *levels*: how often a market is
-winnable, how much the plant is worth, where filing nothing ranks.
+**What it moved.** The suite needed one real change: `balance.test.ts` counted
+seasons finishing above the £6m they started with, and that stops discriminating
+once the economy is right — a company ends with £10m to £36m, so both skills
+clear the line together, identically. The gap it used to report *was this bug*,
+hurting the weaker bot more. The margin is the measurement now, and it is a real
+one:
 
-Passing a fresh economy, as the server does, immediately fails five cases that
-pass today, in markets and cadences that had looked settled. That is the real
-state and it should be fixed before any further balance conclusions are drawn
-from this harness.
+    dating_apps   survivor 36,683,336   filler 28,892,861   1.27x
+    podcasts      survivor 19,365,228   filler 10,330,679   1.88x
+    mmos          survivor 21,302,851   filler 14,862,703   1.43x
+    project_saas  survivor 34,063,677   filler 25,313,778   1.35x
 
-Two things to do, in order. Make the default safe — either store the unweathered
-base on the world so `resolveYear` can rebuild rather than re-apply, or require
-the economy and let the type system find the callers. Then re-run the sweeps
-with it and re-derive the levels.
+Also worth knowing: the plant's advantage drops from 4.62x to **2.56x** with the
+compounding gone, which is a third of the story that measurement was telling.
+
+### Open: the harness still freezes the economy, and a real one costs four cases
+Fixed above is the compounding. What remains is that a caller passing nothing
+gets a *constant* economy for the whole season — the base never advances, so
+demand never moves. The server is unaffected (`tickSeason` passes the period's
+economy); `every-market-winnable.test.ts` and every scratch sweep are not.
+
+Passing `economyFor(seasonId, period, periods)` as the server does fails four
+cases, all of them on the one season seed that opens in a boom and all of them
+"playing well was worth no more than doing nothing":
+
+    dating_apps     910,802 against 940,139   (3% worse)
+    kiln-hire        23,472 against  31,787
+    council-minutes  18,445 against  48,261
+    scrap-yards     178,562 against 217,335
+
+Which is a finding in itself: in a season that opens in a boom and declines from
+there, spending into it is worse than sitting still. Whether that is right —
+real businesses do over-invest at the top of a cycle — or whether the decline is
+too punishing, is a balance question that needs its own pass. Until then the
+levels in this document are measured against a flat economy and should be read
+that way.
 
 ### Withdrawn pending that: the monthly season length
 A monthly season was going to go from two simulated years to four, with the

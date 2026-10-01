@@ -439,12 +439,33 @@ export function resolveYear(
    * they expire, because a funding winter drawn in the first quarter has to
    * last the year rather than the quarter.
    */
+  /*
+   * The economy this period starts from, which is not the one the world stored.
+   *
+   * `world.economy` is the economy *after* last period's weather was applied to
+   * it, so using it as the base applied the new weather on top of the old. A
+   * market event's multiplier was therefore re-applied for every period it
+   * stayed in force: a twelve per cent freight shock became 1.12^12 across a
+   * monthly year, unit cost went from 6 to 25.79 by the second year, and the
+   * company went bankrupt serving customers at four times what they paid.
+   *
+   * The server never hit it, because `tickSeason` passes the period's economy
+   * every time. Everything else did: every sweep behind
+   * `docs/simulation-backlog.md`, and `every-market-winnable.test.ts`.
+   *
+   * So the world now carries the weather-free economy it started from as well
+   * as the weathered one everything reads. The base is what weather is applied
+   * to, and it does not move unless a caller moves it — which is what lets a
+   * test build a world with a chosen economy and have that economy respected,
+   * and what stops a season inventing drift nobody asked for.
+   */
+  const baseEconomy = economy ?? world.economyBase ?? world.economy;
   const events = options.withoutEvent
     ? []
-    : eventsDue({ world, period: world.year, periods, economy: economy ?? world.economy });
+    : eventsDue({ world, period: world.year, periods, economy: baseEconomy });
   const weather = nextWeather(world.weather, events, world.year, periods);
   const event: MarketEvent | null = events[0] ?? null;
-  const nextEconomy = economyWithWeather(economy ?? world.economy, weather);
+  const nextEconomy = economyWithWeather(baseEconomy, weather);
   /*
    * Every number made a number before anything reads it. One bad field used to
    * be enough to turn an entire market's cash into NaN — see
@@ -547,7 +568,7 @@ export function resolveYear(
     if (company.kind !== "player") continue;
     const d = byCompany.get(company.id);
     if (!d) continue;
-    const funded = fundYear(company, d, niche, economy ?? world.economy);
+    const funded = fundYear(company, d, niche, baseEconomy);
     byCompany.set(company.id, funded.decisions);
     if (funded.notes.length) notesFor[company.id] = funded.notes;
   }
@@ -2365,6 +2386,8 @@ export function resolveYear(
       year: world.year + 1,
       companies: [...afterEvent, ...arrived],
       economy: nextEconomy,
+      /* Weather-free, so next period applies its weather to this rather than to itself. */
+      economyBase: baseEconomy,
       // What is still in force next period, so a year event drawn in the
       // first quarter is still cold weather in the fourth.
       ...(weather.length ? { weather } : {}),
