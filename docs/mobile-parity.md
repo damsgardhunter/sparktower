@@ -91,10 +91,15 @@ layout and by the hook that answers the spacing, with a test.
   `SeasonProgress` in `SimKit` — and a bare `ActivityIndicator` everywhere
   else. A phone `Working` reading the same stage lists is the piece that would
   pay for itself fastest: the waits are longer on a phone, not shorter.
-- [ ] **No error boundary.** The web now has one at two levels, and a render
-  throw on the phone still takes the screen out with no way back and no report.
-  `ErrorBoundary` is a class component with no DOM in it; the fallback needs
-  rewriting in React Native, the reporting does not.
+- [x] ~~**No error boundary.**~~ Done. Two levels, as on the web, through
+  expo-router's own convention: a layout that exports a component called
+  `ErrorBoundary` gets it wrapped around that segment, so a tab screen that throws
+  keeps the tab bar and one tap gets you somewhere that works, and the root layout
+  is the backstop for a throw in the shell. The fallback is shared between that
+  convention and the class (`ErrorScreen`), so there is one of it; the reporting
+  is the web's payload to the web's endpoint. Worth knowing: a blank screen is
+  worse on a phone than on the web, where there is at least a reload button —
+  here the only way out was force-quitting the app.
 
 ## The rule worth keeping
 

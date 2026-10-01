@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
-import { Stack, useRouter, useSegments } from "expo-router";
+import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,6 +9,7 @@ import {
   SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
 } from "@expo-google-fonts/space-grotesk";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
+import { ErrorScreen } from "../src/components/ErrorBoundary";
 import { PayWallHost } from "../src/components/Pay";
 import { colors, fontFamily, isDark } from "../src/theme";
 
@@ -119,4 +120,14 @@ export default function RootLayout() {
       </QueryClientProvider>
     </SafeAreaProvider>
   );
+}
+
+/**
+ * The backstop: a throw in the shell itself, where there is no tab bar left to
+ * navigate with and, on a phone, no address bar and no reload. Without this the
+ * app goes blank and the only way out is force-quitting it — which most people
+ * will not think to do, and some will read as the app being broken for good.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return <ErrorScreen error={error} retry={retry} where="root" />;
 }

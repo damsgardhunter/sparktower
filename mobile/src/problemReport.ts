@@ -40,6 +40,15 @@ export function readProblemMessage(raw: unknown): { ok: true; message: string } 
  */
 export function readProblemPath(raw: unknown): string {
   const value = String(raw ?? "").trim();
-  if (!value.startsWith("/")) return "";
+  /*
+   * The same rule as `safeReturnPath` in shared/credits.ts, and for a sharper
+   * reason: `/admin/problems` renders this as `<Link href={r.path}>`, and the
+   * report endpoint deliberately takes no session. So a stranger could submit
+   * `//evil.test`, which starts with a slash and passed, be stored, and show a
+   * reviewer a link to another origin that reads like one of ours. Protocol-
+   * relative and backslash forms are both treated as a host by browsers.
+   */
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "";
+  if (/[\u0000-\u001f]/.test(value)) return "";
   return value.split(/[?#]/)[0].slice(0, 300);
 }
