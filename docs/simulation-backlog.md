@@ -2301,18 +2301,40 @@ a swimming app. Paying that to fix a condition that does not occur in play is
 the wrong trade. Recorded rather than fixed, with the number to raise if the
 judgement changes.
 
-### Withdrawn pending that: the monthly season length
-A monthly season was going to go from two simulated years to four, with the
-real-time tick halved so forty-eight decisions still take the twenty-four days
-twenty-four used to. The measurement behind it — building the business is worth
-1.00x at two years and 1.49x at four — was taken through the harness described
-above, with a frozen economy. It is not evidence yet.
+### Withdrawn: there is nothing wrong with the monthly season length
+Recorded earlier as the sharpest open problem in this document: "nothing a
+founder decides pays off in a monthly season", measured at 1.00x against filing
+nothing at two years and 1.49x at four, with the conclusion that the product's
+"closest to your actual week" option was inert.
 
-The shape of the finding survives: two years is flat, four is not, and it is
-time in market rather than the rhythm, since a quarterly season cut to two
-years is just as flat and shortening the lags moves nothing at any speed. What
-does not survive is the confidence to change a product default on it. Re-measure
-with a real economy first.
+It is not. Re-measured with a real per-period economy and a spend ladder that
+includes frugal rates, monthly at its default two years:
+
+    podcasts          pays in 7/8 seeds   1.79 1.42 1.08 1.92 1.35 0.91 3.42 1.82
+    project_saas      pays in 7/8         0.99 1.31 1.13 1.74 1.49 1.57 1.77 1.45
+    restaurant_chain  pays in 8/8         1.01 1.10 1.08 1.44 1.14 1.16 1.48 1.20
+    dating_apps       pays in 7/8         0.71 1.20 1.09 1.75 1.35 1.25 1.82 1.16
+    mmos              pays in 8/8         1.77 1.73 1.19 1.99 1.25 1.03 2.24 1.88
+
+Building the business pays in seven or eight seasons of eight, typically by ten
+to eighty per cent, and the handful below one are the falling seasons where
+holding the money is the right play anyway. `DEFAULT_YEARS.monthly = 2` and the
+reasoning beside it — "two years is the shortest span in which a monthly table
+sees its own work arrive" — hold up.
+
+The old figure had two faults stacked. The economy was frozen at the opening
+period, so a monthly season never saw demand move; and the only spend rates
+tried were a quarter and a half of the bank a year, which the score punishes
+because it should. Neither the cadence nor the lags were ever the problem, and
+the lag-speed experiment that failed to fix it failed because there was nothing
+to fix.
+
+**Third time a measurement error produced a finding.** The three were: weather
+compounding because no economy was passed, the economy frozen for the same
+reason, and a spend ladder that only contained bad answers. Anything in this
+document measured before the economy was fixed should be read with that in
+mind — the defects stand, because they were found by comparing runs under
+identical conditions, and the levels have been re-derived where it mattered.
 
 ## Whether a market can be entered at all
 
