@@ -1,7 +1,8 @@
 import { exploreContext } from "@/lib/explore";
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
@@ -14,7 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Send, MessageSquare, Search, Check, CheckCheck } from "lucide-react";
+import { Send, MessageSquare, Search, Check, CheckCheck, MessageSquarePlus, X, Users } from "lucide-react";
 import type { User } from "@shared/models/auth";
 import type { UserProfile, DirectMessage } from "@shared/schema";
 
@@ -58,6 +59,158 @@ function formatDateHeader(dateStr: string) {
   return date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
 }
 
+/** An accepted connection, as `GET /api/connections` returns it. */
+interface ConnectionRow {
+  id: string;
+  user: User;
+  profile?: UserProfile;
+}
+
+/**
+ * What to call a connection, in the order the rest of the app does.
+ *
+ * The display name is the one they chose, then the first and last they signed up
+ * with. The email is a last resort that normally is not there at all:
+ * `stripOthersAccountFields` redacts it from anybody else's account on every
+ * payload, so it only survives for a reviewer or an admin. Kept because it costs
+ * nothing and reads better than "User" when it does, not relied on.
+ */
+export function connectionName(c: ConnectionRow): string {
+  return c.profile?.displayName
+    || `${c.user.firstName || ""} ${c.user.lastName || ""}`.trim()
+    || c.user.email
+    || "User";
+}
+
+/**
+ * The connections matching what was typed, in a predictable order.
+ *
+ * Matched on more than the display name, because half of knowing who somebody is
+ * on this product is their handle or what they say they do: searching "design"
+ * to find the designer you met should find them. Sorted by name rather than by
+ * when the connection was made — a picker you search is one you scan, and
+ * recency is not an order you can scan for a name you already have in mind.
+ *
+ * Not matched on the email, though a first version was. `stripOthersAccountFields`
+ * redacts `email` from anybody else's account before it leaves the server, so
+ * for everyone but a reviewer or an admin that was a search over a field that is
+ * never present — which is worse than not offering it, because it fails by
+ * returning nothing and "no match" reads as "not connected to you".
+ *
+ * Pure, and exported, because this is the half that fails silently: a search
+ * that quietly stops matching usernames looks exactly like a person who has not
+ * connected with you yet.
+ */
+export function searchConnections(connections: ConnectionRow[], query: string): ConnectionRow[] {
+  const rows = [...connections].sort((a, b) => connectionName(a).localeCompare(connectionName(b)));
+  const q = query.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((c) => [
+    connectionName(c), c.profile?.username, c.profile?.headline,
+  ].some((field) => field?.toLowerCase().includes(q)));
+}
+
+/**
+ * Pick somebody to write to, out of the people you are allowed to write to.
+ *
+ * Before this the only way to start a conversation was to find the person's
+ * profile and press Message there — which the empty inbox said out loud, and
+ * which means the Messages tab could tell you that you had no messages without
+ * offering any way to send one. If you could not remember who you had connected
+ * with, there was nowhere here to look.
+ *
+ * Connections are the right list rather than every account, because
+ * `POST /api/messages/:userId` refuses anyone you are not connected to — it
+ * answers 403 "You can only message connected users". A picker over all users
+ * would spend most of its results on people the next screen would refuse.
+ */
+function ConnectionPicker({
+  query,
+  withConversation,
+  onPick,
+}: {
+  query: string;
+  /** Who you already have a thread with, so the list can say so. */
+  withConversation: Set<string>;
+  onPick: (userId: string) => void;
+}) {
+  const { data: connections = [], isLoading } = useQuery<ConnectionRow[]>({
+    queryKey: ["/api/connections"],
+  });
+
+  const filtered = useMemo(() => searchConnections(connections, query), [connections, query]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-3 p-3">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  /* No connections at all is a different problem from no match, and needs a way out. */
+  if (connections.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 text-center" data-testid="empty-no-connections">
+        <Users className="h-10 w-10 text-muted-foreground mb-3" />
+        <p className="text-sm text-muted-foreground">You have no connections yet</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Messages only go to people you are connected with.
+        </p>
+        <Button asChild size="sm" variant="outline" className="mt-3" data-testid="link-find-builders">
+          <Link href="/discover">Find builders</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  if (filtered.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 text-center" data-testid="empty-no-connection-match">
+        <Search className="h-10 w-10 text-muted-foreground mb-3" />
+        <p className="text-sm text-muted-foreground">No connection matches "{query.trim()}"</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-2 space-y-1" data-testid="list-connections">
+      {filtered.map((c) => {
+        const name = connectionName(c);
+        return (
+          <button
+            key={c.user.id}
+            onClick={() => onPick(c.user.id)}
+            className="w-full flex items-center gap-3 p-3 rounded-md text-left transition-colors hover-elevate"
+            data-testid={`button-connection-${c.user.id}`}
+          >
+            <UserAvatar src={c.profile?.avatarUrl ?? c.user.profileImageUrl} name={name} className="h-10 w-10" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium truncate">{name}</span>
+                {withConversation.has(c.user.id) && (
+                  <span className="text-[10px] text-muted-foreground flex-shrink-0">Open thread</span>
+                )}
+              </div>
+              {c.profile?.headline && (
+                <p className="text-xs text-muted-foreground truncate mt-0.5">{c.profile.headline}</p>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ConversationList({
   conversations,
   isLoading,
@@ -73,6 +226,9 @@ function ConversationList({
   searchQuery: string;
   onSearchChange: (q: string) => void;
 }) {
+  /* Which of the two lists the panel is showing. Local: nothing outside cares. */
+  const [composing, setComposing] = useState(false);
+
   const filtered = conversations.filter((c) => {
     if (!searchQuery) return true;
     const name = `${c.user.firstName || ""} ${c.user.lastName || ""}`.toLowerCase();
@@ -82,20 +238,52 @@ function ConversationList({
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-border">
-        <h2 className="text-lg font-semibold mb-3" data-testid="text-messages-title">Messages</h2>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h2 className="text-lg font-semibold" data-testid="text-messages-title">
+            {composing ? "New message" : "Messages"}
+          </h2>
+          {/*
+            * One button, both ways. The search box below it is shared, so the
+            * query is cleared on the way in and out — a name typed while looking
+            * for a connection is not a sensible filter over your threads, and
+            * leaving it behind makes the list look empty for no stated reason.
+            */}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 flex-shrink-0"
+            onClick={() => { setComposing(!composing); onSearchChange(""); }}
+            title={composing ? "Back to your messages" : "Message a connection"}
+            aria-label={composing ? "Back to your messages" : "Message a connection"}
+            data-testid="button-toggle-new-message"
+          >
+            {composing ? <X className="h-4 w-4" /> : <MessageSquarePlus className="h-4 w-4" />}
+          </Button>
+        </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search conversations..."
+            placeholder={composing ? "Search your connections..." : "Search conversations..."}
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="pl-9"
-            data-testid="input-search-conversations"
+            data-testid={composing ? "input-search-connections" : "input-search-conversations"}
           />
         </div>
       </div>
       <ScrollArea className="flex-1">
-        {isLoading ? (
+        {composing ? (
+          <ConnectionPicker
+            query={searchQuery}
+            withConversation={new Set(conversations.map((c) => c.userId))}
+            onPick={(userId) => {
+              onSelect(userId);
+              /* Straight back to the thread list, now showing the one just opened. */
+              setComposing(false);
+              onSearchChange("");
+            }}
+          />
+        ) : isLoading ? (
           <div className="space-y-2 p-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="flex items-center gap-3 p-3">
@@ -113,9 +301,15 @@ function ConversationList({
             <p className="text-sm text-muted-foreground">
               {searchQuery ? "No conversations found" : "No messages yet"}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Start a conversation from a user's profile
-            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 gap-1.5"
+              onClick={() => { setComposing(true); onSearchChange(""); }}
+              data-testid="button-start-first-message"
+            >
+              <MessageSquarePlus className="h-3.5 w-3.5" /> Message a connection
+            </Button>
           </div>
         ) : (
           <div className="p-2 space-y-1">
@@ -439,7 +633,8 @@ export default function MessagesPage() {
             <MessageSquare className="h-16 w-16 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-1" data-testid="text-no-chat-selected">Select a conversation</h3>
             <p className="text-sm text-muted-foreground max-w-sm">
-              Choose a conversation from the list or start a new one from a user's profile page
+              Choose a conversation from the list, or start a new one with anybody you're
+              connected to.
             </p>
           </div>
         )}
