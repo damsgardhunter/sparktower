@@ -29,6 +29,8 @@ const SCRIPTS = [
   "script/seed-max-reputation.ts",
   /* And this one imports the seeder for `assertIsCreator`, which is the guard being relied on. */
   "script/seed-demo-social.ts",
+  /* Imports the storage module, which builds a GCS client the moment it is touched. */
+  "script/verify-object-storage.ts",
 ];
 
 describe("command-line scripts", () => {

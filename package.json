@@ -18,6 +18,7 @@
     "db:reconcile": "tsx script/reconcile-migrations.ts",
     "db:catch-up": "tsx script/catch-up-migrations.ts",
     "db:verify": "tsx script/verify-migrations.ts",
+    "storage:verify": "tsx script/verify-object-storage.ts",
     "reputation:gap": "tsx script/reputation-gap.ts",
     "reputation:max": "tsx script/seed-max-reputation.ts",
     "demo:social": "tsx script/seed-demo-social.ts",
