@@ -26,6 +26,7 @@
  */
 export { LiveDot } from "./LiveDot";
 export { NovaRing } from "./NovaRing";
+export { Pill, PILL_TONE, type PillTone } from "./Pill";
 export { Glance, GlanceStat, GlanceAction } from "./Glance";
 export { NovaIntro } from "./NovaIntro";
 export { Working, type WorkingStage } from "../Working";

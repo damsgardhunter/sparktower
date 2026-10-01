@@ -42,8 +42,6 @@ function exportsOf(source: string): string[] {
  * with, and removing a line is how the disagreement gets settled.
  */
 const NOT_ON_THE_PHONE: Record<string, string> = {
-  Pill: "the web's takes a tone of good/warn/bad/info/neutral/unknown; the phone has three components called Pill (MoreKit, FeaturedContest, profile/kit) and none has a tone system. Exporting one would be picking a winner by import order. Fix: one Pill with the web's tones, three call sites migrated.",
-  PILL_TONE: "the tone table belongs with the Pill above.",
   Block: "the phone's Block in ProjectBits is a titled section with an action; the web's is a surface primitive. Same word, different component.",
   NOVA_GRADIENT: "a Tailwind class string, which means nothing on a phone. The phone's equivalent is colors.novaGreen/Emerald/Purple, held to the web's values by nova-gradient-parity.test.ts.",
   NOVA_GRADIENT_BR: "as above.",
@@ -90,6 +88,69 @@ describe("the Nova kit both platforms draw from", () => {
   it("has the live dot and the glance strip on the phone", () => {
     for (const name of ["LiveDot", "Glance", "GlanceStat", "GlanceAction"]) {
       expect(phone, `${name} should be in the phone's nova kit`).toContain(name);
+    }
+  });
+});
+
+/**
+ * The Pill's tones, which are the component.
+ *
+ * A pill without tones is a coloured rectangle, and that is what the phone had:
+ * twenty call sites reached for `colors.success`, `colors.warning`,
+ * `colors.info` or `colors.danger` by hand, so "what does green mean here" was
+ * answered separately twenty times. The tones are the answer written once.
+ */
+describe("the Pill's tones", () => {
+  const webPill = read("client/src/components/nova/pill.tsx");
+  const phonePill = read("mobile/src/components/nova/Pill.tsx");
+
+  const tonesIn = (source: string) => {
+    const m = /PillTone\s*=\s*([^;]+);/.exec(source);
+    expect(m, "PillTone is no longer a union of string literals").toBeTruthy();
+    return [...m![1].matchAll(/"(\w+)"/g)].map((x) => x[1]).sort();
+  };
+
+  it("are the same set on both", () => {
+    expect(tonesIn(phonePill), "the phone's tones have drifted from the web's").toEqual(tonesIn(webPill));
+  });
+
+  /*
+   * The one the web's comment singles out: `unknown` is dashed and blue, never
+   * red, "because 'nobody has checked' is a question and `bad` is an answer.
+   * Drawing them alike is how a screen tells somebody they have a problem they
+   * do not have." Worth a test rather than a comment, because the next person to
+   * tidy the tone table will see two blues and be tempted.
+   */
+  it("keep unknown dashed, and keep it away from the colour bad uses", () => {
+    const table = /PILL_TONE[\s\S]*?\n};/.exec(phonePill);
+    expect(table, "the phone's tone table changed shape").toBeTruthy();
+    const unknown = /unknown:\s*\{([^}]*)\}/.exec(table![0]);
+    expect(unknown, "there is no unknown tone on the phone").toBeTruthy();
+    expect(unknown![1], "unknown has to be dashed — it is the half of the distinction the phone's palette can still carry").toMatch(/dashed:\s*true/);
+    expect(unknown![1], "unknown must not borrow the colour bad uses").not.toMatch(/colors\.danger/);
+
+    const bad = /bad:\s*\{([^}]*)\}/.exec(table![0]);
+    expect(bad![1], "bad is the one that uses danger").toMatch(/colors\.danger/);
+  });
+
+  /*
+   * The point of the migration: a pill that means a state should say which
+   * state, not which colour. These five files had every one of their pills
+   * converted, so a hand-picked semantic colour reappearing in them is a
+   * regression rather than a style choice.
+   */
+  it("are used instead of a hand-picked colour, in the screens that were converted", () => {
+    const converted = [
+      "mobile/app/admin/surfaces.tsx",
+      "mobile/app/admin/analytics.tsx",
+      "mobile/app/admin/safety.tsx",
+      "mobile/app/investor/interview.tsx",
+      "mobile/app/sim/index.tsx",
+    ];
+    for (const path of converted) {
+      const source = read(path);
+      const handPicked = source.split("\n").filter((l) => l.includes("<Pill") && /colors\.(success|warning|danger|info)/.test(l));
+      expect(handPicked, `${path} is back to picking pill colours by hand:\n  ${handPicked.join("\n  ")}`).toEqual([]);
     }
   });
 });

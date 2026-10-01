@@ -94,15 +94,27 @@ What each claim turned out to be, with where the evidence is:
   keeps its ping and stops it dead when inactive, which is also where `Working`'s
   refusal of an `Animated` loop stops applying: there, the stage name and the
   elapsed time already carry the state, and here the dot is the only signal.
-- [ ] **One `Pill`, with the web's tones.** Checked, and the answer was worse
-  than "nobody has checked": the phone has **three** components called `Pill` —
-  `MoreKit`, `FeaturedContest`, `profile/kit` — and not one of them has a tone
-  system. The web's takes `good | warn | bad | info | neutral | unknown`. So the
-  phone cannot agree with the web's by construction, and the three probably do
-  not agree with each other. The work is one `Pill` with the web's tones and
-  three sets of call sites migrated onto it; it is worth doing on its own rather
-  than inside another change, because it touches every screen that shows a
-  status.
+- [x] **One `Pill` with the web's tones** — built 2026-10-01
+  (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
+  reasoning about `unknown`: dashed and blue, never red, because "nobody has
+  checked" is a question and `bad` is an answer.
+- [ ] **Ten semantic pills still pick their colour by hand.** Twelve were
+  converted, in the five files where *every* `<Pill>` was semantic, so one import
+  swap converted the lot: `admin/surfaces`, `admin/analytics`, `admin/safety`,
+  `investor/interview`, `sim/index`.
+
+  The rest are in files with mixed usage — `DeskKit` (6 of 15 semantic),
+  `MarketKit` (3 of 4), `admin/reports` (3 of 4), `sim/[id]` (1 of 3) — where
+  swapping the import changes every pill in the file, including the ones that
+  legitimately take an arbitrary colour. A first attempt did exactly that and
+  broke four files; it was reverted. Those need a decision per call site, and
+  `DeskKit` and `MarketKit` are in a directory somebody is usually working in.
+
+  `MoreKit`'s and `profile/kit`'s pills are **not** going away: they take a
+  colour or a variant for a tier badge or a post type — decoration keyed to
+  something that is not a state. The nova one is for states and is the only one
+  that should carry a severity. Merging all three would mean deciding a tier and
+  a severity are the same kind of thing.
 - [ ] **`Block` is two different components sharing a name.** The phone's, in
   `ProjectBits`, is a titled section with an action. The web's is a surface
   primitive. Deciding which one the phone wants is the work, and it is not

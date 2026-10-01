@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { Text, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Card, Empty, Icon, Loading, NovaGradient, Screen, errText } from "../../src/components/ui";
-import { Pill, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
+import { isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { Disclosure, IncumbentRow, LeverList, SegmentRow, SimSectionTitle, VentureResumeRow } from "../../src/components/sim/SimKit";
 import { useNiches, useVentures } from "../../src/components/sim/useSim";
@@ -221,9 +222,9 @@ function NicheCard({ niche, onJoin, joining, disabled }: {
       </View>
 
       <View style={{ flexDirection: "row", gap: spacing.xs, flexWrap: "wrap" }}>
-        <Pill label={`${hold}% already held`} icon="business-outline" color={colors.danger} />
-        <Pill label={`${formatCount(total)} customers`} icon="people-outline" color={colors.info} />
-        {softest ? <Pill label={`Way in: ${softest.name}`} icon="enter-outline" color={colors.success} /> : null}
+        <Pill label={`${hold}% already held`} icon="business-outline" tone="bad" />
+        <Pill label={`${formatCount(total)} customers`} icon="people-outline" tone="info" />
+        {softest ? <Pill label={`Way in: ${softest.name}`} icon="enter-outline" tone="good" /> : null}
       </View>
 
       <View style={{
