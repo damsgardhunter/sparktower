@@ -19,6 +19,7 @@ import { startingCompany } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
+import { allocate } from "@shared/simulation/market";
 import { ROLES, type Company, type CompanyAsset } from "@shared/simulation/types";
 import { INCUMBENT_BID_MAX, incumbentBids } from "@shared/simulation/assets";
 import { seedIncumbents } from "@shared/simulation/incumbents";
@@ -53,6 +54,13 @@ describe("what owning something does", () => {
      * Assets carried an `effect` the engine did not read for the whole of the
      * feature's life: owning a patent made a company no better at anything, it
      * only raised what a bank would lend against it.
+     *
+     * What this asserts is that the effects reach the market, which is the
+     * thing that was missing. It is measured at the allocation rather than
+     * over a whole year on purpose: a full year currently *reverses* it, and
+     * that is a separate open fault, measured and stated in
+     * `known-imbalances.test.ts` under "owning something for a whole year".
+     * Asserting the year here would have hidden it behind a passing test.
      */
     const world = {
       seasonId: "s", niche, year: 1,
@@ -66,9 +74,17 @@ describe("what owning something does", () => {
       coo: { capacityTarget: 400_000, supportSpend: 200_000, efficiencySpend: 0, headcount: 5 },
     }];
 
-    const plain = resolveYear(world, decisions).reports.find((r) => r.companyId === "t")!;
-    const armed = resolveYear(withAssets, decisions).reports.find((r) => r.companyId === "t")!;
-    expect(armed.customers).toBeGreaterThan(plain.customers);
+    /* The same company the engine puts in front of the market: see `effectiveOf` in resolve.ts. */
+    const effective = (c: any) => {
+      const e = assetEffects(c.assets ?? []);
+      return { ...c, brand: c.brand + e.brand, quality: c.quality + e.quality, service: c.service + e.service,
+        capacity: c.capacity + e.capacity, unitCost: c.unitCost * e.unitCost };
+    };
+    const won = (w: typeof world) => {
+      const out = allocate(w.companies.map(effective), niche, 1, w.economy, 1);
+      return Object.values(out.held.t ?? {}).reduce((sum, n) => sum + n, 0);
+    };
+    expect(won(withAssets), "the effects never reach the market").toBeGreaterThan(won(world));
   });
 
   it("does not let the benefit stick around after the thing is sold", () => {

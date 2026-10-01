@@ -82,6 +82,15 @@ export function clipToSentence(text: string, max: number): string {
   return end > max * 0.4 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(" "))}…`;
 }
 
+/**
+ * The ceiling on an audit's answer.
+ *
+ * Far above the client's default of 8,000, which this call inherited and
+ * silently overran. Still a ceiling rather than none: an audit that wants more
+ * than this has lost the plot, and a model that loops is paid for by the token.
+ */
+const AUDIT_MAX_OUTPUT_TOKENS = Number(process.env.AUDIT_MAX_OUTPUT_TOKENS ?? 32_000);
+
 const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences):
 {
   "stage": "empty" | "scaffold" | "prototype" | "mvp" | "beta" | "production",
@@ -345,6 +354,22 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   const security = scanSecurity(snapshot.files, { suspectedSecrets: digest.signals.suspectedSecrets });
   const completion = await getOpenAI().chat.completions.create({
     model: modelFor(ent),
+    /*
+     * An audit is the longest thing Nova writes, and it was the only long
+     * thing with no ceiling of its own.
+     *
+     * Every call that names no limit gets DEFAULT_MAX_OUTPUT_TOKENS — 8,000 —
+     * put on it by the client (server/openai-client.ts), whose own comment
+     * says "the longest things Nova writes are a document plan and a roadmap,
+     * and neither comes near this". The audit does: capabilities for eleven
+     * areas, built, partial, missing, undocumented, risks, task
+     * reconciliation, a verdict per milestone, every loop with a status and
+     * evidence per stage, and the operations to fix all of it. On a real
+     * codebase that runs past 8,000 tokens, the answer stops mid-object, and
+     * what the builder is told is "Nova returned an unreadable audit" — which
+     * is true and says nothing about the cause.
+     */
+    max_completion_tokens: AUDIT_MAX_OUTPUT_TOKENS,
     messages: [
       {
         role: "system",
@@ -385,6 +410,21 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       },
     ],
   });
+
+  /*
+   * Cut off is not the same as unreadable, and the difference is the only
+   * thing that tells somebody what to do about it. A truncated answer has a
+   * cause, a fix and a cost; garbage has none of those.
+   */
+  if (completion.choices[0].finish_reason === "length") {
+    console.error(`[audit] ${projectId}: the answer hit the ${AUDIT_MAX_OUTPUT_TOKENS}-token ceiling and stopped mid-object.`);
+    return res.status(502).json({
+      message:
+        "The audit was too long to finish — Nova ran out of room mid-answer and what came back was incomplete. " +
+        "Nothing was charged. Try again; if it keeps happening on this codebase, the audit needs a bigger ceiling.",
+      code: "audit_truncated",
+    });
+  }
 
   let parsed: any;
   try {

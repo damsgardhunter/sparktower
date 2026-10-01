@@ -227,9 +227,17 @@ export class ObjectStorageService {
       )
     );
     if (paths.length === 0) {
+      /*
+       * Nothing reaches this. `searchPublicObject` is the only caller and has no
+       * callers of its own — it is Replit scaffold the app never adopted. The
+       * message is kept honest anyway, because the old one sent whoever did
+       * reach it to configure an environment variable that nothing reads, in a
+       * tool that does not exist outside Replit.
+       */
       throw new Error(
-        "PUBLIC_OBJECT_SEARCH_PATHS not set. Create a bucket in 'Object Storage' " +
-          "tool and set PUBLIC_OBJECT_SEARCH_PATHS env var (comma-separated paths)."
+        "PUBLIC_OBJECT_SEARCH_PATHS is not set, and nothing in this app sets it: " +
+          "public-object search is unused scaffold. Uploads need PRIVATE_OBJECT_DIR " +
+          "and GCS_SERVICE_ACCOUNT_KEY instead — see docs/ops/object-storage.md."
       );
     }
     return paths;
@@ -246,7 +254,7 @@ export class ObjectStorageService {
       throw new Error(
         "PRIVATE_OBJECT_DIR is not set, so there is nowhere to put uploads. " +
           "Set it to /<bucket>/<prefix> and give the process credentials for that " +
-          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/custom-domain.md."
+          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/object-storage.md."
       );
     }
     return dir;
@@ -398,7 +406,7 @@ export class ObjectStorageService {
       throw new Error(
         "PRIVATE_OBJECT_DIR is not set, so there is nowhere to put uploads. " +
           "Set it to /<bucket>/<prefix> and give the process credentials for that " +
-          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/custom-domain.md."
+          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/object-storage.md."
       );
     }
 

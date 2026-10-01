@@ -208,12 +208,25 @@ async function tightenPages(opts: {
     passes = pass;
 
     const updates = new Map<string, string>();
+    /*
+     * The blocks that were actually sent this pass.
+     *
+     * Updates are applied by block id across the whole document, so an id the
+     * model returned that belongs to a page nobody asked about used to be
+     * written anyway. That is one hallucinated id away from rewriting prose on
+     * a page the builder did not select — silently, and with no undo, because
+     * the original is replaced. `pageIndex` in particular promises one page.
+     *
+     * So a reply is only honoured for the blocks it was shown.
+     */
+    const offered = new Set<string>();
 
     for (const index of targets) {
       const page = pages[index];
       const printed = render.pageMap[index].pdfPages;
       const filled = page.blocks.filter((b) => b.content.trim() && b.kind !== "spacer");
       if (!filled.length) continue;
+      for (const b of filled) offered.add(b.id);
 
       const currentWords = filled.reduce((n, b) => n + b.content.trim().split(/\s+/).length, 0);
       const targetWords = Math.max(60, Math.round((currentWords / printed) * 0.88));
@@ -258,7 +271,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         for (const entry of Array.isArray(parsed.blocks) ? parsed.blocks : []) {
           const id = str(entry?.id, 40);
           const content = stripIdFragments(str(entry?.content, 20_000), opts.knownIds ?? []);
-          if (id && content) updates.set(id, content);
+          if (id && content && offered.has(id)) updates.set(id, content);
         }
       } catch (err) {
         console.error(`Tighten pass ${pass} failed for page ${index}:`, err);

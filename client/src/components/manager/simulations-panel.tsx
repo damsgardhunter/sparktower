@@ -374,6 +374,18 @@ const CADENCE_CHOICES = [
   { id: "yearly", label: "Every year", note: "The long view: strategy, and living with it. Eight years." },
 ] as const;
 
+/**
+ * Funded and level, or the balance sheet the work has earned.
+ *
+ * The second is not a harder setting, it is a different question — and for
+ * somebody rehearsing the business they are actually running, it is the one
+ * they came for. See `shared/simulation/opening.ts`.
+ */
+const OPENING_CHOICES = [
+  { id: "competitive", label: "Funded and level", note: "Money in the bank and a credit line, same as everyone. The fair contest, and the easier one to learn the levers on." },
+  { id: "actual", label: "Where you actually are", note: "The cash, credit and customers your work so far implies. Harder, and the only version that answers what would happen if we did this for real." },
+] as const;
+
 function FromThisProject({ projectId, onBuilt, replayable }: {
   projectId: string;
   onBuilt: (m: BuiltMarket) => void;
@@ -381,12 +393,13 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
 }) {
   const [error, setError] = useState<string | null>(null);
   const [cadence, setCadence] = useState<string>("quarterly");
+  const [opening, setOpening] = useState<string>("competitive");
   /** Which market is being played again, so only that row shows a spinner. */
   const [replaying, setReplaying] = useState<string | null>(null);
 
   const build = useMutation({
     mutationFn: (fromSeasonId?: string) =>
-      apiRequest("POST", `/api/projects/${projectId}/simulation`, { cadence, ...(fromSeasonId ? { fromSeasonId } : {}) }),
+      apiRequest("POST", `/api/projects/${projectId}/simulation`, { cadence, opening, ...(fromSeasonId ? { fromSeasonId } : {}) }),
     onSuccess: async (res: any) => {
       const body = await res.json() as BuiltMarket;
       onBuilt(body);
@@ -489,6 +502,27 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
               >
                 <span className="block text-[13px] font-medium">{c.label}</span>
                 <span className="block text-[11px] text-muted-foreground leading-snug">{c.note}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="pt-1">
+          <p className="text-xs font-medium mb-1.5">Where you start</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {OPENING_CHOICES.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => setOpening(o.id)}
+                disabled={build.isPending}
+                data-testid={`opening-${o.id}`}
+                aria-pressed={opening === o.id}
+                className={`rounded-xl border p-3 text-left transition-colors disabled:opacity-60 ${
+                  opening === o.id ? "nova-ring bg-primary/5" : "border-border hover:border-primary/40"
+                }`}
+              >
+                <span className="block text-[13px] font-medium">{o.label}</span>
+                <span className="block text-[11px] text-muted-foreground leading-snug">{o.note}</span>
               </button>
             ))}
           </div>

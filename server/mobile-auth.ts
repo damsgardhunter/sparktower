@@ -637,9 +637,22 @@ export function registerMobileAuthRoutes(app: Express) {
     try {
       const { refreshToken } = req.body as { refreshToken?: string };
       if (refreshToken) {
+        /*
+         * Only a token that is still live, so `revokedAt` keeps the moment the
+         * session actually ended.
+         *
+         * Signing out twice used to stamp it twice, and the second stamp
+         * replaced the first. Nothing about access changes either way — a
+         * second revocation of a revoked token is the same token, revoked —
+         * but the column is the only record of *when* a session was ended, and
+         * that is a question worth being able to answer about a device
+         * somebody reported lost. An app that retries a failed sign-out, or a
+         * stolen token replayed by whoever took it, would have moved the
+         * timestamp to the replay.
+         */
         await db.update(mobileRefreshTokens)
           .set({ revokedAt: new Date() })
-          .where(eq(mobileRefreshTokens.tokenHash, hashToken(refreshToken)));
+          .where(and(eq(mobileRefreshTokens.tokenHash, hashToken(refreshToken)), isNull(mobileRefreshTokens.revokedAt)));
       }
       res.json({ success: true });
     } catch (error) {

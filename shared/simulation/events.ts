@@ -47,6 +47,7 @@
  * So the finer the cadence the more *happens*, which is the honest version of
  * what the extra seat price buys. A yearly season is bit-for-bit what it was.
  */
+import { atScale } from "./market";
 import type { Company, Economy, Niche, World } from "./types";
 import { rng, pick } from "./random";
 import { servingCapacity } from "./assets";
@@ -177,7 +178,21 @@ const COMPANY_EVENTS: CompanyEvent[] = [
       headline: `${c.name} has a recall`,
       body: "The product has been failing for long enough that it now has to be fixed at the company's expense, for everybody who bought it.",
       advice: "This is what deferred product work costs when it finally arrives. Reliability spending is the fix, and it is cheaper before this happens than after.",
-      effect: { quality: -5, cash: -450_000, reputation: -4 },
+      /*
+       * Scaled to the market, like every other absolute figure in the engine.
+       *
+       * This was the only money in this file and the only one that was not.
+       * £450,000 is a hard year in a catalogue market — about four tenths of
+       * the opening bank — and an extinction event in the markets Nova writes,
+       * which are small on purpose: measured, 29.1x the entire bank of a
+       * company in an allotment-glut marketplace, 22.5x in a kiln-firing one,
+       * 17.3x in a parish-council one. Recalls fire there as readily as
+       * anywhere — three or four times across eighteen seasons of each — so a
+       * founder could lose twenty-nine times everything they had to one event
+       * earned by a quality score, with no decision available that would have
+       * changed the size of it.
+       */
+      effect: { quality: -5, cash: -atScale(450_000, c.scale), reputation: -4 },
     }),
   },
   {

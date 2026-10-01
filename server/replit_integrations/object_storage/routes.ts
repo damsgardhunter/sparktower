@@ -273,7 +273,7 @@ export function registerObjectStorageRoutes(app: Express): void {
           warnedNoBucket = true;
           console.error(
             "[objects] No object storage configured, so every image in the product will fail to load — " +
-            "not just new uploads. Set PRIVATE_OBJECT_DIR and GCS_SERVICE_ACCOUNT_KEY (docs/ops/deploy.md). " +
+            "not just new uploads. Set PRIVATE_OBJECT_DIR and GCS_SERVICE_ACCOUNT_KEY (docs/ops/object-storage.md). " +
             "Check with: npm run check:env",
           );
         }

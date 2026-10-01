@@ -300,14 +300,18 @@ competent play:
 Three levers, **+57%**, none of which has a setting where it hurts. A player
 who finds them takes all three every time, which makes them not decisions.
 
-- **`annualDiscount` is monotonically best at its cap in every market.** Worth
-  20–40% of the company: dating apps +152,448, restaurant chain +134,971,
-  project management +128,766. The arithmetic is honest — about 13% of revenue
-  buys about 21% less churn — but in markets this flighty (loyalty 0.24 to
-  0.38) reduced churn compounds over a season while the discount is charged
-  once a period. Only MMOs has a peak below the cap. There is no arithmetic
-  error here, which is why it has been left alone: it is a tuning judgement
-  against markets that are balanced around the current number.
+- ~~**`annualDiscount` is monotonically best at its cap in every market.**~~
+  **Done.** Giving away `d` cost `d`, and what it bought — customers who cannot
+  leave — was worth the same at every depth, so deeper was always better and the
+  lever's range collapsed onto its cap.
+
+  What was missing is what happens when the plan ends: a year at 30% under list
+  makes the list price a 43% rise, and a rise on people already paying is what
+  this market has always said they walk out over. It is also the only cost here
+  that does not scale linearly, since the step back up is `d / (1 - d)`. See
+  `ANNUAL_UNWIND`, calibrated to 0.3. The cap is now the best setting in none of
+  the seven markets, a shallow plan is worth taking in six of seven, and two
+  markets are worse at the cap than with no plan at all.
 
   Worth knowing: `responsibilities.ts` says every lever "was built to have a
   real trade-off, and the tests hold them to it: a range where it helps, and a
@@ -316,15 +320,20 @@ who finds them takes all three every time, which makes them not decisions.
   period. The property the comment claims is not actually tested here, which is
   the same blind spot that hid the price bug.
 
-- **Price tiers are worth up to three times the company, and are never wrong.**
-  Setting a tier at each segment's reference price beats a single list price in
-  every market: drone delivery 197,010 → 601,380, podcasts 262,399 → 483,481.
-  The gain tracks the spread in what segments will pay (drone delivery's widest
-  segment pays 28× its narrowest). That is price discrimination behaving
-  correctly — a business with that spread *must* segment — and the level of
-  each tier is a real decision. But *whether* to use tiers is not, and in a
-  wide-spread market a table that has not found the lever is playing at a
-  two-thirds handicap without being told.
+- ~~**Price tiers are worth up to three times the company, and are never
+  wrong.**~~ **Withdrawn — the measurement was wrong.** It compared *one* tier
+  setting, each segment at its own reference price, which is the best setting
+  there is, against a single list price. That asks whether a well-set lever
+  beats not using it, which is true of every lever in the game.
+
+  Swept across settings, tiers behave like the price they are. Every market has
+  an interior best and both ends are punished: undercutting every segment is
+  worse than one list price in four of the seven markets (restaurant chain
+  606,622 → 527,817, construction 230,040 → 109,806, project management 540,474
+  → 394,084, MMOs 135,324 → 94,637), and pricing every segment at 2.2× what it
+  expects takes three of them to nothing. Leakage was already modelled —
+  `TIER_LEAK`, and a premium tier set far above the rest is partly a price
+  nobody pays. The lever meets the standard; the test did not.
 
 **Things that look dead and are not.** Several levers moved nothing in the
 sweep because their preconditions were absent, not because they are broken:
@@ -494,6 +503,69 @@ human is never handed the 2.0% death sentence. Bots have no such floor.
     a person can play — and it is a different thing from what was removed
     earlier, which handed a bot the *best* region as a rule. The guard in
     `season.test.ts` now asserts the absence of that rule rather than a ratio.
+
+### From playing two seasons by hand, 30 Sept 2026
+
+Two custom markets built from scratch and played period by period, with a
+handful of deliberate mistakes to see whether the engine punishes them. An AI
+meeting-notes tool at scale 0.01 (opening bank $47,773) and a consumer
+rent-splitting app at scale 0.09 (opening bank $228,404).
+
+18. ~~A region could be opened with money the company did not have.~~ **Done.**
+    Opening one is charged in full in the period it happens, and it was the
+    only purchase in the game with no affordability check — every other line is
+    cut to what the company can pay, including a feature bet, which is counted
+    for exactly this reason. Played out: a company holding $88,915 ticked four
+    regions costing $149,000, opened all four, finished the quarter on nothing
+    and carried $43,290 of debt it had never agreed to take. `affordableCities`
+    now takes the ones the money reaches, cheapest first, and says which stayed
+    closed.
+
+19. ~~An annual interest rate reported as a quarterly one.~~ **Done.**
+    `inPeriodWords` rewrote every "a year" so a note written for a yearly
+    season reads right in a quarterly one — including the "a year" inside "at
+    30.1% a year". A company that ran out of money was told its emergency loan
+    cost 30.1% *a quarter*: four times the real rate, twelve times in a monthly
+    season. Anything with a percentage in front of it is left alone now.
+
+**Open, and measured:**
+
+- **Entry costs do not count against the spending budget.** They are real money
+  leaving in that period and they belong in `fundYear`'s `wanted` beside the
+  feature bet. Putting them there narrows the gap between a table that plays
+  well and one that does not by about half — `balance.test.ts` measures a
+  survivor beating a filler by 13 points and it drops to 6 — because those
+  markets are tuned against expansion being free of the budget. Trimming to
+  what is affordable (above) fixes the defect that was actually observed;
+  charging it against the purse is the larger, separate job.
+
+- **Borrowing destroys a small company's score instantly.** `valuation` is
+  `revenue × 1.2 + assets − debt`, so at 64 customers paying $36 a year that is
+  $2,765 against a $6,000 loan — 38% of the credit line — and the company is
+  worth nothing from then until the debt is repaid. Cash is not a term either,
+  so $5,762 in the bank counts for zero. A going concern with customers,
+  quality and money reads as worthless on the board the seasons rank on.
+
+- **Quality barely moves at startup scale.** Two quarters and $4,200 of feature
+  spend took quality from 37 to 37: it ships at about a point a quarter against
+  0.55 of decay. Sixteen quarters of near-continuous investment reached 61,
+  while the market leader opened at 74.
+
+- **A price round-trip is nearly free.** Cutting $11 to $4 cost a quarter's
+  revenue and bought 4% more customers — correctly punished. Putting it
+  straight back to $11, a 175% rise, cost almost nothing and the company
+  finished the quarter with *more* customers than before the experiment. The
+  `resented` cap of 0.2 is deliberate, so this is a judgement rather than a
+  bug, but it means price can be searched by trial with no memory.
+
+- **The engine writes £ in a game denominated in $.** "Cleaning it up cost £11",
+  from the breach note.
+
+**Three things worked exactly as intended**, which is worth recording as well:
+building for 3,000 seats when 87 customers were in sight bled about $8,900 a
+quarter and was reversible in one decision; pricing at $150 against a $42
+reference took 64 customers to 11 in a quarter and *lowered* revenue; and
+hiring forty people flipped +$18,112 to −$45,932 and was equally reversible.
 
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
@@ -2084,3 +2156,842 @@ commitment straight away, before the vote. The table may vote it down and the
 money stays. Overstating what a year might cost is the safe side of a meter
 that exists to stop a company filing a year it cannot pay for, so both the web
 and the phone count it that way — but it is a choice, not an oversight.
+
+## Every market has a route for every kind of player, 30 Sept 2026
+
+`every-market-winnable.test.ts` asks whether *a* competent founder can build
+something. That is the floor, and not the same question as whether the market is
+worth entering for the person you actually are. A market with one answer is a
+puzzle somebody solves once.
+
+So: seven archetypes — undercut, go premium, lead on product, grow hard, spend
+out of revenue, price by segment, keep your powder dry — against every market,
+each free to choose how hard it spends, median of several seeds, real economy,
+events on. The weakest archetype as a share of the best:
+
+    before   premium 1% in construction · 6% in drone delivery · 13% in podcasts
+             undercut 8% in construction
+    after    no archetype below 25% of the best in any market
+
+**Both fixes were to how the strategy was expressed, not to the game.** Premium
+had been written as a single list price at nine tenths of the dearest segment —
+which in construction, whose segments run 900, 3,800 and 14,000, is 12,600
+charged to everybody, and prices out all but a rounding error of the market.
+Undercut had the same error mirrored: one price at four fifths of the *cheapest*
+segment, charging the client who would have paid 14,000 a price of 720 and
+throwing away almost everything the market is worth.
+
+Tiers are what the engine provides for pricing by segment, and they arrive in
+year two with help text that says what they do. Expressed through tiers, both
+archetypes have a route in every market. So the engine was right and the
+measurement was wrong — the fifth time this week.
+
+**The one real asymmetry, and it looks deliberate.** The cautious player is
+profitable on eight seeds of eight in every market and goes bankrupt in none,
+but lands at 21–34% of the best and beats filing nothing in only one or two
+seeds of eight in the larger markets. Caution preserves and does not build,
+which is a reasonable thing for the game to say, and it is the only archetype
+that behaves that way.
+
+Worth carrying forward for the product rather than the engine: in year one a
+player has a single list price and nothing else, so a wide-spread market
+punishes a positioning choice made with the only instrument available. Tiers
+arrive in year two, which bounds it — but anybody writing desk copy for year one
+in construction or podcasts should know that "put the price up" and "undercut
+them" are both near-fatal there until tiers exist.
+
+## Closed: the three ways out of a company had almost no tests
+`release`, `leave` and `standings` had one, three and three references between
+them across the whole integration suite, against fifty-odd for the desk — and
+they are the routes that run when somebody changes their mind. Getting them
+wrong leaves a person stuck in a company they walked away from, or four people
+playing a season with an empty chair nobody told them about.
+
+Nine cases now, and the reason they are worth having is that the right answer
+*changes* part-way through a season:
+
+  - **Releasing a seat** works only while the table is still arguing. The fifth
+    claim ends it — the room leaves `claiming` for `naming` the moment every
+    chair is taken — so the test claims four of five to reach the window at all,
+    which is the thing a reader would get wrong. Once the season runs it is a
+    409 with `wrong_phase`, and the seat is left exactly as it was, which is
+    what matters to the other four.
+  - **Leaving before the first year** gives the seat up, and a room the last
+    person walks out of is retired rather than left standing empty.
+  - **Leaving a running season** cannot unmake the company, so the chair goes to
+    one of that venture's own bots: the person is out, the seat is still there,
+    and all five are filled — asserted by joining `users` and checking the new
+    occupant really is a bot rather than the seat merely existing.
+  - **Standings** rank every company in the market in order of what each side
+    owns, include the asker's own, and 404 for somebody else's company.
+
+Coverage went from 1, 3 and 3 references to 4, 5 and 7. Run alongside the lobby
+and responsibilities files rather than alone, because these share a market and a
+season with them and a helper that assumes it owns the room is the standing trap
+in this suite.
+
+## The measurements themselves, 30 Sept 2026
+
+### Closed: an event's cost multiplier compounded for every period it lasted
+`world.economy` is the economy *after* last period's weather was applied, and
+`resolveYear` used it as the base to apply this period's weather to. So a market
+event was re-applied for every period it stayed in force. A twelve per cent
+freight shock became 1.12^12 across a monthly year: unit cost went from 6 to
+**25.79** by the second year, the company was serving customers at four times
+what they paid, and it went bankrupt. Quarterly it is 1.12^4 — milder and
+equally wrong.
+
+The world now carries `economyBase`, the weather-free economy weather is applied
+*to*, and `economy` stays the weathered one everything reads. A caller that
+supplies an economy is still believed, which is what lets a test build a world
+with a chosen economy and have it respected.
+
+A first attempt derived the base instead — `economyFor(seasonId, year, periods)`
+whenever the caller passed nothing — and that was wrong in a way worth recording:
+it overrode the deliberate `{ demand: 1 }` worlds that a dozen tests build, and
+broke thirteen of them. The bug was never that the stored economy was the wrong
+*trajectory*; it was that weather was applied twice.
+
+**What it moved.** The suite needed one real change: `balance.test.ts` counted
+seasons finishing above the £6m they started with, and that stops discriminating
+once the economy is right — a company ends with £10m to £36m, so both skills
+clear the line together, identically. The gap it used to report *was this bug*,
+hurting the weaker bot more. The margin is the measurement now, and it is a real
+one:
+
+    dating_apps   survivor 36,683,336   filler 28,892,861   1.27x
+    podcasts      survivor 19,365,228   filler 10,330,679   1.88x
+    mmos          survivor 21,302,851   filler 14,862,703   1.43x
+    project_saas  survivor 34,063,677   filler 25,313,778   1.35x
+
+Also worth knowing: the plant's advantage drops from 4.62x to **2.56x** with the
+compounding gone, which is a third of the story that measurement was telling.
+
+### Closed: the harness froze the economy, and the levels have been re-derived
+Fixed above was the compounding. The other half was that a caller passing no
+economy got a *constant* one for the whole season — the base never advanced, so
+demand never moved. The server was never affected (`tickSeason` passes the
+period's economy); `every-market-winnable.test.ts` and every scratch sweep were.
+
+Both now pass `economyFor(seasonId, period, periods)`, as the server does. **The
+levels in this document were measured against an economy that does not happen,
+and here is what they actually are:**
+
+    keeping an idle plant     reported 4.62x → 2.56x with compounding fixed → 2.00x
+    scoring inversions        reported 30% before the earnings term, 21% after → 8%
+    Nova markets winnable     8/8 seeds, every market, no bankruptcies anywhere
+    quorumcast                6/8 (two seeds with no profitable plan)
+
+Two of those are worth saying plainly. The plant's dominance — four experiments,
+three write-ups, "the only decision in the game" — was **mostly this bug**: 1.98x
+is an ordinary important decision, not a lever that swamps the others. And the
+earnings term is twice as effective as it looked.
+
+### Closed: a falling season is one where holding the money is the right play
+Switching to a real economy immediately failed four cases, all on the one season
+seed that opens at the top of the cycle: dating apps 910,802 against 940,139,
+and worse in three generated markets.
+
+That is not a defect, and the test was wrong rather than the game. The economy is
+a cycle; a season opening at the top of it falls all the way down (seed "h" runs
+1.118 to 0.908 across sixteen quarters). Spending into that is a mistake the desk
+warns about a period ahead — `outlook` is computed from the step to the next
+period, reads "tightening", and is on the screen. So holding is the better play,
+and a test that demanded spending beat holding was asking the game to reward a
+signposted mistake.
+
+The guard now asks only that a falling season leaves a business standing, and
+keeps the full claim for flat and rising ones. "Beaten by filing nothing" counts
+in the sweeps are high for the same reason and are not a fault.
+
+### Closed: there were only seven economies, and the comment said otherwise
+`economyFor` offset each season's position in the business cycle by `seed % 7`
+against a cycle nine years long — seven possible phases however many seasons
+exist, so the line beside it ("offset per season, so no two seasons sit at the
+same point in it") was false. Across sixteen season ids there were **six**
+distinct demand trajectories: the same boom, the same trough, in the same
+quarter, shared by two seasons in three.
+
+A prime modulus read as a fraction of the cycle fixes it. **Sixty season ids now
+give sixty distinct economies.** The cycle's length and depth are untouched;
+only where a season starts in it.
+
+It reshuffled every season, and the four properties that failed with it in each
+turned out to be the test rather than the game:
+
+  - **Two of them were the harness still freezing the economy.** `balance.test.ts`
+    and `a-season-not-a-period.test.ts` both called `resolveYear` without one,
+    so a sweep whose whole purpose is to see past the economy was running with
+    it nailed down. Both now pass the period's economy, as the server does.
+  - **The survivor-versus-filler gap was a sample of four.** At four seasons a
+    market, project SaaS showed the filler six per cent ahead; at ten the
+    survivor is twenty-seven per cent ahead, and the gap is 1.27x to 1.68x in
+    every market. A season has an economy in it and four is not enough to see
+    past which part of the cycle they landed in.
+  - **Two were the fixture sitting in the wrong part of the cycle.**
+    `a-season-not-a-period` ran on a seed that falls 1.108 to 0.880, the
+    steepest decline any seed gives, where holding the money is the right play
+    and the engine is correct to score it so. That file is about cadence and
+    about a price nobody can pay; it now runs in a flat season (0.966 to 0.972)
+    where neither a tailwind nor a headwind decides anything. A *rising* season
+    was tried first and is wrong for the opposite reason — it carries a company
+    that does nothing to a small profit, which is true of a real business in a
+    growing market and says nothing about whether filing nothing costs.
+
+### Withdrawn: growth does pay, and the one case where it does not is a windfall
+Recorded as a fact about thin-margin markets. It was neither thin margins nor a
+flat season. On genuinely flat seasons — seeds whose demand moves by half a
+point across sixteen quarters — spending the most on offer is the best play in
+**every** market, and by a lot:
+
+    dating_apps 7.4x   drone_delivery 37.7x   podcasts 43.1x   restaurant_chain 3.3x
+    construction 29.1x   project_saas 5.2x   mmos 63.6x
+
+The case that looked broken was drone delivery on one seed, and the cause is the
+year's events. With them off, spending beats holding 2.2x there, as everywhere.
+With them on, the *holding* company's value rises from 65,286 to 759,232,
+because that seed draws "the category is suddenly fashionable" twice and its
+customers go from 2,232 to 8,690.
+
+The windfall multiplies both companies by about 3.9x — it does not favour the
+idle one. What it does is make the money the other one spent redundant: the
+growth it bought arrived free. So in a season with a large positive demand
+event, spending on growth is waste, and holding wins. That is a defensible
+lesson rather than a fault, and it is only visible at all because events are
+always on in play.
+
+Worth keeping for the next person: measuring anything about "does playing well
+pay" on a single seed will find the events on that seed, not the property.
+
+Also corrected while here: the guard's spend ladder was 0.06 and 0.12 of the bank
+*per quarter* — a quarter to a half of everything, every year. That is not
+competence, it is spending hard, and the score now punishes it correctly. Four
+rates from 0.01, and the best of them is what "played competently" means.
+
+### Closed by measurement: quorumcast's two dead seeds
+The one market not 8/8 under a real economy. It is 8/8 **with the year's events
+on**, which is how every season actually runs — `tickSeason` passes no options,
+so events are never off outside a test. With them off it is 6 of 8, the two
+seeds being `m` and `w`, both of which *rise*; they open in a trough and a
+market of 8,000 people never clears break-even before it lifts.
+
+Raising `PRICE_ROOM_FOR_A_BUSINESS` from 28 to 40 fixes them, and the suite stays
+green either way. It is not worth it: the bar is what lifts a generated market's
+prices, and 40 takes the sea-swimming app from £35 a year to £121, which is not
+a swimming app. Paying that to fix a condition that does not occur in play is
+the wrong trade. Recorded rather than fixed, with the number to raise if the
+judgement changes.
+
+### Withdrawn: there is nothing wrong with the monthly season length
+Recorded earlier as the sharpest open problem in this document: "nothing a
+founder decides pays off in a monthly season", measured at 1.00x against filing
+nothing at two years and 1.49x at four, with the conclusion that the product's
+"closest to your actual week" option was inert.
+
+It is not. Re-measured with a real per-period economy and a spend ladder that
+includes frugal rates, monthly at its default two years:
+
+    podcasts          pays in 7/8 seeds   1.79 1.42 1.08 1.92 1.35 0.91 3.42 1.82
+    project_saas      pays in 7/8         0.99 1.31 1.13 1.74 1.49 1.57 1.77 1.45
+    restaurant_chain  pays in 8/8         1.01 1.10 1.08 1.44 1.14 1.16 1.48 1.20
+    dating_apps       pays in 7/8         0.71 1.20 1.09 1.75 1.35 1.25 1.82 1.16
+    mmos              pays in 8/8         1.77 1.73 1.19 1.99 1.25 1.03 2.24 1.88
+
+Building the business pays in seven or eight seasons of eight, typically by ten
+to eighty per cent, and the handful below one are the falling seasons where
+holding the money is the right play anyway. `DEFAULT_YEARS.monthly = 2` and the
+reasoning beside it — "two years is the shortest span in which a monthly table
+sees its own work arrive" — hold up.
+
+The old figure had two faults stacked. The economy was frozen at the opening
+period, so a monthly season never saw demand move; and the only spend rates
+tried were a quarter and a half of the bank a year, which the score punishes
+because it should. Neither the cadence nor the lags were ever the problem, and
+the lag-speed experiment that failed to fix it failed because there was nothing
+to fix.
+
+**Third time a measurement error produced a finding.** The three were: weather
+compounding because no economy was passed, the economy frozen for the same
+reason, and a spend ladder that only contained bad answers. Anything in this
+document measured before the economy was fixed should be read with that in
+mind — the defects stand, because they were found by comparing runs under
+identical conditions, and the levels have been re-derived where it mattered.
+
+## Whether a market can be entered at all
+
+### Closed: rivals held more of a market than it was written with
+`seedIncumbents` weighted each rival's hold by how well a segment suited its
+posture, and the comment said it then scaled the result back to the share the
+niche says they own. Nothing did. `fit` averages about 1.1, so what was written
+as 90% was seated anywhere from 84% to **113%** of a segment depending on the
+market and the season's seed.
+
+Above 100% is the part that mattered. `allocate` sizes the unowned pool as
+demand minus what is held, so a segment seated over demand opened with a
+negative pool, clamped to zero, and stayed shut: a founder playing well won
+**zero customers in sixteen quarters, in every segment, at every level of
+spending**, with nothing on screen saying why. Two of six sampled season seeds
+in one Nova market were unwinnable for this reason alone, and restaurant chains
+seated its rivals holding 102% of the market in an ordinary season.
+
+Now scaled across the market to the written share, with a cap
+(`SEGMENT_HOLD_MAX`) so no single segment runs over. Segments still vary — some
+soft, some hard — because the weak flank is how a newcomer gets in. What is
+gone is the segment that was shut before anyone arrived.
+
+### Closed: a below-trend economy closed the market completely
+Rivals were seated against the sizes a market is *written* with, while a
+segment contains `size * economy.demand` people and the opening economy is
+drawn anywhere in `1 ± 0.12`. Any season drawing below 0.90 therefore opened
+over-subscribed, with the same dead result as above.
+
+Fixed asymmetrically, in `buildWorld`: a bad economy shrinks what the rivals
+hold, a good one does not grow it. Both halves earn their place. Seating them
+against demand in a *boom* took the newcomer's opening away instead — the pool
+a founder enters against halved, from 21.8% of the market to 11.2%, and a
+five-team season that left several companies standing left one. A boom's new
+demand is genuinely unserved, and it should go up for grabs.
+
+### Closed: the open share was not a knob
+`TRULY_OPEN_SHARE` claims a tenth of a market has no supplier, but only the
+fragmented tail respected it: the tail is seeded as "everything the named
+rivals left over, above the open share", so writing the rivals *smaller* simply
+handed the difference to the tail and left a newcomer exactly as much room as
+before. A market's room could not be adjusted at all.
+
+Markets can now say (`niche.openShare`), and dating apps says a sixth, which is
+the room it has always actually had.
+
+### Closed: a bot could not afford the cheapest region in the game
+A one-off was judged against 15% of headroom. A dating-apps bot finished a
+season holding £120,850 next to a £50,000 entry it had never been allowed to
+consider. Now a third for a survivor, and still a sixth for a filler — raised
+for both alike it worked and closed the gap between playing well and going
+through the motions from 13 points to 6, which is the other thing being
+measured.
+
+### Closed: the cash bridge did not add up for a company that ran out
+When there is neither cash nor credit, the shortfall becomes debt and the bank
+balance is floored at zero. The bridge had no line for it, so the year's
+movements ended below zero while the balance read nought — out by exactly what
+the company failed to pay. Found by another session running the suite against
+an uncommitted tree, which is worth saying because nobody had run it yet.
+
+### Closed: every company opened with room for a region it would never hold
+The opening plant was sized against `market * home.weight * TRULY_OPEN_SHARE`
+— every customer in the home region with no supplier, which is the whole pool
+every company in the season competes for. Sizing one company's plant against
+all of it assumes that company wins the lot, which allocation never lets
+anybody do: a newcomer takes about a twentieth of its region's pool in the
+first period.
+
+Idle room is not free, and this is what it cost. In drone delivery a founder
+opened with room for 38,214, served 1,662, and paid **£72,725 a quarter in idle
+capacity** — the largest single line in the accounts, seven times the revenue,
+more than marketing and product together, and incurred before any decision was
+taken. The markets where it was fatal are the ones with the thinnest
+contribution per customer, because there the plant costs more than the
+customers can ever bring in.
+
+Measured over ten markets and eight season seeds, best of four spend rates:
+
+    before   beaten by doing nothing  8 seasons · bankrupt  5 seasons
+    after    beaten by doing nothing  0         · bankrupt  0
+
+`PLANT_SHARE_OF_POOL` is the ceiling coming down to meet the `breakEven` floor
+that was already there. Three fifths, and not less: sized off break-even alone
+the plant stops being related to the opportunity, and a company that buys a
+second region cannot use it — measured, buying one multiplied customers by
+exactly 1.00, because the plant was full either way.
+
+Worth keeping in mind for the next market that reads as unwinnable: what looked
+like a market problem was a cost handed to every company at birth, and it was
+invisible because `idleCapacity` is not one of the lines anybody reads first.
+
+### Closed: drone delivery's biggest segment was priced below what a business costs
+The largest segment in a market is the one the opening defaults size a company
+against. Drone delivery's was novelty orders at £25 against a £10 unit cost, so
+break-even was 9,333 customers — **9.3% of the unowned pool of a home region**,
+where every other market in the catalogue sits between 1.8% and 3.8%. It was
+the only market where paying your people needed more customers than the market
+could realistically hand you.
+
+What that did to a season was worse than making it hard. Outside a boom, the
+worth of a season by how much of its cash the founder spent each period:
+
+    spend    0%      2%      4%      6%      9%     12%
+    worth   48,840  63,840  75,360   8,307      0    0 (bankrupt)
+
+A cliff between 4% and 6%, with nothing on screen to say it was there. At £65 —
+which lands break-even at 2.5% of the pool, between dating apps and podcasts —
+the same sweep rises to a peak at 9% and tapers: a best answer in the middle
+and a price for overreaching, like the other six markets.
+
+It also closed the bot problem this document previously described as separate.
+Survivor bots there went from **0 of 6** ever affording a second region to 6 of
+6, and `bot-play.test.ts` now asserts the rule across every market again rather
+than excluding this one. The bots were not spending badly; they were in a
+market that could not pay for the spending.
+
+Two things worth carrying forward. `voice.test.ts` caught the market's own copy
+still claiming a clinic pays "twenty-eight times a novelty order" when the
+segments now say eleven — prose about the numbers goes stale when the numbers
+move, and that test is the reason it did not ship that way. And the diagnostic
+that found this is a good one to reuse: **break-even as a share of the home
+region's reachable pool**, compared across markets. The outlier was visible at
+a glance and nothing else in the catalogue was close.
+
+### Closed: Nova could write a market nobody could run a business in
+Every rule in `custom-market.ts` checked a market's *shape* — how many
+segments, how big, what the rivals hold, what a region costs to enter. None
+asked whether a company could live in the result.
+
+Nova is asked to write small, because it is writing about a real project.
+Eight markets generated from real briefs all came back under £33m a year and
+five of them under £700,000. A tenth of a market that size, split again across
+five or six regions, is not a business. On the worst of them — a kiln-firing
+marketplace, 9,000 people, £235,000 a year — a founder's home region held
+**270 unowned customers against a break-even of 181**, and nobody was ever once
+profitable: not on any of eight season seeds, not at any rate of spending from
+nothing to an eighth of the bank a period, never in sixteen quarters. The most
+anyone reached was 104 customers of 9,000.
+
+Measured across the eight, playing each on eight seeds at six spend rates:
+
+    a tenth     3 of 8 markets had no profitable season at any spend
+                1 was beaten by filing nothing
+    the rules   8 of 8 winnable, profitable, never bankrupt, never beaten
+
+Two rules, deliberately not held to the same bar. `openShareFor` opens the
+market up until the home region holds enough unowned customers to clear
+break-even — how much of a young market is unserved is a number nobody wrote
+down and nobody will miss. `pricedForABusiness` lifts prices only for whatever
+that could not reach, because a price is something Nova *said*. Held to the
+same bar, a sea-swimming app's prices went up 246-fold, from £1 a year to £246;
+split, the same eight markets get there on a 20-fold lift with the open share
+doing the work, and every price moves together so who pays more than whom
+survives.
+
+Two things worth keeping. The diagnostic that found it — **break-even as a
+share of the home region's reachable pool** — is the same one that found drone
+delivery, and it is the first thing to reach for when a market reads as
+unplayable. And the rule ranks the seven hand-written markets about the way
+playing them does: it asks least of project SaaS, profitable on eight seeds of
+eight, and most of drone delivery and podcasts, profitable on two. That is the
+evidence it measures the right thing rather than being a number chosen to
+rescue the markets it was written for.
+
+## The catalogue pass, 30 Sept 2026
+
+Seven hand-written markets, eight season seeds, seven strategies each (lean,
+grower, premium, cheap, sensible, tiered, product) with the year's events on.
+
+### Closed: a recall cost the same in a market a two-hundredth the size
+`events.ts` held one piece of money and it was the one nothing scaled: a flat
+£450,000. Four tenths of the opening bank in a catalogue market, and 29.1x the
+*entire* bank in an allotment-glut marketplace, 22.5x in a kiln-firing one,
+17.3x in a parish-council one. Recalls fire there three or four times across
+eighteen seasons, so a founder could lose twenty-nine times everything to one
+draw, with no decision that would have made it smaller. `atScale` now applies.
+
+Found only because the sweeps ran with events on for the first time.
+`every-market-winnable.test.ts` now runs both ways.
+
+### Not the fault it looked like: most of the catalogue's weakness was the harness
+Measured with strategies that never cut an over-built plant, the seven markets
+looked alarming — thirteen bankruptcies in construction alone, ten across the
+catalogue. Almost all of it was the plans: `capacityTarget: max(capacity, ...)`
+can only grow, so a company that had priced itself down to two customers went
+on paying £49,613 a quarter for 1,588 units of plant it would never fill. A
+person cuts. With plans that cut by a fifth a period, bankruptcies fall to
+**three in 336 runs**, and every market has a plan profitable on six seeds of
+eight or better.
+
+Worth remembering before reading the next alarming sweep: a strategy that
+cannot do something a player obviously would is not evidence about the market.
+
+### Withdrawn: "filing nothing out-scores deliberate play"
+Recorded here earlier the same day, with the cause given as `valuation =
+revenue x 1.2 + assets - debt` having no term for profit. Both halves were
+wrong and the correction is worth more than the claim was.
+
+**The measurement was mine, not the game's.** Every strategy in that sweep cut
+its plant toward what it currently served. Run the same strategy with the same
+spending and no plant cut:
+
+    restaurant_chain, median of eight seeds, events on
+    grower, cutting the plant     revenue 329,350/qtr   profit -26,616   value 1,580,881
+    grower, keeping it            revenue 904,872/qtr   profit +39,316   value 4,343,384
+    filing nothing                revenue 363,566/qtr   profit +28,679   value 1,745,117
+
+Filing nothing was not beating deliberate play. It was beating seven strategies
+that had each capped themselves below what they could sell, and it keeps the
+plant it opened with because `defaultDraft` carries the capacity target
+forward. With one plan in the pool that manages its plant, filing nothing falls
+from first of eight to between second and fourth of nine, and remains **last in
+all fourteen markets Nova wrote**.
+
+**And a profit term does not fix it, because there was nothing to fix.** Tried,
+measured over twelve markets: adding cash at face value makes filing nothing
+rank *first* in five of seven catalogue markets, because a passive company
+keeps the opening bank while active ones spend theirs. Adding earnings at four
+or eight times moves nothing — in those markets a passive company genuinely has
+both the higher revenue and the positive profit, so no formula built on those
+two can rank it below. The scoring function is not what was wrong.
+
+The lesson is the same one as the catalogue pass above, twice in one day: a
+strategy that cannot do what a player obviously would is not evidence about the
+game. Both times the harness was the finding.
+
+### Open: keeping room is worth more than any decision in the catalogue
+Identical spending, the only difference being whether the plant is cut toward
+what is served:
+
+    dating_apps 2.94x   drone_delivery 4.62x   podcasts 4.34x
+    restaurant_chain 2.75x   construction 2.29x   project_saas 3.11x   mmos 3.45x
+    cairnwait 1.31x   kilnshare 1.32x
+
+Keeping capacity is worth between 2.3x and 4.6x the company's final value in
+every hand-written market, and 1.3x in the markets Nova writes. A company can
+win several times what it holds in a period, so the plant — not appeal, price,
+product or spend — is what decides the season, and retiring idle plant is
+punished harder than any pricing mistake.
+
+**Not the overflow, and not the price of idle room.** Both were swept:
+
+    SPILL_TOPUP_MAX  8 → 4.62x   4 → 4.62x   2 → 4.61x   1 → 4.70x
+    IDLE_RATE     0.08 → 4.62x  0.15 → 4.27x  0.25 → 4.65x  0.40 → 2.49x
+                                 (5 failures)  (16)         (21)
+
+Five times the idle price still leaves the ratio at 2.49x while breaking
+twenty-one tests, so the cost of holding room is not what is mispriced. What is
+left is the ceiling itself: `allocate` caps merit wins at capacity, and a
+company with room can win several times its holdings in one period, so the
+option on that capacity is worth far more than any plausible rent on it. The
+lever is the *growth rate* a company can absorb, which nothing currently
+bounds, and that is a design change rather than a constant.
+
+Worth knowing before touching it: idle cost is also what makes a thin-margin
+market punishing (drone delivery, above), so it is one number pulling two ways.
+
+### Closed: owning something for a whole year made the year worse
+A company holding a patent and a distribution deal won 25,118 customers at the
+allocation against 15,338 without them, and finished the year with **fewer**
+customers than the same company owning nothing. Merit wins were monotonic; the
+whole inversion was in the overflow.
+
+Customers a full rival turns away are shared among the companies with room, in
+proportion to `appeal² × reach × fit` — and that took no account of how much
+room each one had. A rival 105 customers short of its own capacity took 96.9%
+of the claim on 45,695 people, kept its 105, and the other ~44,000 evaporated
+instead of passing to the newcomer with room for 27,373. It only had room
+because the *stronger* newcomer had taken enough on merit to leave it short, so
+improving the product moved the newcomer from all of the overflow to a
+thirtieth of it.
+
+Each claim is now scaled by the share of the rejected a company could actually
+hold — `weight × min(1, room / count)`, a single pass rather than a
+redistribution, which is what an earlier water-filling attempt got wrong. The
+year is monotonic: **13,673 plain · 17,108 patent · 17,588 deal · 21,638
+both**. `SPILL_TOPUP_MAX` comes down from 8 to 3 with it, and that also fixes
+two things the earlier attempt broke — a passive company loses money again, and
+a bought region is worth its price.
+
+The four-team bar in `balance.test.ts` was re-derived from 4% of market
+potential to 3%, with the reason written there: closing the leak sends the
+turned-away to whoever can use them, which in a crowded market is the strongest
+company, and every also-ran came down about 15%. All four teams still finish
+with real companies — 471,887 / 1,250,246 / 73,351 / 87,212 customers, none
+bankrupt — so what the bar stands for is unchanged.
+
+### Closed: the smallest generated markets paid for it, and have been paid back
+Closing the overflow leak took `SPILL_TOPUP_MAX` from 8 to 3, and the two
+smallest generated markets lived on that top-up. Measured over eight seeds and
+eight strategies, seeds with a plan that turns a profit:
+
+    quorumcast   8/8 → 5/8 with events off, 8/8 → 7/8 with them on
+    hearthmap    8/8 → 7/8 with events off, 8/8 → 8/8 with them on
+
+`PRICE_ROOM_FOR_A_BUSINESS` from 25 to 28 gives them back — 8/8 with events on
+for every generated market, which is the condition real play runs in. Twenty-
+eight is the least that does it, and the reason not to go further is what it
+costs the fiction: at 40 the sea-swimming app's prices go to £121 a year, which
+is not a swimming app any more. At 28 it is £35.
+
+`pricedForABusiness` also now converges in twelve passes rather than four.
+Raising prices raises what a market is worth, which raises what its people
+cost, so each pass closes only part of the gap; four of them stopped about 5%
+short of the bar rather than at it.
+
+### Closed: no test exercised a market Nova wrote
+`every-market-winnable.test.ts` walked `NICHES` — the seven hand-written
+markets — and was most of the balance contract in this repo. It had never once
+touched a generated market, which is how the regression above went through CI
+green and was only caught by a scratch harness.
+
+It now builds four markets through the same `buildCustomMarket` the server
+uses, so `openShareFor` and `pricedForABusiness` are exercised rather than
+assumed: a marketplace whose biggest segment is its cheapest, a consumer app
+whose biggest segment pays about what it costs to serve, a public-sector B2B
+market with few buyers and six regions, and one with real money in it. They are
+small on purpose — every market generated from a real brief came back under
+£33m a year and most under £700,000, which the hand-written seven cannot stand
+in for.
+
+A fourth property is asserted for these that the catalogue markets are not held
+to: **the season can be run at a profit**. That is what the overflow change
+cost, and the other three — wins customers, stays solvent, beats filing nothing
+— all passed throughout it.
+
+**Two harness lessons in one day, both of which produced wrong numbers.** The
+5/8 above was measured with events *off* while a second harness measured the
+same market at 7/8 with them on, and the two were compared as though they were
+the same thing. Before quoting a number from a scratch harness: check what it
+is holding constant.
+
+### Closed: the join between a real company and a season had no tests
+`company-baseline.ts` turns a business's weekly check-ins into a starting
+position for the simulator. It is read by `decision-sim-routes.ts`,
+`marketing-routes.ts` and the desk in the client, and it had **no tests at
+all** — 168 lines of translation between the two halves of the product, which
+is exactly where a number drifts without anybody noticing.
+
+Ten cases now hold it to the contract it documents for itself: a week's
+takings become a month's revenue, cash is the *latest* filed balance rather
+than an average of the bank, a field the owner has typed is never overwritten,
+and what the check-ins cannot answer is reported as missing rather than
+invented — no cost base derived from a margin from a revenue, and a software
+company's new-revenue figure is not read as a total.
+
+Checked by mutation rather than assumed: dropping the owner-override guard
+fails one case, and taking cash from the oldest week instead of the newest
+fails another. A test that passes against the bug it was written for is worth
+nothing, and two of the findings in this document were exactly that.
+
+### Closed: a season in flight would have been repriced under the players
+`marketOf` rebuilds a season's market through `buildCustomMarket` on every
+read — deliberately, because the stored row may have been written by an older
+version of this code. That is safe while the cleaner only *clamps*: run a bound
+twice and nothing moves.
+
+`openShareFor` and `pricedForABusiness` are not bounds. They open a market up
+and raise its prices until a business is possible in it. Measured against
+markets stored before those rules existed, the next read would have done this:
+
+    kiln firings     prices x6.3   open share 0.10 -> 0.35
+    sea swimming     prices x35.0
+    parish minutes   prices x4.9
+    shift swapping   prices x1.0   open share 0.10 -> 0.21
+
+A company that priced at 20 against a reference of 15 would come back to find
+itself priced at 20 against 95 — cheap beyond anything it chose, every
+expectation and ceiling in its market moved, halfway through a season it was
+playing. Nobody gets to change the game under the people playing it.
+
+Both transformations now happen when a market is *written* and never again
+(`BuildOptions.fresh`, set by `parseMarket`). A read gets all of the validation
+and none of the rewriting, so a season keeps the market it started with and a
+new one gets the rules. The round trip was checked first and is stable —
+building twice moves nothing — so the risk was only ever across versions, which
+is exactly the case a rebuild-on-read is there to handle and the one it could
+not handle here.
+
+The trade is stated plainly: a season started before the rules keeps a market
+that may be hard or unplayable. That is the right side to err on, and it stops
+mattering as those seasons finish.
+
+### Closed: `opening.ts` is wired
+169 lines that were written, finished, and connected to nothing — no import, no
+column, no control. Now a season can open two ways, which is what it was for:
+
+  - **Funded and level** — money in the bank, a credit line, nobody to serve,
+    everyone identical. Every season until now, and still the default, so
+    nothing changes for anybody who does not ask.
+  - **Where you actually are** — the cash, credit, rating and customers the
+    work so far implies. Its own comment makes the case: "a simulation that
+    hands them six million pounds is teaching them to run a company that is not
+    theirs."
+
+Five pieces: `simSeasons.opening` and `simSeasons.openingStanding` (migration
+0087, both additive with defaults so existing rows are untouched), a standing
+snapshotted from the project's path at creation, `buildWorld` applying
+`atStanding` after `startingCompany`, the tick passing the season's choice
+through, and a control beside the cadence picker.
+
+The standing is taken **once, when the season is made**, not read live: a
+season is a fixed question about a fixed starting point, and a founder who
+ticks off three milestones in week two has not changed the company they
+started with.
+
+Eight tests, and the two that matter most are the ones about what did *not*
+change: a competitive season is bit-for-bit what it always was even when a
+standing is supplied, and no project — however far along — opens richer than
+the funded contest. "Where you actually are" is a different question, not a
+bonus.
+
+### Closed, mostly: the score had no term for whether the business worked
+`valueOf` was `sales x 1.2 + assets - debt`. Nothing in it asked whether the
+sales paid for themselves, so volume was the whole of it. Measured across
+twelve markets and nine ways of playing them, over every pair where one company
+clearly made money and the other clearly lost it:
+
+    before   21 of 70 pairs (30%) ranked the profitable company below the loss-making one
+    after    15 of 70 (21%)
+
+In restaurant chains a plan earning £58,772 a quarter came eighth of nine while
+one losing £49,122 came fourth.
+
+There is now an earnings term at six times annualised profit, bent into a band
+of 0.75 of a year's sales either way. Both halves are necessary and both were
+found by failing:
+
+  - **Unbounded** an eight-times multiple fails in both directions at once. A
+    heavy loss drives every company in a hard market to the zero floor, where
+    they all tie and the score says nothing; and on the other side it makes the
+    company that spent nothing and banked a small profit the best-scoring one
+    in four markets.
+  - **Hard-banded** it ties again, at the band edge this time. Two companies
+    with identical sales and very different margins scored the same to the
+    pound — which is the third time a hard bound has produced exact ties in
+    this engine, after the spill and the intake.
+
+So the band is `tanh`, which approaches it without ever arriving: more earnings
+is always worth more, and the bound still holds.
+
+Twenty-one per cent is not nought, and the remainder is the band doing its job
+— a company with enormous sales and a small loss still outranks a tiny
+profitable one, which is defensible and is what the bound is for. Going further
+means weighting earnings until they decide the season, and that fails the tests
+above.
+
+This was also the thing the plant's dominance kept pointing at: there was no
+route to the score except customer count. There is one now, and it is worth
+re-running the four capacity experiments against it before concluding anything
+further about the plant.
+
+### Open, and a product question: nothing a founder decides pays off in a monthly season
+Balance had only ever been measured quarterly. Running the winnability sweep at
+a monthly rhythm found it immediately. Building the business, measured against
+doing nothing at all, by how many years the season runs:
+
+    podcasts          2yr 1.00x   3yr 1.00x   4yr 1.49x
+    project_saas      2yr 1.00x   3yr 1.00x   4yr 1.41x
+    restaurant_chain  2yr 1.01x   3yr 1.02x   4yr 1.25x
+    dating_apps       2yr 1.01x   3yr 1.01x   4yr 1.58x
+    mmos              2yr 1.08x   3yr 1.08x   4yr 1.72x
+
+`DEFAULT_YEARS` gives monthly two years, reasoning that "every lag in this game
+is a year long ... two years is the shortest span in which a monthly table sees
+its own work arrive". The direction was right and the number is not.
+
+**It is not the rhythm.** A *quarterly* season cut to two years is just as flat
+(3,057,729 doing nothing against 3,051,750 spending), and a monthly season given
+four years pays *better* than a quarterly one (12,768,910 against 11,072,392).
+It is the length, and monthly is simply the cadence whose default is short.
+
+That matters more than it sounds, because monthly is the option the product
+offers as "closest to your actual week" — the one a founder rehearsing their own
+business is steered towards, and the one where nothing they decide pays for
+itself.
+
+**Shorter lags were tried and are not the answer.** A monthly season releasing
+its queues faster than real time — brand over six months rather than twelve,
+room sooner, a hire useful in half the time — leaves the two-year case exactly
+where it was at every speed tried:
+
+    MONTHLY_LAG_SPEED   2      3      4      6
+    podcasts   2yr      1.00x  1.00x  0.99x  0.98x
+    project_saas 2yr    1.00x  1.00x  1.01x  1.00x
+    dating_apps 2yr     1.02x  1.02x  1.02x  0.99x
+
+And the faster settings make longer seasons erratic rather than better
+(restaurant chains at four years goes 1.25x to 0.95x, mmos 1.72x to 0.99x). So
+the flatness is not the lags: it is time in market. Customers come out of the
+unowned pool at a rate the pool and the plant bound, and two years is not long
+enough to take much of it however fast brand and quality arrive.
+
+What is left is a season far longer than a fortnight, or accepting monthly as a
+short flat rehearsal. What was done instead: the winnability guard now runs
+monthly and holds it to customers, solvency and running at a profit, with this
+measurement written where it will be read.
+
+Worth noting the near-miss. A first run of the monthly sweep looked like a
+cadence bug — one market went bankrupt and annualised costs came out 15x
+quarterly's. It was the harness spending a share of the bank *per decision*
+rather than per year, so a monthly season spent three times as much: marketing,
+product and operations all came out at exactly 3x annualised while salaries and
+idle capacity matched, which is the tell. Third time this week the harness was
+the finding.
+
+### Re-run against the new score: the plant is a big decision, not the only one
+The four capacity experiments were worth re-running once the score had a term
+for earnings, because what they kept pointing at was that nothing reached the
+score except customer count. Two things came out of it.
+
+**The earnings term does not reduce the plant's pull** — 4.62x becomes 5.39x at
+worst. A fuller plant is more revenue *and* more profit, because the fixed costs
+are already paid, so the new term rewards it as well. Construction and
+restaurant chains improved (2.29x to 1.57x, 2.75x to 2.09x); podcasts and drone
+delivery got slightly worse.
+
+**But the plant was never the dominant lever, and the earlier framing was
+wrong.** Set against the spread across ways of playing the same market:
+
+    restaurant_chain   best-to-worst strategy 7.6x   ·   cutting the plant 2.09x
+    project_saas       best-to-worst          7.8x   ·   cutting the plant 3.17x
+
+The plant is worth a third to a half of what the rest of the decisions are worth
+between them. "Keeping room decides the season" was measured against nothing
+else, and it does not survive being measured against the alternatives.
+
+What the new score visibly fixed, in the same table: `cheap` in restaurant
+chains has the second-highest revenue in the market and loses £49,122 a quarter,
+and it has gone from fourth of nine to **last**. The two profitable plans it used
+to beat, `premium` and `lean`, have both passed it. That is the scoring change
+doing exactly what it was for.
+
+So this is downgraded from a defect to a fact about the game: capacity is a good
+investment and retiring it while you could still sell is a real mistake, priced
+about as heavily as one or two other bad calls. Nothing further is owed here
+unless the ratio moves again.
+
+### Closed by measurement: keeping room decides the catalogue season
+Identical spending, the only difference being whether the plant is cut toward
+what is served: keeping it is worth **2.3x to 4.6x** the company's final value
+in every hand-written market, and 1.3x in the markets Nova writes.
+
+Four things have now been tried against it, and the way they fail is more
+informative than any of them individually:
+
+    the rent          IDLE_RATE 0.08 -> 0.40     4.62x -> 2.49x, 21 tests broken
+    the overflow      SPILL_TOPUP_MAX 8 -> 1     4.62x -> 4.70x, no effect
+    a bound on wins   room still free to receive 4.62x -> 4.46-5.30x, worse
+    a bound on both   hard, saturating, and
+                      sub-linear intake          4.62x -> 2.5-4.1x
+
+The third one is the tell: bounding what a company can *win* while leaving its
+room free to *receive* made the magnet worse, because the customers the bound
+stops you winning become somebody's turned-away and the big plant takes them in
+as spill instead. The pressure does not go away, it moves.
+
+The fourth is the other tell. A hard ceiling ties every company that reaches
+it — four tests failed on exact ties, including a company with a patent and a
+distribution deal winning precisely as many customers as one owning nothing,
+which is the fault this engine has already had once. A saturating ceiling ties
+them slightly further up. Sub-linear intake (`limit * (asked/limit)^0.5`) has no
+ceiling and no ties, and at the loosest setting that leaves only three tests
+failing the magnet is back to 4.14x — which is to say, gone.
+
+**The likely reading: this is not a mispriced constant.** Capacity is the
+binding constraint on customers, and customers are the only thing the season is
+scored on, so anything that reduces what capacity is worth reduces what playing
+well is worth by the same amount — they are the same lever seen from two ends.
+Making the plant matter less means giving the other decisions a route to the
+score that does not run through customer count: margin, retention, what a
+customer is worth rather than how many there are. That is a design change to
+what a season measures, not a number in `market.ts`, and it should be taken
+together with the valuation having no profit term (above).
+
+Four experiments are written down here so the fifth person does not run them
+again.
+

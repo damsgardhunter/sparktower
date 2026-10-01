@@ -10,13 +10,13 @@
  * project's blurb, which measures how well the description was written, not
  * how the builder is doing.
  *
- * So the numbers here follow four rules:
+ * So the numbers here follow five rules:
  *
- *   1. **Volume counts, with diminishing returns.** `saturate` is used rather
- *      than a hard cap: the fiftieth finished task is worth less than the
- *      fifth and more than nothing, so there is never a point where more work
- *      stops helping, and never a cliff where a tenth of a percent of extra
- *      effort doubles a pillar.
+ *   1. **Volume counts, with diminishing returns, up to a stated target.**
+ *      The fiftieth finished task is worth less than the fifth, so there is no
+ *      cliff where a tenth of a percent of extra effort doubles a pillar — but
+ *      every term does eventually arrive somewhere, at a number written down
+ *      in `REPUTATION_TARGETS` and shown to the builder. See `toward`.
  *   2. **Rates only where the denominator is real.** An on-time rate over
  *      three milestones is noise, so a rate needs a minimum sample before it
  *      counts, and reads as neutral until it has one. Otherwise one lucky
@@ -27,6 +27,10 @@
  *   4. **Recency is visible but not punitive.** A builder who did good work a
  *      year ago keeps most of it; the consistency term is what rewards
  *      turning up lately, rather than decaying everything else away.
+ *   5. **100 is extraordinary, and 100 is reachable.** Every term reaches its
+ *      full marks at its target, so the index the profile promises — "out of
+ *      100" — is a number a builder can actually finish at. It used not to be:
+ *      see `toward`.
  *
  * Pure: no database, no clock, no model. `server/reputation-inputs.ts`
  * gathers the facts and `server/reputation.ts` stores the result, so this
@@ -54,6 +58,105 @@ export function saturate(value: number, half: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return value / (value + Math.max(1e-9, half));
 }
+
+/**
+ * The same shape, but it arrives: 0 at nothing, full marks at `full`, and
+ * diminishing returns all the way there.
+ *
+ * ## Why `saturate` could not be the whole story
+ *
+ * Every term in all four pillars used to be a `saturate`, and a `saturate`
+ * never reaches 1 — so no term could ever pay out in full, so no pillar could
+ * reach 100, so the index could not either. The profile card says "out of 100"
+ * under the number and draws a bar to 100 beside every pillar, and none of that
+ * was true. The ceiling worked out at 99, and it was worse than the arithmetic
+ * suggests: because the curve flattens, the last few points cost absurd
+ * amounts. Market needed something like a hundred thousand followers *and* a
+ * hundred thousand backers *and* a hundred thousand dollars to read 99, and a
+ * 25x increase in money raised — $20k to $500k — bought two points of index.
+ * A scale whose top is unreachable and whose top third is priced in orders of
+ * magnitude is not a scale, it is an asymptote with a number painted on it.
+ *
+ * So volume terms use this instead. `full` is the target, written down in
+ * `REPUTATION_TARGETS` and meant to read as *extraordinary*: a year of serious
+ * work, not a lifetime and not an afternoon. Below it the square root keeps the
+ * diminishing returns that were the point of `saturate` — the fortieth task is
+ * worth less than the fourth — and a quarter of the way to a target is already
+ * worth half its marks, so starting is visibly rewarded.
+ *
+ * Past the target it pays nothing more, which is the one thing `saturate` was
+ * written to avoid. The original objection was that a cap makes "the eleventh
+ * thing worth exactly nothing and the tenth worth as much as the first"; only
+ * the first half of that survives here, because the curve under the cap is
+ * still concave. And a builder who has finished 40 milestones, shipped 3
+ * projects and turned up 40 weeks of the year does not need the score to keep
+ * paying them. They have finished. That is what 100 is supposed to mean.
+ *
+ * `saturate` stays exactly as it was: the market simulation is built on it in
+ * two dozen places, where an unreachable ceiling is the correct model of
+ * spending money on advertising.
+ */
+export function toward(value: number, full: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const target = Math.max(1e-9, full);
+  return Math.sqrt(Math.min(1, value / target));
+}
+
+/**
+ * What "full marks" means for every counted term, in one table.
+ *
+ * These are not soft guidance, they are the divisors the pillars are computed
+ * from — so this is simultaneously the tuning of the score and the thing the
+ * product can show a builder as "here is what is left". One number, one place,
+ * and no way for the copy on the page to drift from the arithmetic behind it.
+ *
+ * They were chosen to be an outstanding *year*, reachable by one person without
+ * funding or an audience to start from. The old score had no such numbers to
+ * choose, which is how the market pillar ended up implicitly asking for six
+ * figures of donations before it would pay half its money term.
+ */
+export const REPUTATION_TARGETS = {
+  execution: {
+    /** Milestones finished. Roughly one a week, with time off. */
+    milestonesCompleted: 40,
+    /** Tasks finished. Five a week. */
+    tasksCompleted: 250,
+    /** Weeks of the last year with something finished in them — twelve weeks off is still full marks. */
+    activeWeeks: 40,
+    /** Projects taken all the way to "completed". */
+    projectsShipped: 3,
+  },
+  contribution: {
+    /** Tasks finished on projects somebody else owns. */
+    tasksForOthers: 60,
+    /** How many other people's projects that work was spread over. */
+    projectsHelped: 8,
+    /** Milestones closed out on other people's projects. */
+    milestonesForOthers: 10,
+    /** Comments left on other people's work. */
+    feedbackGiven: 50,
+    /** Reactions that feedback drew, which is other people saying it helped. */
+    feedbackAppreciated: 40,
+    /** Updates posted about your own projects. */
+    updatesPosted: 40,
+    /** People you have shared a project with. */
+    collaborators: 10,
+  },
+  market: {
+    /** Dollars pledged to your projects. Ten thousand, not the six figures the old curve implied. */
+    donationsReceived: 10_000,
+    backersCount: 50,
+    followersAttracted: 200,
+    /** Projects with somewhere outside the platform to point at. */
+    externalTraction: 3,
+    projectsLaunched: 4,
+  },
+  strategy: {
+    /** Distinct simulation markets played. Replays of one market still count once — see `simScore`. */
+    marketsPlayed: 4,
+    contestWins: 3,
+  },
+} as const;
 
 /**
  * A rate that admits when it hasn't got the numbers.
@@ -84,7 +187,7 @@ export interface ExecutionFacts {
   tasksCompleted: number;
   /** Of those, the ones inside their due date. */
   tasksOnTime: number;
-  /** Distinct weeks in the last half-year with at least one thing finished. */
+  /** Distinct weeks in the last year with at least one thing finished. */
   activeWeeks: number;
   /** Projects the user owns that reached "completed". */
   projectsShipped: number;
@@ -175,20 +278,31 @@ export interface ReputationFacts {
  * written.
  */
 export function executionScore(f: ExecutionFacts): number {
-  const volume = 32 * saturate(f.milestonesCompleted, 6);
+  const T = REPUTATION_TARGETS.execution;
+  const volume = 26 * toward(f.milestonesCompleted, T.milestonesCompleted);
   /*
    * Punctuality reads as neutral on too small a sample — but only for somebody
    * who has finished something. A builder on their first day has no record to
    * be neutral about, and paying them half of two punctuality terms put a
    * brand-new account above zero for having done nothing at all.
    */
-  const punctuality = f.milestonesCompleted > 0 ? 18 * rate(f.milestonesOnTime, f.milestonesWithDates, 3) : 0;
-  const tasks = 20 * saturate(f.tasksCompleted, 40);
+  const punctuality = f.milestonesCompleted > 0 ? 16 * rate(f.milestonesOnTime, f.milestonesWithDates, 3) : 0;
+  const tasks = 18 * toward(f.tasksCompleted, T.tasksCompleted);
   const taskPunctuality = f.tasksCompleted > 0 ? 8 * rate(f.tasksOnTime, f.tasksCompleted, 8) : 0;
-  const consistency = 12 * saturate(f.activeWeeks, 8);
+  const consistency = 12 * toward(f.activeWeeks, T.activeWeeks);
+  /*
+   * Shipping, which this pillar used not to count at all.
+   *
+   * `projectsShipped` was gathered by `executionFacts`, carried through
+   * `ReputationFacts`, and printed in the breakdown the profile card reads — and
+   * never once multiplied by anything. Taking a project all the way to
+   * "completed" is the single clearest evidence of execution the product has,
+   * and it was worth zero points.
+   */
+  const shipped = 10 * toward(f.projectsShipped, T.projectsShipped);
   /* Progress is only worth reading across more than one project. */
   const progress = 10 * (f.progressProjects >= 2 ? Math.max(0, Math.min(1, f.progress)) : 0.5 * Math.max(0, Math.min(1, f.progress)));
-  return clamp100(volume + punctuality + tasks + taskPunctuality + consistency + progress);
+  return clamp100(volume + punctuality + tasks + taskPunctuality + consistency + shipped + progress);
 }
 
 /**
@@ -202,24 +316,36 @@ export function executionScore(f: ExecutionFacts): number {
  * cannot carry the pillar on their own.
  */
 export function contributionScore(f: ContributionFacts): number {
-  const forOthers = 34 * saturate(f.tasksForOthers, 20);
-  const breadth = 16 * saturate(f.projectsHelped, 3);
-  const milestones = 10 * saturate(f.milestonesForOthers, 3);
-  const feedback = 18 * saturate(f.feedbackGiven, 12);
+  const T = REPUTATION_TARGETS.contribution;
+  const forOthers = 30 * toward(f.tasksForOthers, T.tasksForOthers);
+  const breadth = 16 * toward(f.projectsHelped, T.projectsHelped);
+  const milestones = 10 * toward(f.milestonesForOthers, T.milestonesForOthers);
+  const feedback = 18 * toward(f.feedbackGiven, T.feedbackGiven);
   /* Whether the feedback was worth having, judged by the people who got it. */
-  const appreciated = 10 * saturate(f.feedbackAppreciated, 8);
-  const updates = 8 * saturate(f.updatesPosted, 10);
-  const together = 4 * saturate(f.collaborators, 4);
+  const appreciated = 10 * toward(f.feedbackAppreciated, T.feedbackAppreciated);
+  const updates = 10 * toward(f.updatesPosted, T.updatesPosted);
+  const together = 6 * toward(f.collaborators, T.collaborators);
   return clamp100(forOthers + breadth + milestones + feedback + appreciated + updates + together);
 }
 
-/** Market signal: has anything the builder made reached anybody outside it? */
+/**
+ * Market signal: has anything the builder made reached anybody outside it?
+ *
+ * This is the pillar the old curves treated worst. `34 * saturate(donations,
+ * 5_000)` pays 17 of its 34 marks at five thousand dollars and then crawls:
+ * $100k read 30, $500k read 32, and the 34 was never available at any price. A
+ * builder who raised half a million dollars and one who raised a hundred
+ * thousand scored two points apart, which is not a measurement of anything.
+ * The targets are deliberately the numbers an unfunded builder with no audience
+ * could actually reach in a strong year.
+ */
 export function marketScore(f: MarketFacts): number {
-  const money = 34 * saturate(f.donationsReceived, 5_000);
-  const backers = 20 * saturate(f.backersCount, 8);
-  const followers = 18 * saturate(f.followersAttracted, 15);
-  const traction = 18 * saturate(f.externalTraction, 2);
-  const launched = 10 * saturate(f.projectsLaunched, 2);
+  const T = REPUTATION_TARGETS.market;
+  const money = 30 * toward(f.donationsReceived, T.donationsReceived);
+  const backers = 20 * toward(f.backersCount, T.backersCount);
+  const followers = 20 * toward(f.followersAttracted, T.followersAttracted);
+  const traction = 15 * toward(f.externalTraction, T.externalTraction);
+  const launched = 15 * toward(f.projectsLaunched, T.projectsLaunched);
   return clamp100(money + backers + followers + traction + launched);
 }
 
@@ -292,8 +418,13 @@ export function simScore(f: SimFacts): number | null {
   const best = scores[0];
   const mean = scores.reduce((sum, s) => sum + s, 0) / scores.length;
   const blended = (best * 2 + mean) / 3;
-  /* Playing a second *market* is evidence; playing the same one twice is practice. */
-  const settled = 0.85 + 0.15 * saturate(scores.length - 1, 2);
+  /*
+   * Playing a second *market* is evidence; playing the same one twice is
+   * practice. Full confidence at `marketsPlayed` distinct markets — it used to
+   * be a `saturate`, so the multiplier topped out just short of 1 and quietly
+   * held the pillar below its own ceiling no matter how well anybody played.
+   */
+  const settled = 0.85 + 0.15 * toward(scores.length - 1, REPUTATION_TARGETS.strategy.marketsPlayed - 1);
   return clamp100(blended * settled * 100);
 }
 
@@ -318,7 +449,7 @@ export function strategyScore(f: StrategyFacts): number {
   const parts: { value: number; weight: number }[] = [];
   if (sim !== null) parts.push({ value: sim, weight: 45 });
   if (f.aiScore !== null) parts.push({ value: Math.max(0, Math.min(100, f.aiScore)), weight: 45 });
-  const wins = 100 * saturate(f.contestWins, 2);
+  const wins = 100 * toward(f.contestWins, REPUTATION_TARGETS.strategy.contestWins);
   parts.push({ value: wins, weight: parts.length === 0 ? 100 : 10 });
 
   const total = parts.reduce((sum, p) => sum + p.weight, 0);

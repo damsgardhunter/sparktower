@@ -39,6 +39,12 @@ import type { Niche } from "./types";
 
 export const NICHES: Niche[] = [
   {
+    /*
+     * A sixth of this market has no supplier, not the usual tenth — which is
+     * the room it has always actually had, and now says so. See the note on
+     * its rivals' shares below.
+     */
+    openShare: 0.16,
     id: "dating_apps",
     worldHome: "uk_ireland",
     // Everyone dates; not everyone pays an app to help.
@@ -97,7 +103,20 @@ export const NICHES: Niche[] = [
     ],
     incumbents: [
       {
-        id: "inc_ember", name: "Ember", posture: "fortress", startingShare: 0.39, quality: 66, brand: 88, service: 58, priceIndex: 1.18,
+      /*
+       * 84% between them, not the 90% this market was written with.
+       *
+       * Nothing about how it plays has changed. `seedIncumbents` weighted each
+       * rival's hold by how well a segment suited its posture and never scaled
+       * the result back, so what was written as 90% had always been seated as
+       * 84% here — and as 102% in restaurant chains, where the rivals held
+       * more than the whole market and the segments were shut before anyone
+       * arrived. Now that the seating is honest, the written number is
+       * corrected to the one this market has actually been played and balanced
+       * at: 84/81/93 per segment, which is what it seated before and what it
+       * seats now.
+       */
+        id: "inc_ember", name: "Ember", posture: "fortress", startingShare: 0.36, quality: 66, brand: 88, service: 58, priceIndex: 1.18,
         persona: {
           tagline: "Where it starts.",
           boss: "Marguerite Vale, who has run it for nine years and describes it in interviews as infrastructure rather than an app.",
@@ -108,7 +127,7 @@ export const NICHES: Niche[] = [
         },
       },
       {
-        id: "inc_pairwise", name: "Pairwise", posture: "brawler", startingShare: 0.24, quality: 57, brand: 71, service: 46, priceIndex: 0.78,
+        id: "inc_pairwise", name: "Pairwise", posture: "brawler", startingShare: 0.22, quality: 57, brand: 71, service: 46, priceIndex: 0.78,
         persona: {
           tagline: "Half the price. Twice the dates.",
           boss: "Dez Okonkwo, a growth marketer who took over from the founders and put a discount banner on the login screen within a week.",
@@ -119,7 +138,7 @@ export const NICHES: Niche[] = [
         },
       },
       {
-        id: "inc_spark", name: "Spark", posture: "coaster", startingShare: 0.17, quality: 45, brand: 69, service: 38, priceIndex: 0.96,
+        id: "inc_spark", name: "Spark", posture: "coaster", startingShare: 0.16, quality: 45, brand: 69, service: 38, priceIndex: 0.96,
         persona: {
           tagline: "The original.",
           boss: "Nobody, really. It reports into a holding company two floors up and has had four interim heads in three years.",
@@ -173,7 +192,28 @@ export const NICHES: Niche[] = [
       rivals: "the other operators",
     },
     segments: [
-      { id: "novelty", name: "Novelty orderers", description: "Order once to watch it land, film it, and never think about it again.", size: 2_440_000, growth: 0.02, priceSensitivity: 0.75, qualityFocus: 0.3, brandFocus: 0.6, serviceFocus: 0.25, loyalty: 0.12, referencePrice: 25 },
+      /*
+       * £65, not the £25 this segment was written with.
+       *
+       * It is the biggest segment in the market, which makes it the one the
+       * opening defaults size a company against — and at £25 against a £10
+       * unit cost it could not carry the cost of a business. Break-even was
+       * 9,333 customers, which is 9.3% of the unowned pool of a home region,
+       * where every other market in the catalogue sits between 1.8% and 3.8%.
+       * Drone delivery was the only market where paying your people needed
+       * more customers than the market could realistically hand you, and it is
+       * the market `season.ts` already records as the one where "a competent
+       * table died more often than it lived".
+       *
+       * What that did to the season was worse than making it hard. Outside a
+       * boom the value of a season peaked at spending 4% of cash a period and
+       * *collapsed* at 6% — 75,360 against 8,307 — with bankruptcy from 9% on.
+       * A founder spending an ordinary amount was wiped out by a cliff with
+       * nothing on screen to say it was there. At £65 the same sweep rises to
+       * a peak at 9% and tapers, which is a market with a best answer in the
+       * middle and a price for overreaching, like the other six.
+       */
+      { id: "novelty", name: "Novelty orderers", description: "Order once to watch it land, film it, and never think about it again.", size: 2_440_000, growth: 0.02, priceSensitivity: 0.75, qualityFocus: 0.3, brandFocus: 0.6, serviceFocus: 0.25, loyalty: 0.12, referencePrice: 65 },
       { id: "rural", name: "Rural households", description: "Forty minutes from the nearest shop. Once you're the only one who reaches them, you're theirs until somebody else does.", size: 1_220_000, growth: 0.07, priceSensitivity: 0.35, qualityFocus: 0.6, brandFocus: 0.25, serviceFocus: 0.85, loyalty: 0.8, referencePrice: 150 },
       { id: "clinics", name: "Pharmacies and clinics", description: "Prescriptions, samples, things that can't wait. A year of paperwork to sign, and they never switch a supplier that hasn't dropped anything.", size: 200_000, growth: 0.09, priceSensitivity: 0.2, qualityFocus: 0.85, brandFocus: 0.3, serviceFocus: 0.95, loyalty: 0.9, referencePrice: 700 },
     ],

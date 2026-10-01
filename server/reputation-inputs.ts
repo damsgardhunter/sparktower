@@ -66,16 +66,23 @@ export async function executionFacts(userId: string): Promise<ExecutionFacts> {
 
   /*
    * Tasks from the completion log, which outlives the board. Active weeks are
-   * counted over the last half-year: it is the "did they keep turning up"
-   * term, and a year of silence followed by one busy week should read as one
-   * busy week.
+   * counted over the last year: it is the "did they keep turning up" term, and
+   * a year of silence followed by one busy week should read as one busy week.
+   *
+   * The window was half a year, and that was the single hard blocker on the
+   * index ever reaching 100. `activeWeeks` could not exceed 26 however steadily
+   * anybody worked, the consistency term was `12 * saturate(weeks, 8)`, and 26
+   * on that curve pays 9.18 of 12 — so execution's true ceiling was 97.18, and
+   * the weighted index's was 99.1. Nobody could have reached 100 from any
+   * amount of work, and nothing said so. A year with a target of 40 active
+   * weeks leaves twelve weeks off and still pays in full.
    */
   const tasks = await one(sql`
     select
       count(*)::int as completed,
       count(*) filter (where on_time)::int as on_time,
       count(distinct date_trunc('week', completed_at)) filter (
-        where completed_at > (now() at time zone 'utc') - interval '26 weeks'
+        where completed_at > (now() at time zone 'utc') - interval '52 weeks'
       )::int as active_weeks
     from project_task_completions
     where completed_by_id = ${userId}

@@ -14,7 +14,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { checkEnvironment, ENV_RULES } from "@shared/env-requirements";
-import { formatPreflight, preflight } from "../../server/preflight";
+import { assertEnvironmentAtBoot, formatPreflight, preflight } from "../../server/preflight";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /** A production environment with nothing wrong in it, to vary one thing at a time from. */
 const HEALTHY = {
@@ -182,5 +184,120 @@ describe("addresses that must agree with each other", () => {
     expect(checkEnvironment({ ...HEALTHY, PUBLIC_URL: "https://sparktower.app", AUTH_HOST: "sparktower.app" }).degraded).toEqual([]);
     // The common case: AUTH_HOST unset, so the callback follows PUBLIC_URL.
     expect(checkEnvironment(HEALTHY).degraded).toEqual([]);
+  });
+});
+
+/*
+ * The page people read before a deploy, held to the rules the server enforces.
+ *
+ * `docs/env-contract.md` had drifted from this module in two ways that both
+ * mislead in the direction of a broken deploy. It listed
+ * `AI_INTEGRATIONS_OPENAI_API_KEY` under "Required to boot" when the rule here
+ * makes it `degraded` — so an operator reading it would believe an expired AI
+ * key takes the site down, and might take the site down themselves getting a
+ * fresh one in. And it recorded `PUBLIC_URL` in production as the onrender.com
+ * host while the live value is the apex domain: the same stale-copy-of-an-
+ * operational-fact that render.yaml's PUBLIC_URL comment exists to record,
+ * repeated one file over.
+ *
+ * Nothing caught either, because a document cannot be wrong in a way a test
+ * suite notices unless something compares it to the code. This does. It reads
+ * the fatal table out of the prose and asserts it is exactly the set of fatal
+ * rules — so adding a rule here, or changing one's severity, fails until the
+ * page is updated with it.
+ */
+describe("the deploy page and the rules it describes", () => {
+  const contract = readFileSync(resolve(import.meta.dirname, "../../docs/env-contract.md"), "utf8");
+
+  /** The variables named in backticked cells of the "Required to boot" fatal table. */
+  const documentedFatal = () => {
+    const section = contract.split("## Required to boot")[1]?.split(/\n## /)[0] ?? "";
+    const rows = section.split("\n").filter((l) => l.startsWith("| `"));
+    return rows.map((l) => l.match(/^\| `([A-Z0-9_]+)`/)?.[1]).filter((n): n is string => Boolean(n));
+  };
+
+  it("names every variable that stops a boot, and nothing that only costs a feature", () => {
+    const fatal = ENV_RULES.filter((r) => r.severity === "fatal").map((r) => r.name);
+    expect([...documentedFatal()].sort(), "docs/env-contract.md's fatal table has drifted from ENV_RULES").toEqual([...fatal].sort());
+  });
+
+  it("does not file a degraded variable under a heading that says the boot needs it", () => {
+    const degraded = ENV_RULES.filter((r) => r.severity === "degraded").map((r) => r.name);
+    for (const name of documentedFatal()) {
+      expect(degraded, `${name} is degraded, but the page lists it as required to boot`).not.toContain(name);
+    }
+  });
+
+  /*
+   * The address is the one value in here that is an operational fact rather
+   * than a property of the repository, so it is the one that goes stale. Both
+   * pages that state it have to agree with each other; which of them is right
+   * is a question for whoever last moved DNS, and `npm run check:live` is how
+   * they settle it against the running service.
+   */
+  it("states the same production address as the deploy runbook", () => {
+    const deploy = readFileSync(resolve(import.meta.dirname, "../../docs/ops/deploy.md"), "utf8");
+    const canonical = deploy.match(/\*\*Canonical\*\*\s*\|\s*`(https:\/\/[^`]+)`/)?.[1];
+    expect(canonical, "docs/ops/deploy.md no longer marks a canonical URL").toBeTruthy();
+
+    /*
+     * The row under "The site's own address", not the one-line summary of it in
+     * the fatal table above — two rows name this variable, and only one of them
+     * is where the value is recorded.
+     */
+    const section = contract.split("## The site's own address")[1]?.split(/\n## /)[0] ?? "";
+    const row = section.split("\n").find((l) => l.startsWith("| `PUBLIC_URL`"));
+    expect(row, "docs/env-contract.md no longer has a PUBLIC_URL row").toBeTruthy();
+    expect(row, `the runbook says production is ${canonical}`).toContain(`\`${canonical}\``);
+  });
+});
+
+/*
+ * A production boot that came up with features off has to say so somewhere
+ * that outlives the boot.
+ *
+ * It was a single `console.log`. On a platform that is a line in a log nobody
+ * is reading at the time, gone when retention rolls — and `RESEND_API_KEY`
+ * missing is not cosmetic: every confirm-your-email link goes to the server
+ * log instead of the person, so nobody who signs up can post, comment,
+ * message or invite. The site is up and the front door is shut.
+ *
+ * The fatal path is not exercised here on purpose: it calls `process.exit`,
+ * and a test that trips it takes the runner with it.
+ */
+describe("a production boot with features off", () => {
+  const withoutEmail = () => {
+    const env: Record<string, string | undefined> = { ...HEALTHY };
+    delete env.RESEND_API_KEY;
+    delete env.EMAIL_FROM;
+    return env;
+  };
+
+  it("announces which features, down the channel that already exists for things nobody is watching", () => {
+    const seen: { features: string[]; detail: string }[] = [];
+    assertEnvironmentAtBoot(withoutEmail(), (features, detail) => seen.push({ features, detail }));
+
+    expect(seen.length, "exactly one notice, at boot").toBe(1);
+    expect(seen[0].features, "names the variable, so the fix is obvious").toContain("RESEND_API_KEY");
+    expect(seen[0].detail, "and carries what it breaks, not just the name").toMatch(/email|confirm|sign|link/i);
+  });
+
+  it("says nothing when production has everything it needs", () => {
+    const seen: string[][] = [];
+    assertEnvironmentAtBoot({ ...HEALTHY }, (features) => seen.push(features));
+    expect(seen, "a healthy boot is not worth waking anyone for").toEqual([]);
+  });
+
+  /*
+   * A laptop has no email provider, no object storage and no Stripe keys, and
+   * is meant to look exactly like this. A warning that fires every morning is
+   * one people learn to scroll past, which is how the real one gets missed.
+   */
+  it("says nothing outside production, where looking like this is the point", () => {
+    const seen: string[][] = [];
+    const env = withoutEmail();
+    env.NODE_ENV = "development";
+    assertEnvironmentAtBoot(env, (features) => seen.push(features));
+    expect(seen).toEqual([]);
   });
 });

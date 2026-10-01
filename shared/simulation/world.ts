@@ -45,12 +45,27 @@ import { rng } from "./random";
  * reference of £400m quietly cut its opening bank by four per cent — a
  * balance change nobody asked for, in a market that was already the hardest.
  *
- * Floored as well as capped: below a hundredth of the reference the numbers
- * stop reading like a business and start reading like pocket money, and a
- * market that small is one Nova should not have written.
+ * Floored as well as capped, because somewhere below this the numbers stop
+ * reading like a business. Where that is, though, was set a long way above
+ * where it needed to be.
+ *
+ * At a hundredth of the reference, a market Nova wrote for a real project —
+ * £235,000 a year, a booking site for spare kiln firings — opened its founder
+ * with £47,773, which is **20% of everything that market turns over in a
+ * year**. A company in one of the seven catalogue markets opens with 1.5% of
+ * its market. The floor was not protecting the numbers; it was handing a
+ * founder thirteen times the relative wealth of a catalogue table, in the
+ * markets Nova is specifically asked to write small.
+ *
+ * Measured down to a ten-thousandth: no figure goes non-finite, no season
+ * breaks, and the same market plays to the same quality and roughly the same
+ * customers at every floor tried. At a five-hundredth that founder opens with
+ * £15,485 — 6.6% of the market — which is a bootstrapped business rather than
+ * pocket money or a windfall. Markets above the floor are untouched: only one
+ * of the three written for real projects was below it at all.
  */
 export const REFERENCE_POTENTIAL = 350_000_000;
-export const MARKET_SCALE_MIN = 0.01;
+export const MARKET_SCALE_MIN = 0.002;
 
 export function marketScale(niche: Pick<Niche, "segments">): number {
   const scale = marketPotential(niche) / REFERENCE_POTENTIAL;
@@ -86,10 +101,14 @@ export interface Deal {
 export type DealAnswer = "accept" | "decline" | "vote";
 
 /**
- * The year's offers to one company: one, some years two. A distribution
- * partner and a co-marketing partner can come to anybody; a buyer only comes
- * to a company worth buying — one with customers — and only from year five,
- * when there is something to buy.
+ * The year's offers to one company: one partner, some years two, and a buyer
+ * on top in the years one is interested. A distribution partner and a
+ * co-marketing partner can come to anybody; a buyer only comes to a company
+ * worth buying — one with customers — and only from year five, when there is
+ * something to buy.
+ *
+ * A buyer is an offer *as well as* the partner, never instead of one. See the
+ * note on `buyerToo`.
  */
 export function dealsFor(input: {
   seasonId: string;
@@ -107,11 +126,30 @@ export function dealsFor(input: {
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
   const offers: Deal[] = [];
 
-  const kinds: DealKind[] = ["distribution", "comarketing"];
   const biggest = [...incumbents].sort((a, b) => sum(b.customers) - sum(a.customers))[0];
-  if (year >= 5 && held > 0 && biggest && r() < 0.35) kinds.push("buyout");
+  /*
+   * A buyer is drawn first but added last, and never in a partner's place.
+   *
+   * "buyout" used to go into the same pool the partners were drawn from, and
+   * the pool was then sampled `count` times — so in the years a buyer was
+   * interested and only one offer came, the buyer could be the whole of it and
+   * no partner came at all. Measured over 400 year-five draws, **21 of them
+   * (5.3%) offered a buyout and nothing else**: a one-in-nineteen chance of a
+   * year with no partner, in a game where the line above and the test both say
+   * a partner comes to everybody and the draw decides only which one.
+   *
+   * It stayed hidden because which years those are depends on the draw, and
+   * the draw moves whenever the company's customers move — `held > 0` decides
+   * whether the buyer is rolled for at all, so a balance change somewhere else
+   * shifts every later number in the sequence. It surfaced as a fixture that
+   * had always passed suddenly finding `undefined` where a partner should be.
+   *
+   * So the partners are drawn on their own, and a buyer is one more offer on
+   * top rather than one instead.
+   */
+  const buyerToo = year >= 5 && held > 0 && !!biggest && r() < 0.35;
   const count = r() < 0.4 ? 2 : 1;
-  const pool = [...kinds];
+  const pool: DealKind[] = ["distribution", "comarketing"];
   while (offers.length < count && pool.length) {
     const kind = pool.splice(Math.floor(r() * pool.length), 1)[0];
     const from = partners[Math.floor(r() * partners.length)];
@@ -124,21 +162,22 @@ export function dealsFor(input: {
         title: `${from} want to distribute you`,
         terms: `Room for ${capacity.toLocaleString()} more ${niche.voice.capacityShort} and 4 points of brand for three years, for ${Math.round(revenueShare * 100)}% of revenue for those three years.`,
       });
-    } else if (kind === "comarketing") {
+    } else {
       const cost = Math.round(pot * (0.0006 + r() * 0.0006) / 10_000) * 10_000;
       offers.push({
         id, kind, from, cost,
         title: `${from} want a joint campaign`,
         terms: `You put in ${cost.toLocaleString()}, they match it, and the campaign runs under both names — brand for half the price, this year.`,
       });
-    } else {
-      const price = Math.round(worth * (1.15 + r() * 0.3) / 10_000) * 10_000;
-      offers.push({
-        id, kind, from: biggest!.name, price, buyerId: biggest!.id,
-        title: `${biggest!.name} want to buy the business`,
-        terms: `${price.toLocaleString()} for the customers, what you own and what you owe. You keep the company, every seat and the cash, and start again from in front.`,
-      });
     }
+  }
+  if (buyerToo && biggest) {
+    const price = Math.round(worth * (1.15 + r() * 0.3) / 10_000) * 10_000;
+    offers.push({
+      id: `${year}-buyout`, kind: "buyout", from: biggest.name, price, buyerId: biggest.id,
+      title: `${biggest.name} want to buy the business`,
+      terms: `${price.toLocaleString()} for the customers, what you own and what you owe. You keep the company, every seat and the cash, and start again from in front.`,
+    });
   }
   return offers;
 }
@@ -380,3 +419,35 @@ export function expansionOutcome(votes: ("yes" | "no")[]): { carried: boolean; y
 
 /** How much of a newly opened region a company reaches in its first year there: as far as its brand does. */
 export const firstYearReach = (brand: number): number => Math.max(0.15, Math.min(1, brand / 60));
+
+/**
+ * The same, for a region a company bought outright rather than announced.
+ *
+ * There are two doors into a new region and only one of them charged for reach
+ * it had not earned. `expand` — the announced region, put to the table, opened
+ * a year later at 70% — ramps by brand. Buying one through the marketing
+ * seat's `targetCities` set no ramp at all, so the company had the whole
+ * region from the day it paid, and the rule the player guide teaches as a rule
+ * of the game was untrue for anybody who had found the other lever.
+ *
+ * It does not ramp the same way, though, and that is the difference worth
+ * keeping rather than flattening. A company that announced a region a year
+ * ahead arrives with nothing but its brand in front of it. A company that paid
+ * full price to walk in chose its moment and paid for the privilege — so it
+ * starts from a floor rather than from its reputation alone, and only a brand
+ * worth more than that floor carries it further.
+ *
+ * The floor is what the balance actually bears, not a taste. Ramping a bought
+ * region exactly as an announced one is a four-line change and it costs the
+ * catalogue its balance — `balance.test.ts` drops from two-plus teams
+ * finishing with a business to one, because those markets are tuned against
+ * regions being fully reached the period they are paid for. Measured: a floor
+ * of 0.15 fails it, and 0.4 upwards passes. At 0.5 a company buying a region
+ * 1.7 times the size of its home multiplies its customers by 1.85 in that
+ * first period, against 2.70 for reaching it in full — so the rule bites
+ * through both doors now, and the door you pay 30% more for is the one that
+ * gets you further in.
+ */
+export const BOUGHT_REACH_FLOOR = 0.5;
+export const boughtReach = (brand: number): number =>
+  Math.max(BOUGHT_REACH_FLOOR, firstYearReach(brand));

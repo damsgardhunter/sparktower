@@ -45,8 +45,19 @@ describe("no string-built SQL", () => {
    * repository has no string-built SQL in it — did not read a line of them.
    * The one that repairs timestamp skew builds its SQL from table and column
    * names, which is exactly where the rule needs testing.
+   *
+   * And `script/` as well as `scripts/`, which are two different directories
+   * that both exist. Adding the plural one closed the blind spot it was named
+   * for and left an identical one next to it: the singular holds the migration
+   * tooling, the demo seeds and the MFA reset, all of which open a connection,
+   * and none of them were read. `script/demo/seed.ts` was building
+   * `ARRAY['…']` by joining ids into a string — in `assertNoMoney`, the
+   * function whose whole job is refusing to let demo rows carry money.
+   *
+   * Two names one letter apart is a poor way to divide a repository, and until
+   * somebody merges them this list is the thing that has to remember both.
    */
-  const files = ["server", "shared", "scripts"].flatMap(walk).map((path) => ({ path, content: readFileSync(path, "utf8") }));
+  const files = ["server", "shared", "script", "scripts"].flatMap(walk).map((path) => ({ path, content: readFileSync(path, "utf8") }));
 
   it("passes the audit's sql-injection check", () => {
     const check = scanSecurity(files).checks.find((c) => c.id === "sql-injection")!;

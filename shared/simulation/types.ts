@@ -152,6 +152,18 @@ export interface Niche {
   segments: Segment[];
   /** The companies already here, holding the share a team has to take. */
   incumbents: IncumbentSeed[];
+  /**
+   * How much of this market has no supplier at all, as a share of it.
+   *
+   * The room a newcomer has, and the one number that decides whether a market
+   * can be entered. Unset means `TRULY_OPEN_SHARE`, which is what almost every
+   * market wants; it is here because it was previously impossible to say. The
+   * named rivals' shares looked like the knob and were not — whatever they
+   * left over above this share was handed to the fragmented tail, so writing
+   * the rivals smaller moved customers from one holder to another and left a
+   * newcomer exactly as much room as before.
+   */
+  openShare?: number;
   /** Where this market exists. A company only sells where it has opened. */
   cities: City[];
   /**
@@ -526,6 +538,12 @@ export interface Company {
    * Set on the way into the market from the annual plans on offer; never stored.
    */
   retention?: number;
+  /**
+   * And the churn when those plans end and the list price comes back, as an
+   * annual rate. Set from the same decision as `retention` and cleared with
+   * it. See `annualPlans`.
+   */
+  unwind?: number;
   /** Room leased for this year only. Set on the way into the market; never stored. */
   leased?: number;
   /** The five chairs as people: how loyal, how good, how hard pushed. See `people.ts`. */
@@ -669,6 +687,16 @@ export interface World {
   companies: Company[];
   /** The macro climate — it moves on its own and nobody controls it. */
   economy: Economy;
+  /**
+   * The same economy with no weather on it, which is what a market event's
+   * multipliers are applied to.
+   *
+   * `economy` is what everything reads and it already carries whatever weather
+   * is in force. Applying this period's weather to *that* re-applied the last
+   * period's as well, so an event compounded for every period it lasted. Absent
+   * on a world written before this existed, and `economy` is the fallback.
+   */
+  economyBase?: Economy;
   /**
    * Niches companies have gone and found during this season.
    *

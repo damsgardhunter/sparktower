@@ -36,7 +36,8 @@ import { defaultDraft } from "./levers";
 import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
-import { seedFragmentedTail, seedIncumbents } from "./incumbents";
+import { seedFragmentedTail, seedIncumbents, TRULY_OPEN_SHARE } from "./incumbents";
+import { atStanding, type Opening, type Standing } from "./opening";
 import { between, pick } from "./random";
 import { periodsPerYear, type Cadence } from "./cadence";
 import { marketScale } from "./world";
@@ -126,7 +127,23 @@ export function economyFor(seasonId: string, period: number, periods = 1): {
    * monthly one in nine months, which is not a business cycle, it is weather.
    */
   const year = (period - 1) / Math.max(1, periods) + 1;
-  const phase = (year + (seed % 7)) * ((Math.PI * 2) / 9);
+  /*
+   * The offset is a position in the cycle, not a whole number of years into it.
+   *
+   * It was `seed % 7` against a nine-year cycle, which gives seven possible
+   * phases however many seasons there are — so the line above claiming "no two
+   * seasons sit at the same point in it" was not true. Measured across sixteen
+   * season ids there were **six** distinct demand trajectories, two seasons in
+   * three sharing theirs with another exactly, to three decimals: the same
+   * boom, the same trough, in the same quarter.
+   *
+   * A prime modulus read as a fraction of the cycle gives a continuous offset,
+   * so forty season ids produce forty trajectories and two seasons coinciding
+   * is a coincidence rather than a certainty. The cycle's length and depth are
+   * unchanged — only where a given season starts in it.
+   */
+  const offset = ((seed % 10_007) / 10_007) * 9;
+  const phase = (year + offset) * ((Math.PI * 2) / 9);
   const wave = Math.sin(phase);
   const nextWave = Math.sin(phase + (Math.PI * 2) / 9);
 
@@ -281,8 +298,10 @@ export function startingCompany(input: {
   botRun?: boolean;
   /** The season, so no two of them hand out the same opening. */
   seasonId?: string;
+  /** How many companies are competing for this market. The plant is sized against a share of it. */
+  companies?: number;
 }): Company {
-  const { id, name, niche, seats, officers, botRun, seasonId = "" } = input;
+  const { id, name, niche, seats, officers, botRun, seasonId = "", companies = 1 } = input;
   /*
    * What the money was like the year this company started.
    *
@@ -415,8 +434,31 @@ export function startingCompany(input: {
      * year one is not something anybody manages.
      */
     capacity: (() => {
+      /*
+       * A share of the region's unowned pool, not the whole of it.
+       *
+       * `market * home.weight * TRULY_OPEN_SHARE` is everybody in the home
+       * region who has no supplier — the entire pool every company in the
+       * season is competing for. Sizing one company's plant against all of it
+       * says that company will win the lot, which the allocation never lets
+       * anybody do: measured, a newcomer takes about a twentieth of its
+       * region's pool in the first period, and in a field of five nobody can
+       * average more than a fifth of it ever.
+       *
+       * So every company opened with a plant it could not fill and paid idle
+       * cost on the difference from period one. In a five-team market four of
+       * the five were wiped out and the survivor won by outlasting them; in
+       * drone delivery, where the contribution per customer is thinnest, a bot
+       * opened with room for 70,000, served 2,150, and had burned all 5.1m of
+       * its cash by period five.
+       *
+       * Divided by the field, which is the most any one of them can expect to
+       * hold. `breakEven` below still raises it where that share would be too
+       * small to pay the people running it, so this only ever cuts a plant
+       * that was sized for a market the company does not have to itself.
+       */
       const ceiling = Math.min(
-        Math.round(market * home.weight * 0.1),
+        Math.round((market * home.weight * TRULY_OPEN_SHARE * PLANT_SHARE_OF_POOL) / Math.max(1, companies)),
         Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
       );
       const contribution = Math.max(1, opening.referencePrice - niche.baseUnitCost);
@@ -469,6 +511,33 @@ export function startingCompany(input: {
 export const COMPANIES_A_MARKET_IS_WRITTEN_FOR = 4;
 
 /**
+ * How much of its home region's unowned pool a company opens with room for.
+ *
+ * It used to be all of it. `market * home.weight * TRULY_OPEN_SHARE` is every
+ * customer in the region with no supplier — the whole pool every company in
+ * the season is competing for — and sizing one company's plant against the lot
+ * says that company will win all of it, which the allocation never lets
+ * anybody do.
+ *
+ * Idle room is not free, and this is what it cost. In drone delivery a founder
+ * opened with room for 38,214, served 1,662, and paid £72,725 a quarter in
+ * idle capacity: the largest single line in the accounts, seven times the
+ * revenue, more than marketing and product together, and incurred before any
+ * decision was taken. Measured across ten markets and eight season seeds, a
+ * competent founder was beaten by doing nothing in eight seasons and went
+ * bankrupt in five, all of them in the markets where the contribution per
+ * customer is too thin to carry the plant. At three fifths: none and none.
+ *
+ * Not smaller than this. Sized off break-even alone the plant stops being
+ * related to the opportunity at all, and a company that buys a second region
+ * cannot use it — measured, buying one multiplied customers by exactly 1.00,
+ * because the plant was full either way. `breakEven` below is still the floor
+ * it was always written to be, and `PLANT_SHARE_OF_POOL` is the ceiling coming
+ * down to meet it.
+ */
+export const PLANT_SHARE_OF_POOL = 0.6;
+
+/**
  * The market, grown to fit the people in it.
  *
  * A season can seat five hundred — a hundred tables of five, or five hundred
@@ -502,7 +571,12 @@ export function marketFor(niche: Niche, companies: number): Niche {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean }[];
+  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean; standing?: Standing }[];
+  /**
+   * Funded and level, or where each project actually is. Absent means the
+   * contest every season has been until now. See `opening.ts`.
+   */
+  opening?: Opening;
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
 }): World {
@@ -514,20 +588,56 @@ export function buildWorld(input: {
    * their shares of the written one.
    */
   const niche = marketFor(input.niche, teams.length);
+  /* Drawn once and used twice: to seat the rivals, and as the season's economy. */
+  const opening = economyFor(seasonId, 1, periods);
+  /*
+   * A bad economy shrinks what the rivals hold. A good one does not grow it.
+   *
+   * The rivals are written to hold 90% of a market, and the segment contains
+   * `size * demand` people, so the two only agree when demand is 1. The
+   * asymmetry is deliberate and it is the whole point of both halves:
+   *
+   *  - **Below trend**, seating them against the written size leaves them
+   *    holding more people than the segment contains. `allocate` sizes the
+   *    unowned pool as demand minus what is held, so it opened negative,
+   *    clamped to zero, and never reopened: a founder in such a season won
+   *    nothing at all, in every segment, every period, at every level of
+   *    spending. Two of six sampled seeds were unwinnable for this alone.
+   *
+   *  - **Above trend**, the extra demand is genuinely unserved — a boom does
+   *    not hand the incumbents new customers the moment it arrives, it puts
+   *    them up for grabs. Scaling the rivals up with it took that away: in a
+   *    season drawing 1.118 the pool a newcomer enters against halved, from
+   *    21.8% of the market to 11.2%, and a five-team season that used to leave
+   *    several companies standing left one.
+   */
+  const seatedAgainst = Math.min(1, opening.demand);
   return {
     seasonId,
     niche,
     year: 1,
     companies: [
-      ...seedIncumbents(niche, seasonId),
+      ...seedIncumbents(niche, seasonId, seatedAgainst),
       /*
        * And whoever holds the rest of it. Null when the named rivals already
        * hold all but the open tenth, which is every catalogue market.
        */
-      ...[seedFragmentedTail(niche, seasonId)].filter((c): c is NonNullable<typeof c> => c !== null),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId })),
+      ...[seedFragmentedTail(niche, seasonId, seatedAgainst)].filter((c): c is NonNullable<typeof c> => c !== null),
+      /*
+       * The funded company, and then — only when the season asked for it —
+       * moved to where the project actually is.
+       *
+       * Applied after `startingCompany` rather than inside it, so the funded
+       * opening stays the one definition of what a company is, this is visibly
+       * a departure from it, and a competitive season is bit-for-bit what it
+       * always was.
+       */
+      ...teams.map((t) => {
+        const funded = startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId, companies: teams.length });
+        return input.opening === "actual" && t.standing ? atStanding(funded, t.standing, niche) : funded;
+      }),
     ],
-    economy: economyFor(seasonId, 1, periods),
+    economy: opening,
     // Left off entirely for a yearly season, so a world built before any of
     // this existed and a world built now are the same object.
     ...(periods > 1 ? { periodsPerYear: periods } : {}),

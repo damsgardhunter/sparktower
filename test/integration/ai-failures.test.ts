@@ -76,11 +76,27 @@ describe("a model that fails", () => {
     const before = await creditsUsed(agent);
     // Roadmap generation parses in the route; Nova's assistant parses in its helper, novaSuggest.
     for (const [url, body] of [
-      [`/api/projects/${projectId}/roadmap/generate`, {}],
-      [`/api/projects/${projectId}/nova/suggest`, { kind: "brief", field: "problem", input: "Help me say the problem better." }],
+      /* A goal, because the route requires one and answered 400 without it — see the note below. */
+      [`/api/projects/${projectId}/roadmap/generate`, { goal: "Ship the first version to ten people." }],
+      /*
+       * `{ surface, ask }`, which is what this route takes.
+       *
+       * It used to be sent `{ kind, field, input }`, so it answered 400 every
+       * time and the `continue` below stepped straight over it. The assertion
+       * named the route, asserted the right thing, and never ran — and the
+       * route was meanwhile writing its 502 by hand with no `code`, which is
+       * exactly what this was here to catch. A skip that costs nothing to
+       * ignore is a test that stops existing quietly.
+       */
+      [`/api/projects/${projectId}/nova/suggest`, { surface: "direction", ask: "We moved to pay-per-use; say what no longer matches." }],
     ] as const) {
       const res = await agent.post(url).send(body);
-      if (res.status === 400) continue; // an input this test's body doesn't satisfy: not a model failure
+      /*
+       * And a 400 is now a failure rather than a shrug. If a route stops
+       * accepting what this sends, the test says so instead of passing on a
+       * route it never reached.
+       */
+      expect(res.status, `${url} refused the body before the model ran: ${JSON.stringify(res.body)}`).not.toBe(400);
       expect(res.status, `${url} ${JSON.stringify(res.body)}`).toBe(502);
       expect(res.body.code).toBe("model_unreadable");
     }

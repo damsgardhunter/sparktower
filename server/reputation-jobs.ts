@@ -22,6 +22,7 @@
  * that some scores are an hour older than they might have been.
  */
 import { refreshReputation, usersDue, usersDueForNova, usersDueForSim } from "./reputation";
+import { JOB, withJobLock } from "./job-lock";
 
 /** How many builders one pass will do. Enough for a busy hour, not enough to hurt. */
 const INDEX_BATCH = 250;
@@ -99,21 +100,34 @@ export async function refreshDueNovaReads(limit = NOVA_BATCH): Promise<number> {
 export function startReputationJobs(): void {
   const untilNextHour = HOUR_MS - (Date.now() % HOUR_MS);
 
+  /*
+   * One instance per tick, not all of them.
+   *
+   * `refreshDueNovaReads` asks the model with `forceAi: true`, so a second web
+   * instance pays OpenAI a second time for the same strategy reads — and the
+   * work succeeds either way, so nothing in the logs reads as wrong. The
+   * hourly index and the daily scores are merely redundant, but they share the
+   * clock, so one lock around the tick covers all three.
+   *
+   * Nothing is lost when another instance holds it: every piece of this is
+   * due-driven — the rows carry when they were last done — so the instance
+   * that gets the lock does the work and the others have nothing to do.
+   */
+  const tick = async () => {
+    const ran = await withJobLock(JOB.reputation, async () => {
+      await safely("hourly index", async () => { await refreshDueIndexes(); });
+      await safely("daily simulation scores", async () => { await refreshDueSimScores(); });
+      await safely("weekly strategy reads", async () => { await refreshDueNovaReads(); });
+      return true;
+    });
+    if (ran === null) return; // Another instance is on it.
+  };
+
   setTimeout(() => {
-    void safely("hourly index", async () => { await refreshDueIndexes(); });
-    void safely("daily simulation scores", async () => { await refreshDueSimScores(); });
-    void safely("weekly strategy reads", async () => { await refreshDueNovaReads(); });
+    void tick();
 
     setInterval(() => {
-      void safely("hourly index", async () => { await refreshDueIndexes(); });
-      /*
-       * The daily and weekly work is due-driven rather than counted: each row
-       * carries when it was last done, so running the check every hour costs
-       * one cheap query and picks the work up whatever the server was doing
-       * when the day turned over. A restart cannot skip a day this way.
-       */
-      void safely("daily simulation scores", async () => { await refreshDueSimScores(); });
-      void safely("weekly strategy reads", async () => { await refreshDueNovaReads(); });
+      void tick();
     }, HOUR_MS).unref();
   }, untilNextHour).unref?.();
 

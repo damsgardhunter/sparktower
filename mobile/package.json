@@ -44,5 +44,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "brace-expansion": "^5.0.12"
+  }
 }

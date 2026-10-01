@@ -29,6 +29,9 @@
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
 import type { WorkKind } from "./workforce";
 import { ASSET_SLOTS } from "./assets";
+import { marketScale } from "./world";
+import { officerCost } from "./decisions";
+import { TRULY_OPEN_SHARE } from "./incumbents";
 
 /** What a small market is allowed to be. Below this the maths has nothing to work with. */
 export const MIN_SEGMENT_SIZE = 2_000;
@@ -257,7 +260,23 @@ function cleanRegions(raw: unknown, segmentIds: string[], marketValue: number): 
    * its size alone would say" — a real thing the model knows and was asked
    * about — survives. See `ENTRY_COST_MAX_SHARE`.
    */
-  const asked = list.map((c: any) => num(c?.entryCost, 10_000, 5_000_000, 250_000));
+  /*
+   * What Nova wrote, floored and defaulted at the size of *this* market.
+   *
+   * These used to be clamped to at least £10,000, with £250,000 standing in
+   * when the model left the field out — figures from the catalogue, where a
+   * market turns over £400m. Asked about a stocktake app for bottle shops,
+   * Nova wrote a market worth £210,000 a year and entry costs of 5,000, 7,000
+   * and 4,000: three regions, deliberately different, the cheapest being the
+   * small one. All three were lifted to the £10,000 floor, came out identical,
+   * and every distinction the model had drawn was gone before anybody saw it.
+   *
+   * A tenth of a per cent of what a region turns over is a floor that means
+   * the same thing in any market, and the ceiling below does the rest.
+   */
+  const entryFloor = (weight: number) => Math.max(1, marketValue * weight * 0.001);
+  const asked = list.map((c: any, i: number) =>
+    num(c?.entryCost, entryFloor(weights[i]), 5_000_000, marketValue * weights[i] * ENTRY_COST_MAX_SHARE));
   const worst = Math.max(...asked.map((cost, i) => cost / Math.max(1, marketValue * weights[i] * ENTRY_COST_MAX_SHARE)));
   const affordable = worst > 1 ? 1 / worst : 1;
   return list.map((c: any, i): City => {
@@ -457,7 +476,175 @@ function affordableUnitCost(asked: number, segments: Segment[]): number {
  * seven markets still exist, and falling back to the closest one is a better
  * outcome than a season that cannot be played.
  */
-export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | null {
+
+/**
+ * How much of a market has to be unspoken for before a business is possible in it.
+ *
+ * The seven hand-written markets all leave about a tenth, and a tenth is
+ * plenty when the market has millions of people in it. Nova is asked to write
+ * small — a booking site for spare kiln firings, a rota swap for bank staff —
+ * and a tenth of a small market, split again by region, is not a business.
+ *
+ * Measured, before this existed: kilnshare, 9,000 people and £235,000 a year
+ * across five regions, left its founder a home region with **270 unowned
+ * customers** and a break-even of 181. A founder there was never once
+ * profitable — not in sixteen quarters, not on any season seed, and not at any
+ * rate of spending from nothing to a quarter of the bank each period. The most
+ * anybody reached was 104 customers of 9,000. It was not a hard market, it was
+ * an impossible one, and nothing in the cleaner noticed, because every rule
+ * here checks a market's *shape* and none of them checked whether a company
+ * could live in it.
+ *
+ * So the open share is set from what the market costs to operate in: enough
+ * unowned customers in the home region to clear break-even `ROOM_FOR_A_BUSINESS`
+ * times over. Markets that are already big enough keep the usual tenth — the
+ * three markets Nova wrote for real projects, run through this, leave rotaread
+ * exactly where it was and raise only the two that could not be played.
+ *
+ * Capped, because a market with no incumbents worth the name is not the game
+ * either. What the cap cannot reach is still improved by it.
+ */
+export const ROOM_FOR_A_BUSINESS = 70;
+
+/**
+ * The thinner bar the *prices* are lifted to, when opening the market up was
+ * not enough on its own.
+ *
+ * The two levers do not cost the same. How much of a market is unowned is a
+ * number nobody wrote down and nobody will miss — Nova is not asked for it,
+ * and a young market being mostly unserved is true. A price is something Nova
+ * *said*, and moving it rewrites the market's own description of itself. So
+ * the open share is taken as far as it will go first, and the prices only make
+ * up whatever that could not reach.
+ *
+ * Measured, the difference is not small: holding both to the same bar lifted a
+ * sea-swimming app's prices 246-fold, from GBP 1 a year to GBP 246. Splitting
+ * them gets the same eight markets to the same place with a 35-fold lift, and
+ * it is the open share doing the work instead.
+ *
+ * Raised from 25 to 28 when `allocate` stopped losing the overflow. Closing
+ * that leak took `SPILL_TOPUP_MAX` from 8 to 3, and the two smallest markets
+ * lived on that top-up: parish-council minutes lost three of its eight
+ * playable seeds. Twenty-eight is the least that gives them back, and it is
+ * chosen against what it costs the fiction — at 40 the same swimming app goes
+ * to GBP 121 a year, which is not a swimming app any more.
+ */
+export const PRICE_ROOM_FOR_A_BUSINESS = 28;
+export const OPEN_SHARE_MAX = 0.35;
+
+export function openShareFor(input: { segments: Segment[]; cities: City[]; baseUnitCost: number }): number {
+  const { segments, cities, baseUnitCost } = input;
+  const people = segments.reduce((sum, s) => sum + s.size, 0);
+  const biggest = [...segments].sort((a, b) => b.size - a.size)[0];
+  if (!biggest || people <= 0 || !cities.length) return TRULY_OPEN_SHARE;
+  /* The price the opening defaults sell at, which is the biggest segment's. */
+  const contribution = Math.max(1, biggest.referencePrice - baseUnitCost);
+  const payroll = officerCost({ officers: 1, scale: marketScale({ segments }) });
+  const breakEven = payroll / contribution;
+  /* The home region is the biggest one a founder can open in. */
+  const home = Math.max(...cities.map((c) => c.weight));
+  const needed = (breakEven * ROOM_FOR_A_BUSINESS) / Math.max(1, people * home);
+  return Math.min(OPEN_SHARE_MAX, Math.max(TRULY_OPEN_SHARE, needed));
+}
+
+/**
+ * Prices that can pay for the business being run in the market.
+ *
+ * `openShareFor` opens a small market up until there is room for a company,
+ * and it runs out of room at `OPEN_SHARE_MAX` — a market still has to have
+ * incumbents in it. What it cannot fix is a market whose customers do not pay
+ * enough to be worth having.
+ *
+ * Nova wrote one: a tide-and-water-quality app for sea swimmers, 50,000 people
+ * and £130,000 a year, whose biggest segment pays **£1 a year against a £1
+ * unit cost**. Contribution per customer was nothing, so no number of
+ * customers covered the founder's own salary — not at any spend, including
+ * spending nothing, on any season seed. `MAX_UNIT_COST_OF_CHEAPEST_PRICE` is
+ * supposed to leave a margin and cannot here, because `num` floors a unit cost
+ * at 1 and the price was 1.
+ *
+ * So the prices come up until the segment the opening defaults sell at earns
+ * enough, across the customers a founder can actually reach, to clear
+ * break-even `ROOM_FOR_A_BUSINESS` times over — the same bar `openShareFor`
+ * uses, reached from the other side. Raising the prices raises what the market
+ * is worth, which raises what its people cost, so it is solved by iterating
+ * rather than in one step.
+ *
+ * Every price moves together, so what Nova said about the *shape* of the
+ * market — who pays more than whom, and by how much — survives. Only the
+ * absolute figures move, and only in the markets that could not otherwise be
+ * played: none of the seven hand-written markets, and none of the generated
+ * ones already earning enough.
+ */
+export const MAX_PRICE_LIFT = 250;
+
+export function pricedForABusiness(input: { segments: Segment[]; cities: City[]; baseUnitCost: number; openShare: number }): Segment[] {
+  const { cities, baseUnitCost, openShare } = input;
+  let segments = input.segments;
+  const people = segments.reduce((sum, s) => sum + s.size, 0);
+  const home = cities.length ? Math.max(...cities.map((c) => c.weight)) : 0;
+  const reach = people * home * openShare;
+  if (reach <= 0) return segments;
+
+  /*
+   * Twelve passes, not four. Raising the prices raises what the market is
+   * worth, which raises what its people cost, so each pass only closes part of
+   * the gap — and four of them stopped about 5% short of the bar rather than
+   * at it. Converging properly is what lets the bar mean what it says.
+   */
+  let lifted = 1;
+  for (let pass = 0; pass < 12; pass++) {
+    const biggest = [...segments].sort((a, b) => b.size - a.size)[0];
+    if (!biggest || biggest.referencePrice <= 0) break;
+    const payroll = officerCost({ officers: 1, scale: marketScale({ segments }) });
+    const needed = (payroll * PRICE_ROOM_FOR_A_BUSINESS) / reach;
+    const earns = biggest.referencePrice - baseUnitCost;
+    if (earns >= needed) break;
+    const lift = Math.min((needed + baseUnitCost) / biggest.referencePrice, MAX_PRICE_LIFT / lifted);
+    if (!(lift > 1.001)) break;
+    lifted *= lift;
+    segments = segments.map((s) => ({ ...s, referencePrice: Math.max(1, Math.round(s.referencePrice * lift)) }));
+  }
+  return segments;
+}
+
+/**
+ * Whether this is a market being written for the first time, or one being read
+ * back.
+ *
+ * `openShareFor` and `pricedForABusiness` do not clamp a market, they *change*
+ * it — they open it up and they raise its prices until a business is possible
+ * in it. Every other rule here is a bound, and running a bound twice is
+ * harmless; running these twice is not the danger either, because both stop
+ * once their bar is met. The danger is running them at all on a season that is
+ * already being played.
+ *
+ * A season stores its market and `marketOf` rebuilds it through this function
+ * on **every read**, deliberately, because the row may have been written by an
+ * older version. That was safe while this only clamped. Measured against
+ * markets stored before these rules existed, a read would have moved them:
+ *
+ *     kiln firings     prices x6.3   open share 0.10 -> 0.35
+ *     sea swimming     prices x35.0
+ *     parish minutes   prices x4.9
+ *     shift swapping   prices x1.0   open share 0.10 -> 0.21
+ *
+ * A company that had priced at 20 against a reference of 15 would come back to
+ * find itself priced at 20 against 95 — cheap beyond anything it chose, with
+ * every expectation and ceiling in its market moved, in the middle of a season
+ * it was halfway through. Nobody gets to change the game under the people
+ * playing it.
+ *
+ * So the two transformations happen when a market is written and never again.
+ * A read gets all the validation and none of the rewriting, which means a
+ * season keeps the market it started with and a new one gets the rules.
+ */
+export interface BuildOptions {
+  /** True when Nova has just written this market and it has never been played. */
+  fresh?: boolean;
+}
+
+export function buildCustomMarket(raw: unknown, fallbackId: string, options: BuildOptions = {}): Niche | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
 
@@ -473,14 +660,24 @@ export function buildCustomMarket(raw: unknown, fallbackId: string): Niche | nul
   const incumbents = cleanIncumbents(m.incumbents);
   if (!incumbents) return null;
 
+  const baseUnitCost = affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments);
+  /*
+   * Written once, then kept. A market being read back carries whatever it was
+   * given when it was written — see `BuildOptions`.
+   */
+  const written = typeof (m.openShare) === "number" && (m.openShare as number) > 0 ? (m.openShare as number) : null;
+  const openShare = options.fresh ? openShareFor({ segments, cities, baseUnitCost }) : (written ?? TRULY_OPEN_SHARE);
+  const priced = options.fresh ? pricedForABusiness({ segments, cities, baseUnitCost, openShare }) : segments;
   return {
     id: slug(m.id ?? m.name, fallbackId),
     name: str(m.name, 80, "Your market"),
     premise: str(m.premise, 600, "The market this company is actually in."),
-    segments,
+    segments: priced,
     incumbents,
     cities,
-    baseUnitCost: affordableUnitCost(num(m.baseUnitCost, 1, 50_000, 20), segments),
+    baseUnitCost,
+    /* Enough of it unowned that a company can live here at all. See `openShareFor`. */
+    openShare,
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
     workforce: cleanWorkforce(m.workforce),

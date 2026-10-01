@@ -24,7 +24,7 @@ import { fixedCosts, nextTechDebt, officerCost, payScale } from "@shared/simulat
 import { dataNext, outageChance, securityNext } from "@shared/simulation/product";
 import { staffQualityNext } from "@shared/simulation/people";
 import { NICHES, nicheById } from "@shared/simulation/niches";
-import { buildCustomMarket } from "@shared/simulation/custom-market";
+import { buildCustomMarket, OPEN_SHARE_MAX} from "@shared/simulation/custom-market";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { ROLES, type Company, type Niche } from "@shared/simulation/types";
 import { distressOf } from "@shared/simulation/recovery";
@@ -267,7 +267,7 @@ describe("who holds a market nobody named", () => {
       id: `r${i}`, name: `Rival ${i}`, posture: "coaster", startingShare,
       quality: 50, brand: 50, service: 50, priceIndex: 1,
     })),
-  }, "f")!;
+  }, "f", { fresh: true })!;
 
   const total = (n: typeof fragmented) => n.segments.reduce((s, x) => s + x.size, 0);
   const holds = (c: { customers: Record<string, number> } | null) =>
@@ -279,10 +279,29 @@ describe("who holds a market nobody named", () => {
     expect(tail!.name).toBe("Everybody else");
   });
 
-  it("leaves about a tenth genuinely free, as the catalogue markets do", () => {
+  it("leaves a tenth free at least, and more when the market is too small to live in", () => {
+    /*
+     * This used to assert a tenth exactly, "as the catalogue markets do". A
+     * tenth is right when a market has millions of people in it, and it is not
+     * a rule that can be applied to the markets Nova writes: they are small on
+     * purpose, and a tenth of a small market split again by region is not a
+     * business. Measured, a kiln-firing marketplace of 9,000 people left its
+     * founder a home region with 270 unowned customers against a break-even of
+     * 181, and nobody was ever once profitable there — no season seed, no rate
+     * of spending, including spending nothing.
+     *
+     * `openShareFor` now sets it from what the market costs to operate in, so
+     * the tenth is a floor rather than the answer. This market is small enough
+     * to be opened up, which is the case worth asserting; the seven catalogue
+     * markets are not, and come out at the tenth exactly — `openShareFor` is
+     * asked for all seven in `custom-market.test.ts`.
+     */
     const named = seedIncumbents(fragmented).reduce((s, c) => s + holds(c), 0);
     const free = total(fragmented) - named - holds(seedFragmentedTail(fragmented));
-    expect(free / total(fragmented)).toBeCloseTo(TRULY_OPEN_SHARE, 1);
+    const share = free / total(fragmented);
+    expect(share, "less room than the catalogue leaves").toBeGreaterThanOrEqual(TRULY_OPEN_SHARE - 0.001);
+    expect(share, "a market with no incumbents left in it").toBeLessThanOrEqual(OPEN_SHARE_MAX + 0.001);
+    expect(share, "a market this small should have been opened up").toBeGreaterThan(TRULY_OPEN_SHARE);
   });
 
   /* And the seven, which already hold 90%, get no tail and are unchanged. */

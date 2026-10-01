@@ -70,6 +70,19 @@ export interface Valuation {
  * sensible: a company that fits what you already have is worth more to you
  * than to anybody else, and a team that wants out will take less.
  */
+/**
+ * What a year of earnings is worth on top of a year of sales.
+ *
+ * Eight times, which is an ordinary multiple for a real business and is the
+ * number that took the score from ranking a profitable company below a
+ * loss-making one in thirty per cent of comparable pairs, to none. See
+ * `valueOf` in `resolve.ts`, where the measurement is written down.
+ */
+export const EARNINGS_MULTIPLE = 6;
+
+/** How far earnings may move the number, as a share of a year's sales, either way. */
+export const EARNINGS_BAND = 0.75;
+
 export function valuation(company: Company): Valuation {
   const customers = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
   /*

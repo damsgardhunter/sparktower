@@ -137,11 +137,25 @@ has state in process memory that two instances would not share.
 
 ### Blockers, in the order they will hurt
 
-1. **Credit and money reservations live in memory.**
-   [credit-reservations.ts](../../server/credit-reservations.ts) holds `holds`
-   and `moneyHolds` in `Map`s. Instance A's hold is invisible to instance B,
-   and a restart loses them. This is money. **Move it to Postgres before you
-   add an instance.**
+1. ~~**Credit and money reservations live in memory.**~~ **Checked, and this
+   does not block a second instance** (2026-09-30).
+
+   The claim was that instance A's hold is invisible to instance B. True, and
+   harmless: the money is already in Postgres before a hold exists —
+   `requireCredits` charges up front through `storage.chargeCredits` — and the
+   `Map` holds only the settlement bookkeeping. `holdMoney` and `holdCredits`
+   wrap `res.end` and `res.once("close")`, so a hold is scoped to the single
+   response that created it, and a request is served start to finish by one
+   instance. No other instance ever needs to see it.
+
+   **What is real, and is a different problem:** if a process is hard-killed
+   between the money being taken and the response ending, neither `res.end`
+   nor `close` fires and the refund is lost. That is crash-safety, it is true
+   today on one instance, and it gets likelier with more deploys and
+   autoscaling — but it is not a reason to delay instance number two. The fix
+   when it is worth doing: a `credit_holds` row written with the charge and
+   swept by a job, so an abandoned hold is refunded by the sweep rather than by
+   a callback that may never run.
 
 2. **Fourteen background jobs run in every process** (`setInterval` across
    `server/`). Two instances run all of them twice. Some are guarded and fine;
@@ -155,12 +169,24 @@ has state in process memory that two instances would not share.
    | [company-rhythm-jobs.ts](../../server/company-rhythm-jobs.ts) | partly | check before scaling |
    | [retention.ts](../../server/retention.ts) | no | harmless — deletes are idempotent |
    | [promotion-sync.ts](../../server/promotion-sync.ts) | no | wasted work |
-   | **[reputation-jobs.ts](../../server/reputation-jobs.ts)** | **no** | **`refreshDueNovaReads` calls the model with `forceAi: true`. Two instances means paying twice.** |
+   | **[reputation-jobs.ts](../../server/reputation-jobs.ts)** | **yes, now** | was: `refreshDueNovaReads` calls the model with `forceAi: true`, so two instances paid OpenAI twice for the same answers — and the work succeeded both times, so nothing in the logs read as wrong |
 
-   Fix: either a leader lock around each job (an advisory lock keyed on the job
-   name is enough), or move scheduled work out of the web process entirely into
-   a worker service that runs as exactly one instance. The second is the better
-   shape and also fixes the deploy-kills-your-build problem.
+   **Done (2026-09-30):** [job-lock.ts](../../server/job-lock.ts) is the
+   leader lock, one advisory lock per named job, and `reputation-jobs.ts` and
+   `promotion-sync.ts` now run behind it. Held to its claim against a real
+   Postgres in [job-lock.test.ts](../../test/integration/job-lock.test.ts):
+   one caller in and the other turned away, the lock returned after a throw,
+   different jobs not blocking each other, every job on a key of its own, and
+   no connection leaked per tick.
+
+   It prevents *concurrent* runs rather than duplicate runs an hour apart,
+   which is the guarantee these jobs need — every one is due-driven, so the
+   instance that loses the race has nothing left to do.
+
+   **Still to do:** `company-rhythm-jobs.ts` is only partly guarded, and
+   `retention.ts` and the rest are unguarded but idempotent. Wrapping them is
+   now one line each. The better long-term shape is still a worker service
+   running exactly one instance, which also fixes blocker 3.
 
 3. **Long-running work is in the web process.** Nova builds and code audits run
    inside request handlers' lifetimes
@@ -174,22 +200,45 @@ has state in process memory that two instances would not share.
    truth — two instances means two caches and slightly more work, not
    incorrect behaviour. Fine to leave.
 
+5. **The API-wide floor** ([api-rate-limit.ts](../../server/api-rate-limit.ts))
+   is `express-rate-limit`, which keeps its counts in the process. Two
+   instances means two allowances, so the real ceiling is the number in that
+   file multiplied by however many instances are running — 600 anonymous
+   requests a minute becomes 1,200 across two, and nothing says so at the time.
+
+   This is deliberate and it is not the same problem as the three above. The
+   floor exists to protect *reads*, which are the requests too numerous and too
+   cheap to be worth a database round trip each; putting its counting in
+   Postgres would add a write to every read and cost more than the thing it
+   prevents. It is a coarse backstop under the per-action limits, not the limit
+   itself, and a backstop that is twice as loose is still a backstop.
+
+   What it means in practice: size that number per instance rather than for the
+   fleet, and divide it if the fleet grows. If the floor ever needs to be exact
+   across instances it wants a shared counter (Redis, or the store interface
+   `express-rate-limit` already takes) — worth doing when reads are the thing
+   under pressure, and not before.
+
 ### What is already ready
 
 Worth knowing, because it is the expensive half and it is done:
 
 - **Sessions are in Postgres**, so any instance can serve any user.
-- **Rate limiting is in Postgres**, so limits are global rather than per
-  instance.
+- **Per-action rate limiting is in Postgres**, so the limits that matter — the
+  ones on signing in, commenting, posting, uploading, spending credits — are
+  global rather than per instance.
 - **Object storage is external**, so uploads are not tied to a disk.
 
 ### Order of operations
 
-1. Move credit reservations to the database.
-2. Extract scheduled jobs and long-running work into a worker service (one
-   instance, `numInstances: 1`).
-3. Confirm the connection budget against the database tier.
-4. Add web instances.
+1. ~~Move credit reservations to the database.~~ Not required — see blocker 1.
+2. ~~Leader-lock the scheduled jobs.~~ Done for the two that cost money or
+   waste work; one line each for the rest.
+3. Extract scheduled jobs and long-running work into a worker service (one
+   instance, `numInstances: 1`). Still the better shape, and it is what
+   unblocks blocker 3.
+4. Confirm the connection budget against the database tier.
+5. Add web instances.
 
 ---
 
@@ -423,6 +472,60 @@ from the measured per-user request rates, not a guarantee.
 
 If polling is cut (SSE for the three count endpoints), the web tier halves.
 That is the cheapest capacity in this table by a wide margin.
+
+## A starting configuration for ~2,000 concurrent signed-in users
+
+Decided 2026-09-30: **stay on Render, keep GCS for objects, add a CDN.** No
+platform migration — the arithmetic below is the table above, doubled where
+doubling is what the number means, and left alone where it is not.
+
+2,000 × 22 req/min ≈ **733 req/s**, against a measured *comfortable* ceiling
+of 50 concurrent on one small instance. That is the whole of the problem in two
+numbers, and it is why this is an infrastructure project rather than a config
+change.
+
+| Piece | Start at | Why this and not more |
+|---|---|---|
+| Web instances | **8–16** at 2 CPU | 733 req/s ÷ 50–100 req/s per process. Measure before buying the top of that range |
+| Web autoscaling | min 6, max 20 | Marketing traffic arrives as a step change, not a ramp |
+| Postgres | **8+ vCPU, 32 GB+** | The working set must fit in RAM. This is the purchase that always helps and the one to make first |
+| PgBouncer | transaction mode, required | 16 instances × 32 connections = 512 direct connections. No Postgres tier will take that; the pooler is not optional at this size |
+| Redis | small–medium | Counts cache **and** sessions. Moving sessions off Postgres is worth more here than at 1,000, because session writes scale with people rather than with work |
+| CDN | required | Static bundle, public objects, cacheable anonymous API. Without it the web tier serves bytes a CDN serves for pennies |
+| Worker service | 1 instance | Jobs and long-running builds. With 8–16 web instances the leader lock is doing real work every tick; a worker makes that structural |
+
+### What changes qualitatively at 2,000, not just quantitatively
+
+- **The pooler stops being optional.** At 1,000 you can argue about it. At
+  2,000, 512 direct connections is past every tier's limit, and exceeding it
+  does not degrade — Postgres refuses connections outright.
+- **Polling becomes the dominant cost.** The three count endpoints at 2,000
+  users are most of the 733 req/s. The note above still holds and matters
+  more: cutting polling to SSE roughly halves the web tier. It is by a wide
+  margin the cheapest capacity on this page, and it is a code change rather
+  than a purchase.
+- **The in-process rate-limit floor is 16 allowances.** Blocker 5 says size it
+  per instance; at this fleet size that is no longer a rounding error. Either
+  divide the number by the instance count, or give
+  `express-rate-limit` the shared store it already supports.
+- **A deploy restarts 16 processes.** Every in-flight money hold whose response
+  has not ended is lost (blocker 1's residual). At one instance that is rare
+  enough to accept; at sixteen, with autoscaling adding and removing instances,
+  the `credit_holds` sweep described in blocker 1 stops being optional.
+
+### Do these three first, in this order
+
+None of them need a code change, and the first two help at any size:
+
+1. **Postgres tier.** Always helps, nothing is wasted, and every other number
+   here depends on it.
+2. **CDN.** Always helps.
+3. **Counts cache (Redis).** Always helps.
+
+Then measure — see *How to size it properly* below. Every instance count on
+this page is arithmetic from a per-user request rate; only a load run against
+the tier you actually buy gives you the real requests-per-second per instance,
+and that is the number that decides how many you need.
 
 ## What each purchase is wasted without
 

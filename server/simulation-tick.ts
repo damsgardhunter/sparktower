@@ -23,6 +23,7 @@
 import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import { surfaceEnabled } from "./surfaces";
+import { schemaMatchesBuild } from "./migration-state";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
@@ -372,6 +373,12 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       seasonId: season.id,
       niche,
       cadence: season.cadence as Cadence,
+      /*
+       * Funded and level, or where the project actually is. Taken from the
+       * season rather than decided here, and the standing was snapshotted when
+       * the season was made — see `simSeasons.openingStanding`.
+       */
+      opening: (season as { opening?: "competitive" | "actual" }).opening ?? "competitive",
       teams: playing.map((v) => {
         const held = seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role);
         /*
@@ -390,6 +397,13 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
           seats: soloSeat ? [...ROLES] : held,
           officers: soloSeat ? 1 : undefined,
           botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
+          /*
+           * Where this company actually is, for a season that asked to open
+           * that way. One standing for the season, because a project season is
+           * one project's — a season with several ventures and an "actual"
+           * opening would want one each, and nothing creates that yet.
+           */
+          standing: (season as { openingStanding?: { progress: number; people: number } | null }).openingStanding ?? undefined,
         };
       }),
     });
@@ -1541,6 +1555,17 @@ export async function runSimulationPass(now = new Date()): Promise<{ settled: nu
    * clock left it, because a season's next tick is a time, not a tally.
    */
   if (!surfaceEnabled("sprints")) return null;
+  /*
+   * Nothing while the database is behind this build.
+   *
+   * A missing column makes every season in this pass throw, and each throw is
+   * a full DrizzleQueryError carrying the hundred-column SELECT — so twenty-two
+   * running seasons produce a screen of stack traces a minute, burying the one
+   * boot line that already named the cause and the command. The loop cannot
+   * succeed until somebody migrates, and a season's next tick is a time rather
+   * than a tally, so waiting costs nothing.
+   */
+  if (!(await schemaMatchesBuild())) return null;
   return withLock(LOCK_SIM_TICK, async () => {
     // Before settling: a room that has waited its minute gets its bots, so the
     // deadline it is about to hit finds five players rather than one.

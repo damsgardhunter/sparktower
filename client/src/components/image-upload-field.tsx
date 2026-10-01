@@ -3,10 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
-import { Loader2, Upload, X, ImageIcon } from "lucide-react";
+import { ImageCropDialog } from "@/components/image-crop-dialog";
+import { CROP_PRESETS, type CropPresetName } from "@/lib/image-crop";
+import { Loader2, Upload, X, ImageIcon, Crop } from "lucide-react";
 
 /**
- * Pick an image from your computer.
+ * Pick an image from your computer, and choose which part of it is kept.
  *
  * Replaces the "paste a URL" inputs that were scattered around the app. Asking
  * someone to host their own logo somewhere and paste a link is a step most
@@ -15,9 +17,20 @@ import { Loader2, Upload, X, ImageIcon } from "lucide-react";
  *
  * Uploads through the presigned-URL flow and hands back the stored object
  * path, so the caller only deals in a string either way.
+ *
+ * ## Why a crop step
+ *
+ * Because without one this field was quietly lying. It previewed with
+ * `object-contain`, which shows the whole picture letterboxed, and every place
+ * the picture was then shown used `object-cover` / `bg-cover bg-center`, which
+ * fills the shape and throws the rest away. So the preview showed you a photo
+ * and the page showed you the middle of it. Pass a `crop` preset and the preview
+ * becomes the real shape and the person picks what survives; leave it off and
+ * the file is uploaded as it was, which is still right for a logo or a document
+ * where no shape is being forced.
  */
 export function ImageUploadField({
-  label, value, onChange, hint, aspect = "square", accept = "image/*", maxMB = 12, testId,
+  label, value, onChange, hint, aspect = "square", accept = "image/*", maxMB = 12, testId, crop,
 }: {
   label: string;
   value: string | null | undefined;
@@ -28,31 +41,58 @@ export function ImageUploadField({
   accept?: string;
   maxMB?: number;
   testId?: string;
+  /**
+   * Offer the crop step, framed as the shape this picture is shown in.
+   *
+   * Also the fix for a second problem: the crop re-encodes to a JPEG of known
+   * size, so a 12-megapixel phone photo stops arriving at the uploader as
+   * several megabytes of something that was going to be drawn 400px wide.
+   */
+  crop?: CropPresetName;
 }) {
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [localPreview, setLocalPreview] = useState<string | null>(null);
+  const [pending, setPending] = useState<File | null>(null);
   const { uploadFile, isUploading } = useUpload();
 
-  const handle = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
+  /*
+   * The size check happens before the crop, on the file as picked. It is a
+   * guard against reading a 90MB file into memory to decode it, not against
+   * uploading one — what gets uploaded after a crop is always small.
+   */
+  const accepted = (file: File): boolean => {
+    if (!file.type.startsWith("image/") && !/\.(heic|heif)$/i.test(file.name)) {
       toast({ title: "Images only", description: "Pick a PNG, JPG or WebP.", variant: "destructive" });
-      return;
+      return false;
     }
-    if (file.size > maxMB * 1024 * 1024) {
-      toast({ title: "That file is too big", description: `Keep it under ${maxMB}MB.`, variant: "destructive" });
-      return;
+    const limit = crop ? Math.max(maxMB, 40) : maxMB;
+    if (file.size > limit * 1024 * 1024) {
+      toast({ title: "That file is too big", description: `Keep it under ${limit}MB.`, variant: "destructive" });
+      return false;
     }
+    return true;
+  };
+
+  const upload = async (file: File) => {
     // Shown immediately so the box doesn't sit empty during the round trip.
     setLocalPreview(URL.createObjectURL(file));
     try {
       const result = await uploadFile(file);
       if (!result?.objectPath) throw new Error("no path");
       onChange(result.objectPath);
+      setPending(null);
     } catch {
       setLocalPreview(null);
+      setPending(null);
       toast({ title: "Upload failed", description: "Try again.", variant: "destructive" });
     }
+  };
+
+  const handle = (file: File) => {
+    if (!accepted(file)) return;
+    if (crop) { setPending(file); return; }
+    void upload(file);
   };
 
   const shown = localPreview || value || null;
@@ -67,7 +107,12 @@ export function ImageUploadField({
           }`}
         >
           {shown ? (
-            <img src={shown} alt="" className="w-full h-full object-contain" />
+            /*
+             * `object-cover` once there is a crop step, because that is what the
+             * page does with it. `object-contain` here and cover everywhere else
+             * is how the preview came to disagree with the product.
+             */
+            <img src={shown} alt="" className={`w-full h-full ${crop ? "object-cover" : "object-contain"}`} />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">
               <ImageIcon className="h-5 w-5" />
@@ -103,6 +148,11 @@ export function ImageUploadField({
             )}
           </div>
           {hint && <p className="text-[11px] text-muted-foreground leading-relaxed">{hint}</p>}
+          {crop && (
+            <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Crop className="h-3 w-3" /> You choose the framing after picking a file.
+            </p>
+          )}
         </div>
       </div>
 
@@ -119,6 +169,20 @@ export function ImageUploadField({
         }}
         data-testid={testId}
       />
+
+      {crop && (
+        <ImageCropDialog
+          file={pending}
+          preset={crop}
+          open={pending !== null}
+          busy={isUploading}
+          onCancel={() => setPending(null)}
+          onCropped={(cropped) => void upload(cropped)}
+        />
+      )}
     </div>
   );
 }
+
+/** Re-exported so callers can name a shape without reaching into the lib. */
+export { CROP_PRESETS };

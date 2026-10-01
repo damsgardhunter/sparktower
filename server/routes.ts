@@ -102,7 +102,7 @@ import {
   type TierId,
   PAY_ENDPOINTS,
 } from "@shared/plans";
-import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects } from "./wallet";
+import { walletOf, buyActionPack, spend, recentLedger, hasBuildPass, buildPassProjects, devUnlimited } from "./wallet";
 import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
 import { requireImages, buyImagePass, imagePassActive } from "./images";
 
@@ -148,6 +148,7 @@ import { openai } from "./openai-client";
 import { notifyWatchersOfNewProject } from "./scouting-alerts";
 import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 import { connectFailure } from "./stripe-connect-errors";
+import { addStandingNote } from "@shared/standing-notes";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -1834,30 +1835,16 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       const task = await storage.updateKanbanTask(req.params.taskId, updates);
 
       if (movingToDone) {
-        // A task on the path is a pace signal; the projection moves on it.
-        await onPathTaskDone(task).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
         /*
-         * The first step this project has ever finished, named once.
-         *
-         * It is the step in the growth loop where a new account stops being a
-         * signup and starts being a builder, and it is invisible in `api.write`
-         * — one PATCH among thousands. Counted from the board rather than from
-         * a flag, so it stays true for a project that finished its first step
-         * long before anybody thought to measure it.
+         * A task on the path is a pace signal; the projection moves on it —
+         * and this is also where the first step of a project is counted, which
+         * is why the browser's own session travels with it. The counting lives
+         * in `onPathTaskDone` because five other things finish path tasks and
+         * none of them come through here; see `recordFirstPathStep`.
          */
-        void (async () => {
-          const onPath = (t: any) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:"));
-          if (!onPath(task)) return;
-          const all = await storage.getProjectKanbanTasks(existingTask.projectId).catch(() => []);
-          const done = (all as any[]).filter((t) => t.status === "done" && onPath(t));
-          if (done.length !== 1) return;
-          await recordActivity({
-            name: PATH_FUNNEL_EVENTS.firstStep,
-            userId, visitorId: req.visitorId || "unknown", sessionId: req.sessionId || "unknown",
-            path: req.originalUrl, projectId: existingTask.projectId,
-            props: sanitizePathFunnelProps({ projectId: existingTask.projectId }),
-          });
-        })().catch(() => {});
+        await onPathTaskDone(task, {
+          userId, visitorId: req.visitorId, sessionId: req.sessionId, path: req.originalUrl,
+        }).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
         /*
          * Finishing a task unblocks whatever was waiting on it.
          *
@@ -2609,6 +2596,7 @@ PROJECT CONTEXT:
 - Value Proposition: ${(project as any).valueProposition || "Not set"}
 - Target Customer: ${(project as any).targetCustomerProfile || "Not set"}
 - Problem Statement: ${project.problemStatement || "Not set"}
+- How it makes money (pricing and business model): ${(project as any).businessModel || "Not set"}
 - Target User: ${project.targetUser || "Not set"}
 - Success Metrics: ${project.successMetrics || "Not set"}
 - Team Size: ${project.teamSize}
@@ -2648,7 +2636,10 @@ CONVERSATION GUIDELINES:
 - ACT ON CLEAR INSTRUCTIONS. When the builder tells you to change, remove or rewrite something, do it in this message with the action — do not ask whether they are sure, do not ask what to replace it with, do not offer a menu of alternatives. "Remove X" means remove X and put nothing in its place.
 - Ask a question only when the instruction is genuinely ambiguous and you cannot make a reasonable call yourself — at most ONE, and only after doing everything that doesn't depend on the answer. Never end a message with "reply A, B or C".
 - NEVER re-ask something the builder has already answered or stated in this conversation. If they said it once, it is settled. If they have said it twice, apologise in one clause and act.
-- When the builder tells you something about their project that changes what you should believe — what's being removed, what the real loops are, what the wedge is — save it with the remember action so every future conversation and every Nova read starts from it. Then act on it.
+- When the builder tells you something about their project that changes what you should believe — what's being removed, what the real loops are, what the wedge is, how they charge — save it with the remember action so every future conversation and every Nova read starts from it. Then act on it.
+- Remembered notes accumulate: each one is added to what you already know, dated, so a builder correcting you twice ends up with you knowing both things. Keep each note to the one fact it carries rather than restating everything.
+- When a new note contradicts one you were given before, pass the old wording as "replaces" so it is dropped instead of left to argue with the new one. A builder who moved from subscriptions to per-use pricing should not leave you holding both.
+- A change of direction is not only a note. When the standing notes, the code or the builder disagree with what is already written — a loop, a milestone, the brief — propose the operations that fix it in the same turn: update_project for the brief, update_loop or retire_loop for a loop, update_task or retire_task for work that is no longer the plan. Naming the contradiction without correcting it leaves the builder to do it by hand.
 - Remember context from earlier in the conversation
 - If information is already filled in (not "Not set"), acknowledge it and build on it
 - Adapt to the user's current tab context and help with relevant tasks
@@ -2693,7 +2684,7 @@ You can take actions to update the project. When you want to take an action, inc
 
 Available actions:
 1. update_project: Update project fields
-   <nova_action>{"type": "update_project", "data": {"oneLiner": "...", "mission": "...", "valueProposition": "...", "targetCustomerProfile": "...", "problemStatement": "...", "targetUser": "...", "successMetrics": "..."}}</nova_action>
+   <nova_action>{"type": "update_project", "data": {"oneLiner": "...", "mission": "...", "valueProposition": "...", "targetCustomerProfile": "...", "problemStatement": "...", "targetUser": "...", "successMetrics": "...", "businessModel": "..."}}</nova_action>
    Only include fields you're updating. Valid fields: oneLiner, mission, valueProposition, targetCustomerProfile, problemStatement, targetUser, successMetrics
    - mission: why the project exists and what it's working toward, in 1-2 sentences.
    - targetUser: a short phrase naming who this is for (e.g. "Solo indie founders shipping their first SaaS"), NOT a paragraph.
@@ -2719,6 +2710,7 @@ Available actions:
 
 7. remember: Save something the builder told you that should hold from now on — a correction to the brief, something being removed, what the loops or the wedge really are. It goes to the top of every future Nova prompt and outranks the brief and the board. Send the FULL updated note (it replaces the previous one); keep it under 1500 characters, one line per fact.
    <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Run a company."}}</nova_action>
+   <nova_action>{"type": "remember", "data": {"notes": "Pricing is pay-per-use: each outcome is bought on its own, no subscription.", "replaces": "Pricing is a monthly subscription"}}</nova_action>
 
 8. write_loops: Write the builder's business loops for them, when they ask you to (or say yes to your offer). Each loop is 3–5 steps in their product's own words, ending with the step that sends the user back to the start, plus what closes it. Send one entry per loop you're writing; an unwritten loop of that kind is filled in, a kind the project doesn't have yet is added, and a loop that's already written is left alone (to change one of those, use edit_project on its task). Product loops can be several; the other four kinds are one each.
    <nova_action>{"type": "write_loops", "data": {"loops": [{"type": "product|growth|retention|revenue|referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1"}]}}</nova_action>
@@ -2838,9 +2830,27 @@ ${projectContext}`;
               break;
             }
             case "remember": {
-              const notes = typeof action.data?.notes === "string" ? action.data.notes.trim().slice(0, 2000) : "";
+              /*
+               * Added to what is already known, not written over it.
+               *
+               * This used to `set({ novaNotes: notes })`, so the second thing a
+               * builder told Nova erased the first — and Nova is told, three
+               * hundred lines up, that a remembered note makes "every future
+               * conversation and every Nova read start from it". Somebody
+               * correcting Nova repeatedly was making it know less each time.
+               *
+               * `replaces` is how a note is revised: the builder changed their
+               * mind about that specific thing, so the old line goes rather
+               * than sitting there contradicting the new one.
+               */
+              const notes = typeof action.data?.notes === "string" ? action.data.notes.trim() : "";
               if (notes) {
-                await db.update(projects).set({ novaNotes: notes }).where(eq(projects.id, projectId));
+                const [current] = await db.select({ novaNotes: projects.novaNotes })
+                  .from(projects).where(eq(projects.id, projectId));
+                const merged = addStandingNote(current?.novaNotes, notes, {
+                  replaces: typeof action.data?.replaces === "string" ? action.data.replaces : null,
+                });
+                await db.update(projects).set({ novaNotes: merged }).where(eq(projects.id, projectId));
                 actionsTaken.push({ type: "remember", data: { notes } });
               }
               break;
@@ -7077,12 +7087,33 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const sub = await storage.getUserSubscription(userId);
       const ent = await getUserEntitlements(userId);
       const privateProjectsUsed = await storage.countPrivateProjects(userId);
+      /*
+       * A developer's account is unlimited *here* as well as at the charge.
+       *
+       * `requireCredits` has honoured `devUnlimited` for a while, so nothing was
+       * ever billed on these accounts — but this endpoint worked its answer out
+       * from the month's allowance alone, and the whole client state derives
+       * from this answer. So the allowance ran out at 25 actions, `creditState`
+       * read "out", and every screen offered to sell more of something that was
+       * already free: a bypass that stopped the charge and forgot to tell the
+       * interface, which looks from the outside exactly like a bypass that does
+       * not work.
+       *
+       * Same two gates as the charge: only outside production, and only for an
+       * account whose flag was set through a route that 404s there.
+       */
+      const devFree = process.env.NODE_ENV !== "production" && await devUnlimited(userId);
+      const unlimited = devFree || sub.creditsLimit === Infinity;
+      /* -1 is the client's Infinity, and what `creditState` reads as "no ceiling". */
+      const creditsLimit = unlimited ? -1 : sub.creditsLimit;
+      const creditsRemaining = unlimited ? -1 : sub.creditsRemaining;
       res.json({
         ...sub,
         // JSON has no Infinity; the client treats -1 as unlimited.
-        creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit,
-        creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining,
-        unlimited: sub.creditsLimit === Infinity,
+        creditsLimit,
+        creditsRemaining,
+        unlimited,
+        devUnlimited: devFree,
         fairUseCap: sub.creditsLimit === Infinity ? FAIR_USE_MONTHLY_CAP : null,
         entitlements: {
           ...ent,
@@ -7092,8 +7123,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         privateProjectsUsed,
         creditCosts: CREDIT_COSTS,
         // The revenue loop's trigger: "low" offers "Upgrade to keep generating" before a generate fails.
-        creditState: creditState({ creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining, creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit, unlimited: sub.creditsLimit === Infinity }),
-        lowCreditsAt: sub.creditsLimit === Infinity ? null : lowCreditsAt(sub.creditsLimit),
+        creditState: creditState({ creditsRemaining, creditsLimit, unlimited }),
+        lowCreditsAt: unlimited ? null : lowCreditsAt(sub.creditsLimit),
         // A subscription payment that failed (until one goes through), or was refunded in full.
         billingIssue: await billingIssueFor(userId),
         /*

@@ -44,7 +44,25 @@ export function testDatabaseUrl(suffix = "_test"): string {
   const explicit = process.env.TEST_DATABASE_URL;
   if (explicit && suffix === "_test") return explicit;
 
-  const base = process.env.DATABASE_URL;
+  /*
+   * TEST_DATABASE_URL is the base for *every* suffix, not only the default.
+   *
+   * It used to be consulted for `_test` alone, so `testDatabaseUrl("_e2e")`
+   * ignored it and derived from DATABASE_URL instead. Unit runs were therefore
+   * isolatable and Playwright runs were not: several people — or several agents
+   * — working in one checkout each got their own `*_test` database and then all
+   * shared a single `project_e2e`, which every run truncates and repopulates.
+   * Concurrent E2E runs quietly corrupted each other's fixtures, and the
+   * failures landed on whichever specs happened to be reading data at the time.
+   * That is a suite that fails for a reason nobody can find, and CI never sees
+   * it because CI has the database to itself.
+   *
+   * A trailing `_test` is stripped first so `project_x_test` becomes
+   * `project_x_e2e` rather than `project_x_test_e2e`.
+   *
+   * With TEST_DATABASE_URL unset — which is how CI runs — nothing changes.
+   */
+  const base = explicit ?? process.env.DATABASE_URL;
   if (!base) {
     throw new Error(
       "Set TEST_DATABASE_URL, or DATABASE_URL to derive it from. " +
@@ -53,8 +71,12 @@ export function testDatabaseUrl(suffix = "_test"): string {
   }
 
   const url = new URL(base);
-  const name = url.pathname.replace(/^\//, "") || "postgres";
-  if (name.endsWith(suffix)) return base;
+  const given = url.pathname.replace(/^\//, "") || "postgres";
+  const name = explicit ? given.replace(/_test$/, "") : given;
+  if (name.endsWith(suffix)) {
+    url.pathname = `/${name}`;
+    return url.toString();
+  }
   url.pathname = `/${name}${suffix}`;
   return url.toString();
 }

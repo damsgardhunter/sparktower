@@ -15,7 +15,7 @@ import { NICHES, nicheById } from "@shared/simulation/niches";
 import { cleanDecision, defaultDraft, validateDecision, LEVER_FIELDS, LEVERS_FOR_A_TABLE } from "@shared/simulation/levers";
 import {
   BOND_DISCOUNT, BOND_TERM, SOLO_ORDER, UNLOCKS, annualPlans, buildCostPerUnit, forecastOutcome, isUnlocked, leaseCostPerUnit,
-  paidBy, seatAllowances, soloSchedule, soloUnlocked, takings,
+  fundYear, paidBy, seatAllowances, soloSchedule, soloUnlocked, takings,
 } from "@shared/simulation/responsibilities";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
 import { interestOn } from "@shared/simulation/finance";
@@ -244,9 +244,39 @@ describe("annual plans", () => {
   it("cost revenue on everyone who takes them, and buy customers who stay", () => {
     const none = annualPlans(0);
     const some = annualPlans(15);
-    expect(none).toEqual({ uptake: 0, revenueFactor: 1, retention: 0 });
+    expect(none).toEqual({ uptake: 0, revenueFactor: 1, retention: 0, unwind: 0 });
     expect(some.revenueFactor).toBeLessThan(1);
     expect(some.retention).toBeGreaterThan(0);
+  });
+
+  /**
+   * And there is a depth past which it stops being worth it.
+   *
+   * Giving away `d` costs `d`, and what it buys — customers who cannot leave —
+   * is worth the same at every depth, so the deepest discount was always the
+   * better buy and the lever's whole range collapsed onto its cap. Measured
+   * over twenty-four quarters, the cap was the right answer in all seven
+   * markets and worth 20% to 40% of the company: a lever with no setting where
+   * it hurts, which is the thing this file says a lever must not be.
+   *
+   * What was missing is what happens when the plan ends. Somebody who has
+   * spent a year paying 30% under list does not see list as the price; they
+   * see a rise of 43%, and a rise on people already paying is what this market
+   * has always said they walk out over. It is also the only cost here that
+   * does not scale linearly with the discount — the step back up is
+   * `d / (1 - d)` — which is what gives the lever an interior best.
+   */
+  it("costs more to unwind the deeper it goes", () => {
+    const shallow = annualPlans(10);
+    const deep = annualPlans(30);
+    expect(shallow.unwind, "a plan has to be climbed down from").toBeGreaterThan(0);
+    /*
+     * Three times the discount, but more than three times the unwind: that is
+     * the superlinearity, and it is why there is a depth past which a deeper
+     * discount is the wrong call.
+     */
+    expect(deep.unwind / shallow.unwind).toBeGreaterThan(3);
+    expect(annualPlans(0).unwind, "and no plan is nothing to climb down from").toBe(0);
   });
 
   /*
@@ -463,5 +493,51 @@ describe("a year's worth is not a period's worth", () => {
   it("still makes longer terms worth giving", () => {
     // The lever has to remain a trade, not a penalty: it buys appeal.
     expect(termsOf(90, 0.25).appeal).toBeGreaterThan(termsOf(0, 0.25).appeal);
+  });
+});
+
+/**
+ * A region you cannot pay for does not open.
+ *
+ * Opening one is charged in full in the period it happens, and it was the only
+ * purchase in the game with no affordability check: every other line — the
+ * marketing, the product plan, the room being built, even a feature bet — is
+ * cut to what the company can pay. Ticking four regions it could not begin to
+ * afford opened all four, and the hole was covered by an emergency loan at a
+ * punitive rate. Played out over a season: a company holding $88,915 opened
+ * $149,000 of regions, finished the quarter on nothing, and carried $43,290 of
+ * debt it had never agreed to take.
+ */
+describe("opening regions the company cannot pay for", () => {
+  const withCities = (cities: string[], cash: number) =>
+    ({ ...team({ cash, creditLimit: 0, debt: 0 }), cities } as Company);
+
+  it("opens the ones the money reaches, cheapest first", () => {
+    const four = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost);
+    const home = four[0].id;
+    const budget = four[1].entryCost + four[2].entryCost;
+    const out = fundYear(
+      withCities([home], budget),
+      plain({ cmo: { targetCities: [home, four[1].id, four[2].id, four[3].id] } }),
+      niche,
+      { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as any,
+    );
+    const opened = out.decisions.cmo!.targetCities!;
+    expect(opened, "the region it already sells in is never given up").toContain(home);
+    expect(opened, "the two it can afford").toEqual(expect.arrayContaining([four[1].id, four[2].id]));
+    expect(opened, "and not the one it cannot").not.toContain(four[3].id);
+    expect(out.notes.join(" "), "and it says which stayed closed").toMatch(/stays closed|stay closed/i);
+  });
+
+  it("leaves a plan it can afford exactly as it was", () => {
+    const cheapest = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost);
+    const out = fundYear(
+      withCities([cheapest[0].id], 50_000_000),
+      plain({ cmo: { targetCities: cheapest.map((c) => c.id) } }),
+      niche,
+      { demand: 1, interestRate: 0.06, costIndex: 1, outlook: "steady" } as any,
+    );
+    expect(out.decisions.cmo!.targetCities).toEqual(cheapest.map((c) => c.id));
+    expect(out.notes.join(" ")).not.toMatch(/stays closed/i);
   });
 });

@@ -69,6 +69,13 @@ export const SURFACES: SurfaceDef[] = [
   { id: "mcp",        label: "Editor bridge (MCP)",  cls: "core", defaultEnabled: true, note: "Nova over MCP, for Claude Code, Cursor and VS Code agent mode. Long-lived tokens and whole source trees arrive here — the first switch to reach for if one leaks.", sequence: "supports" },
   { id: "documents",  label: "Documents",            cls: "core", defaultEnabled: true, note: "In use.", sequence: "supports" },
   { id: "personas",   label: "Personas & research",  cls: "core", defaultEnabled: true, note: "In use.", sequence: "supports" },
+  /*
+   * The decision simulator is deliberately not part of `sprints` — that note
+   * says so — and until now it was part of nothing, so the four AI routes
+   * behind a project's Simulations tab had no switch at all.
+   */
+  { id: "decisionSim", label: "Decision simulator",   cls: "core", defaultEnabled: true, note: "One owner's own numbers: scenarios, ten years from now, what would it take. Costs a model call per run — turn off here if the spend or the answers misbehave, without touching the multiplayer simulation.", sequence: "supports" },
+  { id: "resume",     label: "Résumé review",         cls: "core", defaultEnabled: true, note: "Reads an uploaded résumé into a profile. One model call per go.", sequence: "supports" },
 
   // --- Momentum: proof the company is moving ----------------------------
   { id: "discover",   label: "Discover",             cls: "momentum", defaultEnabled: true, note: "Where a shared link lands.", sequence: "supports" },
@@ -165,15 +172,32 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
    */
   signup: ["/api/auth/register", "/api/auth/mobile/register"],
   uploads: ["/api/uploads", "/internal-local-upload"],
-  nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/health-check"],
+  /*
+   * `/api/projects/:id/chat` as well as `/api/chat`: they are two different
+   * routes and only the second was listed, so turning Nova off left the
+   * per-project chat — a model call each — still answering. `/ai` and
+   * `/path/loops` are the same omission: writing and auditing loops, detecting
+   * gaps and summarizing progress are all Nova, all cost money, and none of
+   * them was under the switch that claims to drive every other surface.
+   */
+  nova: ["/api/chat", "/api/projects/:id/chat", "/api/projects/:id/ai", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/path/loops", "/api/projects/:id/health-check"],
   roadmap: ["/api/projects/:id/roadmap"],
+  /*
+   * "Most-used surface in the product" and "In use" respectively, and neither
+   * owned a single prefix: both switches were live in the admin console and
+   * changed nothing on the API. Two of the kanban routes call a model.
+   */
+  tasks: ["/api/projects/:id/kanban", "/api/kanban"],
+  milestones: ["/api/projects/:id/milestones", "/api/milestones"],
+  decisionSim: ["/api/projects/:id/decision-sim", "/api/projects/:id/simulation", "/api/projects/:id/what-would-it-take"],
+  resume: ["/api/profile/evaluate-resume", "/api/profile/resume-status"],
   codeAudit: ["/api/projects/:id/code-audit", "/api/code-audits"],
   mcp: ["/api/mcp", "/api/mcp-tokens"],
   documents: ["/api/projects/:id/documents", "/api/documents"],
   personas: ["/api/projects/:id/personas", "/api/projects/:id/interviews", "/api/projects/:id/experiments"],
   investor: ["/api/mock-interviews", "/api/projects/:id/investment", "/api/investment-applications", "/api/projects/:id/investor-artifacts", "/api/projects/:id/pitch-deck", "/api/projects/:id/readiness-score", "/api/projects/:id/pitch-critique", "/api/projects/:id/pricing-analysis", "/api/projects/:id/mock-interview", "/api/investor-personas"],
-  launch: ["/api/projects/:id/waitlist", "/api/projects/:id/deploy-checklist", "/api/projects/:id/pricing", "/api/projects/:id/legal-docs", "/api/projects/:id/launch-tasks", "/api/projects/:id/support-tickets"],
-  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/projects/:id/visuals", "/api/projects/:id/generate-video"],
+  launch: ["/api/projects/:id/waitlist", "/api/projects/:id/deploy-checklist", "/api/projects/:id/pricing", "/api/projects/:id/legal-docs", "/api/projects/:id/launch-tasks", "/api/projects/:id/support-tickets", "/api/projects/:id/marketing-schemes"],
+  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/projects/:id/visuals", "/api/projects/:id/brand-kit", "/api/projects/:id/generate-video"],
   backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges", "/api/projects/:id/merch", "/api/merch-orders", "/api/admin/printful", "/api/users/:userId/backings", "/api/backings", "/api/users/:userId/badges/backer", "/api/me/backings", "/api/payouts", "/api/stripe/connect-account", "/api/stripe/connect-onboarding", "/api/stripe/connect-dashboard", "/api/projects/:id/donations", "/api/projects/:id/donate-checkout"],
   discover: ["/api/discover"],
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],

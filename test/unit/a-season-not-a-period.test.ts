@@ -34,7 +34,7 @@
  * is which way round the strategies come out.
  */
 import { describe, it, expect } from "vitest";
-import { buildWorld } from "@shared/simulation/season";
+import { buildWorld, economyFor} from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { nicheById } from "@shared/simulation/niches";
 import { defaultDraft } from "@shared/simulation/levers";
@@ -59,7 +59,26 @@ const held = (c: any): number =>
 function play(strategy: Play, nicheId: string = NICHE): { worth: number; customers: number; cash: number; cashDelta: number } {
   const niche = nicheById(nicheId)!;
   let world: World = buildWorld({
-    seasonId: "season-not-period",
+    /*
+     * A season whose economy rises rather than falls, chosen deliberately.
+     *
+     * "season-not-period" landed at the top of the business cycle and fell all
+     * the way down — 1.108 to 0.880 over sixteen quarters, the steepest decline
+     * any seed produces. In a season like that, holding the money is the right
+     * play and the engine is correct to score it that way, so "deciding nothing
+     * costs something" is not a claim about the game, it is a claim about where
+     * the fixture happened to sit in the cycle.
+     *
+     * This file is about what a *season* is as against a period, and about a
+     * price nobody can pay. Neither wants an argument about the economy running
+     * underneath it, so it runs in a flat one — 0.966 to 0.972 across sixteen
+     * quarters — where neither a tailwind nor a headwind decides anything. A
+     * rising season was tried and is the wrong fixture for the opposite reason:
+     * it carries a company that does nothing to a small profit, which is true
+     * of a real business in a growing market and says nothing about whether
+     * filing nothing costs anything.
+     */
+    seasonId: "season-long",
     niche,
     cadence: "quarterly",
     teams: [{ id: "me", name: "Mine", seats: [...ROLES], officers: 1 }],
@@ -77,7 +96,13 @@ function play(strategy: Play, nicheId: string = NICHE): { worth: number; custome
     for (const role of ROLES) {
       filed[role] = { ...defaultDraft(role, me as any, previous?.[role]), ...(wanted[role] ?? {}) };
     }
-    const out = resolveYear({ ...world, year: period }, [filed as TeamDecisions], undefined, { withoutEvent: true });
+    /*
+     * The period's economy, as `tickSeason` passes it. Left out, the opening
+     * economy is held for the whole season and demand never moves — which for
+     * a file about what a *season* is rather than a period is the wrong thing
+     * to hold still.
+     */
+    const out = resolveYear({ ...world, year: period }, [filed as TeamDecisions], economyFor("season-long", period, 4), { withoutEvent: true });
     last = out.reports.find((r: any) => r.companyId === "me");
     previous = filed;
     world = out.world;

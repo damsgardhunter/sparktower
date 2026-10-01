@@ -54,14 +54,49 @@ export function formatPreflight(report: EnvReport): string {
 }
 
 /**
+ * Announces a production boot that came up with features off.
+ *
+ * The fatal case looks after itself: the process exits and somebody looks
+ * within minutes. The degraded case was a single `console.log` at boot, which
+ * is the quietest possible place to put it — on a platform it lands in a log
+ * nobody is reading at the time and is gone when the retention window rolls.
+ *
+ * That is the wrong volume for what it can mean. `RESEND_API_KEY` missing is
+ * not a cosmetic degradation: every confirm-your-email link goes to the server
+ * log instead of the person, so nobody who signs up can post, comment, message
+ * or invite. The site is up and the front door is shut, and the only notice was
+ * a line at boot.
+ *
+ * So the same report also goes wherever 500s go. It is not an error, and it is
+ * the one channel that already exists for "something you need to know and are
+ * not watching for". A deployment with no `ERROR_WEBHOOK_URL` set is no worse
+ * off than before.
+ */
+export type BootNotice = (features: string[], detail: string) => void;
+
+const notifyByWebhook: BootNotice = (features, detail) => {
+  void import("./error-reporting")
+    .then(({ reportError }) => {
+      const err = new Error(`Production started with ${features.length} feature${features.length === 1 ? "" : "s"} off: ${features.join(", ")}. ${detail}`);
+      err.name = "DegradedBoot";
+      reportError(err, { route: "boot/preflight", status: 500 });
+    })
+    .catch(() => { /* a failure to report a warning must not touch the boot */ });
+};
+
+/**
  * Runs the check and, in production, ends the process when something fatal is
  * wrong.
  *
  * Outside production nothing is fatal: a laptop has no PUBLIC_URL and no
  * object storage, and a checker that shouts about it every morning is a
- * checker people learn to scroll past.
+ * checker people learn to scroll past. It is also not worth notifying about —
+ * the whole point is that a laptop is meant to look like this.
  */
-export function assertEnvironmentAtBoot(env: Record<string, string | undefined> = process.env): void {
+export function assertEnvironmentAtBoot(
+  env: Record<string, string | undefined> = process.env,
+  notify: BootNotice = notifyByWebhook,
+): void {
   const report = preflight(env);
   const message = formatPreflight(report);
 
@@ -73,4 +108,11 @@ export function assertEnvironmentAtBoot(env: Record<string, string | undefined> 
   }
 
   console.log(message);
+
+  if (report.production && report.degraded.length) {
+    notify(
+      report.degraded.map((f) => f.name),
+      report.degraded.map((f) => `${f.name}: ${f.detail}`).join(" | "),
+    );
+  }
 }

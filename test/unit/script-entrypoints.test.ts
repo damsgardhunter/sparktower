@@ -9,8 +9,8 @@
  * output points at the cause.
  *
  * That happened once, to the catch-up script (1dcf2a0a), and cost an
- * afternoon. These are its siblings, and this is the check that keeps all four
- * importable.
+ * afternoon. These are its siblings, and this is the check that keeps every one
+ * of them importable.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
@@ -20,6 +20,17 @@ const SCRIPTS = [
   "script/reconcile-migrations.ts",
   "script/verify-migrations.ts",
   "script/baseline-migrations.ts",
+  /*
+   * The reputation pair, for the same reason and one more: both import the
+   * fact-gatherers, and one of them writes. A missing guard there would not
+   * merely connect to a database on import, it would seed one.
+   */
+  "script/reputation-gap.ts",
+  "script/seed-max-reputation.ts",
+  /* And this one imports the seeder for `assertIsCreator`, which is the guard being relied on. */
+  "script/seed-demo-social.ts",
+  /* Imports the storage module, which builds a GCS client the moment it is touched. */
+  "script/verify-object-storage.ts",
 ];
 
 describe("command-line scripts", () => {

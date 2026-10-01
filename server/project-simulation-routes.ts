@@ -52,6 +52,33 @@ const slugify = (name: string) =>
  * nothing is not the same business as one with customers. Quietly skipped
  * when there is no path, rather than failing.
  */
+/**
+ * Where the project actually is, for a season that opens there.
+ *
+ * Milestones done over milestones total, and how many people are on it. Both
+ * coarse on purpose: `opening.ts` sorts them into four recognisable stages, and
+ * pretending a percentage of a path maps to a precise bank balance would be
+ * false precision about somebody's real business.
+ *
+ * Null when the project has not adopted a path, because then there is no
+ * progress to read and "where you actually are" has no answer — the season
+ * opens funded, which is the honest default.
+ */
+async function standingOf(projectId: string, companyId: string): Promise<{ progress: number; people: number } | null> {
+  try {
+    const status = await pathStatus(projectId);
+    if (!status?.adopted) return null;
+    const phases = status.phases ?? [];
+    const done = phases.reduce((sum: number, p: any) => sum + (p.done ?? 0), 0);
+    const total = phases.reduce((sum: number, p: any) => sum + (p.total ?? 0), 0);
+    if (!total) return null;
+    const members = await db.select({ id: companyMembers.userId }).from(companyMembers).where(eq(companyMembers.companyId, companyId));
+    return { progress: Math.max(0, Math.min(1, done / total)), people: Math.max(1, members.length) };
+  } catch {
+    return null;
+  }
+}
+
 async function progressOf(projectId: string): Promise<string | null> {
   try {
     const status = await pathStatus(projectId);
@@ -107,6 +134,15 @@ export function registerProjectSimulationRoutes(app: Express): void {
        * picking monthly does not also mean answering a question about length.
        */
       const cadence: Cadence = CADENCES.includes(req.body?.cadence) ? req.body.cadence : "yearly";
+      /*
+       * Funded and level, or where this project actually is.
+       *
+       * Defaulted to the contest every season has been, so nothing changes for
+       * anybody who does not ask. A founder rehearsing the business they are
+       * running now is exactly who the other opening was written for, and they
+       * can now choose it — see `shared/simulation/opening.ts`.
+       */
+      const opening: "competitive" | "actual" = req.body?.opening === "actual" ? "actual" : "competitive";
 
       /*
        * Playing again a market this project already paid for.
@@ -345,6 +381,14 @@ export function registerProjectSimulationRoutes(app: Express): void {
           botSkill: "survivor",
           origin: "nova",
           customMarket: written ?? null,
+          opening,
+          /*
+           * Snapshotted here rather than read at the first tick: a season is a
+           * fixed question about a fixed starting point, and a founder who
+           * ticks off three milestones in week two has not changed the company
+           * they started with.
+           */
+          openingStanding: opening === "actual" ? await standingOf(project.id, company.id) : null,
         }).returning();
         return { company, season };
       });

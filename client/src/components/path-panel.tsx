@@ -19,6 +19,7 @@ import { useLivePath, useOpenMilestoneRequests, SyncDot } from "@/components/sec
 import { NextStep } from "@/components/section/next-step";
 import { NovaBuildsBusiness } from "@/components/section/nova-builds-business";
 import { ProgressStats, ProgressStrip, NovaRead } from "@/components/section/progress";
+import { NovaActionButton } from "@/components/nova-action-button";
 import { CodebaseSync } from "@/components/section/codebase";
 import { RecentActivity } from "@/components/section/activity";
 import { PathMap } from "@/components/section/path-map";
@@ -106,6 +107,31 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
 
         {/* Nova doing the whole path at once, and what it's doing while it does. */}
         <NovaBuildsBusiness projectId={projectId} />
+
+        {/*
+          * The way out when the path is not where the builder actually is.
+          *
+          * This first went next to "Tell Nova" and "Re-evaluate", which is
+          * where it belongs by meaning and nowhere by visibility: that row
+          * lives inside the Progress block, which is collapsed until somebody
+          * opens it. A builder whose plan has drifted is the least likely
+          * person to go hunting behind a fold for the thing that fixes it, so
+          * it sits on the open card instead.
+          */}
+        <div className="rounded-lg border border-border/60 p-3 flex items-center gap-3 flex-wrap" data-testid="direction-catch-up">
+          <Compass className="h-4 w-4 text-muted-foreground shrink-0" />
+          <p className="text-xs text-muted-foreground min-w-0 flex-1">
+            Not where you actually are? Tell Nova what changed and it rewrites the brief, the loops and the board to match.
+          </p>
+          <NovaActionButton
+            projectId={projectId}
+            surface="direction"
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs shrink-0"
+            label="Catch up with my direction"
+          />
+        </div>
 
         {/* The fork: keep building, or go to users. Chosen, never drifted into. */}
         {data.offer && (

@@ -287,6 +287,75 @@ describe("the checks added for limits, sessions, stored secrets and data rights"
     expect(verdict("secrets-at-rest", [srv(`app.get("/x", h);`)]).status).toBe("n/a");
   });
 
+  /*
+   * The word that does the damage.
+   *
+   * Anything metering a language model has `prompt_tokens`,
+   * `completion_tokens` and `cached_tokens`, and every one of them is an
+   * integer holding how many were spent. This check read the word "token" and
+   * told the owner of such a table to rename the columns `*_sealed` and pass
+   * them through an encryption helper — three numbers that could not hold a
+   * secret if they tried, and a schema that would then describe a count as a
+   * sealed credential.
+   *
+   * A credential is a string. The shape of the column answers this before the
+   * name has to.
+   */
+  it("stored credentials: a number is never one, whatever it is called", () => {
+    const counts = [{
+      path: "shared/schema.ts",
+      content: `export const aiSpend = table("ai_spend", {
+        promptTokens: integer("prompt_tokens"),
+        completionTokens: integer("completion_tokens"),
+        cachedTokens: integer("cached_tokens"),
+      });`,
+    }];
+    /* `pass`, not `n/a`: there is a schema here and the check read it — it simply found nothing a secret could be hiding in. */
+    expect(verdict("secrets-at-rest", counts).status).toBe("pass");
+
+    const sqlCounts = [{
+      path: "migrations/0056_ai_spend.sql",
+      content: `CREATE TABLE "ai_spend" (\n\t"prompt_tokens" integer,\n\t"completion_tokens" integer\n);`,
+    }];
+    expect(verdict("secrets-at-rest", sqlCounts).status).toBe("pass");
+
+    /* Nor a flag, a date or a money column that happens to say "token". */
+    const others = [{
+      path: "shared/schema.ts",
+      content: `export const t = table("t", {
+        tokenEnabled: boolean("token_enabled"),
+        tokenSpend: numeric("token_spend"),
+        secretRotatedOn: date("secret_rotated_on"),
+      });`,
+    }];
+    expect(verdict("secrets-at-rest", others).status).toBe("pass");
+  });
+
+  /*
+   * And the half that must not be blunted by the half above: the types that
+   * genuinely hold a credential are still read.
+   */
+  it("stored credentials: still catches one in every type that could hold it", () => {
+    for (const column of [
+      `apiKey: text("api_key")`,
+      `apiKey: varchar("api_key", { length: 64 })`,
+      `apiKey: char("api_key")`,
+      `credentials: jsonb("credentials")`,
+      `privateKey: bytea("private_key")`,
+    ]) {
+      const files = [{ path: "shared/schema.ts", content: `export const t = table("t", { ${column} });` }];
+      expect(verdict("secrets-at-rest", files).status, column).toBe("missing");
+    }
+    /* And in a migration, where the type sits after the name rather than before it. */
+    for (const sql of [
+      `ALTER TABLE "users" ADD COLUMN "api_key" text;`,
+      `ALTER TABLE "users" ADD COLUMN "access_key" varchar(64);`,
+      `CREATE TABLE "k" (\n\t"private_key" bytea NOT NULL\n);`,
+    ]) {
+      expect(verdict("secrets-at-rest", [{ path: "migrations/0001_k.sql", content: sql }]).status, sql).toBe("missing");
+    }
+  });
+
   it("secret comparison: plain equality on a signature is a gap, a constant-time compare isn't", () => {
     expect(verdict("timing-safe-compare", [srv(`const ok = signature === expectedSignature;`)]).status).toBe("partial");
     expect(verdict("timing-safe-compare", [srv(`if (!crypto.timingSafeEqual(a, b)) return null;\nconst same = digest === expected;`)]).status).toBe("pass");

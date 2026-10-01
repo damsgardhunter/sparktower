@@ -9,8 +9,8 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  EMPTY_FACTS, PILLAR_WEIGHTS, contributionScore, executionScore, rate,
-  reputationFrom, saturate, seasonScore, simScore, strategyScore,
+  EMPTY_FACTS, PILLAR_WEIGHTS, REPUTATION_TARGETS, contributionScore, executionScore, marketScore,
+  rate, reputationFrom, saturate, seasonScore, simScore, strategyScore, toward,
   type ContributionFacts, type ExecutionFacts, type SimFacts,
 } from "@shared/reputation";
 
@@ -28,6 +28,31 @@ const season = (over: Partial<SimFacts["seasons"][number]> = {}) => ({
   rank: 5, field: 9, yearsPlayed: 14, totalYears: 14, marketShare: 0.1, profitable: false, bankrupt: false, ...over,
 });
 
+/** A builder sitting exactly on every published target, and no further. */
+const atEveryTarget = () => {
+  const T = REPUTATION_TARGETS;
+  return {
+    execution: execution({
+      milestonesCompleted: T.execution.milestonesCompleted,
+      milestonesWithDates: T.execution.milestonesCompleted,
+      milestonesOnTime: T.execution.milestonesCompleted,
+      tasksCompleted: T.execution.tasksCompleted,
+      tasksOnTime: T.execution.tasksCompleted,
+      activeWeeks: T.execution.activeWeeks,
+      projectsShipped: T.execution.projectsShipped,
+      progress: 1, progressProjects: 3,
+    }),
+    contribution: contribution({ ...T.contribution }),
+    market: { ...T.market },
+    strategy: {
+      aiScore: 100,
+      contestWins: T.strategy.contestWins,
+      sim: { seasons: Array.from({ length: T.strategy.marketsPlayed }, (_, i) =>
+        season({ marketId: `world_${i}`, playedAt: i, rank: 1, field: 9, marketShare: 0.35, profitable: true })) },
+    },
+  };
+};
+
 describe("the curve everything is built on", () => {
   it("gives half the marks at the halfway mark, and never quite all of them", () => {
     expect(saturate(10, 10)).toBeCloseTo(0.5);
@@ -42,9 +67,109 @@ describe("the curve everything is built on", () => {
     expect(fiftieth).toBeLessThan(tenth);
   });
 
+  /*
+   * And the curve the pillars actually use, which is `saturate`'s shape with an
+   * end on it. `saturate` stays untouched because the market simulation is built
+   * on it in two dozen places, where a ceiling nobody can reach is the right
+   * model of spending money on advertising. A reputation score is not that.
+   */
+  it("arrives at full marks at the target, unlike saturate", () => {
+    expect(toward(0, 40)).toBe(0);
+    expect(toward(40, 40), "the target is the point where it pays in full").toBe(1);
+    expect(toward(400, 40), "and nothing beyond it is needed").toBe(1);
+    expect(saturate(400, 40), "which saturate could never do").toBeLessThan(1);
+  });
+
+  it("keeps diminishing returns on the way there", () => {
+    const fourth = toward(4, 40) - toward(3, 40);
+    const thirtieth = toward(30, 40) - toward(29, 40);
+    expect(thirtieth).toBeGreaterThan(0);
+    expect(thirtieth, "later work is worth less, as it was before").toBeLessThan(fourth);
+    expect(toward(10, 40), "a quarter of the way is half the marks").toBeCloseTo(0.5);
+  });
+
   it("calls a rate neutral until there are enough of them to mean anything", () => {
     expect(rate(1, 1, 3)).toBe(0.5);
     expect(rate(8, 10, 3)).toBeCloseTo(0.8);
+  });
+});
+
+/**
+ * That the top of the scale exists.
+ *
+ * It did not. Every term in all four pillars was a `saturate`, which approaches
+ * full marks and never arrives, so no pillar could reach 100 and neither could
+ * the index. On top of that `activeWeeks` was gathered over `interval '26
+ * weeks'` while the consistency term was `12 * saturate(weeks, 8)` — 26 on that
+ * curve pays 9.18 of 12, capping execution at 97 by the calendar alone. The
+ * true ceiling was 99, the profile card said "out of 100" under the number and
+ * drew a bar to 100 beside every pillar, and nothing anywhere said otherwise.
+ *
+ * These are the tests that stop that happening again, and they are deliberately
+ * about the *promise* rather than the arithmetic: a scale that says 100 has to
+ * have a 100 in it.
+ */
+describe("the top of the scale", () => {
+  it("reaches full marks at the targets, in every pillar and in the index", () => {
+    const r = reputationFrom(atEveryTarget());
+    expect(r.execution, "execution").toBe(100);
+    expect(r.contribution, "contribution").toBe(100);
+    expect(r.market, "market").toBe(100);
+    expect(r.strategy, "strategy").toBe(100);
+    expect(r.builderIndex, "the number the profile prints 'out of 100' under").toBe(100);
+  });
+
+  /*
+   * The pillars have to be *worth* 100 as well as reach it: a term list that
+   * sums to 96 would pass nothing above, and a list summing to 104 would let a
+   * builder skip a target and still read full marks.
+   */
+  it("weights each pillar's terms to exactly 100, so no target is skippable", () => {
+    const full = atEveryTarget();
+    for (const [name, score, facts] of [
+      ["execution", executionScore, full.execution],
+      ["contribution", contributionScore, full.contribution],
+      ["market", marketScore, full.market],
+    ] as const) {
+      for (const key of Object.keys(REPUTATION_TARGETS[name as "execution"] ?? {})) {
+        const short = { ...facts, [key]: 0 } as any;
+        expect((score as any)(short), `${name} still reads 100 with ${key} at zero`).toBeLessThan(100);
+      }
+    }
+  });
+
+  it("is extraordinary: a strong year falls well short of it", () => {
+    const strong = reputationFrom({
+      execution: execution({ milestonesCompleted: 30, milestonesWithDates: 28, milestonesOnTime: 26,
+        tasksCompleted: 180, tasksOnTime: 160, activeWeeks: 34, projectsShipped: 2, progress: 0.8, progressProjects: 3 }),
+      contribution: contribution({ tasksForOthers: 35, projectsHelped: 6, milestonesForOthers: 6,
+        feedbackGiven: 30, feedbackAppreciated: 22, updatesPosted: 25, collaborators: 7 }),
+      market: { donationsReceived: 4_000, backersCount: 25, followersAttracted: 110, externalTraction: 2, projectsLaunched: 3 },
+      strategy: { aiScore: 85, contestWins: 1, sim: { seasons: [
+        season({ rank: 2, field: 9, marketShare: 0.22, profitable: true }),
+        season({ rank: 1, field: 9, marketShare: 0.3, profitable: true }),
+      ] } },
+    });
+    expect(strong.builderIndex, "a very good year should read high but not full").toBeGreaterThan(70);
+    expect(strong.builderIndex).toBeLessThan(90);
+  });
+
+  /*
+   * The market pillar's old curve is the clearest case of the second failure —
+   * not that 100 was unreachable, but that the top third was priced in orders of
+   * magnitude. `34 * saturate(donations, 5_000)` read 30 at $100k and 32 at
+   * $500k: a 25x increase in money raised bought two points.
+   */
+  it("prices the last of the market pillar in reach, not in orders of magnitude", () => {
+    const T = REPUTATION_TARGETS.market;
+    const at = (donationsReceived: number) => marketScore({ ...T, donationsReceived });
+    expect(at(T.donationsReceived)).toBe(100);
+    expect(at(T.donationsReceived / 2), "halfway to the target is most of the way to the marks").toBeGreaterThan(88);
+    expect(at(T.donationsReceived * 50), "and nothing above the target is required").toBe(100);
+  });
+
+  it("still starts at nothing for a builder who has done nothing", () => {
+    expect(reputationFrom(EMPTY_FACTS).builderIndex).toBe(0);
   });
 });
 
@@ -76,6 +201,18 @@ describe("execution", () => {
     const steady = executionScore(execution({ milestonesCompleted: 6, activeWeeks: 20 }));
     const burst = executionScore(execution({ milestonesCompleted: 6, activeWeeks: 1 }));
     expect(steady).toBeGreaterThan(burst);
+  });
+
+  /*
+   * `projectsShipped` was gathered by `executionFacts`, carried through the
+   * facts, printed in the breakdown the profile card reads — and never
+   * multiplied by anything. Finishing a project was worth zero points in the
+   * pillar named "execution".
+   */
+  it("pays for taking a project all the way to done", () => {
+    const shipped = executionScore(execution({ milestonesCompleted: 10, projectsShipped: 3 }));
+    const ongoing = executionScore(execution({ milestonesCompleted: 10, projectsShipped: 0 }));
+    expect(shipped, "shipping has to be worth something").toBeGreaterThan(ongoing);
   });
 
   it("reads how far the projects have actually got", () => {

@@ -14,7 +14,7 @@ import { describe, it, expect } from "vitest";
 import {
   CADENCES, PERIODS_PER_YEAR, perPeriod, periodsFor, growthPerPeriod,
   yearOfPeriod, periodsInSeason, periodLabel, periodsPerYear,
-  DEFAULT_YEARS, PERIODS_MAX, PERIOD_MS, totalPeriods, yearsMax, yearsMin,
+  DEFAULT_YEARS, PERIODS_MAX, PERIOD_MS, totalPeriods, yearsMax, yearsMin, inPeriodWords,
 } from "@shared/simulation/cadence";
 import { buildWorld, economyFor, seasonOver, tickDueAt } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -514,5 +514,32 @@ describe("cutting the room you have", () => {
     const up = capacityBuild(serving(380), 1_400, 0.25);
     expect(up.now).toBe(700);
     expect(up.next).toBeGreaterThan(700);
+  });
+});
+
+/**
+ * A rate is not a duration.
+ *
+ * `inPeriodWords` rewrites "a year" to "a quarter" so a note written for a
+ * yearly season reads correctly in a quarterly one. It rewrote every "a year",
+ * including the one inside "at 30.1% a year" — so a company that ran out of
+ * money was told its emergency loan cost 30.1% *a quarter*, which is the same
+ * annual rate reported as four times what it is, and twelve times in a monthly
+ * season.
+ *
+ * Found by playing a season rather than by reading the code: the number looked
+ * deliberate, which is what makes this kind of wrong worse than a wrong number.
+ */
+describe("saying a year in a season of quarters", () => {
+  it("leaves an interest rate alone", () => {
+    const note = "Cash ran out and an emergency loan of 1,877 covered it — at 30.1% a year, repaid before anything else.";
+    expect(inPeriodWords(note, 4)).toContain("30.1% a year");
+    expect(inPeriodWords(note, 12)).toContain("30.1% a year");
+  });
+
+  it("still says quarter where a quarter is meant", () => {
+    expect(inPeriodWords("The year was run for growth", 4)).toBe("The quarter was run for growth");
+    expect(inPeriodWords("a third of a year's takings", 4)).toBe("a third of a quarter's takings");
+    expect(inPeriodWords("21% less churn in a year", 12)).toBe("21% less churn in a month");
   });
 });

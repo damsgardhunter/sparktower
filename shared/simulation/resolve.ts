@@ -51,10 +51,10 @@ import { automationCost, automationEffect, automationNext, shiftCapacity, sourci
 import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./treasury";
 import {
   DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers, expansionOutcome,
-  dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
+  boughtReach, dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
   statementCost, winBack, type Cover, type Shock, type ShockAnswer,
 } from "./world";
-import { valuation, applyAcquisition } from "./mergers";
+import { valuation, applyAcquisition, EARNINGS_MULTIPLE, EARNINGS_BAND} from "./mergers";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -439,12 +439,33 @@ export function resolveYear(
    * they expire, because a funding winter drawn in the first quarter has to
    * last the year rather than the quarter.
    */
+  /*
+   * The economy this period starts from, which is not the one the world stored.
+   *
+   * `world.economy` is the economy *after* last period's weather was applied to
+   * it, so using it as the base applied the new weather on top of the old. A
+   * market event's multiplier was therefore re-applied for every period it
+   * stayed in force: a twelve per cent freight shock became 1.12^12 across a
+   * monthly year, unit cost went from 6 to 25.79 by the second year, and the
+   * company went bankrupt serving customers at four times what they paid.
+   *
+   * The server never hit it, because `tickSeason` passes the period's economy
+   * every time. Everything else did: every sweep behind
+   * `docs/simulation-backlog.md`, and `every-market-winnable.test.ts`.
+   *
+   * So the world now carries the weather-free economy it started from as well
+   * as the weathered one everything reads. The base is what weather is applied
+   * to, and it does not move unless a caller moves it — which is what lets a
+   * test build a world with a chosen economy and have that economy respected,
+   * and what stops a season inventing drift nobody asked for.
+   */
+  const baseEconomy = economy ?? world.economyBase ?? world.economy;
   const events = options.withoutEvent
     ? []
-    : eventsDue({ world, period: world.year, periods, economy: economy ?? world.economy });
+    : eventsDue({ world, period: world.year, periods, economy: baseEconomy });
   const weather = nextWeather(world.weather, events, world.year, periods);
   const event: MarketEvent | null = events[0] ?? null;
-  const nextEconomy = economyWithWeather(economy ?? world.economy, weather);
+  const nextEconomy = economyWithWeather(baseEconomy, weather);
   /*
    * Every number made a number before anything reads it. One bad field used to
    * be enough to turn an entire market's cash into NaN — see
@@ -547,7 +568,7 @@ export function resolveYear(
     if (company.kind !== "player") continue;
     const d = byCompany.get(company.id);
     if (!d) continue;
-    const funded = fundYear(company, d, niche, economy ?? world.economy);
+    const funded = fundYear(company, d, niche, baseEconomy);
     byCompany.set(company.id, funded.decisions);
     if (funded.notes.length) notesFor[company.id] = funded.notes;
   }
@@ -665,8 +686,28 @@ export function resolveYear(
      * the pipeline; what arrives now is last year's shipping and research that
      * started two years ago. See `lag.ts`.
      */
+    /*
+     * And who is building it.
+     *
+     * `staffQuality` drove service and nothing else: the people a company
+     * hires, recruits for, trains and pays had no effect whatever on the
+     * product they build, which is not true of any business and was why
+     * `recruitingSpend` and `trainingSpend` measured as dead levers. Engineer
+     * pay already moved what shipped (`pay.output`); the people themselves did
+     * not.
+     *
+     * `staffLeverage` runs 0.5 to 1.5 and is exactly 1 at the staff quality a
+     * company starts with, so this changes nothing for a table that ignores
+     * it: good people make the same budget go further, poor ones waste it.
+     *
+     * A company with nobody on the payroll ships at 1. A solo founder is the
+     * engineer, and what they can build is already priced into the lever
+     * itself — docking them for having no employees would be charging them
+     * twice for being one person.
+     */
+    const builders = (company.staff ?? 0) > 0 ? staffLeverage(company.staffQuality ?? STAFF_QUALITY_START) : 1;
     // An automated line is a line set up for what it already makes: product work buys less.
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product;
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
     /*
      * The pace again: shipping swings the year's result either way, and puts
      * part of it in front of customers now rather than next year.
@@ -972,6 +1013,8 @@ export function resolveYear(
     let expanding = company.expanding;
     let citiesNow = cities;
     const ramp: Record<string, number> = {};
+    /* A region bought outright is reached from a floor, not in full. See `boughtReach`. */
+    for (const city of opened) ramp[city.id] = boughtReach(company.brand);
     if (expanding && expanding.opensYear === world.year) {
       if (!citiesNow.includes(expanding.cityId)) {
         citiesNow = [...citiesNow, expanding.cityId];
@@ -1049,6 +1092,7 @@ export function resolveYear(
       // A marketing seat that filed sets the tiers; one that did not leaves them as they were.
       tiers: d.cmo ? d.cmo.tiers : company.tiers,
       retention: annualPlans(d.cfo?.annualDiscount).retention,
+      unwind: annualPlans(d.cfo?.annualDiscount).unwind,
       // What customers are given to pay, which is part of the offer (see `treasury.ts`).
       terms: d.cfo?.terms,
       pipeline: quality.pipeline,
@@ -1180,6 +1224,15 @@ export function resolveYear(
 
   /* 3. The market decides. */
   const allocation = allocate(withIncumbents, niche, world.year, nextEconomy, periods);
+  if (process.env.SIM_DEBUG) {
+    console.log(`[dbg] demand=${(nextEconomy as any).demand} year=${world.year} periods=${periods}`);
+    for (const c of withIncumbents) {
+      const w = Object.values(allocation.held[c.id] ?? {}).reduce((s: number, n: any) => s + n, 0);
+      const start = Object.values(c.customers ?? {}).reduce((s: number, n: any) => s + Number(n||0), 0);
+      if (c.kind === "player") console.log("[dbg]PLAYER " + JSON.stringify({ ...c, customers: start, assets: (c.assets??[]).length }));
+      else console.log(`[dbg]   ${String(c.id).padEnd(14)} q=${c.quality} b=${c.brand} s=${c.service} price=${c.price} cap=${c.capacity} held0=${Math.round(start)} -> ${Math.round(w)}`);
+    }
+  }
 
   /*
    * Win-back: last year's leavers, brought back from whoever took them — the
@@ -1616,6 +1669,8 @@ export function resolveYear(
     }
 
     let emergencyDrawn = 0;
+    /** Bills there was neither cash nor credit to pay. Booked as debt below, and a line on the bridge. */
+    let unpaidBills = 0;
     // Repayment clears the expensive money first.
     let emergencyDebt = company.kind === "player" ? applyRepayment(company.emergencyDebt ?? 0, repaid) : 0;
     if (cash < 0) {
@@ -1668,6 +1723,7 @@ export function resolveYear(
         const unpaid = -cash;
         debt += unpaid;
         if (company.kind === "player") emergencyDebt += unpaid;
+        unpaidBills = unpaid;
         cash = 0;
         notesFor[company.id] = [
           ...(notesFor[company.id] ?? []),
@@ -1874,6 +1930,15 @@ export function resolveYear(
       if (repaid > 0) lines.push({ label: "Repaid", amount: -repaid });
       if (raised > 0) lines.push({ label: "Raised from investors", amount: raised });
       if (emergencyDrawn > 0) lines.push({ label: "Drawn on credit to stay solvent", amount: emergencyDrawn });
+      /*
+       * The bills above are on the bridge as though they were paid, and the
+       * ones there was no money for were not. Without this line the year's
+       * movements ended below zero while the bank balance read nought, and the
+       * bridge — whose whole job is to show where the money went — was out by
+       * exactly the amount the company failed to pay. The money did not move;
+       * the obligation did, into `debt`.
+       */
+      if (unpaidBills > 0) lines.push({ label: "Bills there was no money to pay", amount: unpaidBills });
 
       accounts[company.id] = {
         opening,
@@ -1942,7 +2007,7 @@ export function resolveYear(
     }
 
     // Capacity ordered this year opens now that the year is over.
-    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
+    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, unwind: _unwind, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
     return {
       ...rest,
       ...(company.kind === "player"
@@ -2086,7 +2151,49 @@ export function resolveYear(
     // A year of what its customers actually pay, tier by tier.
     const sales = takings(c, c.customers, niche.segments).revenue;
     const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
-    return Math.max(0, Math.round(sales * 1.2 + assets - c.debt));
+    /*
+     * And what the company earns, which the score used to be blind to.
+     *
+     * Just over a year of sales, plus what it owns, minus what it owes — with
+     * no term anywhere for whether the sales paid for themselves. So volume was
+     * the whole of it, and a business losing money outranked a smaller one
+     * making it. Measured across twelve markets and nine ways of playing them,
+     * of every pair where one company clearly made money and the other clearly
+     * lost it, **thirty per cent had the profitable one ranked below the
+     * loss-making one**. In restaurant chains a plan earning £58,772 a quarter
+     * came eighth of nine while one losing £49,122 came fourth.
+     *
+     * That is not a close call about weighting, it is the score measuring
+     * something other than whether the business works. A revenue multiple for
+     * what has been built, and an earnings multiple for whether it pays: eight
+     * times, which is an ordinary multiple for a real business and takes those
+     * thirty per cent to **nought**.
+     *
+     * Annualised, because `sales` is a year and a period is a quarter or a
+     * month. Negative earnings subtract, which is the point — a company can be
+     * worth less than its sales suggest, and now is.
+     */
+    const earnings = (ledger[c.id]?.profit ?? 0) * periods;
+    /*
+     * Bounded, so earnings tilt the number rather than deciding it.
+     *
+     * Unbounded, an eight times multiple on a heavy loss drove every company in
+     * a hard market to the zero floor, where they all tie and the score stops
+     * saying anything at all — and on the other side it made the company that
+     * spent nothing and banked a small profit the best-scoring one in four
+     * markets, which is the opposite mistake. A band keeps both halves: being
+     * profitable is worth about as much as the sales themselves, being
+     * loss-making costs nearly as much, and neither can swamp what was built.
+     *
+     * Bent rather than clipped, for the same reason the intake bound could not
+     * be a ceiling: a hard band ties every company that reaches it, and two
+     * companies with the same sales and very different margins scored the same
+     * to the pound. `tanh` approaches the band without ever arriving, so more
+     * earnings is always worth more and the bound still holds.
+     */
+    const ceiling = sales * EARNINGS_BAND;
+    const lift = ceiling > 0 ? ceiling * Math.tanh((earnings * EARNINGS_MULTIPLE) / ceiling) : 0;
+    return Math.max(0, Math.round(sales * 1.2 + lift + assets - c.debt));
   };
   /*
    * What the founders hold: their share of the company, plus every dividend
@@ -2279,6 +2386,8 @@ export function resolveYear(
       year: world.year + 1,
       companies: [...afterEvent, ...arrived],
       economy: nextEconomy,
+      /* Weather-free, so next period applies its weather to this rather than to itself. */
+      economyBase: baseEconomy,
       // What is still in force next period, so a year event drawn in the
       // first quarter is still cold weather in the fourth.
       ...(weather.length ? { weather } : {}),

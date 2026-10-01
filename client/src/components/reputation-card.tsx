@@ -22,7 +22,7 @@ const SCORE_CONFIG = [
     icon: Zap,
     color: "text-amber-500",
     bgColor: "bg-amber-500",
-    tooltip: "Milestones and tasks you have actually finished, whether they landed by their date, how many weeks running you have shipped something, and how far your projects have got.",
+    tooltip: "Milestones and tasks you have actually finished, whether they landed by their date, how many weeks running you have shipped something, how far your projects have got, and how many you have taken all the way to done.",
   },
   {
     key: "contributionScore" as const,

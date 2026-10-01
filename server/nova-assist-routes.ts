@@ -84,6 +84,25 @@ Define the smallest set of events that would tell the builder whether the produc
 
 Where instrumentation is missing, create the tasks to add it. Where the brief's success metrics are vague, sharpen them with update_project.`,
 
+  direction: `You are RECONCILING this project with where the builder actually is.
+
+The builder has changed direction, and the project still describes the old one somewhere. Your job is to find every place that is true and fix it in the same turn.
+
+THE ORDER OF TRUTH, when two things disagree: the builder's standing notes first, then what they have just told you, then the code, then the brief, then the board. The notes and the code are current; the brief and the board are what somebody wrote down at the time, and they are the things most likely to be stale. Never resolve a disagreement in favour of the brief.
+
+What to look for, in this order:
+- the brief describing a product, a customer or a business model the builder has moved away from — fix it with update_project, including businessModel when the way they charge has changed;
+- loops that are no longer how the product works — update_loop to rewrite, retire_loop to drop one that has gone;
+- work on the board that only made sense under the old plan — retire_task with the reason;
+- anything the new direction implies that nobody has written down yet — create the task or the loop for it.
+
+RULES:
+- Every contradiction you name must come with the operation that fixes it. A finding with no edit behind it leaves the builder to do it by hand, which is the thing they asked you not to do.
+- Taking work away needs evidence, not an absence of it: the notes say it is retired, the builder just said so, or the code shows what replaced it. "I cannot see it" is not evidence.
+- Never retire a path milestone (a backbone: task). Those are the path itself.
+- Say what you changed and why, in the builder's own terms, so they can tell at a glance whether you understood them.
+- If what they have told you contradicts a standing note you already hold, use remember with "replaces" so the old one goes rather than sitting there arguing with the new one.`,
+
   tasks: `You are working on this project's TASK BOARD.
 
 Every task gets a whole-hour estimate a real person could hit, ordered so prerequisites come first. Between 5 and 10 tasks per milestone — more than that is a backlog, not a plan.`,
@@ -196,10 +215,25 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   let parsed: any;
   try {
     const raw = completion.choices[0].message.content ?? "";
-    parsed = parseModelJson(raw);
+    /* "answer" rather than the default "response", so the sentence a person reads is the one this route always showed. */
+    parsed = parseModelJson(raw, "answer");
   } catch (err) {
     console.error("Nova assist parse failed (%s):", String(surface).replace(/[\r\n]+/g, " ").slice(0, 60), err);
-    return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });
+    /*
+     * The typed refusal, like the other two catches in this file.
+     *
+     * This wrote the 502 by hand with a message and no `code`, so a client
+     * branching on `model_unreadable` — which every other AI route here sends —
+     * could not tell "the model had a bad day, try again" from "this is broken".
+     * The sweep test did not catch it because it reads the *status* out of the
+     * catch, and the status was always right.
+     *
+     * `parseModelJson` is the only thing in the try, and it throws
+     * ModelResponseError, so this is the unreadable-answer path in practice;
+     * anything else that ever lands here gets the route's own 500 rather than
+     * being mislabelled as the model's fault.
+     */
+    return respondToAiError(res, err, "Nova couldn't read that answer. Nothing was charged — try again.");
   }
 
   await storage.deductCredits(userId, CREDIT_COSTS.novaAssist);

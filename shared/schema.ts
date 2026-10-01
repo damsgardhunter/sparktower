@@ -213,6 +213,14 @@ export const projects = pgTable("projects", {
   problemStatement: text("problem_statement"),
   targetUser: text("target_user"),
   successMetrics: text("success_metrics"),
+  /**
+   * How the project makes money, in the builder's words.
+   *
+   * Part of the brief every Nova prompt reads, because a model asked to
+   * reason about a business without knowing how it charges will invent an
+   * answer — and did. See shared/project-sections.ts.
+   */
+  businessModel: text("business_model"),
   scope: jsonb("scope"),
   oneLiner: text("one_liner"),
   mission: text("mission"),
@@ -3929,6 +3937,29 @@ export const simSeasons = pgTable("sim_seasons", {
    * seat because it is more of the product — see SEAT_PRICE_CENTS.
    */
   cadence: text("cadence", { enum: ["yearly", "quarterly", "monthly"] }).default("yearly").notNull(),
+  /**
+   * Whether the companies open funded and level, or where the project actually
+   * is.
+   *
+   * "competitive" is every season there has ever been: money in the bank, a
+   * credit line, nobody to serve, everyone identical. The right contest for
+   * tables playing each other, and the wrong one for somebody rehearsing the
+   * business they are running now — handing them six million pounds teaches
+   * them to run a company that is not theirs.
+   *
+   * "actual" opens them on the balance sheet the work has earned. It is not a
+   * handicap setting; it is a different question, and the one people came for.
+   * See `shared/simulation/opening.ts`.
+   */
+  opening: text("opening", { enum: ["competitive", "actual"] }).default("competitive").notNull(),
+  /**
+   * The project's standing when the season was made, for an "actual" opening.
+   *
+   * Taken once, at creation, rather than read live: a season is a fixed
+   * question about a fixed starting point, and a founder who ticks off three
+   * milestones in week two has not changed the company they started with.
+   */
+  openingStanding: jsonb("opening_standing"),
   /**
    * A market Nova wrote for this company, rather than one of the seven.
    *

@@ -13,9 +13,39 @@ export class ModelResponseError extends Error {
   status = 502;
   code = "model_unreadable";
   constructor(what: string, public raw?: string) {
-    super(`Nova returned an unreadable ${what}. Please try again.`);
+    super(
+      looksTruncated(raw)
+        ? `Nova's ${what} was cut off part-way and couldn't be read. Nothing was charged — please try again.`
+        : `Nova returned an unreadable ${what}. Please try again.`,
+    );
     this.name = "ModelResponseError";
   }
+}
+
+/**
+ * Whether the answer began as JSON and stopped part-way.
+ *
+ * Worth telling apart from prose, because the two have different causes and
+ * different fixes: an answer that ran out of room needs a bigger ceiling,
+ * while one that came back as a paragraph needs a clearer prompt. Both used to
+ * read as "unreadable", which is true of each and useful about neither — an
+ * audit that overran its token limit told its builder nothing about why.
+ *
+ * Deliberately shallow: it asks whether the text opens like JSON, got as far
+ * as writing a field, and never closed — not whether the JSON is valid.
+ * Anything cleverer would be a parser, and there is already one below.
+ *
+ * The field is what separates this from ordinary malformed JSON. "{not json"
+ * also opens and never closes, and it did not run out of room — it was never
+ * JSON. Something that stopped part-way has at least one `"key":` behind it.
+ */
+export function looksTruncated(raw: string | null | undefined): boolean {
+  const text = String(raw ?? "").trim().replace(/^```(?:json)?\s*/i, "");
+  if (!text.startsWith("{") && !text.startsWith("[")) return false;
+  if (!/"\s*:/.test(text)) return false;
+  const opens = (text.match(/[{[]/g) ?? []).length;
+  const closes = (text.match(/[}\]]/g) ?? []).length;
+  return opens > closes;
 }
 
 export function parseModelJson<T = any>(raw: string | null | undefined, what = "response"): T {

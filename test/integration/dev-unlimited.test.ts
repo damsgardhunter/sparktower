@@ -150,3 +150,81 @@ describe("un-buying a project", () => {
     expect((await me.agent.get("/api/nova/wallet")).body.buildPasses, "the pass is gone").not.toContain(project.id);
   }, 120_000);
 });
+
+/**
+ * And the half of the switch that was missing: what the *screen* is told.
+ *
+ * `requireCredits` has honoured the flag for a while, so nothing was ever billed
+ * on these accounts — but `GET /api/subscription` worked its answer out from the
+ * month's allowance alone, and every piece of client credit state derives from
+ * that answer: `creditState`, the "out of credits" dialog `queryClient` raises
+ * globally for any route, the upgrade nag, the low-credit warning. So once the
+ * allowance ran out the interface said "out of credits" and offered to sell more
+ * of something already free, while the server would have served the request
+ * perfectly well had anything asked it.
+ *
+ * That is the worst shape a bypass can have: working, and looking broken. The
+ * account it was reported on had 1068 actions against an allowance of 25.
+ */
+describe("what the developer switch tells the client", () => {
+  /** Spent well past the month's allowance, which is where this became visible. */
+  const spendEverything = (userId: string) =>
+    db.update(users)
+      /*
+       * `creditsResetAt` as well as the count: `getUserSubscription` calls
+       * `resetCreditsIfNeeded` first, which zeroes the counter whenever that date
+       * is null or in an earlier month — so on a freshly registered account,
+       * setting `creditsUsed` alone is undone before anything reads it.
+       */
+      .set({ creditsUsed: MONTHLY_SMALL_ACTIONS * 40, creditsResetAt: new Date() })
+      .where(eq(users.id, userId));
+
+  it("reads as out of credits without it, which is what everybody else gets", async () => {
+    const app = await getTestApp();
+    const me = await dev(app);
+    await spendEverything(me.id);
+
+    const res = await me.agent.get("/api/subscription");
+    expect(res.status).toBe(200);
+    expect(res.body.unlimited).toBe(false);
+    expect(res.body.creditsRemaining).toBe(0);
+    expect(res.body.creditState, "an ordinary account really is out").toBe("out");
+  });
+
+  /*
+   * The regression. Each of these is read by something that puts a wall in front
+   * of the person, so each has to agree with the charge that will never happen.
+   */
+  it("reads as unlimited with it, so nothing offers to sell it anything", async () => {
+    const app = await getTestApp();
+    const me = await dev(app);
+    await spendEverything(me.id);
+    expect((await me.agent.post("/api/dev/unlimited").send({ on: true })).status).toBe(200);
+
+    const res = await me.agent.get("/api/subscription");
+    expect(res.body.unlimited, "the flag has to reach the client").toBe(true);
+    expect(res.body.devUnlimited, "and say why, so the UI can label it").toBe(true);
+    expect(res.body.creditsRemaining, "-1 is the client's Infinity").toBe(-1);
+    expect(res.body.creditsLimit).toBe(-1);
+    expect(res.body.creditState, "never 'out', whatever the allowance says").toBe("ok");
+    expect(res.body.lowCreditsAt, "and no low-credit warning either").toBeNull();
+  });
+
+  /* The same second gate the charge has: a flag in a production database is ignored. */
+  it("still reads as out in production, however the column got there", async () => {
+    const app = await getTestApp();
+    const me = await dev(app);
+    await spendEverything(me.id);
+    await db.update(users).set({ devUnlimited: true }).where(eq(users.id, me.id));
+
+    const was = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const res = await me.agent.get("/api/subscription");
+      expect(res.body.unlimited).toBe(false);
+      expect(res.body.creditState).toBe("out");
+    } finally {
+      process.env.NODE_ENV = was;
+    }
+  });
+});

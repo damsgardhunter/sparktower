@@ -46,6 +46,46 @@ const offersFor = (c: Company, year = 6, seasonId = "wld") => dealsFor({
 });
 
 describe("the offers that arrive", () => {
+  /**
+   * A partner comes to everybody, whatever the draw does.
+   *
+   * A season's id is a fresh `gen_random_uuid()`, and `dealsFor` seeds itself
+   * from it — so which offers a company gets is redrawn on every run of the
+   * game and of the tests. "buyout" used to be sampled from the same pool as
+   * the two partners, and only one offer comes in most years, so a year could
+   * arrive with a buyer and nothing else. Measured over 400 draws it happened
+   * in 21 of them: a **1-in-19 chance, per run**, of a company being offered
+   * no partner at all.
+   *
+   * That is why this is asserted over many seeds rather than one. The
+   * integration test that covers the same ground draws a single uuid and
+   * passed eighteen times out of nineteen, which made it look like a
+   * regression somebody had just introduced when it finally went red in CI —
+   * it is the oldest kind of flake, and one seed can never see it.
+   */
+  it("always include a partner, over many seasons", () => {
+    const seats = seedIncumbents(niche);
+    const buyoutOnly: string[] = [];
+    for (let i = 0; i < 400; i++) {
+      const seasonId = `flake-${i}`;
+      const offers = dealsFor({ seasonId, year: 6, company: team(), niche, incumbents: seats, worth: 10_000_000 });
+      if (!offers.some((o) => o.kind !== "buyout")) buyoutOnly.push(seasonId);
+    }
+    expect(buyoutOnly.length, `${buyoutOnly.length} of 400 seasons offered a buyout and no partner (${buyoutOnly.slice(0, 3).join(", ")})`).toBe(0);
+  });
+
+  it("still let a buyer come, and only from year five", () => {
+    /* The other half: guaranteeing a partner must not have cost the buyout. */
+    const seats = seedIncumbents(niche);
+    let buyers = 0;
+    for (let i = 0; i < 400; i++) {
+      const offers = dealsFor({ seasonId: `flake-${i}`, year: 6, company: team(), niche, incumbents: seats, worth: 10_000_000 });
+      if (offers.some((o) => o.kind === "buyout")) buyers++;
+    }
+    expect(buyers, "a buyer never comes at all now").toBeGreaterThan(40);
+    expect(buyers, "a buyer comes every year, which is not an event").toBeLessThan(240);
+  });
+
   it("are the same every time for the same company and year, and never a buyout too early", () => {
     const c = team();
     expect(offersFor(c)).toEqual(offersFor(c));

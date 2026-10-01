@@ -12,7 +12,7 @@
  */
 
 export const NOVA_SURFACE_IDS = [
-  "milestones", "roadmap", "research", "strategy", "pricing", "analytics", "tasks",
+  "milestones", "roadmap", "research", "strategy", "pricing", "analytics", "tasks", "direction",
 ] as const;
 
 export type NovaSurfaceId = (typeof NOVA_SURFACE_IDS)[number];
@@ -36,6 +36,31 @@ export interface NovaSurfaceConfig {
 }
 
 export const NOVA_SURFACES: Record<NovaSurfaceId, NovaSurfaceConfig> = {
+  direction: {
+    label: "Catch up with my direction",
+    blurb: "Tell Nova what changed, and it goes through the brief, the loops and the board and rewrites what no longer matches — for you to approve.",
+    placeholder: "e.g. We moved from a monthly subscription to pay-per-use, and the onboarding quiz is gone.",
+    presets: [
+      {
+        label: "What no longer matches my plan?",
+        ask: "Go through the brief, the loops and the board against my standing notes and the project as it actually is now. Find everything that contradicts where I am today, and propose the edits that fix it — rewrite the brief where it is out of date, rewrite or retire loops that are no longer the plan, and retire work that is no longer the plan. Say plainly what you changed and why.",
+      },
+      {
+        label: "My pricing changed",
+        ask: "My pricing has changed. Update the brief's business model and anything downstream of it — value proposition, target customer, success metrics, and any loop or task that assumed the old pricing. Ask me for the new numbers if I have not given them.",
+      },
+      {
+        label: "I changed direction — reconcile everything",
+        ask: "I have changed direction. Treat my standing notes as the current truth, work out what in the brief, the loops and the board still describes the old direction, and propose the edits that bring all of it into line. Do not leave a contradiction named but unfixed.",
+      },
+      {
+        label: "What do you think my direction is?",
+        ask: "Tell me back, in your own words, what you currently believe this project is, who it is for, how it makes money and where it is going — and name anything in the brief, the loops or the board that made that picture unclear or contradictory. Do not change anything yet.",
+      },
+    ],
+    invalidates: ["path", "tracks", "kanban", "milestones", "loops", "documents"],
+  },
+
   milestones: {
     label: "Milestones",
     blurb: "Nova turns your plan into checkpoints with a real definition of done, and links the tasks that serve each one.",

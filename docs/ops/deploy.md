@@ -352,7 +352,10 @@ answered `/_health` with a 200, and was quietly missing a whole feature:
   `/admin/surfaces` shows the reason next to a switch that won't move. Without
   this, each avatar, cover and post image failed on its own, one user at a
   time. Set the variable and deploy again and uploads come back by themselves —
-  it is read from the environment at boot, not stored as a decision.
+  it is read from the environment at boot, not stored as a decision. The bucket,
+  the service account, the CORS rule the browser needs and a script that proves
+  all three before you deploy are in
+  [object-storage.md](object-storage.md).
 - **No `PUBLIC_URL`** (or `SERVER_BASE_URL`) stops the boot outright. Render
   sets `RENDER_EXTERNAL_URL` on every service by itself, and it used to count
   as an answer here; it isn't one, because nothing that builds a link reads it

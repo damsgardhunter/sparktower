@@ -14,11 +14,26 @@ There are three environments. There is no staging.
 
 ## Required to boot
 
+This table is a reading of [`shared/env-requirements.ts`](../shared/env-requirements.ts),
+which is the actual rule the server enforces: every variable there carries a
+`severity` of `fatal` (the boot refuses) or `degraded` (the process starts and
+one feature is off). `npm run check:env` runs those rules against whatever
+environment you point it at and prints the two lists separately, so the
+question "would this deploy come up?" is answered by a command rather than by
+this page. If the two ever disagree, the code is right and this is stale.
+
+Fatal — the process exits at boot with the reason, rather than starting broken:
+
 | variable | local | CI | production |
 |---|---|---|---|
 | `DATABASE_URL` | your own Postgres | per-run service container (`ci-<run id>`) | Render → Environment |
-| `SESSION_SECRET` | any value | pinned fake | **must be random**; the dev fallback is refused in production |
-| `AI_INTEGRATIONS_OPENAI_API_KEY` | real key | pinned fake — tests never call the API | Render → Environment |
+| `SESSION_SECRET` | any value | pinned fake | **must be random.** There is no development fallback in any environment — `server/secrets.ts` throws when it is unset, and in production also when it is shorter than 32 characters or is a value that has been published anywhere |
+| `PUBLIC_URL` | optional (see below) | unset | **required** — production only; see [the site's own address](#the-sites-own-address) |
+
+`AI_INTEGRATIONS_OPENAI_API_KEY` is **not** in that list: it is `degraded`. A
+deploy without it boots and serves the whole product with the AI features
+turned off, which is the right failure — an expired key should not take the
+site down. It is listed under [integrations](#integrations-optional-the-feature-is-off-without-them).
 
 ## Who runs the site
 
@@ -34,7 +49,7 @@ the role on the next restart.
 
 | variable | local | CI | production |
 |---|---|---|---|
-| `PUBLIC_URL` | unset in `.env.example`; links then fall back to the request's `Host` header | unset | **set** — today `https://sparktower.onrender.com` |
+| `PUBLIC_URL` | unset in `.env.example`; links then fall back to the request's `Host` header | unset | **set** — today `https://sparktower.app`, the canonical domain. `https://sparktower.onrender.com` still answers and should, but it is not what this is set to; [ops/deploy.md](ops/deploy.md#the-live-url) records both and how the value moved |
 
 This one is not a label. Every email verification link, every invite link,
 every shared artifact URL, every `<loc>` in the sitemap, the Stripe webhook the

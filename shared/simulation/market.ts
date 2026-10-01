@@ -357,7 +357,7 @@ export function segmentPush(company: Company, niche: Niche, segmentId: string): 
  * nothing ends down £745 with its customers halved and a company worth a third
  * of a played one — losing, but not painfully.
  */
-export const SPILL_TOPUP_MAX = 8;
+export const SPILL_TOPUP_MAX = 3;
 
 export function regionalReach(company: Company, niche: Niche): number {
   if (company.kind === "incumbent") return 1;
@@ -481,10 +481,13 @@ export function allocate(
 
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
+    /** What is held after the market shrank, before anybody churns. What `open` is measured against. */
+    let heldAfterShrink = 0;
     for (const c of companies) {
       const started = c.customers[segment.id] ?? 0;
       if (started <= 0) continue;
       const current = shrinkRatio < 1 ? Math.floor(started * shrinkRatio) : started;
+      heldAfterShrink += current;
       if (current < started) shrank[segment.id][c.id] = started - current;
 
       const mine = appeal[c.id];
@@ -615,7 +618,18 @@ export function allocate(
       const rise = Math.max(0, priceFor(c, segment.id) / was - 1);
       const resented = Math.min(0.2, rise * (1.3 - segment.loyalty) * 0.5);
       const shopping = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), resented) * (1 - locked) * per;
-      const leaveRate = Math.max(shopping, unaffordable);
+      /*
+       * And the annual plans that ended this period, whose holders are now
+       * looking at the list price for the first time in a year. That is a rise
+       * on people already paying — the thing this loop has always said they
+       * leave over — and it is the one cost of a deep discount that does not
+       * scale linearly with the discount. See `annualPlans`.
+       *
+       * Forgiven the same way an ordinary rise is: a devoted segment shrugs at
+       * it and a flighty one walks.
+       */
+      const unwinding = Math.max(0, c.unwind ?? 0) * per * (1.3 - segment.loyalty);
+      const leaveRate = Math.min(1, Math.max(shopping, unaffordable) + unwinding);
       /*
        * And last year's deal-chasers: customers a promotion won, who leave
        * faster than the rest once the deal is over.
@@ -659,7 +673,13 @@ export function allocate(
      * its first year. Separating them makes a period's opportunity a quarter
      * of a year's, which is the whole of what it should be.
      */
-    const heldBefore = Math.min(heldAtStart, demand);
+    /*
+     * Measured after the shrink, not before it. Taken from `heldAtStart` this
+     * handed the contraction straight back to the incumbents: they shed
+     * customers, and the pool those customers should have fallen into was
+     * still being sized as though they had not.
+     */
+    const heldBefore = Math.min(heldAfterShrink, demand);
     const alreadyHeld = companies.reduce((sum, c) => sum + (held[c.id][segment.id] ?? 0), 0);
     const open = Math.max(0, demand - heldBefore);
     /*
@@ -827,7 +847,36 @@ export function allocate(
       if (count <= 0) continue;
       const takers = companies
         .filter((c) => c.id !== from && room[c.id] > 0)
-        .map((c) => ({ id: c.id, weight: Math.pow(appeal[c.id] ?? 0, 2) * regionalReach(c, niche) * regionalFit(c, niche, segment.id) }))
+        /*
+         * Weighted by appeal, and by how many of these people the company
+         * could actually take.
+         *
+         * Appeal alone decided the split, and what a taker could not hold was
+         * not passed on — it evaporated. That is a rounding detail until two
+         * companies want the overflow, and then it is a cliff. Measured: a
+         * well-known rival that finished **105 customers short of its own
+         * capacity** was handed 96.9% of the claim on 45,695 people its
+         * neighbour had turned away, took its 105, and the other 44,000 ceased
+         * to exist — while the newcomer beside it with room for 27,373 was
+         * left the 3.1% its appeal had earned.
+         *
+         * Worse, that rival only had room at all because a *stronger*
+         * newcomer had taken enough on merit to leave it 105 short. So
+         * improving the product moved the newcomer from receiving all of the
+         * overflow to a thirtieth of it, and a company that bought a patent
+         * and a distribution deal finished the year with fewer customers than
+         * the same company owning nothing.
+         *
+         * Scaling each claim by the share of the rejected it could hold says
+         * the true thing — a company with room for a hundred is not a
+         * candidate for forty-five thousand — and leaves the rest with the
+         * companies that can use it.
+         */
+        .map((c) => ({
+          id: c.id,
+          weight: Math.pow(appeal[c.id] ?? 0, 2) * regionalReach(c, niche) * regionalFit(c, niche, segment.id)
+            * Math.min(1, Math.max(0, room[c.id] ?? 0) / Math.max(1, count)),
+        }))
         .filter((t) => t.weight > 0);
       const total = takers.reduce((sum, t) => sum + t.weight, 0);
       if (total <= 0) continue;

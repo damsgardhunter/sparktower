@@ -39,6 +39,16 @@ interface Deployment {
   ready: { ready: boolean; database: string; ms: number; detail: string | null };
   env: EnvRow[];
   missingRequired: string[];
+  /** How many web instances this database will take. Absent on a build older than this card. */
+  connections?: {
+    maxConnections: number | null;
+    inUse: number | null;
+    perInstance: number;
+    mainPoolMax: number;
+    lockPoolMax: number;
+    safeInstances: number | null;
+    note: string;
+  };
   scope: string;
 }
 
@@ -118,7 +128,7 @@ export function DeploymentCard() {
     );
   }
 
-  const { publicUrl, build, ready, env, missingRequired } = data;
+  const { publicUrl, build, ready, env, missingRequired, connections } = data;
   const urlOk = publicUrl.ok;
   const dbOk = ready.ready;
   const worst = !dbOk || !urlOk || missingRequired.length > 0;
@@ -150,6 +160,43 @@ export function DeploymentCard() {
             <span className="font-medium">The database refused:</span> {ready.detail}
             <span className="block mt-1 text-muted-foreground">A localhost address here means this deployment is carrying a development connection string.</span>
           </p>
+        )}
+
+        {/*
+          * How many instances this database will take.
+          *
+          * The number that decides the web tier, and it used to live only in a
+          * provider's dashboard. It is here because exceeding it does not slow
+          * the site down — Postgres refuses new connections — so the cost of
+          * guessing is an outage at peak traffic.
+          */}
+        {connections && (
+          <div className="rounded-md border border-border/60 p-2.5 space-y-1" data-testid="deployment-connections">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-medium">Connection budget</span>
+              {connections.safeInstances == null ? (
+                <State tone="warn" label="this database would not say" testId="deployment-connections-unknown" />
+              ) : (
+                <State
+                  tone={connections.safeInstances >= 2 ? "good" : "warn"}
+                  label={`${connections.safeInstances} instance${connections.safeInstances === 1 ? "" : "s"}`}
+                  testId="deployment-connections-instances"
+                />
+              )}
+            </div>
+            {connections.maxConnections != null && (
+              <p className="text-xs text-muted-foreground">
+                {connections.inUse ?? "?"} of {connections.maxConnections} connections in use ·
+                {" "}{connections.perInstance} per instance
+              </p>
+            )}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">{connections.note}</p>
+            {connections.safeInstances != null && connections.safeInstances < 4 && (
+              <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                Past this many instances you need a connection pooler, not a bigger database — see docs/ops/scaling-to-2000.md.
+              </p>
+            )}
+          </div>
         )}
 
         {/* The address. Wrong here is silent everywhere else, so wrong here is loud. */}

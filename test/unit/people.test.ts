@@ -12,6 +12,7 @@ import { validateDecision, cleanDecision } from "@shared/simulation/levers";
 import {
   LOYALTY_START, OVERRULE_LOYALTY, RESIGN_AT, SEVERANCE, STOPGAP_SKILL, candidatesFor, closeYear, effort, payEffect,
   poached, settleHires, staffLeverage, staffQualityNext, stretchChallenge, stretchGoal, whoWasRight, yearLoyalty,
+  STAFF_QUALITY_START,
 } from "@shared/simulation/people";
 import { UNLOCKS } from "@shared/simulation/responsibilities";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
@@ -282,5 +283,38 @@ describe("the cost review", () => {
     const nextNone = resolveYear({ ...none.world, year: 7 }, [plain()]);
     expect(after(next).service).toBeLessThan(after(nextNone).service);
     expect(after(next).people!.cmo!.loyalty).toBeLessThan(after(nextNone).people!.cmo!.loyalty);
+  });
+});
+
+/**
+ * The people a company hires build its product.
+ *
+ * `staffQuality` drove service and nothing else, so hiring, recruiting,
+ * training and engineer pay had no effect whatever on the thing a software
+ * company sells. That is why `recruitingSpend` and `trainingSpend` measured as
+ * dead levers: they moved a number that moved nothing a player could see.
+ *
+ * `staffLeverage` runs 0.5 to 1.5 and is exactly 1 at the quality a company
+ * starts with, so a table that ignores it plays exactly the season it played
+ * before — which is the property that makes this safe.
+ */
+describe("who builds the product", () => {
+  it("is worth nothing extra at the staff quality a company starts with", () => {
+    expect(staffLeverage(STAFF_QUALITY_START)).toBe(1);
+  });
+
+  it("makes the same budget go further with better people, and less far with worse", () => {
+    expect(staffLeverage(100), "the best people you can get").toBeCloseTo(1.5, 6);
+    expect(staffLeverage(0), "and the worst").toBeCloseTo(0.5, 6);
+    expect(staffLeverage(80)).toBeGreaterThan(staffLeverage(40));
+  });
+
+  it("is moved by recruiting and by training", () => {
+    const base = staffQualityNext({ quality: 50, established: 10, newHires: 0, recruiting: 0, training: 0, scale: 1 });
+    const trained = staffQualityNext({ quality: 50, established: 10, newHires: 0, recruiting: 0, training: 150_000, scale: 1 });
+    expect(trained, "training makes the people you have better").toBeGreaterThan(base);
+    const hiredWell = staffQualityNext({ quality: 50, established: 5, newHires: 5, recruiting: 100_000, training: 0, scale: 1 });
+    const hiredBlind = staffQualityNext({ quality: 50, established: 5, newHires: 5, recruiting: 0, training: 0, scale: 1 });
+    expect(hiredWell, "and recruiting decides who turns up").toBeGreaterThan(hiredBlind);
   });
 });

@@ -68,3 +68,53 @@ export async function warnIfMigrationsPending(): Promise<void> {
     console.log(`[schema] ${state.applied} migrations applied; the database matches this build.`);
   }
 }
+
+/*
+ * Whether the background loops should run at all.
+ *
+ * The boot warning above says the right thing and says it once. What buried it
+ * was the simulation's own clock: with one migration missing, every pass read
+ * `sim_seasons` for twenty-two running seasons, each one threw "column
+ * `opening` does not exist", and each threw a full DrizzleQueryError with the
+ * hundred-column SELECT in it — a screen of stack traces a minute, on a loop,
+ * on top of the one line that had already named the cause and the command.
+ *
+ * A loop that cannot succeed should not run. Nothing is lost by waiting: a
+ * season's next tick is a time, not a tally, so the clock resumes where it left
+ * off once the migration is applied.
+ *
+ * Cached once true, because migrations are only ever added — so the steady
+ * state costs nothing, and the query happens only while the database is behind.
+ */
+let matched = false;
+let lastComplaint = 0;
+const COMPLAIN_EVERY_MS = 5 * 60_000;
+
+/** For tests: forget both the cached answer and when it last complained. */
+export const forgetSchemaMatch = (): void => { matched = false; lastComplaint = 0; };
+
+export async function schemaMatchesBuild(
+  read: () => Promise<MigrationState> = migrationState,
+  now: () => number = Date.now,
+): Promise<boolean> {
+  if (matched) return true;
+  const state = await read();
+  /*
+   * `ok === null` means the question could not be asked — an unreadable
+   * journal, or a deploy shipped without the folder. Refusing to run the loops
+   * on "don't know" would take a working deployment down over missing
+   * bookkeeping, so an unanswerable check is treated as no objection.
+   */
+  if (state.ok !== false) {
+    if (state.ok === true) matched = true;
+    return true;
+  }
+  if (now() - lastComplaint > COMPLAIN_EVERY_MS) {
+    lastComplaint = now();
+    console.warn(
+      `[schema] holding the background loops: ${state.pending} migration(s) not applied ` +
+      `(${state.applied} of ${state.expected}). They would fail on every pass. Run: npm run db:migrate`,
+    );
+  }
+  return false;
+}
