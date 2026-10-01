@@ -191,3 +191,59 @@ describe("the inbox", () => {
     expect(thread.lastMessage.content).toBe("A message that will go unread.");
   });
 });
+
+/**
+ * And what the list of connections has to carry.
+ *
+ * The Messages tab now searches your connections for somebody to write to —
+ * connections rather than every account, because sending refuses anyone you are
+ * not connected to. That picker matches on the display name, the username, the
+ * headline and the email, and shows an avatar, so `GET /api/connections` has to
+ * return the profile alongside the account.
+ *
+ * Pinned because the failure is invisible from the server: trimming `profile`
+ * out of this payload for weight would leave the endpoint working, the list
+ * populated and the names right, while searching for a handle you typed from
+ * memory silently returned nothing.
+ */
+describe("the connections a picker is built from", () => {
+  it("carries each person's account and profile, not just the pair", async () => {
+    const app = await getTestApp();
+    const ivy = await person(app, "Ivy");
+    const jo = await person(app, "Jo");
+
+    const sent = await ivy.agent.post("/api/connections/request").send({ userId: jo.id });
+    expect(sent.status, JSON.stringify(sent.body)).toBe(200);
+    const [pair] = await rowsBetween(ivy.id, jo.id);
+    expect((await jo.agent.post(`/api/connections/${pair.id}/accept`)).status).toBe(200);
+
+    const res = await ivy.agent.get("/api/connections");
+    expect(res.status).toBe(200);
+    const [row] = res.body as any[];
+    expect(row, "the accepted connection is listed").toBeTruthy();
+
+    /* The other person, not the viewer — a picker that lists you is useless. */
+    expect(row.user?.id, "the row names the other person").toBe(jo.id);
+    expect(row.status).toBe("accepted");
+
+    /*
+     * Every field the picker searches or renders — and one it must NOT get.
+     * `email` is redacted from anybody else's account platform-wide, which is
+     * why the picker does not search it.
+     */
+    expect(row.user.email, "somebody else's address is not ours to send").toBeUndefined();
+    expect(row.profile, "the profile has to come with it").toBeTruthy();
+    expect(row.profile.displayName, "what they chose to be called").toContain(jo.first);
+  });
+
+  it("lists nobody before anything is accepted, so the picker cannot offer a stranger", async () => {
+    const app = await getTestApp();
+    const kit = await person(app, "Kit");
+    const lou = await person(app, "Lou");
+    await kit.agent.post("/api/connections/request").send({ userId: lou.id });
+
+    /* Pending is not connected, and sending would 403 — so it must not be offered. */
+    expect((await kit.agent.get("/api/connections")).body).toEqual([]);
+    expect((await lou.agent.get("/api/connections")).body).toEqual([]);
+  });
+});
