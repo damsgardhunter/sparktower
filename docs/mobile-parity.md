@@ -93,8 +93,25 @@ What each claim turned out to be, with where the evidence is:
   | `/admin/revenue` | — | **done** 2026-10-01 |
   | `/admin/ai-spend` | — | **done** 2026-10-01 |
   | `/admin/console` | — | **lookup done** 2026-10-01; acting is not on the phone |
-  | `/admin/problems` | `/api/admin/problem-reports` | missing |
-  | `/admin/security` | `/api/admin/security` | missing |
+  | `/admin/problems` | — | **done** 2026-10-01; notes are on the web |
+  | `/admin/security` | — | **done** 2026-10-01; reset/sign-out on the web |
+
+  All five are on the phone. The pattern across them: the *watching* half is on
+  the phone, because that is what somebody does away from a desk, and the half
+  that moves money or removes a protection stays on the web. Each screen says
+  which half it is rather than being quietly short of the web's.
+
+  **Problems** keeps the web's restraint — four states and a note, no priority
+  and no assignment, because "a triage system with more moving parts than
+  reports is a way of not reading them". State changes are on the phone; writing
+  the note is not, since it is a paragraph for whoever picks the report up.
+
+  **Security** leads with the one fact the route's own comment singles out —
+  "power without a second factor" — as a sentence rather than a column, because
+  it is the only thing here that cannot wait for a desk. Resetting a second
+  factor and signing somebody out are on the web: both take a written reason,
+  and taking a factor off an admin is the one action that makes the platform
+  less safe while it is being used to help somebody.
 
   **AI spend** is built around the four questions `server/ai-spend-routes.ts`
   says a launch day asks — today against the brake, which parts are dear, who is

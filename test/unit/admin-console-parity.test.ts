@@ -52,7 +52,7 @@ describe("the admin consoles on the phone", () => {
    * this catches, and it is an easy one: the screen works when you navigate to
    * it by hand during development.
    */
-  const screens = ["safety", "reports", "backing", "surfaces", "analytics", "revenue", "ai-spend", "console"];
+  const screens = ["safety", "reports", "backing", "surfaces", "analytics", "revenue", "ai-spend", "console", "problems", "security"];
 
   for (const screen of screens) {
     it(`${screen} is reachable from the More tab`, () => {
@@ -217,5 +217,71 @@ describe("the support console on the phone", () => {
     const row = more.split("\n").find((l) => l.includes('"/admin/console"'));
     expect(row, "the console row is gone").toBeTruthy();
     expect(row, "gating it on owner would lock out the reviewers it is for").not.toMatch(/access\?\.owner/);
+  });
+});
+
+/**
+ * The last two consoles.
+ *
+ * Both are read-and-triage on the phone and leave their heavier actions on the
+ * web, and both say so on the screen. The pairing is tested, as it is for the
+ * support console: if an action arrives, the sentence telling people it is
+ * elsewhere has to go with it.
+ */
+describe("the problem queue on the phone", () => {
+  const screen = read("mobile/app/admin/problems.tsx");
+
+  /*
+   * The shape caught me writing this one. I assumed `{ rows }` and the route
+   * sends `{ reports, counts }` — so the list would have been permanently
+   * empty and the "N new" badge permanently absent, with nothing failing.
+   */
+  it("reads the fields the route actually sends", () => {
+    const routes = read("server/problem-report-routes.ts");
+    const at = routes.indexOf('app.get("/api/admin/problem-reports"');
+    const jsonAt = routes.indexOf("res.json({", at);
+    const keys = [...routes.slice(jsonAt, routes.indexOf("});", jsonAt)).matchAll(/\n\s*(\w+):/g)].map((m) => m[1]);
+    /*
+     * Read as a property, not found as a substring. The first version of this
+     * asserted `toContain(key)` and passed with the bug still in, because
+     * "reports" appears in the screen's title, in the URL and in a comment —
+     * so it proved only that the word exists somewhere on the page.
+     */
+    for (const key of keys) {
+      expect(
+        new RegExp(`\\.${key}\\b`).test(screen),
+        `the route sends \`${key}\` and the screen never reads \`.${key}\``,
+      ).toBe(true);
+    }
+  });
+
+  it("triages, because that is the whole point of the queue", () => {
+    expect(screen, "it should PATCH a status").toMatch(/problem-reports\/\$\{[^}]*\}/);
+    expect(screen).toMatch(/PATCH/);
+  });
+
+  it("says where writing a note happens, since it does not", () => {
+    expect(screen).toMatch(/note is on the web/i);
+  });
+});
+
+describe("the security overview on the phone", () => {
+  const screen = read("mobile/app/admin/security.tsx");
+
+  /*
+   * The route's own comment calls this "the thing worth seeing at a glance:
+   * power without a second factor". It is the one fact on the screen that
+   * cannot wait for somebody to reach a desk, so it has to be impossible to
+   * miss — not a column in a table.
+   */
+  it("leads with power that has no second factor", () => {
+    expect(screen, 'it must single out twoFactor === "OFF"').toMatch(/twoFactor === "OFF"/);
+    expect(screen, "and say it as a sentence rather than a column").toMatch(/without a second factor/);
+  });
+
+  it("does not reset a second factor or sign anybody out", () => {
+    const acts = /security\/users\/[^"'`]*\/(reset-mfa|sign-out)/.test(screen);
+    expect(acts, "those are recovery operations on privileged accounts; they are a desk job").toBe(false);
+    expect(screen, "and the screen has to say where they are").toMatch(/on the web console/);
   });
 });

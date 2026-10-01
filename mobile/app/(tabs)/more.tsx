@@ -162,6 +162,8 @@ export default function More() {
             {access?.owner && <MenuRow icon="flash" title="AI spend" subtitle="What the model costs, and against what brake" tint={colors.novaEmerald} onPress={() => go("/admin/ai-spend")} testID="more-ai-spend" />}
             {/* requireAdmin, not requireOwner — a reviewer may look somebody up. */}
             <MenuRow icon="search" title="Support console" subtitle="Look somebody up, and what was done to them" tint={colors.info} onPress={() => go("/admin/console")} testID="more-console" />
+            <MenuRow icon="warning" title="Problem reports" subtitle="What people told us is broken" tint={colors.warning} onPress={() => go("/admin/problems")} testID="more-problems" />
+            <MenuRow icon="shield-checkmark" title="Security" subtitle="Who has power, and whether they are protected" tint={colors.danger} onPress={() => go("/admin/security")} testID="more-security" />
           </Group>
         )}
 
