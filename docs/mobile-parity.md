@@ -98,11 +98,22 @@ What each claim turned out to be, with where the evidence is:
   (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
   reasoning about `unknown`: dashed and blue, never red, because "nobody has
   checked" is a question and `bad` is an answer.
-- [ ] **Six semantic pills still pick their colour by hand.** Sixteen were
-  converted: twelve in the five files where *every* `<Pill>` was semantic, so one
-  import swap converted the lot — `admin/surfaces`, `admin/analytics`,
-  `admin/safety`, `investor/interview`, `sim/index` — and four more in
-  `admin/reports`, where all four pills turned out to be states once read: what
+- [ ] **Sixteen semantic pills still pick their colour by hand**, in eight
+  files. Count it with the command below rather than trusting a number in this
+  file; the first survey of this said "twenty, in nine files" and was wrong in
+  both halves, because it read the first few lines of a grep and then only
+  examined the files it had already noticed. `leaderboard`, `admin/backing`,
+  `more/UpgradeCard`, `sim/OffersKit` and `sim/StandingsKit` were never looked
+  at.
+
+  ```
+  grep -rn "<Pill" mobile/src mobile/app | grep -E "colors\.(success|warning|danger|info|textSecondary)"
+  ```
+
+  Seventeen now carry a tone: twelve in the five files where *every* `<Pill>` was
+  semantic, so one import swap converted the lot — `admin/surfaces`,
+  `admin/analytics`, `admin/safety`, `investor/interview`, `sim/index` — and four
+  more in `admin/reports`, where all four turned out to be states once read: what
   was reported, why, what was done, and whether the author is suspended.
 
   `sim/[id]` was looked at and deliberately left: of its three pills, one is a
@@ -117,6 +128,10 @@ What each claim turned out to be, with where the evidence is:
   legitimately take an arbitrary colour. A first attempt did exactly that and
   broke four files; it was reverted. Those need a decision per call site, and
   `DeskKit` and `MarketKit` are in a directory somebody is usually working in.
+
+  Six of the sixteen sit in `DeskKit` and `MarketKit`, in a directory somebody
+  is usually working in; the rest are spread one or two at a time across five
+  files nobody has read yet for this.
 
   `MoreKit`'s and `profile/kit`'s pills are **not** going away: they take a
   colour or a variant for a tier badge or a post type — decoration keyed to
