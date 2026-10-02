@@ -29,6 +29,42 @@ describe("the contests page", () => {
     expect(page, "the join route exists; the page should use it").toMatch(/\/api\/contests\/\$\{[^}]+\}\/join/);
   });
 
+  it("offers a way to file the work, which no client had", () => {
+    /*
+     * `POST /api/contests/:id/submit` existed from the beginning and nothing
+     * called it — not this page, not the phone. Entering turned the button into a
+     * disabled "Entered" and there was nowhere to put what you built.
+     */
+    expect(page).toMatch(/contests\/\$\{[^}]*\}\/submit/);
+    expect(page).toContain("submissionUrl");
+  });
+
+  it("knows the difference between entered and filed", () => {
+    /*
+     * The page cannot offer to file without being told whether somebody already
+     * has. `isParticipant` alone is what made this a dead end on both clients.
+     */
+    expect(page, "the page's Contest shape has to carry the viewer's entry").toMatch(/submission:\s*\{/);
+  });
+
+  it("does not offer to file a contest that has not opened", () => {
+    /* Joining takes `upcoming`; submitting does not, so the button would 400. */
+    const branch = page.match(/c\.isParticipant \?[\s\S]*?button-file-/);
+    expect(branch, "the filing branch has moved").not.toBeNull();
+    expect(branch![0]).toMatch(/c\.status === "active"/);
+  });
+
+  it("shows the server's own refusal rather than a shrug", () => {
+    /*
+     * Both contest mutations read the server's sentence now, through one helper:
+     * the link is not a link, the contest is full, it has closed. Each is
+     * actionable and "try again in a moment" throws it away.
+     */
+    expect(page).toContain("function serverMessage");
+    const calls = [...page.matchAll(/serverMessage\(err\)/g)];
+    expect(calls, "both entering and filing should say what the server said").toHaveLength(2);
+  });
+
   /*
    * `judging` and `completed` contests are refused by the join route, so
    * listing them would be offering a door that answers 400.

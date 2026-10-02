@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
-import { Btn, Empty, Icon, Loading, NovaGradient, errText, type IconName } from "../src/components/ui";
+import { Avatar, Btn, Empty, Icon, Loading, NovaGradient, errText, type IconName } from "../src/components/ui";
 import { NoticeBanner, Sheet, useNotice } from "../src/components/Sheet";
 import { FeaturedContestCard } from "../src/components/FeaturedContest";
 
@@ -39,6 +39,23 @@ interface Contest {
    * reason entering was a dead end on both clients: nothing could tell somebody
    * who was in from somebody who had actually filed, so nothing offered to file.
    */
+  submission: { url: string | null; note: string | null } | null;
+}
+
+/**
+ * One entrant, as `GET /api/contests/:id/participants` returns them.
+ *
+ * Deliberately not the entry. That route is readable signed out, so it answers
+ * with who is in and whether they have filed — never what anybody else filed,
+ * which would be every rival's work readable before judging. `submission` is
+ * only ever your own.
+ */
+interface Entrant {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+  joinedAt: string;
+  hasSubmitted: boolean;
   submission: { url: string | null; note: string | null } | null;
 }
 
@@ -124,6 +141,18 @@ export default function ContestsAndCommunities() {
     onError: (e) => show({ tone: "error", text: errText(e, "Couldn't file that entry.") }),
   });
 
+  /*
+   * Who else is in. Fetched only when somebody opens it — a contest card showing
+   * every entrant by default would be a request per card on a screen that already
+   * makes two.
+   */
+  const [showing, setShowing] = useState<Contest | null>(null);
+  const entrants = useQuery<Entrant[]>({
+    queryKey: ["contest", showing?.id, "entrants"],
+    queryFn: () => api<Entrant[]>(`/api/contests/${showing!.id}/participants`),
+    enabled: !!showing,
+  });
+
   const label = { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.8, textTransform: "uppercase" as const };
 
   return (
@@ -177,12 +206,19 @@ export default function ContestsAndCommunities() {
                   </View>
                   <Text numberOfLines={3} style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>{c.description}</Text>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xs }}>
-                    <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
-                      {c.submission?.url
-                        /* What they filed, so the card is a receipt and not just a state. */
-                        ? "Your entry is in"
-                        : `${c.participantCount.toLocaleString()}${c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered`}
-                    </Text>
+                    {/*
+                      * The count opens the list of who is in. A contest is partly
+                      * about who else turned up, and on a phone that is a tap
+                      * rather than a second screen.
+                      */}
+                    <Pressable onPress={() => setShowing(c)} hitSlop={8} accessibilityRole="button" testID={`entrants-${c.id}`}>
+                      <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
+                        {c.submission?.url
+                          /* What they filed, so the card is a receipt and not just a state. */
+                          ? "Your entry is in · see who else"
+                          : `${c.participantCount.toLocaleString()}${c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered`}
+                      </Text>
+                    </Pressable>
                     {user ? (
                       c.isParticipant ? (
                         /*
@@ -316,6 +352,48 @@ export default function ContestsAndCommunities() {
           onPress={() => filing && submit.mutate(filing)}
           testID="submit-entry"
         />
+      </Sheet>
+
+      {/*
+        * Who is in. Names, faces, and whether each has filed — which is all the
+        * route publishes, and all it should: an entrant's work is theirs until
+        * judging is done.
+        */}
+      <Sheet
+        visible={!!showing}
+        onClose={() => setShowing(null)}
+        title="Who's entered"
+        subtitle={showing?.title}
+      >
+        {entrants.isLoading ? (
+          <Loading />
+        ) : !entrants.data?.length ? (
+          <Text style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular }}>
+            Nobody yet. Be first.
+          </Text>
+        ) : (
+          <>
+            <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular, marginBottom: spacing.sm }}>
+              {entrants.data.filter((e) => e.hasSubmitted).length} of {entrants.data.length} have filed their work.
+            </Text>
+            {entrants.data.map((e) => (
+              <View
+                key={e.userId}
+                style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm }}
+              >
+                <Avatar uri={e.avatarUrl} name={e.name} size={32} />
+                <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular }}>{e.name}</Text>
+                {/*
+                  * Filed or not — never *what*. The one fact about somebody
+                  * else's entry that is fair to show before judging.
+                  */}
+                <Text style={{ color: e.hasSubmitted ? colors.success : colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+                  {e.hasSubmitted ? "filed" : "entered"}
+                </Text>
+              </View>
+            ))}
+          </>
+        )}
       </Sheet>
 
       <NoticeBanner notice={notice} onDismiss={clear} />

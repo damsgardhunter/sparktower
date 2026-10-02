@@ -143,6 +143,63 @@ describe("submitting to a contest", () => {
     expect(unchanged.submissionUrl).toBe("https://example.test/build");
   });
 
+  it("does not publish anybody's entry on the public entrants list", async () => {
+    /*
+     * The leak this closes. `GET /api/contests/:id/participants` takes no auth and
+     * used to answer with the rows as the database returns them: every entrant's
+     * whole account row, their profile, and their `submissionUrl`,
+     * `submissionNote` and `score`.
+     *
+     * The global scrubber in server/app.ts is why there was never an email or a
+     * password hash in it — it strips credentials and other people's account
+     * fields from every response. But a contest entry is not an account field, so
+     * nothing held it back: anybody could read every entrant's work, and the
+     * judges' scores, before judging had finished.
+     */
+    const app = await getTestApp();
+    const entrant = await person(app, "Open");
+    const live = await contest();
+    expect((await entrant.agent.post(`/api/contests/${live.id}/join`).set("x-forwarded-for", ip()).send({})).status).toBe(200);
+    await entrant.agent.post(`/api/contests/${live.id}/submit`).set("x-forwarded-for", ip())
+      .send({ submissionUrl: "https://example.test/their-clever-build", submissionNote: "the approach nobody has thought of" })
+      .expect(200);
+
+    const res = await request(app).get(`/api/contests/${live.id}/participants`).expect(200);
+    const body = JSON.stringify(res.body);
+    expect(body, "a rival could read the work before judging").not.toContain("their-clever-build");
+    expect(body, "and the note with it").not.toContain("nobody has thought of");
+    expect(body, "and the judges' score").not.toContain("score");
+    expect(body).not.toContain(entrant.email);
+
+    /* What it does say: who is in, and whether they have filed. */
+    const [row] = res.body;
+    expect(Object.keys(row).sort()).toEqual(["avatarUrl", "hasSubmitted", "joinedAt", "name", "submission", "userId"]);
+    expect(row.hasSubmitted, "whether somebody filed is the fair part to publish").toBe(true);
+    expect(row.submission, "signed out, nobody's entry is yours").toBeNull();
+  });
+
+  it("gives an entrant their own entry back, and still nobody else's", async () => {
+    const app = await getTestApp();
+    const mine = await person(app, "Mine2");
+    const theirs = await person(app, "Theirs2");
+    const live = await contest();
+    for (const who of [mine, theirs]) {
+      expect((await who.agent.post(`/api/contests/${live.id}/join`).set("x-forwarded-for", ip()).send({})).status).toBe(200);
+    }
+    await mine.agent.post(`/api/contests/${live.id}/submit`).set("x-forwarded-for", ip())
+      .send({ submissionUrl: "https://example.test/mine", submissionNote: "mine" }).expect(200);
+    await theirs.agent.post(`/api/contests/${live.id}/submit`).set("x-forwarded-for", ip())
+      .send({ submissionUrl: "https://example.test/theirs", submissionNote: "theirs" }).expect(200);
+
+    const rows = (await mine.agent.get(`/api/contests/${live.id}/participants`)).body;
+    const own = rows.find((r: any) => r.submission !== null);
+    expect(own.submission.url).toBe("https://example.test/mine");
+    expect(rows.filter((r: any) => r.submission !== null), "exactly one entry is yours").toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain("example.test/theirs");
+    /* But both of them show as having filed, which is the public fact. */
+    expect(rows.every((r: any) => r.hasSubmitted)).toBe(true);
+  });
+
   it("refuses something that isn't a link, and says what is wrong with it", async () => {
     /*
      * `submissionUrl` used to be a truthiness test, so "asdf" and a thousand

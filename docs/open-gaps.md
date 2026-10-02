@@ -123,6 +123,34 @@ statically. Worth doing, not urgent now that the sweep exists.
 
 ## Closed
 
+- **A contest's entries were readable by anybody** — found and closed 2026-10-02
+  while building the entrants list. `GET /api/contests/:id/participants` takes no
+  authentication and answered with the rows as the database returns them: each
+  entrant's whole account row, their profile, and their `submissionUrl`,
+  `submissionNote` and `score`. So every entrant's work, and the judges' scores,
+  were public before judging had finished.
+
+  No credential or email was ever in it — the global scrubber in
+  [server/app.ts](../server/app.ts) strips those from every response, which is why
+  — but a contest entry is not an account field, so nothing held it back. The
+  route now answers a shape written out on purpose: who is in, whether they have
+  filed, and your own entry. Judging will want the entries themselves and that
+  wants its own route behind the contest's owner, not a widening of this one.
+
+  Two account columns were also riding out on *every* embedded account row,
+  because `PRIVATE_ACCOUNT_FIELDS` is a list and a new column is public by
+  default: `appleId` (never added — `googleId` beside it was) and `pushEnabled`
+  (added to the schema the day before, by me, and not here). Four entitlement
+  columns were in the same state. All are now listed, and
+  [account-fields-classified.test.ts](../test/integration/account-fields-classified.test.ts)
+  makes every column on `users` account for itself — adding one to the schema
+  fails that test until somebody says which side it is on, which is the only
+  moment the question is cheap.
+
+- **Filing a contest entry on the web** — closed 2026-10-02. The phone got it
+  first; the asymmetry is gone, and both now call the route that had no caller at
+  all. The entrants list is on the phone too.
+
 - **The weekly rhythm's other half on the phone** — closed 2026-10-02. The
   check-in was there; the quarter's goals, the monthly report and the check-in
   day were not, so three of eleven rhythm routes had a caller. Now all but the

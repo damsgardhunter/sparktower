@@ -6592,9 +6592,27 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     });
   });
 
-  app.get("/api/contests/:id/participants", async (req, res) => {
-    // Paged and capped: the list is readable signed out, and an uncapped one
-    // let a single request pull every entrant plus their account and profile.
+  /**
+   * Who is in a contest. Readable signed out, so what it says is chosen.
+   *
+   * It used to answer with the rows as they come out of the database: each
+   * entrant's whole account row, their whole profile, and — the part that
+   * matters — their `submissionUrl`, their `submissionNote` and their `score`.
+   * The global scrubber in server/app.ts keeps credentials and other people's
+   * account fields out of any response, which is why no email or password hash
+   * was ever in it; but a contest entry is not an account field, so nothing was
+   * keeping it back. Anybody could read every entrant's work, and the judges'
+   * scores, before judging had finished.
+   *
+   * So the shape is written out here instead of inherited. `hasSubmitted` is the
+   * one thing about somebody else's entry that is fair to publish: whether they
+   * have filed, which is the difference between an entrant and a name.
+   *
+   * Judging will need the entries themselves. That wants its own route, behind
+   * the contest's owner — not a widening of this one.
+   */
+  app.get("/api/contests/:id/participants", async (req: any, res) => {
+    // Paged and capped: an uncapped list let a single request pull every entrant.
     const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
     const offset = Number.parseInt(String(req.query.offset ?? ""), 10);
     const participants = await storage.getContestParticipants(
@@ -6602,7 +6620,18 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       Number.isFinite(limit) ? limit : undefined,
       Number.isFinite(offset) ? offset : 0,
     );
-    res.json(participants);
+    const viewerId = req.user?.id as string | undefined;
+    res.json(participants.map((p) => ({
+      userId: p.userId,
+      name: p.profile?.displayName || [p.user.firstName, p.user.lastName].filter(Boolean).join(" ") || "Someone",
+      avatarUrl: p.profile?.avatarUrl || p.user.profileImageUrl || null,
+      joinedAt: p.joinedAt,
+      hasSubmitted: !!p.submissionUrl,
+      /* Your own entry comes back in full; this is the same row the list route gives you. */
+      submission: viewerId && p.userId === viewerId && p.submissionUrl
+        ? { url: p.submissionUrl, note: p.submissionNote }
+        : null,
+    })));
   });
 
   app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {

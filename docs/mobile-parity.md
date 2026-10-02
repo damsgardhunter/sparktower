@@ -217,8 +217,17 @@ What each claim turned out to be, with where the evidence is:
   later. The phone stops an empty box and leaves judging what a link *is* to the
   server, so there is one opinion and it is the one that answers.
 
-  **The web still has no way to file an entry.** Worth knowing: the phone is now
-  ahead of it here.
+  The web caught up on 2026-10-02: the same dialog, the same rules, reading the
+  same server sentence through one helper. Both clients now call a route that had
+  no caller at all.
+
+  **Who else is in** is on the phone as well — the entrant count opens a list of
+  names, faces, and whether each has filed. Building it turned up the reason it
+  had not been built safely before: `GET /api/contests/:id/participants` takes no
+  authentication and was answering with every entrant's `submissionUrl`,
+  `submissionNote` and `score`, so a rival could read the work before judging. The
+  route now publishes who is in and whether they filed, and nothing else; the full
+  story is in [open-gaps.md](open-gaps.md).
 
   Held by [rhythm-and-contest-entry.test.ts](../test/unit/rhythm-and-contest-entry.test.ts)
   (17) and four new cases in

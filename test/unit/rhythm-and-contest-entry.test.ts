@@ -252,6 +252,32 @@ describe("filing a contest entry, from a phone", () => {
     expect(code, "the phone should not be parsing URLs too").not.toMatch(/new URL\(/);
   });
 
+  it("shows who else is in, without showing what they filed", () => {
+    /*
+     * The entrants route is readable signed out. It used to answer with the rows
+     * as the database returns them, which included every entrant's
+     * `submissionUrl`, `submissionNote` and `score` — so a rival could read the
+     * work before judging. It now publishes who is in and whether they have
+     * filed, and the phone renders exactly that.
+     */
+    const code = withoutComments(contests);
+    expect(code).toMatch(/contests\/\$\{[^}]*\}\/participants/);
+    expect(code).toContain("hasSubmitted");
+
+    /* The phone has no business reading another entrant's link out of that list. */
+    const sheet = code.match(/Who's entered[\s\S]*?<\/Sheet>/);
+    expect(sheet, "the entrants sheet has moved").not.toBeNull();
+    expect(sheet![0], "it must not render anybody's submission").not.toMatch(/\.submission/);
+  });
+
+  it("fetches the entrants only when somebody opens the list", () => {
+    /*
+     * A card showing every entrant by default would be one request per contest on
+     * a screen that already makes two.
+     */
+    expect(withoutComments(contests)).toMatch(/enabled:\s*!!showing/);
+  });
+
   it("seeds the sheet from what is already filed, so a change is an edit", () => {
     const code = withoutComments(contests);
     expect(code).toMatch(/setUrl\(c\.submission\?\.url \?\? ""\)/);

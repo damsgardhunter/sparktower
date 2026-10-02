@@ -92,6 +92,26 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
   // the month. Nobody else's business either, and on the same embedded rows.
   "balanceCents", "dayPassUntil",
   "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
+  /*
+   * The rest of the wallet, and Apple's identifier.
+   *
+   * These were missed rather than decided. `googleId` is above and `appleId` was
+   * not — Apple sign-in arrived later — so the stable per-app identifier for
+   * anybody who signed in that way rode out on every embedded account row. It is
+   * not a credential, but it is a permanent cross-reference and it is theirs.
+   *
+   * The four entitlement columns are the same category as `balanceCents` and
+   * `dayPassUntil` already here: what somebody has bought, what they have left,
+   * and whether a developer switch is on for them. `payoutTarget` is where their
+   * money goes, and `pushEnabled` is whether their phone buzzes — a preference,
+   * and one that was added to the schema without being added here.
+   *
+   * Every one of these is still sent on *your own* row, which is where the
+   * clients read them; this only covers somebody else's.
+   */
+  "appleId",
+  "devUnlimited", "novaActionsBought", "gamePlaysPaid", "imagePassUntil",
+  "payoutTarget", "pushEnabled",
 ]);
 
 export function stripOthersAccountFields(obj: any, viewer: { id?: string; platformRole?: string } | undefined, depth = 0): any {

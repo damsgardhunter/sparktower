@@ -1,6 +1,11 @@
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, HandCoins, Layers, Loader2, Rocket, Sparkles, Store, Trophy, User, Users, type LucideIcon } from "lucide-react";
+import { Check, HandCoins, Layers, Loader2, Rocket, Sparkles, Store, Trophy, Upload, User, Users, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -20,6 +25,13 @@ interface Contest {
   promoted: boolean;
   participantCount: number;
   isParticipant: boolean;
+  /**
+   * The viewer's own entry, once they have filed one; null while they have only
+   * joined. Added when filing was built: `isParticipant` alone is why entering
+   * dead-ended on both clients — nothing could tell a joiner from an entrant, so
+   * nothing offered to file.
+   */
+  submission: { url: string | null; note: string | null } | null;
 }
 
 /** Open to entries, which is what belongs on a page people come to to enter something. */
@@ -45,7 +57,33 @@ const ICONS: Record<string, LucideIcon> = { user: User, sparkles: Sparkles, laye
  * Only `active` and `upcoming` are listed. `judging` and `completed` are
  * history, and the join route refuses them anyway, so showing them here would
  * be offering a door that answers 400.
+ *
+ * ## Filing the work
+ *
+ * Entering used to be the end of the road here: the button turned into a
+ * disabled "Entered" and there was nowhere to put what you built.
+ * `POST /api/contests/:id/submit` had existed the whole time with no caller on
+ * any client. The dialog below is that caller.
+ *
+ * Joining takes an `upcoming` contest and submitting does not, so an entrant in
+ * one that has not opened is told they are in and can file later, rather than
+ * being given a button the server would refuse.
  */
+/**
+ * The server's own sentence out of a thrown `apiRequest` error.
+ *
+ * `apiRequest` throws with the status and the raw body in the message, so the
+ * useful part is JSON somewhere inside a string. Both contest mutations want it:
+ * every refusal they can get is specific enough to act on, and "try again" would
+ * throw that away.
+ */
+function serverMessage(err: unknown, fallback = "Try again in a moment."): string {
+  const raw = String((err as any)?.message ?? "");
+  const start = raw.indexOf("{");
+  if (start < 0) return fallback;
+  try { return JSON.parse(raw.slice(start)).message || fallback; } catch { return fallback; }
+}
+
 export default function Contests() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -59,13 +97,42 @@ export default function Contests() {
       void queryClient.invalidateQueries({ queryKey: ["/api/contests"] });
       toast({ title: `Entered ${c.title}` });
     },
+    /* The route refuses a full contest and a closed one; say which. */
+    onError: (err: any) => toast({ title: "Couldn't enter that contest", description: serverMessage(err), variant: "destructive" }),
+  });
+
+  /*
+   * Filing, and changing what was filed. The link is the entry; the note is for
+   * what a judge would otherwise have to guess.
+   */
+  const [filing, setFiling] = useState<Contest | null>(null);
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+
+  const openFiling = (c: Contest) => {
+    /* Seeded from what is filed, so changing a link is an edit and not a retype. */
+    setUrl(c.submission?.url ?? "");
+    setNote(c.submission?.note ?? "");
+    setFiling(c);
+  };
+
+  const submit = useMutation({
+    mutationFn: async (c: Contest) => (await apiRequest("POST", `/api/contests/${c.id}/submit`, {
+      submissionUrl: url.trim(),
+      submissionNote: note.trim() || undefined,
+    })).json(),
+    onSuccess: (_r, c) => {
+      setFiling(null);
+      void queryClient.invalidateQueries({ queryKey: ["/api/contests"] });
+      toast({ title: c.submission ? "Entry updated" : `Entry filed for ${c.title}` });
+    },
     onError: (err: any) => {
-      /* The route refuses a full contest and a closed one; say which. */
-      const raw = String(err?.message ?? "");
-      const start = raw.indexOf("{");
-      let description = "Try again in a moment.";
-      if (start >= 0) { try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ } }
-      toast({ title: "Couldn't enter that contest", description, variant: "destructive" });
+      /*
+       * The server's own sentence. Every refusal here is specific and actionable
+       * — the link is not a link, the contest has not opened, it has closed — and
+       * a generic message would leave somebody retyping a good URL.
+       */
+      toast({ title: "Couldn't file that entry", description: serverMessage(err), variant: "destructive" });
     },
   });
 
@@ -122,9 +189,25 @@ export default function Contests() {
                       </span>
                       {user && (
                         c.isParticipant ? (
-                          <Button size="sm" variant="outline" disabled data-testid={`button-entered-${c.id}`}>
-                            <Check className="h-4 w-4 mr-1" />Entered
-                          </Button>
+                          /*
+                           * In, so the next thing is the work. An upcoming contest
+                           * takes entrants and not submissions, so it says it is
+                           * waiting rather than offering a refused button.
+                           */
+                          c.status === "active" ? (
+                            <Button
+                              size="sm"
+                              variant={c.submission ? "outline" : "default"}
+                              onClick={() => openFiling(c)}
+                              data-testid={`button-file-${c.id}`}
+                            >
+                              {c.submission ? <><Check className="h-4 w-4 mr-1" />Change entry</> : <><Upload className="h-4 w-4 mr-1" />File your entry</>}
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground" data-testid={`text-entered-${c.id}`}>
+                              Entered — file your work when it opens
+                            </span>
+                          )
                         ) : (
                           <Button size="sm" disabled={busy || full} onClick={() => enter.mutate(c)} data-testid={`button-enter-${c.id}`}>
                             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : full ? "Full" : "Enter"}
@@ -182,6 +265,60 @@ export default function Contests() {
             </ul>
           )}
         </section>
+      {/*
+        * Filing the work: a link, and optionally a sentence about it. Mirrors the
+        * phone's sheet, including leaving the question of whether something is a
+        * link to the server — one opinion, and it is the one that answers.
+        */}
+      <Dialog open={!!filing} onOpenChange={(open) => !open && setFiling(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{filing?.submission ? "Change your entry" : "File your entry"}</DialogTitle>
+            <DialogDescription>{filing?.title}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="submission-url">Link to what you built</Label>
+              <Input
+                id="submission-url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://"
+                autoComplete="off"
+                spellCheck={false}
+                data-testid="input-submission-url"
+              />
+              <p className="text-xs text-muted-foreground">
+                A live page, a repository, a video. You can change it until entries close.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="submission-note">Anything the judge should know (optional)</Label>
+              <Textarea
+                id="submission-note"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={2000}
+                rows={4}
+                placeholder="What it does, and what you'd do next."
+                data-testid="input-submission-note"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFiling(null)}>Cancel</Button>
+            <Button
+              /* Only the obviously-empty case is stopped here; the server judges the rest. */
+              disabled={!url.trim() || submit.isPending}
+              onClick={() => filing && submit.mutate(filing)}
+              data-testid="button-submit-entry"
+            >
+              {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : filing?.submission ? "Save the change" : "File it"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       </div>
     </div>
   );
