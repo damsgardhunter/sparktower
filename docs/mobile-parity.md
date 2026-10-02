@@ -153,7 +153,7 @@ What each claim turned out to be, with where the evidence is:
   |---|---|---|
   | `company-routes.ts` | 14 | **2 of 14** — the list and one company, read-only, 2026-10-01 |
   | `challenge-routes.ts` | 12 | **5 of 12** — the builder's side, 2026-10-01 |
-  | `company-season-routes.ts` | 11 | no — private training seasons, simulation seats |
+  | `company-season-routes.ts` | 11 | **the door**, via `/api/sim/join-code`, 2026-10-01 |
   | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |
   | `scouting-routes.ts` | 4 | no |
   | `company-verification-routes.ts` | 3 | no |
@@ -169,6 +169,24 @@ What each claim turned out to be, with where the evidence is:
   Being findable is a privacy control and reads as one, because the server
   defaults it off (`open: row?.open ?? false`) and nobody should be in a
   recruiting pool they did not opt into. Editing the role list is on the web.
+
+  **Private training seasons: measured first, and the answer was one route.**
+  The phone already called eleven `/api/sim/*` routes — the desk, the market,
+  offers, standings, recovery, decisions, bids — so anybody *seated* in a
+  company's season could play the whole thing. What it never called was
+  `POST /api/sim/join-code`, which is how a member takes their seat. So a
+  company could run a training season, send its members the code, and anyone
+  holding a phone could not get in: a missing door with every room behind it
+  already built. It is on `app/sim/index.tsx` now.
+
+  The refusal is left as vague as the server's on purpose. That route answers a
+  wrong code and a code for a company you are not in identically, because "a
+  forwarded code must not confirm it works" — so the phone says the same bland
+  thing rather than helpfully explaining the rule.
+
+  The other ten routes are the company's side: buying seats, inviting, starting,
+  resolving a year early, watching, the report. A desk job, except `watch` and
+  `report`, which are reading and may be worth a phone later.
 
   **Built third: sponsored challenges, the builder's side** (`app/challenges.tsx`,
   `app/challenge/[id].tsx`): browse by state, read the brief, accept the terms,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Pill } from "../../src/components/nova/Pill";
-import { Text, View } from "react-native";
+import { Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
@@ -49,6 +49,21 @@ export default function PickMarket() {
    * behind it. `replace`, not `push` — coming back out of a room should reach
    * the markets, not a market picker with a stale join in progress.
    */
+  const [code, setCode] = useState("");
+  /*
+   * By code rather than by matchmaking. The server decides which season the
+   * code belongs to and whether this person is in that company; the phone sends
+   * the code and goes where it is told.
+   */
+  const byCode = useMutation({
+    mutationFn: (c: string) => api<{ ventureId: string }>("/api/sim/join-code", { method: "POST", body: { code: c } }),
+    onSuccess: (r) => {
+      setCode("");
+      if (r?.ventureId) router.push(`/sim/desk/${r.ventureId}` as any);
+    },
+    onError: (e) => show({ tone: "error", text: errText(e, "That join link isn't valid.") }),
+  });
+
   const join = useMutation({
     mutationFn: (nicheId: string) => api<{ ventureId: string }>("/api/sim/join", { method: "POST", body: { nicheId } }),
     onSuccess: ({ ventureId }) => router.replace(`/sim/${ventureId}`),
@@ -140,6 +155,53 @@ export default function PickMarket() {
           </Text>
         </NovaGradient>
         ) : null}
+
+        {/*
+          * A company's private season is joined by code, not by matchmaking.
+          * `POST /api/sim/join-code` seats you in it — and until this existed a
+          * company could run a training season, send its members the code, and
+          * anyone holding a phone could not take their seat. Every screen for
+          * *playing* one was already here; only the door was missing.
+          *
+          * The refusal is deliberately the same for a wrong code and for a code
+          * belonging to a company you are not in — the route's own comment says
+          * "a forwarded code must not confirm it works" — so the message here
+          * stays as vague as the server's answer, on purpose.
+          */}
+        <Card>
+          <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+            Joining a company's season?
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: font.sm, marginTop: 2 }}>
+            Paste the code your company sent you.
+          </Text>
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+            <TextInput
+              value={code}
+              onChangeText={setCode}
+              placeholder="Join code"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="go"
+              onSubmitEditing={() => code.trim() && byCode.mutate(code.trim())}
+              style={{
+                flex: 1, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, borderWidth: 1,
+                borderColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+                color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular,
+              }}
+              testID="input-join-code"
+            />
+            <Btn
+              label="Join"
+              small
+              loading={byCode.isPending}
+              disabled={!code.trim() || byCode.isPending}
+              onPress={() => byCode.mutate(code.trim())}
+              testID="join-by-code"
+            />
+          </View>
+        </Card>
 
         {niches.length === 0 ? (
           <Card style={{ borderStyle: "dashed" }}>

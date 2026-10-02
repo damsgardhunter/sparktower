@@ -527,3 +527,53 @@ describe("challenges on the phone", () => {
     expect(more).toMatch(/go\("\/challenges"\)/);
   });
 });
+
+/**
+ * Taking a seat in a company's private season.
+ *
+ * Measured before building, and the measurement is the interesting part: the
+ * phone already calls eleven `/api/sim/*` routes — the desk, the market,
+ * offers, standings, recovery, decisions, bids — so somebody seated in a
+ * company's training season could play the whole thing. What it never called
+ * was `/api/sim/join-code`, which is how you get seated. A company could run a
+ * season, send its members the code, and anyone holding a phone could not take
+ * their seat.
+ *
+ * So this was a door, not a feature: one route, and every screen behind it
+ * already built.
+ */
+describe("joining a company season on the phone", () => {
+  const screen = read("mobile/app/sim/index.tsx");
+  const routes = read("server/simulation-routes.ts");
+
+  it("can take a seat by code", () => {
+    expect(screen, "the phone should post a join code").toMatch(/\/api\/sim\/join-code/);
+    expect(screen, "and ask for one").toMatch(/input-join-code/);
+  });
+
+  /*
+   * The route answers a wrong code and a code for a company you are not in
+   * identically, because "a forwarded code must not confirm it works". A phone
+   * that said "you're not in that company" would undo that on the one screen
+   * where the code gets pasted.
+   */
+  it("keeps the refusal as vague as the server's", () => {
+    expect(routes, "the server still answers 404 for both").toMatch(/a forwarded code must not confirm it works/);
+    expect(screen, "so the phone says the same bland thing").toMatch(/isn't valid/);
+    expect(screen, "and must not name the company rule").not.toMatch(/not a member|not in that company/i);
+  });
+
+  /*
+   * The point of measuring first: the playing half was never missing. If these
+   * stop being called the gap is a different one and this slice's reasoning no
+   * longer holds.
+   */
+  it("still plays through the routes it already had", () => {
+    for (const path of ["/desk", "/market", "/offers", "/standings"]) {
+      expect(
+        new RegExp(`/api/sim/ventures/\\$\\{[^}]*\\}${path}`).test(read("mobile/src/components/sim/useSim.ts")),
+        `the phone stopped calling ventures${path}`,
+      ).toBe(true);
+    }
+  });
+});
