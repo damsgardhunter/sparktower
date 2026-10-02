@@ -7,7 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "sparktower",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.sparktower.app",
@@ -164,7 +163,8 @@
       "router": {},
       "eas": {
         "projectId": "f6de2c54-48d9-4f99-90f1-4f7ff3fe6f91"
-      }
+      },
+      "//newArch": "The New Architecture is the default from SDK 53 on, and `newArchEnabled` was removed from the config schema — leaving it set made `expo-doctor` fail its schema check on every run, which is the check that tells you a build is going to behave unexpectedly. Removing it changes nothing: it was set to true, which is what happens anyway."
     },
     "owner": "hunterdamsgard"
   }

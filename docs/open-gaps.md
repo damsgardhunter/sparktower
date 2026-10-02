@@ -117,11 +117,50 @@ statically. Worth doing, not urgent now that the sweep exists.
 - `valuation = revenue × 1.2 + assets − debt` has no term for customers served.
 - 34 tables are named by no test.
 - `script/` and `scripts/` should be one directory.
-- Branch protection has `strict: false` — a stale branch can merge.
+- Branch protection has `strict: false` — a stale branch can merge. Changing it
+  needs a `gh api -X PUT .../branches/main/protection` call, which this
+  environment refuses as a CI-settings change; the payload is in
+  [docs/ops/branch-protection.md](ops/branch-protection.md) for an owner to run.
 
 ---
 
 ## Closed
+
+- **The project list resources were never driven** — closed 2026-10-02. Interviews,
+  experiments, legal documents, the deploy checklist, support tickets, launch tasks,
+  analytics events and pricing tiers are the same four routes eight times over, and
+  nothing had ever posted to most of them: a route that 500s on every call would have
+  been found by the first person to use the feature.
+
+  Their *security* turned out to be covered already, and better than I assumed —
+  [request-body-writes.test.ts](../test/integration/request-body-writes.test.ts)
+  loops all eight segments attacking them across projects and tests the field
+  allowlist in depth. So the new suite was trimmed to what it adds: a full round
+  trip per family, who may do it, and the one line worth repeating for all eight
+  (that a patch naming nothing writable is refused rather than reported as success).
+  43 tests, in [project-list-crud.test.ts](../test/integration/project-list-crud.test.ts).
+
+  It carries a `// covers-routes:` declaration, which is the repository's own
+  mechanism for a table-driven test: the paths never appear whole in the file, so
+  without it the coverage sweep counted every one of them as untested while they
+  were being thoroughly tested.
+
+- **The native build could not have worked** — closed 2026-10-02. `expo-doctor` was
+  failing three checks, and one of them mattered: `newArchEnabled` has not been a
+  valid config property since SDK 53 removed it, so the schema check failed on every
+  run — and a check that is always red is a check nobody reads. Ten Expo packages
+  were also behind the version the installed SDK expects.
+
+  Both fixed, and the failure mode they were hiding is now a test:
+  [app-config.test.ts](../mobile/test/app-config.test.ts) evaluates `app.config.js`
+  as a build would and asserts the things that fail *silently* — the EAS project id
+  without which no push token can be issued, `savePhotosPermission` without which
+  saving a picture is refused, the photo-library string, and that no plugin was
+  filtered out for a missing module.
+
+  The one remaining doctor warning is a false positive: it does not understand a
+  dynamic `app.config.js` that spreads the static `app.json`. The resolved config
+  was checked by hand — 11 plugins, both bundle identifiers, the EAS id.
 
 - **A contest's entries were readable by anybody** — found and closed 2026-10-02
   while building the entrants list. `GET /api/contests/:id/participants` takes no
