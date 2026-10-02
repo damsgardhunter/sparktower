@@ -179,6 +179,18 @@ export const KEPT: Owned[] = [
   { table: "ai_image_runs", column: "user_id" },
   // A build is a project's work, like an audit run two lines down.
   { table: "nova_build_runs", column: "started_by_id" },
+  /*
+   * Who on the team marked a backer's reward delivered.
+   *
+   * Kept rather than mine, which is what the table already says: `delivered_by`
+   * is `on delete set null` rather than cascade, so a closing account takes its
+   * name off the record and leaves the record. That is the right way round,
+   * because the row is not really theirs — it is the backer's evidence that the
+   * thing they paid for arrived, and a creator leaving should not erase somebody
+   * else's proof of delivery. Exported all the same: the note on it is the
+   * leaver's own writing.
+   */
+  { table: "backer_reward_fulfilments", column: "delivered_by" },
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },

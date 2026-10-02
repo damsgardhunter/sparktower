@@ -76,7 +76,17 @@ function WallBadge({ entry, logoUrl, projectTitle }: {
 }) {
   const level = BADGE_LEVELS.find((l) => l.key === entry.badgeLevel);
   if (!level) return null;
-  const art = assetUri(entry.badgeImage ?? logoUrl);
+  /*
+   * The path, resolved where it is used rather than here.
+   *
+   * `assetUri` is what turns the server's `/objects/...` into something a phone
+   * can fetch — without it an `<Image>` draws blank space, no error and no
+   * broken-image icon. `test/unit/mobile-restatements.test.ts` enforces that by
+   * reading the source for the call inside `source={{ uri: ... }}`, which it
+   * cannot see through a variable, so hoisting it defeated a guard that exists
+   * for a bug this app shipped everywhere once.
+   */
+  const art = entry.badgeImage ?? logoUrl;
   return (
     <Row center gap={3}>
       <View style={{
@@ -84,7 +94,7 @@ function WallBadge({ entry, logoUrl, projectTitle }: {
         overflow: "hidden", alignItems: "center", justifyContent: "center",
       }}>
         {art
-          ? <Image source={{ uri: art }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+          ? <Image source={{ uri: assetUri(art)! }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
           : <Text style={{ fontSize: 8, fontFamily: fontFamily.semibold, color: level.hex }}>
               {projectTitle.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
             </Text>}
