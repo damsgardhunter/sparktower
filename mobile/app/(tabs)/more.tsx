@@ -217,6 +217,7 @@ export default function More() {
         )}
 
         <Group title="Account">
+          <MenuRow icon="cash" title="Earnings" subtitle="What you've earned, and where the next of it goes" tint={colors.success} onPress={() => go("/earnings")} testID="more-earnings" />
           <MenuRow icon="card" title="Plans & credits" subtitle={plan ? `You're on ${plan.name}` : "Compare plans"} onPress={() => go("/pricing")} testID="more-pricing" />
           <MenuRow icon="settings" title="Settings" subtitle="Account, security and sign-in" tint={colors.textSecondary} onPress={() => go("/settings")} testID="more-settings" />
           <MenuRow icon="help-circle" title="Help & about" subtitle="How SparkTower works" tint={colors.textSecondary} onPress={() => go("/settings?section=help")} />

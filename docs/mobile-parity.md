@@ -145,13 +145,95 @@ What each claim turned out to be, with where the evidence is:
   along with the response shape — the phone cannot import the server's types, so
   every interface on it is a copy, and a copy drifts.
 
+- [ ] **Push notifications do not exist.** Measured 2026-10-01, and worth stating
+  carefully, because "notifications" is two different features and only one of
+  them is missing.
+
+  The **in-app inbox is complete**. The phone calls all three routes the server
+  has — `GET /api/notifications`, `GET /api/notifications/unread-count`,
+  `POST /api/notifications/read` — and there is no fourth. Nothing to build.
+
+  **Push is absent end to end.** Neither `package.json` lists
+  `expo-notifications` or `expo-server-sdk`, nothing in the app asks permission
+  or registers a device token, there is no table to store one in, and the server
+  sends nothing. The practical consequence: a notification only exists while
+  somebody has the app open and looks at the bell. Everything the bell is *for* —
+  an invitation, an offer, a season tick, a backing decision — reaches a phone
+  user only if they happen to come back.
+
+  The one piece of good news is the shape of the server. Every one of the 46
+  emitters across 19 files goes through a single `notify()` in
+  `server/notifications.ts`, and the block list is already filtered *there* for
+  exactly this reason: "filtering here rather than at each of the dozen emitters
+  is the whole point". Push hooks into that one function, after the block filter,
+  and no emitter has to know about it.
+
+  What it takes, in order, and none of it is subtle:
+
+  1. `expo-notifications` in the app; ask permission at a point where the person
+     has a reason to say yes, not on first launch.
+  2. A table of device tokens — one person has several — with the platform and a
+     last-seen, plus a migration.
+  3. A route the app posts its token to, and one that forgets it on sign-out.
+     A token left behind sends somebody else's notifications to a shared phone.
+  4. `expo-server-sdk` in the server, sending from inside `notify()`, in batches,
+     off the request path. It must not be able to fail a request: the inbox row
+     is the record, and the push is a courtesy on top of it.
+  5. Expo's receipts, read later, because a token goes stale silently — an
+     uninstalled app returns `DeviceNotRegistered` and that token has to be
+     deleted or the error rate climbs for good.
+  6. A per-person switch, since the thing being added is the one way the product
+     interrupts somebody.
+
+  Steps 2–5 are the real work and step 5 is the one that gets skipped and then
+  rots. **This is a feature rather than a gap-fill, so it is written down here
+  rather than started** — it wants the choice made deliberately, including
+  whether it comes before launch.
+
+- [x] **Earnings** (`mobile/app/earnings.tsx`), done 2026-10-01. Somebody paid on
+  their phone could neither see what they had earned nor send the next of it to
+  their bank; the web has had both all along. Both of the server's routes are
+  called — `GET /api/earnings` and `PATCH /api/earnings/target`.
+
+  The trap in this one is that `balanceCents` and `toBalanceCents` are different
+  numbers, differing by exactly what the person topped up themselves. Showing the
+  first under a heading about earnings credits somebody for their own deposit, so
+  the screen names them separately and a test holds the two apart.
+
+  Switching the target to `bank` is a 422 when Stripe is not connected, not
+  ready, or not configured on the server at all — three different reasons, each
+  with its own sentence from the server. The screen passes the server's message
+  through rather than saying "couldn't change that", because the generic version
+  leaves somebody with no idea which of the three to fix.
+
+- [x] **Accepting a company invitation**, done 2026-10-01. The phone had an
+  `/invite/[token]` screen already and it was the wrong one: project invites are
+  a stored row read by `GET /api/invites/:token`, while a company invite is a
+  *signed* token posted to `POST /api/company-invites/accept`. Different
+  mechanism, so it needed its own handling, and anybody sent a company link
+  simply could not act on it from a phone.
+
+  It reads `?invite=<token>` — the web's own URL for this is
+  `/companies?invite=…` — so one link a company sends works wherever it is
+  opened, and a deep link lands on the screen that can accept it. There is also
+  a paste field, because people paste the whole link rather than the token, and
+  it takes the last part after `invite=` for that reason.
+
+  An already-a-member accept is a 200 carrying `alreadyMember: true`, not an
+  error, and the screen says "you're already in" rather than claiming a join that
+  did not happen.
+
+  This is the one write on the Companies screens, and the read-only test is now
+  a list of permitted routes rather than a ban on write verbs: joining a company
+  is not running one, and a verb check cannot tell the difference.
+
 - [ ] **The Companies surface — 54 of 55 routes still have no phone caller.**
   Measured by family rather than by screen name, which is the only signal that
   separates a missing feature from a renamed one:
 
   | File | Routes | On the phone |
   |---|---|---|
-  | `company-routes.ts` | 14 | **2 of 14** — the list and one company, read-only, 2026-10-01 |
+  | `company-routes.ts` | 14 | **3 of 14** — the list, one company, and accepting an invitation, 2026-10-01 |
   | `challenge-routes.ts` | 12 | **5 of 12** — the builder's side, 2026-10-01 |
   | `company-season-routes.ts` | 11 | **the door**, via `/api/sim/join-code`, 2026-10-01 |
   | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |

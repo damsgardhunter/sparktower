@@ -21,28 +21,8 @@
  * only thing that notices.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
-const read = (p: string) => readFileSync(resolve(import.meta.dirname, "../..", p), "utf8");
-
-/** Top-level field names of a TypeScript interface, ignoring nested objects' own fields. */
-function fieldsOf(source: string, name: string): string[] {
-  const at = source.indexOf(`interface ${name} {`);
-  expect(at, `interface ${name} is gone`).toBeGreaterThanOrEqual(0);
-  let depth = 0;
-  let end = -1;
-  for (let i = source.indexOf("{", at); i < source.length; i++) {
-    if (source[i] === "{") depth++;
-    else if (source[i] === "}" && --depth === 0) { end = i; break; }
-  }
-  const body = source.slice(source.indexOf("{", at) + 1, end);
-  /* Strip nested braces so only this interface's own keys remain. */
-  let flat = body;
-  let previous: string;
-  do { previous = flat; flat = flat.replace(/\{[^{}]*\}/g, "OBJ"); } while (flat !== previous);
-  return [...flat.matchAll(/(?:^|\n)\s*(\w+)\??\s*:/g)].map((m) => m[1]).sort();
-}
+/* Both live in test/helpers/source-parity.ts — several suites read sources this way. */
+import { readSource as read, interfaceFields as fieldsOf, withoutComments } from "../helpers/source-parity";
 
 const more = read("mobile/app/(tabs)/more.tsx");
 
@@ -389,10 +369,30 @@ describe("companies on the phone", () => {
     expect(detail, "and say that is where the answer comes from").toMatch(/one answer instead of restating/);
   });
 
-  it("does not change a company from the phone", () => {
-    const writes = /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(list + detail);
-    expect(writes, "members, seasons and challenges are forms with consequences; they are on the web").toBe(false);
-    expect(list + detail, "and the screens have to say so").toMatch(/on the web/);
+  /*
+   * The phone reads companies and does not run them: members, seasons and
+   * challenges are forms with consequences, and they stayed on the web. The one
+   * exception is accepting an invitation, which is not administering a company
+   * but joining one — the same thing the sim's join-by-code does, and the point
+   * at which somebody has nothing to read yet.
+   *
+   * Written as a list of the routes allowed rather than as "no writes", because
+   * the ban is on particular powers and a bare verb check cannot tell the
+   * difference. A new write here fails this until it is argued for by name.
+   */
+  it("does not run a company from the phone", () => {
+    const JOINING = ["/api/company-invites/accept"];
+    const code = withoutComments(list + detail);
+    /* `api<Shape>("/url", { method })` — the generic is optional and easy to forget. */
+    const writes = [...code.matchAll(/api(?:<[^>]*>)?\(\s*`?"?([^"`]+)"?`?[^)]*method:\s*"(?:POST|PATCH|PUT|DELETE)"/g)]
+      .map((m) => m[1]);
+    /*
+     * Anchor on the allowed one. Without this the test passes when the pattern
+     * stops matching anything at all, which is how a check like this rots.
+     */
+    expect(writes, "the pattern no longer finds the writes it is filtering").toContain(JOINING[0]);
+    expect(writes.filter((r) => !JOINING.includes(r))).toEqual([]);
+    expect(code, "and the screens have to say the rest is on the web").toMatch(/on the web/);
   });
 
   it("is reachable, behind the companies switch", () => {

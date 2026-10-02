@@ -121,6 +121,23 @@ statically. Worth doing, not urgent now that the sweep exists.
 
 ---
 
+### 5. Push notifications on the phone — absent end to end
+
+Measured 2026-10-01. The in-app inbox is complete and calls all three routes the
+server has; **push does not exist at all** — no `expo-notifications`, no stored
+device token, no server-side sending. So a notification reaches a phone user only
+while they have the app open.
+
+It hooks into one place: every emitter goes through `notify()` in
+`server/notifications.ts`, which already filters blocks there deliberately. The
+work is a token table and migration, register/forget routes, `expo-server-sdk`
+sending off the request path, and reading Expo's receipts so a stale token is
+deleted rather than retried for ever. Full breakdown in
+[mobile-parity.md](../mobile-parity.md).
+
+Open because it is a feature, not a gap-fill, and wants a decision about whether
+it lands before launch — not because it is unclear what to do.
+
 ## Closed
 
 | What | Fixed in | Held by |

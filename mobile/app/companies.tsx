@@ -1,12 +1,14 @@
-import { Text, View } from "react-native";
-import { Stack, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { Text, TextInput, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { colors, font, fontFamily, spacing } from "../src/theme";
-import { Empty, Loading, Screen } from "../src/components/ui";
+import { Btn, Empty, Loading, Screen, errText } from "../src/components/ui";
 import { Callout, PageIntro, TitledCard } from "../src/components/MoreKit";
 import { Pill } from "../src/components/nova/Pill";
 import { CountRow } from "../src/components/more/AdminKit";
+import { NoticeBanner, useNotice } from "../src/components/Sheet";
 
 /**
  * The companies you act for — the phone's half of `client/src/pages/companies.tsx`.
@@ -32,11 +34,52 @@ interface CompanyRow {
 
 const TITLE = "Companies";
 
+/** What `POST /api/company-invites/accept` answers with — see server/company-routes.ts. */
+interface AcceptedInvite {
+  companyId: string;
+  name: string;
+  role: string;
+  alreadyMember: boolean;
+}
+
 export default function Companies() {
   const router = useRouter();
+  const qc = useQueryClient();
+  const { notice, show, clear } = useNotice();
+  /*
+   * `?invite=<token>` is the web's own URL for this (`/companies?invite=…`), so
+   * a link a company sends works the same whichever thing opens it — and a
+   * deep link into the app lands on the screen that can accept it rather than
+   * on a page that cannot.
+   */
+  const { invite } = useLocalSearchParams<{ invite?: string }>();
+  const [pasted, setPasted] = useState("");
+
   const list = useQuery<{ companies: CompanyRow[] }>({
     queryKey: ["companies"],
     queryFn: () => api<{ companies: CompanyRow[] }>("/api/companies"),
+  });
+
+  /*
+   * The token is signed rather than stored, so the server is the only thing
+   * that can say whether it is good — and it carries the company, the role and
+   * an expiry inside it. The phone sends it and reads the answer.
+   */
+  const accept = useMutation({
+    mutationFn: (token: string) =>
+      api<AcceptedInvite>("/api/company-invites/accept", { method: "POST", body: { token } }),
+    onSuccess: (r) => {
+      setPasted("");
+      void qc.invalidateQueries({ queryKey: ["companies"] });
+      // A link clicked twice, or one sent to somebody already on the team: the
+      // server says so rather than treating it as a failure, and so do we.
+      show({
+        text: r.alreadyMember ? `You're already in ${r.name}.` : `You've joined ${r.name}.`,
+        tone: "success",
+      });
+      if (r.companyId) router.replace(`/company/${r.companyId}`);
+    },
+    onError: (e) => show({ text: errText(e, "That invitation isn't valid any more."), tone: "error" }),
   });
 
   if (list.isLoading) {
@@ -51,9 +94,60 @@ export default function Companies() {
   const rows = list.data?.companies ?? [];
 
   return (
+    <>
     <Screen>
       <Stack.Screen options={{ title: TITLE }} />
       <PageIntro icon="business" title={TITLE} body="The companies you act for, and what each one can do." />
+
+      {/* An invitation that arrived as a link, offered before the list. */}
+      {invite ? (
+        <TitledCard icon="mail-open" title="You've been invited to a company">
+          <Text style={{ color: colors.textSecondary, fontSize: font.sm }}>
+            Accepting adds you to it with the role the invitation carries.
+          </Text>
+          <Btn
+            label="Accept the invitation"
+            style={{ marginTop: spacing.sm }}
+            loading={accept.isPending}
+            onPress={() => accept.mutate(String(invite))}
+            testID="accept-company-invite"
+          />
+        </TitledCard>
+      ) : (
+        <TitledCard icon="mail" title="Been sent an invitation?">
+          <Text style={{ color: colors.textSecondary, fontSize: font.sm }}>
+            Paste the invitation link or code.
+          </Text>
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+            <TextInput
+              value={pasted}
+              onChangeText={setPasted}
+              placeholder="Invitation link or code"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                flex: 1, backgroundColor: colors.surfaceRaised, borderRadius: 8, borderWidth: 1,
+                borderColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+                color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular,
+              }}
+              testID="input-company-invite"
+            />
+            <Btn
+              label="Join"
+              small
+              loading={accept.isPending}
+              disabled={!pasted.trim() || accept.isPending}
+              /*
+               * A whole link pasted, not just the token — somebody copies what
+               * they were sent. The token is the last thing after `invite=`.
+               */
+              onPress={() => accept.mutate(pasted.trim().split("invite=").pop()!.trim())}
+              testID="join-company-by-token"
+            />
+          </View>
+        </TitledCard>
+      )}
 
       {rows.length === 0 ? (
         <Empty
@@ -100,5 +194,7 @@ export default function Companies() {
       />
       <View style={{ height: spacing.xl }} />
     </Screen>
+    <NoticeBanner notice={notice} onDismiss={clear} />
+    </>
   );
 }
