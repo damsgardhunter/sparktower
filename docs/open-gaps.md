@@ -17,39 +17,7 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 ## Open
 
-### 1. Routes no test names — a working checklist
-
-`summarizeUntestedRoutes` is the source of this list; re-run it rather than
-trusting the numbers below. As of 30 September: **33 of 499 routes named by no
-test, 12 of them writes** (down from 36/17). Three of the first eight looked
-at held a real defect — unpaid AI spend, a published backer, and a model reply
-rewriting a page nobody asked about — which is the argument for continuing.
-
-Ranked by what a silent failure would cost:
-
-| Route | Why it matters | State |
-|---|---|---|
-| `PATCH /api/backings/:id/privacy` | a backer's anonymity | **done** — found a bug |
-| `GET /api/merch-orders/:orderId/print/:face.png` | renders what a backer paid for | **done** |
-| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | **done** |
-| `POST /api/projects/:id/backing/badge-preview` | spends money on an image | **done** — found a bug |
-| `GET /api/stripe/connect-onboarding` | the payout path | **done** |
-| `GET /api/stripe/connect-dashboard` | the payout path | **done** |
-| `POST /api/documents/:docId/tighten` | AI write over a document | **done** — found a bug |
-| `GET /api/documents/:docId/pdf` | what a customer downloads | next |
-| `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
-| `POST /api/projects/:id/{pitch-deck,pitch-critique,pricing-analysis,readiness-score,mock-interview}` | five AI spends in one file | |
-| `POST /api/projects/:id/ai/{detect-gaps,summarize-progress}` | AI spend | |
-| `POST /api/projects/:id/personas/generate`, `roadmap/next-actions`, `kanban/reorder` | AI spend / board order | |
-| `POST /api/games/idea-options` | AI spend | |
-| the remaining reads (`feed/my-projects`, `health-checks`, `task-history`, `investor-personas`, `looking-for-options`, `resume-status`, `fill-quote`, `layout-report`, `nova-briefing`, `rebuild-quote`, `reports{/:year}`, `scenes/:index/image`, `stripe/publishable-key`) | lower cost of failure | |
-
-The shape that has worked twice now: assert the properties the route's *own
-comment* claims, then check each assertion against the bug it describes by
-breaking the route and watching the test fail. Both defects so far were found
-that way, and one test passed vacuously until a deliberate control caught it.
-
-### 2. Deploy verification — the public half is now observed, the private half is not
+### 1. Deploy verification — the public half is now observed, the private half is not
 
 `npm run check:live` was run against production on 30 September and passed
 every check:
@@ -92,7 +60,7 @@ to close it, both needing the owner's own credentials:
 2. Run `npm run check:env` in the Render shell, where the production
    environment actually is.
 
-### 3. Access control is correct but held together by convention
+### 2. Access control is correct but held together by convention
 
 There is no defect here — see *Checked and not a gap* — but twelve different
 access helpers do this job with no shared type and no common middleware:
@@ -107,7 +75,7 @@ is the part that matters. Unifying the helpers would additionally make the
 property *readable* — and would have saved four failed attempts to determine it
 statically. Worth doing, not urgent now that the sweep exists.
 
-### 4. Product and simulation
+### 3. Product and simulation
 
 - A tier priced past its own segment's ceiling still floors at 10% appeal, so
   raising a price past every buyer can still win customers.
@@ -125,6 +93,40 @@ statically. Worth doing, not urgent now that the sweep exists.
 ---
 
 ## Closed
+
+- **No write route is named by no test any more** — closed 2026-10-02. The
+  repository's own sweep (`summarizeUntestedRoutes`) reports **0 of 507 writes**
+  untested, down from 12. Four suites, 36 tests:
+
+  | Suite | What it holds |
+  |---|---|
+  | [kanban-reorder.test.ts](../test/integration/kanban-reorder.test.ts) | The one board write that takes a list of ids from the client, including that foreign ids cannot be used to renumber another project's cards |
+  | [investor-artifacts.test.ts](../test/integration/investor-artifacts.test.ts) | The four paid artifacts on the success path, and the clamps each applies to model output |
+  | [project-ai-writes.test.ts](../test/integration/project-ai-writes.test.ts) | Gap detection, progress summary, persona generation, next actions — and that a success *is* billed |
+  | [last-ai-writes.test.ts](../test/integration/last-ai-writes.test.ts) | The mock interview, the résumé read, the game's idea suggestions |
+
+  Two of these are the inverse of what `ai-metering-sweep.test.ts` proves. That
+  sweep drives every AI route with a model that throws, says nothing, or answers
+  prose, and shows nothing is charged — it never sees one succeed. So a route broken
+  on a *good* answer passed it, and nothing anywhere proved that a success is
+  charged at all: a route that forgot to deduct would spend real money on every call
+  and bill nobody, a leak that gets louder with use and that no error reports.
+
+  The other new thing is the clamps. Each artifact route takes a JSON object from
+  the model and writes parts of it down, bounding what it takes — a score to 0–100,
+  a verdict to four known words, a list to eight, a string to five hundred
+  characters. A model is the one input in this product that will hand over
+  `"overall": 5000` without anybody attacking it, and not one of those bounds was
+  tested. All four hold.
+
+  Four of my own assumptions were wrong and are recorded in the tests that corrected
+  them: a new project already has a roadmap, so the "build a roadmap first" branch is
+  not reachable that way; `ai/summarize-progress` asks for markdown and returns it,
+  so prose is a correct answer there and billing it is honest; a mock interview's
+  question is prose by design, so only silence fails it; and the game's ideas come
+  back under `ideas`, each needing a name and a pitch or it is dropped.
+
+  What remains is 12 reads, no writes.
 
 - **The project list resources were never driven** — closed 2026-10-02. Interviews,
   experiments, legal documents, the deploy checklist, support tickets, launch tasks,
