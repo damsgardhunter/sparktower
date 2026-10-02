@@ -45,6 +45,7 @@ import {
 import { requireImages } from "./images";
 import { respondToAiError } from "./ai-json";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
+import { renderCertificate } from "./certificate-render";
 import {
   DEFAULT_MERCH_CONFIG, DEFAULT_TIER_TEMPLATE, DIGITAL_REWARD_KEYS, MERCH_PRODUCT_KEYS,
   MIN_PLEDGE_CENTS, MAX_PLEDGE_CENTS, REFUND_WINDOW_DAYS, DEFAULT_TIP_PERCENT,
@@ -1323,6 +1324,93 @@ export function registerBackingRoutes(app: Express) {
    * person they paid knows who they are, and the response says which is which
    * so the UI can't muddle them.
    */
+  /**
+   * The backer's certificate, as a PNG they can print.
+   *
+   * Drawn on request rather than stored: it is deterministic from the backing —
+   * same name, same number, same metal, same seeded border every time — so a
+   * file sitting in object storage would be a copy to keep in step with a row,
+   * for no gain. It costs no model call, which is what lets the reward be free.
+   *
+   * Only your own, and only for a pledge that actually settled. A certificate is
+   * a claim about a person; one anybody could mint for anybody is worth nothing,
+   * and one for a pledge still in flight would be a claim that is not yet true.
+   */
+  app.get("/api/projects/:id/backing/certificate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const projectId = req.params.id;
+
+      const [row] = await db.select({
+        amountCents: projectBackings.amountCents,
+        believerNumber: projectBackings.believerNumber,
+        isAnonymous: projectBackings.isAnonymous,
+        createdAt: projectBackings.createdAt,
+        digitalRewards: projectBackerTiers.digitalRewards,
+      }).from(projectBackings)
+        .leftJoin(projectBackerTiers, eq(projectBackerTiers.id, projectBackings.tierId))
+        .where(and(
+          eq(projectBackings.projectId, projectId),
+          eq(projectBackings.backerId, userId),
+          inArray(projectBackings.status, ["held", "released"]),
+        ))
+        .orderBy(projectBackings.believerNumber)
+        .limit(1);
+
+      if (!row) return res.status(404).json({ message: "You haven't backed this project." });
+
+      const [project] = await db.select({ title: projects.title, logoUrl: projects.logoUrl, ownerId: projects.ownerId })
+        .from(projects).where(eq(projects.id, projectId));
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const [owner] = await db.select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users).where(eq(users.id, project.ownerId));
+      const [ownerProfile] = await db.select({ displayName: userProfiles.displayName })
+        .from(userProfiles).where(eq(userProfiles.userId, project.ownerId));
+
+      const [me] = await db.select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users).where(eq(users.id, userId));
+      const [myProfile] = await db.select({ displayName: userProfiles.displayName })
+        .from(userProfiles).where(eq(userProfiles.userId, userId));
+
+      const backerName = myProfile?.displayName?.trim()
+        || [me?.firstName, me?.lastName].filter(Boolean).join(" ").trim()
+        || "A believer";
+      const creatorName = ownerProfile?.displayName?.trim()
+        || [owner?.firstName, owner?.lastName].filter(Boolean).join(" ").trim()
+        || "The founder";
+
+      /* The logo is nice to have; a certificate without one is still a certificate. */
+      const logo = await projectLogoBuffer(project.logoUrl).catch(() => null);
+
+      const png = await renderCertificate({
+        backerName,
+        projectTitle: project.title,
+        believerNumber: row.believerNumber,
+        amountCents: row.amountCents,
+        backedAt: row.createdAt,
+        creatorName,
+        logo,
+        /*
+         * Anonymity is the backer's own choice about the public wall, and this
+         * file is theirs alone — so their own copy carries their name. It is the
+         * one place where honouring the flag would be the wrong reading of it.
+         */
+        anonymous: false,
+      });
+
+      const slug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "project";
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-certificate.png"`);
+      /* Deterministic from the row, so it may be cached by the person who owns it. */
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.send(png);
+    } catch (error) {
+      console.error("Certificate render error:", error);
+      res.status(500).json({ message: "Couldn't draw that certificate." });
+    }
+  });
+
   app.get("/api/projects/:id/backing/backers", isAuthenticated, async (req: any, res) => {
     try {
       const projectId = req.params.id;

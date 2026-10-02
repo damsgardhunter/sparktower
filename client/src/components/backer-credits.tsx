@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { Heart, Crown, Eye, EyeOff } from "lucide-react";
+import { Heart, Crown, Eye, EyeOff, Award } from "lucide-react";
 import { formatBelieverNumber } from "@shared/backing";
 
 interface PublicBacking {
@@ -119,14 +119,36 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
                     : <><Eye className="h-2.5 w-2.5" /> On the wall</>}
                 </Badge>
               </div>
-              <Button
-                variant="ghost" size="sm" className="h-6 text-[11px] px-2"
-                disabled={setPrivacy.isPending}
-                onClick={() => setPrivacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })}
-                data-testid={`toggle-privacy-${b.id}`}
-              >
-                {b.isAnonymous ? "Show my name" : "Hide my name"}
-              </Button>
+              <div className="flex items-center gap-1">
+                {/*
+                  * A plain link, not a fetch: the route answers with a PNG and a
+                  * Content-Disposition, so the browser's own download is both
+                  * simpler and better behaved than pulling the bytes into memory
+                  * to make a blob URL out of them.
+                  *
+                  * Shown on every settled backing rather than only where the tier
+                  * promised one. The certificate costs nothing to draw and says
+                  * something true about any pledge; gating it on a reward the
+                  * creator happened to tick would be withholding a fact.
+                  */}
+                <Button asChild variant="ghost" size="sm" className="h-6 text-[11px] px-2 gap-1">
+                  <a
+                    href={`/api/projects/${b.projectId}/backing/certificate`}
+                    download
+                    data-testid={`download-certificate-${b.id}`}
+                  >
+                    <Award className="h-3 w-3" /> Certificate
+                  </a>
+                </Button>
+                <Button
+                  variant="ghost" size="sm" className="h-6 text-[11px] px-2"
+                  disabled={setPrivacy.isPending}
+                  onClick={() => setPrivacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })}
+                  data-testid={`toggle-privacy-${b.id}`}
+                >
+                  {b.isAnonymous ? "Show my name" : "Hide my name"}
+                </Button>
+              </div>
             </div>
           </div>
         )) : data!.map((b) => (

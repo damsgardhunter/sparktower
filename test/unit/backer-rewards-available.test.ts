@@ -37,14 +37,13 @@ import {
  *                       their profile renders it. Built.
  *   founding_believer — a crown beside their name in the credits and the
  *                       showcase. Built.
- *   certificate       — nothing renders one, nothing serves one, there is no
- *                       print view. Its only trace anywhere is a boolean in the
- *                       owner's records export, which reports the promise rather
- *                       than keeping it.
+ *   certificate       — drawn by `server/certificate-render.ts` and served by
+ *                       GET /api/projects/:id/backing/certificate. Built after
+ *                       this audit found it missing.
  *   wallpaper         — nothing generates the file.
  *   profile_frame     — nothing draws the ring.
  */
-const UNBUILT = ["wallpaper", "profile_frame", "certificate"];
+const UNBUILT = ["wallpaper", "profile_frame"];
 
 describe("rewards the platform cannot deliver", () => {
   it("are still defined, so a saved tier does not render a raw key", () => {
@@ -84,7 +83,7 @@ describe("rewards the platform cannot deliver", () => {
    */
   it("drops them from a tier saved before they were withdrawn", () => {
     const saved = ["backer_wall", "wallpaper", "digital_badge", "profile_frame", "certificate"];
-    expect(deliverableRewards(saved)).toEqual(["backer_wall", "digital_badge"]);
+    expect(deliverableRewards(saved)).toEqual(["backer_wall", "digital_badge", "certificate"]);
   });
 
   it("leaves a clean tier untouched, and tolerates nothing at all", () => {
@@ -121,6 +120,7 @@ describe("every platform reward that is still offerable", () => {
     believer_number: "server/backing-routes.ts — assigned on settlement, shown beside the name",
     digital_badge: "server/backer-badges.ts + backer-badge-showcase.tsx — row on settlement, first drawing free",
     founding_believer: "backer-credits.tsx + backer-badge-showcase.tsx — the crown",
+    certificate: "server/certificate-render.ts — GET /api/projects/:id/backing/certificate",
   };
 
   it("has somewhere it is actually delivered", () => {

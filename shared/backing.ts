@@ -99,12 +99,6 @@ export const DIGITAL_REWARDS: DigitalRewardDef[] = [
     label: "Printable certificate",
     description: "A dated certificate they can actually print and pin up.",
     fulfilledBy: "platform",
-    /*
-     * Nothing renders one, nothing serves one, and there is no print view. The
-     * only trace of it anywhere is a boolean in the owner's records export, which
-     * reports the promise rather than keeping it. See `available` above.
-     */
-    available: false,
   },
   {
     key: "founding_believer",
