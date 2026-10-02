@@ -42,6 +42,15 @@ export function badgePrompt(opts: { projectTitle: string; metal: string; hex: st
 }
 
 /**
+ * An id, safe to put in a log line.
+ *
+ * These are uuids everywhere they are real, so stripping to word characters and
+ * hyphens loses nothing — and it removes the newline that would otherwise let a
+ * value chosen by whoever made the request write its own entry in the log.
+ */
+const logId = (value: string): string => String(value).replace(/[^\w-]/g, "").slice(0, 64);
+
+/**
  * Recomputes what someone has earned on a project from their pledges.
  *
  * Counts held and released money only. A refunded pledge shouldn't leave a
@@ -116,7 +125,13 @@ export async function reconcileBackerBadge(userId: string, projectId: string) {
      */
     if (existing) {
       await db.delete(backerBadges).where(eq(backerBadges.id, existing.id));
-      console.log(`[badges] ${userId}'s badge for project ${projectId} removed: no settled pledge remains`);
+      /*
+       * Through `logId`, because both of these arrive from a request. A log line
+       * is read by a person scanning for what happened, and anything that can
+       * carry a newline into it can forge a second line that looks exactly like
+       * one this code wrote.
+       */
+      console.log(`[badges] badge for ${logId(userId)} on project ${logId(projectId)} removed: no settled pledge remains`);
     }
     return null;
   }

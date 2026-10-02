@@ -219,7 +219,6 @@ export function certificateDate(at: Date): string {
 export function buildCertificateSvg(input: CertificateInput): string {
   const level = badgeLevelForAmount(input.amountCents);
   const metal = level.hex;
-  const accent = level.accentHex;
 
   const cx = CERT_WIDTH / 2;
   const name = input.anonymous ? "An anonymous believer" : (input.backerName || "A believer");

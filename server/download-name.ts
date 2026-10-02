@@ -23,7 +23,20 @@ export function downloadName(raw: unknown, extension: string, fallback = "image"
     .trim()
     .replace(/\s+/g, "-")
     .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
+    /*
+     * One hyphen each end, not a run of them.
+     *
+     * This was `/^-+|-+$/g`, which CodeQL flagged as polynomial on uncontrolled
+     * data, and it was right: the name comes from a query parameter, the slice
+     * to 60 happens after these passes rather than before, and `-+$` makes the
+     * engine retry from every position in a long run of hyphens.
+     *
+     * The quantifier was never needed. The line above has already collapsed
+     * every run of two or more into one, so by the time this runs no run of
+     * hyphens is longer than a single character and the two forms cannot
+     * differ. A regex with nothing to backtrack over cannot blow up.
+     */
+    .replace(/^-|-$/g, "")
     .slice(0, 60);
   const ext = String(extension ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8);
   return `${base || fallback}${ext ? `.${ext}` : ""}`;
