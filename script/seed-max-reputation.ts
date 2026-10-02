@@ -49,6 +49,8 @@ import { db } from "../server/db";
 import { userProfiles, userReputationScores, users } from "@shared/schema";
 import { REPUTATION_TARGETS as T, reputationFrom, type ReputationFacts } from "@shared/reputation";
 import { contestWins, contributionFacts, executionFacts, marketFacts, simFacts } from "../server/reputation-inputs";
+import { ensureBackerBadges } from "../server/backer-badges";
+import { assignBelieverNumbers } from "./backfill-backer-badges";
 
 const apply = process.argv.includes("--apply");
 const allowRemote = process.argv.includes("--allow-remote");
@@ -498,12 +500,32 @@ async function marketSteps(me: string, others: string[]): Promise<Step[]> {
       short: Math.max(0, T.market.backersCount - f.backersCount),
       run: async () => {
         const all = await myProjects(me);
+        const projectsTouched = new Set<string>();
+        const backers = new Set<string>();
         for (const [i, who] of others.slice(0, T.market.backersCount).entries()) {
+          const projectId = all[i % all.length];
           await db.execute(sql`
             insert into project_backings (project_id, backer_id, amount_cents, status, created_at)
-            values (${all[i % all.length]}, ${who}, ${2_000}, ${"released"},
+            values (${projectId}, ${who}, ${2_000}, ${"released"},
                     (now() at time zone 'utc') - (${(i % WEEK_SPREAD) + 1} * interval '1 week'))`);
+          projectsTouched.add(projectId);
+          backers.add(who);
         }
+
+        /*
+         * And everything the real path would have done.
+         *
+         * A pledge written straight into the table skips the two things
+         * `recordBacking` does inside the same transaction as the insert: it
+         * takes a believer number from the campaign's counter, and it mints the
+         * badge. Without them these backers sat on the wall with no number, and
+         * had nothing at all on their own profiles — no badge row means nothing
+         * to equip, so the reward they had supposedly earned did not exist. The
+         * fix was a backfill script; running it from here is what stops this
+         * step from needing one every time it runs.
+         */
+        for (const projectId of projectsTouched) await assignBelieverNumbers(projectId);
+        for (const who of backers) await ensureBackerBadges(who);
       },
     },
     {

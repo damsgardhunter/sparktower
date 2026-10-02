@@ -41,11 +41,62 @@ interface PublicCampaign {
   tiers: PublicTier[];
   badgePreviews?: Record<string, string>;
   badgeLogoUrl?: string | null;
-  wall: { believerNumber: number | null; name: string; image: string | null; message: string | null; tierName: string | null }[];
+  wall: {
+    believerNumber: number | null;
+    name: string;
+    image: string | null;
+    message: string | null;
+    tierName: string | null;
+    /* The badge minted where one exists, else the level the pledge clears. */
+    badgeLevel?: string | null;
+    badgeReady?: boolean;
+    /* The struck artwork, only once it really exists. */
+    badgeImage?: string | null;
+  }[];
   raisedCents: number;
   backers: number;
   defaultTipPercent: number;
   refundWindowDays: number;
+}
+
+/**
+ * One wall entry's badge: the medal and the name of its metal.
+ *
+ * Named in words, not only struck in colour. A tinted rim is legible only to
+ * somebody who already knows the scale, and the backer whose reward it is is
+ * exactly the person who does not yet.
+ *
+ * Until the artwork is drawn the medal wears the project's own logo inside that
+ * level's rim, which is the same stand-in the tier rows above use.
+ */
+function WallBadge({ entry, logoUrl, projectTitle }: {
+  entry: { badgeLevel?: string | null; badgeReady?: boolean; badgeImage?: string | null };
+  logoUrl: string | null;
+  projectTitle: string;
+}) {
+  const level = BADGE_LEVELS.find((l) => l.key === entry.badgeLevel);
+  if (!level) return null;
+  const art = assetUri(entry.badgeImage ?? logoUrl);
+  return (
+    <Row center gap={3}>
+      <View style={{
+        width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: level.hex,
+        overflow: "hidden", alignItems: "center", justifyContent: "center",
+      }}>
+        {art
+          ? <Image source={{ uri: art }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+          : <Text style={{ fontSize: 8, fontFamily: fontFamily.semibold, color: level.hex }}>
+              {projectTitle.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+            </Text>}
+      </View>
+      <Text
+        style={{ fontSize: 10, fontFamily: fontFamily.semibold, color: level.hex }}
+        accessibilityLabel={`${level.label} believer badge for ${projectTitle}`}
+      >
+        {level.label}
+      </Text>
+    </Row>
+  );
 }
 
 function TierBadge({ levelKey, previews, logoUrl, size = 44 }: { levelKey?: string; previews: Record<string, string>; logoUrl: string | null; size?: number }) {
@@ -187,12 +238,22 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
               <Row key={i} gap={spacing.sm} style={{ alignItems: "flex-start" }}>
                 <Avatar name={w.name} uri={w.image} size={28} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: font.sm, color: colors.text, fontFamily: fontFamily.semibold }}>
-                    {w.name}
-                    <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular }}>
-                      {w.believerNumber != null ? ` ${formatBelieverNumber(w.believerNumber)}` : ""}{w.tierName ? ` · ${w.tierName}` : ""}
+                  {/*
+                    * The badge, beside the name, as the web wall shows it. The
+                    * level is the thing a backer paid for and the thing they get
+                    * to wear, and this list left it out entirely — so the one
+                    * place a backer could see the reward they had earned was a
+                    * browser.
+                    */}
+                  <Row center gap={5}>
+                    <Text style={{ fontSize: font.sm, color: colors.text, fontFamily: fontFamily.semibold }}>
+                      {w.name}
                     </Text>
-                  </Text>
+                    <WallBadge entry={w} logoUrl={data.badgeLogoUrl ?? null} projectTitle={projectTitle} />
+                    <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular, fontSize: font.sm }}>
+                      {w.believerNumber != null ? formatBelieverNumber(w.believerNumber) : ""}{w.tierName ? ` · ${w.tierName}` : ""}
+                    </Text>
+                  </Row>
                   {w.message ? <Meta style={{ fontSize: font.sm }}>{w.message}</Meta> : null}
                 </View>
               </Row>

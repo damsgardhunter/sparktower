@@ -18,6 +18,7 @@ import { colors, font, fontFamily, novaGradient, radius, spacing } from "../them
 import { assetUri, Body, Btn, Icon, Meta, Row, type IconName } from "./ui";
 import { Sheet, type Notice } from "./Sheet";
 import { CardTitle, OutlineButton, PCard, Pill } from "./profile/kit";
+import { saveImage } from "../saveImage";
 
 // --- Restated from shared/backing.ts --------------------------------------
 
@@ -343,6 +344,8 @@ export function EarnedBadges({ userId, isOwn = false }: { userId: string; isOwn?
 export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn: boolean; notify: (n: Notice) => void }) {
   const router = useRouter();
   const qc = useQueryClient();
+  /** Which certificate is being fetched, so its own row can say so. */
+  const [fetching, setFetching] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["user-backings", userId],
     queryFn: () => api<any[]>(`/api/users/${userId}/backings`).catch(() => []),
@@ -374,6 +377,26 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
     </Row>
   );
 
+  /*
+   * Never throws. `saveImage` reports rather than rejects, and a certificate
+   * that could not be fetched is a line on the screen, not something that
+   * takes the profile down with it.
+   */
+  const downloadCertificate = async (b: { id: string; projectId: string; projectTitle: string }) => {
+    setFetching(b.id);
+    try {
+      const result = await saveImage({
+        path: `/api/projects/${b.projectId}/backing/certificate`,
+        name: `${b.projectTitle} certificate`,
+      });
+      notify(result.ok
+        ? { text: result.where === "photos" ? "Saved to your photos" : "Certificate ready to share", tone: "success" }
+        : { text: result.reason, tone: "error" });
+    } finally {
+      setFetching(null);
+    }
+  };
+
   return (
     <PCard>
       <CardTitle icon="heart" iconColor={colors.primary}>Believed in</CardTitle>
@@ -391,6 +414,28 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
                   <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>{b.isAnonymous ? "Show my name" : "Hide my name"}</Text>
                 </Pressable>
               </Row>
+              {/*
+                * The certificate, which the app has been promising since the
+                * rewards were written and had no way to hand over. The server
+                * draws it on request, so there is nothing to wait for and
+                * nothing stored — and `saveImage` already does the hard part:
+                * it fetches with the access token, puts it in the camera roll
+                * if that is allowed, and offers the share sheet if it is not,
+                * which is where printing lives on a phone.
+                */}
+              <Pressable
+                disabled={fetching === b.id}
+                hitSlop={6}
+                onPress={() => downloadCertificate(b)}
+                accessibilityRole="button"
+              >
+                <Row center gap={5}>
+                  <Icon name="ribbon-outline" size={13} color={colors.primary} />
+                  <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary }}>
+                    {fetching === b.id ? "Getting your certificate…" : "Save your certificate"}
+                  </Text>
+                </Row>
+              </Pressable>
             </View>
           ))
           : data!.map((b) => (

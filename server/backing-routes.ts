@@ -38,9 +38,10 @@ import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
 import { renderMerchFace, type MerchFace } from "./merch-render";
 import {
-  generateBadgeArt, setShowcase, upsertBackerBadge, renderBadgeImage, projectLogoBuffer,
+  generateBadgeArt, setShowcase, reconcileBackerBadge, renderBadgeImage, projectLogoBuffer,
   badgeLogoUrl,
   ensureCreatorBadges,
+  ensureBackerBadges,
 } from "./backer-badges";
 import { requireImages } from "./images";
 import { respondToAiError } from "./ai-json";
@@ -739,12 +740,39 @@ export function registerBackingRoutes(app: Express) {
         .groupBy(projectBackings.tierId);
       const claimedByTier = new Map(claimed.map((c) => [c.tierId, c.n]));
 
+      /*
+       * One entry per backer, not one per pledge.
+       *
+       * This listed rows, so somebody who backed a project twice appeared on
+       * the wall twice — and worse, each of those rows derived its level from
+       * that one pledge's amount, while the badge they actually hold is struck
+       * from the total across all of them. Two $20 pledges is a gold badge and
+       * read as two silver entries. The badge means "how far I went for this
+       * project"; the wall now says the same thing.
+       *
+       * Aggregated rather than deduplicated in JavaScript, because the 200-row
+       * cap is applied in the database: collapsing afterwards would silently
+       * return fewer than 200 believers whenever anybody had backed twice.
+       */
       const wall = await db.select({
-        believerNumber: projectBackings.believerNumber,
-        message: projectBackings.message,
-        isAnonymous: projectBackings.isAnonymous,
-        tierName: projectBackings.tierNameAtBacking,
-        createdAt: projectBackings.createdAt,
+        /* The earliest number they hold. Being early is the thing recorded. */
+        believerNumber: sql<number | null>`min(${projectBackings.believerNumber})`,
+        /*
+         * The most recent pledge that came with a note. `array_remove` drops
+         * the pledges that left none, so a later silent pledge does not blank
+         * out what they said the first time.
+         */
+        message: sql<string | null>`(array_remove(array_agg(${projectBackings.message} order by ${projectBackings.createdAt} desc), null))[1]`,
+        /*
+         * Hidden if *any* pledge asked to be. Somebody who gave anonymously
+         * once and openly once has asked to be hidden, and the wall is not the
+         * place to decide they only half meant it.
+         */
+        isAnonymous: sql<boolean>`bool_or(${projectBackings.isAnonymous})`,
+        /* The rung their largest single pledge bought, which is the one they'd name. */
+        tierName: sql<string | null>`(array_remove(array_agg(${projectBackings.tierNameAtBacking} order by ${projectBackings.amountCents} desc), null))[1]`,
+        /* When they first backed it, not when they last did. */
+        createdAt: sql<Date>`min(${projectBackings.createdAt})`,
         backerFirstName: users.firstName,
         backerImage: users.profileImageUrl,
         /*
@@ -753,10 +781,18 @@ export function registerBackingRoutes(app: Express) {
          * platinum is a bucket the backer chose to wear, the exact figure is
          * nobody else's business and this wall has never shown it.
          */
-        amountCents: projectBackings.amountCents,
+        amountCents: sql<number>`sum(${projectBackings.amountCents})::int`,
         /* The badge actually minted, which outranks the amount when it exists. */
         badgeLevel: backerBadges.level,
         badgeStatus: backerBadges.status,
+        /*
+         * And its artwork, so the wall shows the badge itself rather than only
+         * the metal it is made of. Public on purpose — the art is struck from
+         * the project's own logo, so it says nothing about the backer that the
+         * level beside it does not already say, and an anonymous backer's badge
+         * is the same picture as everybody else's at that level.
+         */
+        badgeImage: backerBadges.imageUrl,
       }).from(projectBackings)
         .leftJoin(users, eq(users.id, projectBackings.backerId))
         .leftJoin(backerBadges, and(
@@ -767,12 +803,26 @@ export function registerBackingRoutes(app: Express) {
           eq(projectBackings.projectId, projectId),
           inArray(projectBackings.status, ["held", "released"]),
         ))
-        .orderBy(projectBackings.believerNumber)
+        /*
+         * Everything selected that is not aggregated. The badge columns come
+         * from a join that is already one row per (backer, project), so
+         * grouping by them cannot split a backer across two entries.
+         */
+        .groupBy(
+          projectBackings.backerId, users.firstName, users.profileImageUrl,
+          backerBadges.level, backerBadges.status, backerBadges.imageUrl,
+        )
+        .orderBy(sql`min(${projectBackings.believerNumber}) asc nulls last`)
         .limit(200);
 
       const [totals] = await db.select({
         raisedCents: sql<number>`coalesce(sum(amount_cents), 0)::int`,
-        backers: sql<number>`count(*)::int`,
+        /*
+         * People, not pledges. This counted rows, so a project where one
+         * enthusiast backed three times reported three believers — and said so
+         * right next to a wall that now lists them once.
+         */
+        backers: sql<number>`count(distinct backer_id)::int`,
       }).from(projectBackings)
         .where(and(
           eq(projectBackings.projectId, projectId),
@@ -825,6 +875,12 @@ export function registerBackingRoutes(app: Express) {
           badgeLevel: w.badgeLevel ?? badgeLevelForAmount(w.amountCents ?? 0).key,
           /* Whether the art is drawn yet, so the wall can show a plain ring until it is. */
           badgeReady: w.badgeStatus === "ready",
+          /*
+           * Only once it is drawn. A `failed` or `pending` badge can still hold
+           * the path of an earlier attempt, and serving that would put the old
+           * metal on the wall beside the new level's name.
+           */
+          badgeImage: w.badgeStatus === "ready" ? w.badgeImage : null,
         })),
         raisedCents: totals?.raisedCents ?? 0,
         backers: totals?.backers ?? 0,
@@ -1484,8 +1540,16 @@ export function registerBackingRoutes(app: Express) {
   /** Every badge someone holds, for their own management screen. */
   app.get("/api/me/badges", isAuthenticated, async (req: any, res) => {
     try {
-      // Projects started before founder badges existed get theirs the first time anyone looks.
+      /*
+       * Projects started before founder badges existed get theirs the first
+       * time anyone looks, and so does any project they backed whose pledge
+       * was not written by the webhook — a seeded or imported backing earns a
+       * badge like any other, and until this ran the picker had nothing to
+       * offer for it. Creator first, so a founder badge takes a pinned slot
+       * ahead of a backer one.
+       */
       await ensureCreatorBadges(req.user.id);
+      await ensureBackerBadges(req.user.id);
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
@@ -1506,8 +1570,19 @@ export function registerBackingRoutes(app: Express) {
     try {
       const userId = String(req.params.userId);
       const self = req.user?.id === userId;
-      // A creator's founder badges appear on their profile from the start, not only after they open the picker.
-      if (self) await ensureCreatorBadges(userId);
+      /*
+       * Badges appear on a profile from the start rather than only after its
+       * owner opens the picker — but only on their own request. This endpoint
+       * is public and unauthenticated, and minting on somebody else's read
+       * would let any passer-by make this route do writes, one per stranger
+       * whose profile they open. A profile whose owner has never signed in
+       * since their badge was earned is filled in by
+       * `script/backfill-backer-badges.ts` instead.
+       */
+      if (self) {
+        await ensureCreatorBadges(userId);
+        await ensureBackerBadges(userId);
+      }
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
@@ -1761,7 +1836,7 @@ export async function recordBacking(session: any): Promise<void> {
    * already been paid for, which is the wrong trade entirely.
    */
   try {
-    await upsertBackerBadge(m.backerId, m.projectId);
+    await reconcileBackerBadge(m.backerId, m.projectId);
   } catch (err) {
     console.error("Badge upsert failed (pledge is unaffected):", err);
   }

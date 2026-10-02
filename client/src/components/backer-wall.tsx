@@ -3,7 +3,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, Users } from "lucide-react";
-import { BADGE_LEVELS, formatBelieverNumber, type BadgeLevelKey } from "@shared/backing";
+import { BADGE_LEVELS, badgeLevel, formatBelieverNumber, type BadgeLevelKey } from "@shared/backing";
+import { BadgeMedal } from "@/components/pinned-badges";
 
 /**
  * Everybody who backed this project, as a page rather than a sidebar list.
@@ -17,12 +18,21 @@ import { BADGE_LEVELS, formatBelieverNumber, type BadgeLevelKey } from "@shared/
  *
  * ## The badge
  *
- * Beside the name, and it is the point of the tab. The level comes from the
- * server: the badge actually minted where one exists, and otherwise the level the
- * pledge clears, because a badge is drawn asynchronously and somebody who paid a
- * minute ago has earned gold with no row to show for it yet. `badgeReady` says
- * whether the art exists; until it does the ring is drawn in that level's metal,
- * which is honest about the state without saying "pending" at somebody.
+ * Beside the name, and it is the point of the tab. It is the badge itself — the
+ * same medal that hangs on the backer's profile — and not only a tinted ring
+ * around their face, which was what the first version of this tab showed. A
+ * coloured ring is information nobody decodes: a visitor seeing it has no way to
+ * learn that a warmer ring means somebody went further, and the backer whose
+ * reward it is cannot see what they earned. So the medal is shown, named, and in
+ * its metal.
+ *
+ * The level comes from the server: the badge actually minted where one exists,
+ * and otherwise the level the pledge clears, because a badge is drawn
+ * asynchronously and somebody who paid a minute ago has earned gold with no row
+ * to show for it yet. `badgeImage` is the struck artwork and is only sent once it
+ * is really drawn; until then the medal wears the project's own logo inside that
+ * level's rim, which is already recognisably this project's badge and is the same
+ * stand-in the pledge panel has always used.
  *
  * ## Anonymous backers
  *
@@ -41,12 +51,16 @@ interface WallEntry {
   createdAt: string;
   badgeLevel: BadgeLevelKey | string | null;
   badgeReady?: boolean;
+  /** The struck artwork, once it exists. Null while it is still being drawn. */
+  badgeImage?: string | null;
 }
 
 interface PublicBacking {
   wall: WallEntry[];
   backers: number;
   raisedCents: number;
+  /** The project's logo as the badge wears it — the medal's stand-in until the art is made. */
+  badgeLogoUrl?: string | null;
 }
 
 /** The ring, in the metal that level is made of. */
@@ -57,17 +71,52 @@ function BadgeRing({ level, ready, children }: { level: string | null; ready?: b
     <span
       className="relative inline-flex shrink-0 rounded-full p-[2px]"
       style={{ background: `linear-gradient(135deg, ${def.hex}, ${def.accentHex})` }}
-      /* Named, because the ring is the only thing carrying this information. */
-      title={ready ? `${def.label} believer` : `${def.label} believer — badge still being drawn`}
-      aria-label={`${def.label} believer`}
-      data-testid={`wall-badge-${def.key}`}
+      /*
+       * Decoration now. It was the only thing carrying the level, so it was
+       * named and labelled; the medal beside the name says it in words, and two
+       * announcements of the same fact is one too many.
+       */
+      aria-hidden
     >
       {children}
     </span>
   );
 }
 
-export function BackerWall({ projectId }: { projectId: string }) {
+/**
+ * The badge, beside the name: the medal and what it is called.
+ *
+ * Named in words as well as struck in metal. The level is the whole point of
+ * the thing — it is what the backer paid for and what they get to wear — and a
+ * colour alone leaves it legible only to somebody who already knows the scale.
+ */
+function WallBadge({ entry, logoUrl, projectTitle }: {
+  entry: WallEntry; logoUrl: string | null; projectTitle: string;
+}) {
+  const def = badgeLevel(String(entry.badgeLevel ?? ""));
+  if (!def) return null;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 align-middle"
+      title={entry.badgeReady
+        ? `${def.label} believer — their badge for ${projectTitle}`
+        : `${def.label} believer — the artwork is still being drawn`}
+      data-testid={`wall-badge-${def.key}`}
+    >
+      <BadgeMedal
+        level={def.key}
+        imageUrl={entry.badgeImage ?? logoUrl}
+        projectTitle={projectTitle}
+        className="h-[1.15rem] w-[1.15rem] text-[16px]"
+      />
+      <span className="text-[11px] font-semibold leading-none" style={{ color: def.hex }}>
+        {def.label}
+      </span>
+    </span>
+  );
+}
+
+export function BackerWall({ projectId, projectTitle }: { projectId: string; projectTitle: string }) {
   /*
    * The same endpoint the pledge panel reads, so the wall cannot disagree with
    * itself in two places on one page. It 404s when a project is not taking
@@ -142,8 +191,9 @@ export function BackerWall({ projectId }: { projectId: string }) {
                   </Avatar>
                 </BadgeRing>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm flex flex-wrap items-baseline gap-x-1.5">
+                  <p className="text-sm flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <span className="font-medium">{w.name}</span>
+                    <WallBadge entry={w} logoUrl={data.badgeLogoUrl ?? null} projectTitle={projectTitle} />
                     {w.believerNumber != null && (
                       <span className="text-muted-foreground font-mono text-xs">
                         {formatBelieverNumber(w.believerNumber)}

@@ -6,6 +6,7 @@ import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { applyTier, onInvoicePaid, onSubscriptionPaymentFailed, onSubscriptionChargeRefunded } from "./billing-credits";
 import { recordBacking } from './backing-routes';
+import { reconcileBackerBadge } from './backer-badges';
 import { settleTier } from './subscription-state';
 
 /** Thrown only when the signature check fails: the caller answers 400, and Stripe does not retry. */
@@ -412,6 +413,13 @@ export class WebhookHandlers {
     if (event.type !== 'charge.refunded') return;
     const charge = event.data?.object;
     if (!charge) return;
+    /*
+     * Filled when a backing really moved to refunded, so its badge can be
+     * reconciled after the commit. A list rather than a nullable: the
+     * assignment happens inside the transaction's callback, which the compiler
+     * cannot see, so a `let` stays narrowed to `null` at the point it is read.
+     */
+    const unbacked: { userId: string; projectId: string }[] = [];
     const paymentIntent: string | null = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id ?? null;
     const chargeId: string | null = charge.id ?? null;
     if (!paymentIntent && !chargeId) return;
@@ -441,7 +449,7 @@ export class WebhookHandlers {
         }
       }
 
-      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId })
+      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId, backerId: projectBackings.backerId })
         .from(projectBackings).where(match(projectBackings.stripePaymentIntentId, projectBackings.stripeChargeId)).for("update");
       if (backing && backing.status !== 'refunded') {
         if (!inFull && refundedSoFar < backing.amountCents) {
@@ -459,9 +467,21 @@ export class WebhookHandlers {
         await tx.update(projectMerchOrders).set({ status: 'canceled', updatedAt: new Date() })
           .where(and(eq(projectMerchOrders.backingId, backing.id), inArray(projectMerchOrders.status, ['queued', 'failed'])));
         console.log(`Backing ${backing.id} refunded from Stripe; project ${backing.projectId} total reduced by ${backing.amountCents}`);
+        unbacked.push({ userId: backing.backerId, projectId: backing.projectId });
       }
       return !!donation || !!backing;
     });
+    /*
+     * The badge goes with the money, and after the transaction rather than
+     * inside it: it reads the pledges that are left, so it has to see the
+     * refund committed. Never fatal — a refund that failed because a badge
+     * could not be adjusted would be a much worse bug than a badge left
+     * standing, and Stripe would retry the whole event.
+     */
+    for (const b of unbacked) {
+      await reconcileBackerBadge(b.userId, b.projectId)
+        .catch((err) => console.error("[badges] refund reconcile failed:", err));
+    }
     if (matched) return;
 
     // Not a donation or a backing: a subscription payment, refunded in full, takes the plan with it.
@@ -507,10 +527,12 @@ export class WebhookHandlers {
       ...(paymentIntent ? [eq(projectBackings.stripePaymentIntentId, paymentIntent)] : []),
       ...(chargeId ? [eq(projectBackings.stripeChargeId, chargeId)] : []),
     );
+    /** Filled when the bank took the money back, so the badge can follow it after the commit. */
+    const chargedBack: { userId: string; projectId: string }[] = [];
 
     await db.transaction(async (tx) => {
       // The same lock release and the sweep take, so neither can act on this pledge mid-decision.
-      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId, disputedAt: projectBackings.disputedAt, stripeChargeId: projectBackings.stripeChargeId })
+      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId, backerId: projectBackings.backerId, disputedAt: projectBackings.disputedAt, stripeChargeId: projectBackings.stripeChargeId })
         .from(projectBackings).where(match).for("update");
       if (!backing) return;
 
@@ -538,10 +560,21 @@ export class WebhookHandlers {
         await tx.update(projectMerchOrders).set({ status: 'canceled', updatedAt: new Date() })
           .where(and(eq(projectMerchOrders.backingId, backing.id), inArray(projectMerchOrders.status, ['queued', 'failed'])));
         console.log(`[stripe] dispute ${dispute.id} lost: backing ${backing.id} refunded by the bank; project ${backing.projectId} total reduced by ${backing.amountCents}`);
+        /*
+         * A chargeback the platform lost is the clearest case of all: the
+         * backer took the money back through their bank, so the badge for it
+         * goes too. Queued for after the commit, like the refund path.
+         */
+        chargedBack.push({ userId: backing.backerId, projectId: backing.projectId });
       } else if (backing.status === 'released') {
         console.error(`[stripe] dispute ${dispute.id} lost on backing ${backing.id}, already paid out to the creator — the platform is out ${backing.amountCents} cents; needs a person`);
       }
     });
+
+    for (const b of chargedBack) {
+      await reconcileBackerBadge(b.userId, b.projectId)
+        .catch((err) => console.error("[badges] chargeback reconcile failed:", err));
+    }
   }
 
   /**

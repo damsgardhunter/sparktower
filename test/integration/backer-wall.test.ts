@@ -158,6 +158,127 @@ describe("the backer wall", () => {
     expect(JSON.stringify(entry)).not.toContain("765");
   });
 
+  /*
+   * The medal itself, not only the metal it is made of. The first version of
+   * this tab tinted a ring around the backer's face, which is information
+   * nobody decodes: a visitor has no way to learn that a warmer ring means
+   * somebody went further, and the backer whose reward it is cannot see what
+   * they earned.
+   */
+  it("sends the badge artwork once it has been drawn", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Ines");
+    const fan = await person(app, "Wren");
+    const project = await campaign(owner.id);
+    await back(project.id, fan.id);
+    await db.insert(backerBadges).values({
+      userId: fan.id, projectId: project.id, level: "gold", status: "ready",
+      imageUrl: "/objects/badges/struck.png",
+    } as any);
+
+    const [entry] = await wallOf(app, project.id);
+    expect(entry.badgeImage).toBe("/objects/badges/struck.png");
+    expect(entry.badgeReady).toBe(true);
+  });
+
+  /*
+   * And not before. A badge whose generation failed can still hold the path of
+   * an earlier attempt, and a level change blanks the image precisely because
+   * the metal is the whole point — so serving whatever is in the column would
+   * put last week's gold beside this week's platinum.
+   */
+  it("withholds artwork that is not finished, even when a path is sitting there", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Ivar");
+    const fan = await person(app, "Xan");
+    const project = await campaign(owner.id);
+    await back(project.id, fan.id);
+    await db.insert(backerBadges).values({
+      userId: fan.id, projectId: project.id, level: "gold", status: "failed",
+      imageUrl: "/objects/badges/stale.png",
+    } as any);
+
+    const [entry] = await wallOf(app, project.id);
+    expect(entry.badgeImage).toBeNull();
+    expect(entry.badgeReady).toBe(false);
+    /* The level still shows — it is earned whether or not a picture exists. */
+    expect(entry.badgeLevel).toBe("gold");
+  });
+
+  /*
+   * One entry per person, not per pledge.
+   *
+   * The wall listed rows, so backing twice put you on it twice — and each of
+   * those rows read its level off that single pledge, while the badge actually
+   * held is struck from the total. Two $20 pledges is one gold believer, and
+   * the wall said two silver ones.
+   */
+  describe("somebody who backed twice", () => {
+    it("appears once, at the level their pledges add up to", async () => {
+      const app = await getTestApp();
+      const owner = await person(app, "Ida");
+      const keen = await person(app, "Yuki");
+      const project = await campaign(owner.id);
+      await back(project.id, keen.id, { amountCents: 2_000, believerNumber: 3 });
+      await back(project.id, keen.id, { amountCents: 2_000, believerNumber: 9 });
+
+      const wall = await wallOf(app, project.id);
+      expect(wall, "one person, one entry").toHaveLength(1);
+      expect(wall[0].name).toBe("Yuki");
+      /* $40 in total is gold; each pledge alone would only have been silver. */
+      expect(wall[0].badgeLevel).toBe(badgeLevelForAmount(4_000).key);
+      expect(wall[0].badgeLevel).toBe("gold");
+      /* The earliest number they hold — being early is what is being recorded. */
+      expect(wall[0].believerNumber).toBe(3);
+    });
+
+    it("is counted as one believer", async () => {
+      const app = await getTestApp();
+      const owner = await person(app, "Ravi");
+      const keen = await person(app, "Zara");
+      const once = await person(app, "Ash");
+      const project = await campaign(owner.id);
+      await back(project.id, keen.id);
+      await back(project.id, keen.id);
+      await back(project.id, once.id);
+
+      const res = await request(app).get(`/api/projects/${project.id}/backing/public`);
+      expect(res.body.backers, "two people, three pledges").toBe(2);
+      /* The money is still all of it. */
+      expect(res.body.raisedCents).toBe(3_500 * 3);
+    });
+
+    /*
+     * Anonymity is not something somebody half meant. Asking to be hidden on
+     * one pledge hides them, rather than being outvoted by the other.
+     */
+    it("stays hidden if either pledge asked to be", async () => {
+      const app = await getTestApp();
+      const owner = await person(app, "Nova");
+      const shy = await person(app, "Bly");
+      const project = await campaign(owner.id);
+      await back(project.id, shy.id, { isAnonymous: false, believerNumber: 2 });
+      await back(project.id, shy.id, { isAnonymous: true, believerNumber: 4 });
+
+      const [entry] = await wallOf(app, project.id);
+      expect(entry.name).toBe("Anonymous");
+      expect(JSON.stringify(entry)).not.toContain("Bly");
+    });
+
+    /* A later silent pledge must not blank out what they said the first time. */
+    it("keeps the most recent note they actually left", async () => {
+      const app = await getTestApp();
+      const owner = await person(app, "Pax");
+      const fan = await person(app, "Cleo");
+      const project = await campaign(owner.id);
+      await back(project.id, fan.id, { message: "Backing this early.", createdAt: new Date("2026-01-01T00:00:00Z") });
+      await back(project.id, fan.id, { message: null, createdAt: new Date("2026-02-01T00:00:00Z") });
+
+      const [entry] = await wallOf(app, project.id);
+      expect(entry.message).toBe("Backing this early.");
+    });
+  });
+
   /* A pledge that never settled is not a backer, so it is not on the wall. */
   it("lists only backings that went through", async () => {
     const app = await getTestApp();

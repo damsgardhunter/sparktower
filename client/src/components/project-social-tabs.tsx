@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
   MessagesSquare, ArrowRight,
 } from "lucide-react";
 import { isSectionVisible } from "@shared/project-sections";
+import { fitScale, MIN_FIT_SCALE } from "@/lib/fit-scale";
 import type { Project, ProjectMember, User, UserProfile } from "@shared/schema";
 
 type MemberWithUser = ProjectMember & { user: User; profile?: UserProfile };
@@ -47,6 +48,139 @@ const TABS: { id: TabId; label: string; icon: typeof Users }[] = [
 ];
 
 
+
+/** 14px, the `text-sm` this row was designed at and the size it keeps when it fits. */
+const TAB_BASE_PX = 14;
+
+/**
+ * A row of tabs that never wraps, scaled down until it fits.
+ *
+ * The scale is applied by writing a font size straight onto the row rather
+ * than through state. Measuring is a layout read and applying is a layout
+ * write, so routing it through a re-render means the browser paints the
+ * unscaled row first — the tabs appear full size and snap smaller, which is
+ * more noticeable than it sounds on a page that loads its counts a moment
+ * after its tabs.
+ *
+ * Measuring needs the row's natural width, which is not observable while the
+ * row is scaled, so each pass resets the size, reads `scrollWidth`, and writes
+ * the answer. The reset is never painted: both happen inside one callback,
+ * between the same two frames.
+ *
+ * Three things are given up, in this order: the type gets smaller, then the
+ * icons go, then — on a phone narrower than the labels themselves — the row
+ * scrolls sideways. Nothing is ever clipped and nothing wraps.
+ */
+function OneLineTabBar({ children, signature }: { children: React.ReactNode; signature: string }) {
+  const row = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+
+    /*
+     * Reset, measure, write — then check the answer.
+     *
+     * Sizing the row in `em` was meant to make one division enough: if every
+     * part of the row scales with the type, the row scales with the type. It
+     * very nearly does. What does not are the parts that are not type at all —
+     * a border is one pixel whatever the font size, and a glyph's advance is
+     * rounded rather than divided — which leaves the row about two per cent
+     * wider than the arithmetic says. Two per cent of a tab bar is thirteen
+     * pixels hanging off the right-hand edge, which is what this did at 820
+     * pixels wide while fitting perfectly at 1280.
+     *
+     * So the first division gets most of the way there and each further pass
+     * corrects against what the row actually measures. It is a search, but a
+     * short one: two passes in practice, and bounded so a row that cannot be
+     * made to fit at the readable floor stops being asked to.
+     *
+     * The write is never skipped when the scale comes out unchanged. An
+     * earlier version returned early in that case, to stop a resize this
+     * function caused from causing another — and left the row at full size,
+     * because the reset at the top has already happened by the time the scale
+     * is known. No guard is needed: writing a font size identical to the one
+     * already there changes no layout, so the observer has nothing to report
+     * and the chain ends on its own. That is what the quantising inside
+     * `fitScale` is for.
+     */
+    const settle = () => {
+      el.style.fontSize = `${TAB_BASE_PX}px`;
+      let scale = fitScale({ available: el.clientWidth, natural: el.scrollWidth });
+      el.style.fontSize = `${TAB_BASE_PX * scale}px`;
+
+      for (let pass = 0; pass < 4 && el.scrollWidth > el.clientWidth; pass++) {
+        const correction = fitScale({ available: el.clientWidth, natural: el.scrollWidth, min: 0 });
+        const next = Math.max(MIN_FIT_SCALE, Math.floor(scale * correction * 200) / 200);
+        if (next >= scale) break; // At the floor, or as small as it is going to get.
+        scale = next;
+        el.style.fontSize = `${TAB_BASE_PX * scale}px`;
+      }
+      return scale;
+    };
+
+    /*
+     * On a phone the type runs out of room before the row does, and the icons
+     * are what go.
+     *
+     * Five labels and their counts need about 340 pixels at the smallest
+     * readable size, which is more than a 390-pixel screen has once the page's
+     * own margins are taken out — so the row hit the floor and still hung 54
+     * pixels off the edge. The icons are worth roughly that much: five of them
+     * at a bit over one em, plus the gap each one sits in. They are also the
+     * part nobody is reading. A tab called Followers does not need a heart next
+     * to it to be understood, whereas a tab bar scrolled half out of view needs
+     * a visitor to discover that it scrolls.
+     *
+     * Tried at full strength first on every pass, so widening the window brings
+     * them straight back rather than leaving the row permanently stripped.
+     */
+    /*
+     * Hidden rather than merely transparent: a `display: none` child is not a
+     * flex item, so the gap it sat in goes with it. Set as a style on the
+     * element instead of through a class, because this runs inside a layout
+     * pass that then measures the result — a React state change would not have
+     * taken effect by the time the next line reads `scrollWidth`.
+     */
+    const showIcons = (show: boolean) => {
+      for (const icon of el.querySelectorAll<SVGElement>("svg")) {
+        icon.style.display = show ? "" : "none";
+      }
+    };
+
+    const fit = () => {
+      showIcons(true);
+      if (settle() <= MIN_FIT_SCALE && el.scrollWidth > el.clientWidth) {
+        showIcons(false);
+        settle();
+      }
+    };
+
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    /*
+     * And again once the real typeface is in. Before it loads the row is
+     * measured in the fallback font, which is a different width — usually
+     * narrower, so the row fits at full size and then overflows.
+     */
+    let cancelled = false;
+    document.fonts?.ready.then(() => { if (!cancelled) fit(); }).catch(() => {});
+
+    return () => { cancelled = true; observer.disconnect(); };
+  }, [signature]);
+
+  return (
+    <div
+      ref={row}
+      className="flex flex-nowrap items-center gap-[0.25em] overflow-x-auto border-b border-border pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      style={{ fontSize: TAB_BASE_PX }}
+      data-testid="project-tab-bar"
+    >
+      {children}
+    </div>
+  );
+}
 
 /**
  * The project's public social page — a LinkedIn company page crossed with a
@@ -143,8 +277,15 @@ export function ProjectSocialTabs({
 
   return (
     <div className="space-y-6">
-      {/* Wrapping tab bar so every section stays reachable on any width. */}
-      <div className="flex flex-wrap gap-1 border-b border-border pb-3">
+      {/*
+        * One line, always. The type shrinks to make it true.
+        *
+        * Every label and every count is part of what has to fit, so the row is
+        * re-fitted whenever one of them changes rather than only on resize —
+        * "Followers" becoming "Followers 156" is the change that used to push
+        * the row onto a second line.
+        */}
+      <OneLineTabBar signature={TABS.map((t) => `${t.label}:${tabCount(t.id) ?? ""}`).join("|") + `:${newFeedback}`}>
         {TABS.map((t) => {
           const count = tabCount(t.id);
           return (
@@ -152,22 +293,44 @@ export function ProjectSocialTabs({
               key={t.id}
               variant={tab === t.id ? "default" : "ghost"}
               size="sm"
-              className="gap-1.5"
+              /*
+               * Sized in `em` throughout, which is what lets a single font-size
+               * on the row shrink the whole thing by one factor. With padding
+               * fixed in pixels, scaling the text by 0.7 scales the row by
+               * rather less, and fitting it would take a search instead of one
+               * division.
+               */
+              className="h-auto shrink-0 gap-[0.35em] whitespace-nowrap rounded-[0.4em] px-[0.6em] py-[0.4em] text-[1em] leading-none"
               onClick={() => setTab(t.id)}
               data-testid={`project-tab-${t.id}`}
             >
-              <t.icon className="h-4 w-4" />
+              <t.icon className="h-[1.15em] w-[1.15em] shrink-0" />
               {t.label}
               {count !== null && count > 0 && (
-                <Badge variant="secondary" className="ml-0.5 h-4 px-1.5 text-[10px]">{count}</Badge>
+                <Badge variant="secondary" className="h-[1.35em] rounded-[0.7em] px-[0.4em] text-[0.72em] leading-none">{count}</Badge>
               )}
+              {/*
+                * The team's unread count, as a number rather than "3 new
+                * feedback". The words were the widest thing in the row by some
+                * way, and they only ever appeared for members — so a creator
+                * looking at their own project got a row scaled down to fit a
+                * phrase that the tab it sits on already explains. The full
+                * phrase is still read out and still in the tooltip.
+                */}
               {t.id === "updates" && newFeedback > 0 && (
-                <Badge className="ml-0.5 h-4 px-1.5 text-[10px]" data-testid="badge-new-feedback">{newFeedback} new feedback</Badge>
+                <Badge
+                  className="h-[1.35em] rounded-[0.7em] px-[0.4em] text-[0.72em] leading-none"
+                  title={`${newFeedback} new piece${newFeedback === 1 ? "" : "s"} of feedback`}
+                  aria-label={`${newFeedback} new feedback`}
+                  data-testid="badge-new-feedback"
+                >
+                  {newFeedback} new
+                </Badge>
               )}
             </Button>
           );
         })}
-      </div>
+      </OneLineTabBar>
 
       {tab === "overview" && (
         <div className="space-y-6">
@@ -270,7 +433,7 @@ export function ProjectSocialTabs({
         </div>
       )}
 
-      {tab === "backers" && <BackerWall projectId={project.id} />}
+      {tab === "backers" && <BackerWall projectId={project.id} projectTitle={project.title} />}
 
       {tab === "discussion" && (
         <Card>
