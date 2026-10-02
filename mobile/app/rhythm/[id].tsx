@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Loading, Screen, errText } from "../../src/components/ui";
-import { Callout, PageIntro, TitledCard } from "../../src/components/MoreKit";
+import { Callout, MenuRow, PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { Pill } from "../../src/components/nova/Pill";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components/more/AdminKit";
@@ -35,12 +35,17 @@ import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components
  * going up a better one" — so it is shown, because a number without a direction
  * is a number somebody has to remember the meaning of.
  *
- * ## What is not here
+ * ## What is here, and what is next door
  *
- * Adding and editing the recurring jobs, the metric settings, the quarter goals
- * and the monthly report. Those are configuration and reading, and they are the
- * parts that benefit from a desk. Marking a job done is here, because that is
- * the other recurring act and it is one tap.
+ * This screen is the week itself: the numbers, what happened, and marking a job
+ * done — the acts. The quarter's goals, the monthly report and the check-in day
+ * are each a screen of their own, linked from the bottom, because they are a
+ * different frequency: goals are set once a quarter and read weekly, the report
+ * is read once a month, and the check-in day is changed about never.
+ *
+ * Still not here: adding and editing the recurring jobs, and choosing which
+ * numbers the project tracks. Both are the project's shape rather than this
+ * week's or this quarter's intent, and both are long forms.
  */
 
 interface Metric { id: string; label: string; unit: string; better: "up" | "down"; advice?: string }
@@ -54,6 +59,12 @@ interface Checkin {
   numbers: Record<string, number | null> | null;
   wentRight: string | null;
   wentWrong: string | null;
+  /**
+   * What was made of the week: Nova's reading when it was asked for, and
+   * otherwise the one worked out from the numbers alone. Stored on the check-in,
+   * so it survives the page and is here on the next visit.
+   */
+  reply: string | null;
 }
 interface Rhythm {
   today: string;
@@ -69,6 +80,7 @@ interface Rhythm {
 
 export default function ProjectRhythm() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const qc = useQueryClient();
   const { notice, show, clear } = useNotice();
 
@@ -121,6 +133,27 @@ export default function ProjectRhythm() {
       show({ text: "Marked done.", tone: "success" });
     },
     onError: (e) => show({ text: errText(e, "Couldn't mark that done."), tone: "error" }),
+  });
+
+  /*
+   * Nova's reading of the week. Only offered once the week is filed, because it
+   * is a reply *to* the numbers — and it costs credits, so it is a tap somebody
+   * makes rather than something that happens on open.
+   *
+   * The route answers 200 with `ai: false` and a sentence when the model is
+   * unavailable or fails, having charged nothing, so a refusal is a message and
+   * not an error.
+   */
+  const askNova = useMutation({
+    mutationFn: () => api<{ checkin: Checkin; ai: boolean; message?: string }>(
+      `/api/projects/${id}/rhythm/checkins/${q.data!.weekOf}/nova`,
+      { method: "POST", body: {} },
+    ),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["rhythm", id] });
+      show({ text: r.message ?? "Nova had a look at your week.", tone: r.ai ? "success" : "info" });
+    },
+    onError: (e) => show({ text: errText(e, "Couldn't ask Nova about this week."), tone: "error" }),
   });
 
   if (isNotFound(q.error)) return <NotFoundScreen title="This week" />;
@@ -230,6 +263,36 @@ export default function ProjectRhythm() {
           </Text>
         </TitledCard>
 
+        {/*
+          * What was made of the week.
+          *
+          * There is always a reply once a week is filed: the route recomputes one
+          * from the numbers on every save. So this card never offers to produce a
+          * reading — it shows the one there is, and offers to have Nova take a
+          * closer look, which replaces it with a better-written one.
+          *
+          * It deliberately does not claim which of the two is on screen. Nothing
+          * is stored saying where a reply came from, so after a reload the phone
+          * cannot know, and a label that guessed would be wrong half the time.
+          */}
+        {filed && d.current?.reply ? (
+          <TitledCard icon="sparkles" title="What to make of it">
+            <Text style={[text.body, { lineHeight: 21 }]}>{d.current.reply}</Text>
+            <Btn
+              label="Ask Nova to look closer"
+              variant="outline"
+              style={{ marginTop: spacing.sm }}
+              loading={askNova.isPending}
+              onPress={() => askNova.mutate()}
+              testID="ask-nova"
+            />
+            <Text style={text.small}>
+              Nova compares this week with the weeks before it. It costs credits; the reading above is
+              free and is worked out from the numbers.
+            </Text>
+          </TitledCard>
+        ) : null}
+
         {d.jobs.length ? (
           <TitledCard icon="repeat" title="Recurring jobs">
             {d.jobs.filter((j) => j.active).map((j) => (
@@ -263,10 +326,41 @@ export default function ProjectRhythm() {
           </TitledCard>
         ) : null}
 
+        {/*
+          * The rest of the rhythm, each at its own frequency. Rows rather than a
+          * sentence pointing at the web, which is what was here before: all three
+          * of these are on the phone now.
+          */}
+        <TitledCard icon="compass" title="The rest of the rhythm">
+          <MenuRow
+            icon="flag"
+            title="This quarter's goals"
+            subtitle="What the weeks are adding up to, and how far along they are"
+            onPress={() => router.push(`/rhythm/goals/${id}` as any)}
+            testID="link-goals"
+          />
+          <MenuRow
+            icon="calendar-outline"
+            title="Last month"
+            subtitle="How the numbers moved, what slipped, and what to fix next"
+            tint={colors.info}
+            onPress={() => router.push(`/rhythm/report/${id}` as any)}
+            testID="link-report"
+          />
+          <MenuRow
+            icon="alarm"
+            title="Check-in day and reminders"
+            subtitle="Which day the week is due, and who gets chased"
+            tint={colors.textSecondary}
+            onPress={() => router.push(`/rhythm/settings/${id}` as any)}
+            testID="link-rhythm-settings"
+          />
+        </TitledCard>
+
         <Callout
           icon="desktop"
           tone="info"
-          body="Choosing which numbers to track, editing the recurring jobs, the quarter goals and the monthly report are on the web. This screen is the week itself."
+          body="Editing the recurring jobs, and choosing which numbers this project tracks, are still on the web — both are the project's shape rather than this week's."
         />
         <View style={{ height: spacing.xl }} />
       </Screen>

@@ -123,6 +123,21 @@ statically. Worth doing, not urgent now that the sweep exists.
 
 ## Closed
 
+- **The weekly rhythm's other half on the phone** — closed 2026-10-02. The
+  check-in was there; the quarter's goals, the monthly report and the check-in
+  day were not, so three of eleven rhythm routes had a caller. Now all but the
+  two long setup forms (the recurring jobs' CRUD, and which numbers a project
+  tracks) do. Holding test:
+  [rhythm-and-contest-entry.test.ts](../test/unit/rhythm-and-contest-entry.test.ts).
+
+- **Filing a contest entry** — closed 2026-10-02 on the phone, and it was missing
+  from both clients: `POST /api/contests/:id/submit` had no caller anywhere, and
+  the list route carried only `isParticipant` so nothing could tell a joiner from
+  an entrant. The routes now carry the viewer's own `submission` (null until
+  filed), the URL is parsed rather than merely truthy, and the refusals say which
+  way the contest is shut. **The web still cannot file an entry** — the phone is
+  ahead of it here, which is worth doing something about.
+
 - **Push notifications on the phone** — were absent end to end; built 2026-10-02.
   A notification used to exist only while the app was open. Now: `push_tokens` and
   `push_receipts` (migration `0090`), a `users.push_enabled` switch, sending over

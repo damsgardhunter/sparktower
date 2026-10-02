@@ -6548,23 +6548,48 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     const allContests = await storage.getContests(status ? { status: status as string } : undefined);
     const userId = req.user?.id as string | undefined;
     if (userId) {
+      /*
+       * The viewer's own entry, not just whether they have one.
+       *
+       * `isParticipant` alone is why entering a contest was a dead end on both
+       * clients: the button turned into "Entered" and nothing could say whether
+       * the work had been filed, so nothing offered to file it. `submission` is
+       * null until they do, and only ever their own — a contest's entries are
+       * not public before judging.
+       */
       const enriched = await Promise.all(
-        allContests.map(async (c) => ({
-          ...c,
-          isParticipant: await storage.isContestParticipant(c.id, userId),
-        }))
+        allContests.map(async (c) => {
+          const mine = await storage.contestEntryFor(c.id, userId);
+          return {
+            ...c,
+            isParticipant: !!mine,
+            /*
+             * Null until they have actually filed. The row existing means they
+             * joined — that is `isParticipant` — and a `{ url: null }` object
+             * here reads as "has an entry" to anything checking truthiness, which
+             * is how the phone came to offer "Change entry" to somebody who had
+             * only joined.
+             */
+            submission: mine?.submissionUrl ? { url: mine.submissionUrl, note: mine.submissionNote } : null,
+          };
+        })
       );
       return res.json(enriched);
     }
-    res.json(allContests.map(c => ({ ...c, isParticipant: false })));
+    res.json(allContests.map(c => ({ ...c, isParticipant: false, submission: null })));
   });
 
   app.get("/api/contests/:id", async (req: any, res) => {
     const contest = await storage.getContest(req.params.id);
     if (!contest) return res.status(404).json({ message: "Contest not found" });
     const userId = req.user?.id as string | undefined;
-    const isParticipant = userId ? await storage.isContestParticipant(contest.id, userId) : false;
-    res.json({ ...contest, isParticipant });
+    const mine = userId ? await storage.contestEntryFor(contest.id, userId) : null;
+    res.json({
+      ...contest,
+      isParticipant: !!mine,
+      /* Null until filed — see the list route above for why that matters. */
+      submission: mine?.submissionUrl ? { url: mine.submissionUrl, note: mine.submissionNote } : null,
+    });
   });
 
   app.get("/api/contests/:id/participants", async (req, res) => {
@@ -6612,15 +6637,53 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
-      const { submissionUrl, submissionNote } = req.body;
-      if (!submissionUrl) return res.status(400).json({ message: "submissionUrl is required" });
+      /*
+       * The link is the entry, so it is checked rather than taken on trust.
+       *
+       * It used to be a truthiness test, which accepted "asdf" and a thousand
+       * characters of pasted text — and the judge is the one who would find out.
+       * Both messages are written for the person typing, not for the field name:
+       * "submissionUrl is required" is a sentence for whoever wrote the route.
+       */
+      const rawUrl = typeof req.body?.submissionUrl === "string" ? req.body.submissionUrl.trim() : "";
+      if (!rawUrl) {
+        return res.status(400).json({ message: "Add a link to what you built.", code: "invalid_input", field: "submissionUrl" });
+      }
+      if (rawUrl.length > 2000) {
+        return res.status(400).json({ message: "That link is too long.", code: "invalid_input", field: "submissionUrl" });
+      }
+      let submissionUrl: string;
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("scheme");
+        submissionUrl = parsed.toString();
+      } catch {
+        return res.status(400).json({
+          message: "That doesn't look like a link. It needs to start with https://",
+          code: "invalid_input", field: "submissionUrl",
+        });
+      }
+      const submissionNote = typeof req.body?.submissionNote === "string"
+        ? req.body.submissionNote.trim().slice(0, 2000) || null
+        : null;
+
       const contest = await storage.getContest(contestId);
       if (!contest) return res.status(404).json({ message: "Contest not found" });
       if (contest.status !== "active") {
-        return res.status(400).json({ message: "Contest is not accepting submissions" });
+        /*
+         * Says which way it is shut. Somebody who entered an upcoming contest
+         * and came back to file is in a different position from somebody who
+         * missed the deadline, and "not accepting submissions" told neither.
+         */
+        return res.status(400).json({
+          message: contest.status === "upcoming"
+            ? "This contest hasn't opened yet. You're entered, and you can file your work once it does."
+            : "This contest has closed for entries.",
+          code: "contest_closed",
+        });
       }
       const isParticipant = await storage.isContestParticipant(contestId, userId);
-      if (!isParticipant) return res.status(400).json({ message: "You must join the contest first" });
+      if (!isParticipant) return res.status(400).json({ message: "Enter the contest first.", code: "not_entered" });
       const updated = await storage.submitToContest(contestId, userId, submissionUrl, submissionNote);
       res.json(updated);
     } catch (error) {

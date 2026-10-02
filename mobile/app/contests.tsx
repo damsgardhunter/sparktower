@@ -1,11 +1,12 @@
-import { ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { ScrollView, Text, TextInput, View } from "react-native";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
 import { Btn, Empty, Icon, Loading, NovaGradient, errText, type IconName } from "../src/components/ui";
-import { NoticeBanner, useNotice } from "../src/components/Sheet";
+import { NoticeBanner, Sheet, useNotice } from "../src/components/Sheet";
 import { FeaturedContestCard } from "../src/components/FeaturedContest";
 
 interface Community {
@@ -32,6 +33,13 @@ interface Contest {
   maxParticipants: number | null;
   participantCount: number;
   isParticipant: boolean;
+  /**
+   * The viewer's own entry, once they have filed one. Null while they have only
+   * joined — which is the distinction that did not exist until now, and the
+   * reason entering was a dead end on both clients: nothing could tell somebody
+   * who was in from somebody who had actually filed, so nothing offered to file.
+   */
+  submission: { url: string | null; note: string | null } | null;
 }
 
 /* The two a person can still get into. Judging and completed are history. */
@@ -81,6 +89,41 @@ export default function ContestsAndCommunities() {
        from a tap that did not land. */
     onError: (e, c) => show({ tone: "error", text: errText(e, `Couldn't enter ${c.title}. Try again.`) }),
   });
+  /*
+   * Filing the work. A sheet rather than a screen: it is a link and a sentence,
+   * and a contest entered on a phone is usually filed from the same place a
+   * minute later.
+   */
+  const [filing, setFiling] = useState<Contest | null>(null);
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+
+  const openFiling = (c: Contest) => {
+    /* Seeded from what is already filed, so changing a link is an edit and not a retype. */
+    setUrl(c.submission?.url ?? "");
+    setNote(c.submission?.note ?? "");
+    setFiling(c);
+  };
+
+  const submit = useMutation({
+    mutationFn: (c: Contest) =>
+      api(`/api/contests/${c.id}/submit`, {
+        method: "POST",
+        body: { submissionUrl: url.trim(), submissionNote: note.trim() || undefined },
+      }),
+    onSuccess: (_r, c) => {
+      setFiling(null);
+      void qc.invalidateQueries({ queryKey: CONTESTS_KEY });
+      show({ text: c.submission ? "Entry updated." : "Entry filed. Good luck.", tone: "success" });
+    },
+    /*
+     * The server's own sentence, because every refusal here is actionable and
+     * specific: the link isn't a link, the contest hasn't opened, it has closed.
+     * A generic message would leave somebody retyping a perfectly good URL.
+     */
+    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't file that entry.") }),
+  });
+
   const label = { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.8, textTransform: "uppercase" as const };
 
   return (
@@ -135,19 +178,43 @@ export default function ContestsAndCommunities() {
                   <Text numberOfLines={3} style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>{c.description}</Text>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xs }}>
                     <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
-                      {c.participantCount.toLocaleString()}{c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered
+                      {c.submission?.url
+                        /* What they filed, so the card is a receipt and not just a state. */
+                        ? "Your entry is in"
+                        : `${c.participantCount.toLocaleString()}${c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered`}
                     </Text>
                     {user ? (
-                      <Btn
-                        small
-                        label={c.isParticipant ? "Entered" : full ? "Full" : "Enter"}
-                        icon={c.isParticipant ? "checkmark" : undefined}
-                        variant={c.isParticipant ? "outline" : "primary"}
-                        disabled={c.isParticipant || full}
-                        loading={busy}
-                        onPress={() => enter.mutate(c)}
-                        testID={c.isParticipant ? `button-entered-${c.id}` : `button-enter-${c.id}`}
-                      />
+                      c.isParticipant ? (
+                        /*
+                         * In, so the next thing is the work. An upcoming contest
+                         * takes entrants but not submissions, so it says it is
+                         * waiting rather than offering a button the server would
+                         * refuse.
+                         */
+                        c.status === "active" ? (
+                          <Btn
+                            small
+                            label={c.submission ? "Change entry" : "File your entry"}
+                            icon={c.submission ? "checkmark-circle" : "cloud-upload"}
+                            variant={c.submission ? "outline" : "primary"}
+                            onPress={() => openFiling(c)}
+                            testID={`button-file-${c.id}`}
+                          />
+                        ) : (
+                          <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular }}>
+                            Entered — file your work when it opens
+                          </Text>
+                        )
+                      ) : (
+                        <Btn
+                          small
+                          label={full ? "Full" : "Enter"}
+                          disabled={full}
+                          loading={busy}
+                          onPress={() => enter.mutate(c)}
+                          testID={`button-enter-${c.id}`}
+                        />
+                      )
                     ) : null}
                   </View>
                 </View>
@@ -189,6 +256,68 @@ export default function ContestsAndCommunities() {
           })}
         </View>
       </ScrollView>
+
+      {/*
+        * Filing the work: a link, and optionally a sentence about it. The link is
+        * the entry — the note is for the thing a judge would otherwise have to
+        * guess, like which part you built.
+        */}
+      <Sheet
+        visible={!!filing}
+        onClose={() => setFiling(null)}
+        title={filing?.submission ? "Change your entry" : "File your entry"}
+        subtitle={filing?.title}
+      >
+        <Text style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular, marginBottom: spacing.sm }}>
+          A link to what you built — a live page, a repository, a video. You can change it
+          until entries close.
+        </Text>
+        <TextInput
+          value={url}
+          onChangeText={setUrl}
+          placeholder="https://"
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          style={{
+            backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border,
+            paddingHorizontal: spacing.md, paddingVertical: spacing.sm, color: colors.text,
+            fontSize: font.sm, fontFamily: fontFamily.regular,
+          }}
+          testID="input-submission-url"
+        />
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs + 1, fontFamily: fontFamily.regular, marginTop: spacing.md, marginBottom: 4 }}>
+          Anything the judge should know (optional)
+        </Text>
+        <TextInput
+          value={note}
+          onChangeText={setNote}
+          multiline
+          maxLength={2000}
+          placeholder="What it does, and what you'd do next."
+          placeholderTextColor={colors.textTertiary}
+          style={{
+            backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border,
+            padding: spacing.md, minHeight: 72, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular,
+          }}
+          testID="input-submission-note"
+        />
+        <Btn
+          label={filing?.submission ? "Save the change" : "File it"}
+          style={{ marginTop: spacing.lg }}
+          loading={submit.isPending}
+          /*
+           * Only the obviously-empty case is stopped here. Whether a link is a
+           * link is the server's judgement, and it says so in a sentence this
+           * screen shows — two places deciding would drift.
+           */
+          disabled={!url.trim() || submit.isPending}
+          onPress={() => filing && submit.mutate(filing)}
+          testID="submit-entry"
+        />
+      </Sheet>
+
       <NoticeBanner notice={notice} onDismiss={clear} />
     </>
   );

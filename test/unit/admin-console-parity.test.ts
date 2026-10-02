@@ -447,10 +447,30 @@ describe("the weekly rhythm on the phone", () => {
     expect(project, "a ship_mvp project has no week to file").toMatch(/goal === "run_company"/);
   });
 
-  it("leaves the configuration on the web", () => {
-    const writesConfig = /rhythm\/(settings|goals)/.test(screen);
-    expect(writesConfig, "choosing metrics and goals is a desk job").toBe(false);
-    expect(screen).toMatch(/are on the web/);
+  /*
+   * This used to assert the opposite: that the week's screen touched neither the
+   * goals nor the settings, because "choosing metrics and goals is a desk job".
+   * Two of the three turned out not to be. The goals are read every week and set
+   * once a quarter, and the check-in day and the reminder list are *about the
+   * phone* — the person who wants the chasing moved to Sunday is holding the
+   * thing it arrives on. So both moved, each to its own screen, and the week's
+   * screen links to them.
+   *
+   * What stayed is the line this now draws: the two long forms about the
+   * project's shape, which are the recurring jobs and which numbers it tracks.
+   */
+  it("keeps the two long setup forms on the web, and nothing else", () => {
+    const code = withoutComments(screen);
+    expect(code, "the week should link to the goals").toContain("/rhythm/goals/");
+    expect(code, "and to the check-in day").toContain("/rhythm/settings/");
+    expect(code, "and to the month").toContain("/rhythm/report/");
+
+    /*
+     * The jobs' own CRUD is the remaining desk job. Marking one done is here and
+     * always was, so the check is on writing a job rather than on the word.
+     */
+    expect(code, "editing the recurring jobs is still a desk job").not.toMatch(/rhythm\/jobs`|rhythm\/jobs\/\$\{[^}]*\}`/);
+    expect(code, "and the screen has to say what is still elsewhere").toMatch(/still on the web/);
   });
 });
 

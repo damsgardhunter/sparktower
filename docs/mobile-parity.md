@@ -145,6 +145,88 @@ What each claim turned out to be, with where the evidence is:
   along with the response shape — the phone cannot import the server's types, so
   every interface on it is a copy, and a copy drifts.
 
+- [x] **The weekly rhythm's other half**, built 2026-10-02. The phone had the
+  check-in — the act — and nothing the act was *for*. Three of the eleven rhythm
+  routes were called; now it is all but the two long setup forms.
+
+  Three new screens, each at its own frequency, linked from the week:
+
+  | Screen | Frequency | What it is |
+  |---|---|---|
+  | `rhythm/goals/[id]` | set once a quarter, read weekly | The quarter's goals, with progress worked out from the weeks filed |
+  | `rhythm/report/[id]` | read once a month | How the numbers moved, what slipped, and the one line about what to fix |
+  | `rhythm/settings/[id]` | changed about never | The check-in day, and who gets chased |
+
+  Why those three and not the other two. The goals are read every week, so being
+  unable to see them on the phone made the check-in an act with no visible point.
+  The report is all reading and short, and the month somebody wants is the one
+  that just ended — so it opens on that rather than on the three days of the
+  current one. The check-in day and the reminder list are *about the phone*: the
+  person who wants the chasing moved to Sunday, or wants to stop being the one
+  chased, is holding the device it arrives on.
+
+  What stayed on the web is the line now drawn: the recurring jobs' own CRUD and
+  choosing which numbers the project tracks. Both are long forms about the
+  project's shape rather than about this week or this quarter.
+
+  Three things worth keeping:
+
+  **Progress is read, never recomputed.** `goalProgress` measures from the
+  quarter's first recorded value to the target — a café aiming for 600 covers
+  from 500 is halfway at 550, not 92% of the way — and allows about two weeks of
+  slack in thirteen before calling a goal behind, because weekly numbers are
+  noisy and a badge that cries "behind" in week two teaches people to ignore the
+  badge. The phone renders the state it is given. A test fails if it starts doing
+  its own arithmetic.
+
+  **An empty reminder list means everyone.** That is the server's default, and a
+  checkbox list that read it as "nobody" would show an unticked team and quietly
+  turn reminders off for a company that had never touched the setting. The two
+  states are drawn differently, and there is a way back to "everyone". Also: the
+  days are numbered 0 = Monday, which is *not* `Date.getDay()`.
+
+  **Nova's reading does not claim to be Nova's.** A reply is recomputed from the
+  numbers on every save, and asking Nova replaces it with a better-written one —
+  but nothing records which is stored, so after a reload the phone cannot know. It
+  shows the reply and offers a closer look, rather than labelling it and being
+  wrong half the time.
+
+- [x] **Filing a contest entry**, built 2026-10-02 — and this one was missing
+  from *both* clients. `POST /api/contests/:id/submit` existed and nothing called
+  it: not the phone, not the web. Entering worked and then dead-ended, because
+  the list route returned only `isParticipant`, so no screen could tell somebody
+  who had joined from somebody who had filed — and so no screen offered to file.
+
+  The server change is small and was the blocker: `GET /api/contests` and
+  `GET /api/contests/:id` now carry the viewer's *own* entry as `submission`, and
+  only their own, since entries are not public before judging. It is null until
+  they have actually filed — a `{ url: null }` object reads as "has an entry" to
+  anything checking truthiness, which is how the first version of the phone's
+  card came to offer "Change entry" to somebody who had only joined. An
+  integration test caught that.
+
+  `submissionUrl` was also a truthiness check, so "asdf" and a thousand
+  characters of pasted prose were both accepted and the judge was the one who
+  found out. It is parsed now, http(s) only, and the refusals say which way the
+  contest is shut: joining takes an `upcoming` contest and submitting does not,
+  so somebody entered early is told they are in and may file when it opens —
+  different from having missed the deadline, and the old message said neither.
+
+  On the phone it is a sheet rather than a screen: it is a link and a sentence,
+  and a contest entered on a phone is usually filed from the same place a minute
+  later. The phone stops an empty box and leaves judging what a link *is* to the
+  server, so there is one opinion and it is the one that answers.
+
+  **The web still has no way to file an entry.** Worth knowing: the phone is now
+  ahead of it here.
+
+  Held by [rhythm-and-contest-entry.test.ts](../test/unit/rhythm-and-contest-entry.test.ts)
+  (17) and four new cases in
+  [contests.test.ts](../test/integration/contests.test.ts). Thirteen deliberate
+  breakages were tried; three got through and are fixed — each one a string that
+  also appeared somewhere else in the same file, which is the failure mode this
+  file's tests keep hitting.
+
 - [x] **Push notifications**, built 2026-10-02. Before this a notification only
   existed while somebody had the app open and looked at the bell, so everything
   the bell is *for* — an invitation, an offer, a backing decision, a teammate
