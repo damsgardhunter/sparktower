@@ -15,6 +15,31 @@ export type ContestDifficulty = (typeof CONTEST_DIFFICULTIES)[number];
 export const CONTEST_STATUSES = ["upcoming", "active", "judging", "completed"] as const;
 export type ContestStatus = (typeof CONTEST_STATUSES)[number];
 
+/**
+ * The contests that score themselves, and what each one means.
+ *
+ * Empty — `scoredBy: null` — is the ordinary kind: entrants file a link and a
+ * person reads them. A named scorer replaces both halves of that: nothing is
+ * filed, and the standings are worked out from what entrants did in the game.
+ *
+ * Declared here rather than taken from the schema's enum so that the admin form
+ * has a label and a sentence to show for each, and so adding one is a decision
+ * made in one place with its wording attached.
+ */
+export const CONTEST_SCORERS = [
+  {
+    id: "ten_years_from_now" as const,
+    label: "Ten Years From Now",
+    /* What the standings rank, said the way an entrant would read it. */
+    blurb: "Each entrant's highest ten-year valuation from a game played while the contest is open. Nothing is filed and nobody judges it.",
+  },
+] as const;
+
+export type ContestScorer = (typeof CONTEST_SCORERS)[number]["id"];
+
+export const isContestScorer = (v: unknown): v is ContestScorer =>
+  typeof v === "string" && CONTEST_SCORERS.some((s) => s.id === v);
+
 export const CONTEST_TITLE_MAX = 120;
 export const CONTEST_DESCRIPTION_MAX = 4000;
 export const CONTEST_PRIZE_MAX = 200;
@@ -34,6 +59,8 @@ export interface ContestInput {
   endDate: Date;
   maxParticipants: number | null;
   promoted: boolean;
+  /** Null for a judged contest; a scorer id for one the product works out itself. */
+  scoredBy: ContestScorer | null;
 }
 
 export type ContestValidation =
@@ -98,6 +125,19 @@ export function validateContestInput(raw: Record<string, unknown>): ContestValid
     maxParticipants = n;
   }
 
+  /*
+   * Which game scores it, if any. An unknown value is refused rather than
+   * ignored: silently storing null would make a contest that promises a prize
+   * for a game and then has nothing to rank, which nobody would notice until
+   * somebody asked where the standings were.
+   */
+  let scoredBy: ContestScorer | null = null;
+  const scorer = text(raw.scoredBy);
+  if (scorer) {
+    if (!isContestScorer(scorer)) return { ok: false, message: "That isn't a game this can score from.", field: "scoredBy" };
+    scoredBy = scorer;
+  }
+
   return {
     ok: true,
     value: {
@@ -108,6 +148,7 @@ export function validateContestInput(raw: Record<string, unknown>): ContestValid
       badgeId: text(raw.badgeId) || null,
       startDate, endDate, maxParticipants,
       promoted: raw.promoted === true || raw.promoted === "true",
+      scoredBy,
     },
   };
 }

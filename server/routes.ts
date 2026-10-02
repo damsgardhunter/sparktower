@@ -24,6 +24,7 @@ import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
 import { registerPushRoutes } from "./push-routes";
+import { standingsFor } from "./contest-standings";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -6634,6 +6635,32 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     })));
   });
 
+  /**
+   * Where everybody stands, for a contest the product scores itself.
+   *
+   * 404 for an ordinary contest rather than an empty table: a judged contest has
+   * no standings, and answering with `[]` would read as "nobody is winning".
+   *
+   * Readable signed out, like the entrants list, and for the same reason — it is
+   * a leaderboard, and a leaderboard nobody can see is not much of one. What it
+   * carries is a name, a face, a number and a rank; nothing about an account.
+   */
+  app.get("/api/contests/:id/standings", async (req, res) => {
+    try {
+      const standings = await standingsFor(String(req.params.id));
+      if (!standings) {
+        return res.status(404).json({
+          message: "This contest is judged rather than scored, so it has no standings.",
+          code: "not_scored",
+        });
+      }
+      res.json(standings);
+    } catch (error) {
+      console.error("Contest standings error:", error);
+      res.status(500).json({ message: "Couldn't work out the standings." });
+    }
+  });
+
   app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
@@ -6698,6 +6725,18 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       const contest = await storage.getContest(contestId);
       if (!contest) return res.status(404).json({ message: "Contest not found" });
+      /*
+       * Nothing to file in a contest the game scores. The screens do not offer
+       * it, so reaching here means a stale page or somebody poking the route —
+       * and accepting a link would put an entry nobody will ever read against a
+       * standing worked out from their games.
+       */
+      if (contest.scoredBy) {
+        return res.status(400).json({
+          message: "This contest is scored from your games, so there's nothing to file. Play a round and your best result counts.",
+          code: "scored_not_judged",
+        });
+      }
       if (contest.status !== "active") {
         /*
          * Says which way it is shut. Somebody who entered an upcoming contest

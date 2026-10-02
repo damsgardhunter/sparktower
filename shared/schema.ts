@@ -591,8 +591,37 @@ export const contests = pgTable("contests", {
   endDate: timestamp("end_date").notNull(),
   maxParticipants: integer("max_participants"),
   promoted: boolean("promoted").default(false).notNull(),
+  /**
+   * What decides this contest, when it isn't a person reading entries.
+   *
+   * Null is the ordinary kind: entrants file a link and somebody judges it.
+   * `ten_years_from_now` means the standings come from the game — each entrant's
+   * best ten-year valuation from a verdict that landed inside the contest's own
+   * dates. Nothing is filed and nothing is judged, so the screens for such a
+   * contest offer a way to play rather than a box to paste a link into.
+   *
+   * The valuation rather than the 0–1000 `overall`, because it is the number the
+   * game puts on its results screen under "nothing competes with it" and the one
+   * a player would call their score. It is a bigint for a reason that matters
+   * here: a few hundred billion overflows a 32-bit integer, so the standings
+   * never round-trip through `contest_participants.score`, which is an integer.
+   *
+   * Standings are computed when read rather than stored. That is what makes "any
+   * game inside the dates" true without a backfill: somebody who plays a good
+   * game on day one and enters on day three still has it counted, and there is no
+   * denormalised best score to go stale or to be wrong after a verdict is
+   * rewritten.
+   */
+  scoredBy: text("scored_by", { enum: ["ten_years_from_now"] }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+/*
+ * The scorers themselves — ids, labels and what each one ranks — live in
+ * shared/contests.ts beside the validation that accepts them, so that adding one
+ * is a single decision with its wording attached. The column's enum above is the
+ * database's copy of those ids.
+ */
 
 export const contestParticipants = pgTable("contest_participants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -3613,6 +3642,12 @@ export const startupGameVerdicts = pgTable("startup_game_verdicts", {
 }, (table) => ({
   /** Every leaderboard is this index, read five ways. */
   byOverall: index("startup_game_verdicts_overall_idx").on(table.overall),
+  /*
+   * A contest scored by this game asks for the verdicts that landed between two
+   * dates. Without this that is a scan of every verdict ever written, on a table
+   * that only grows and is read once per standings page.
+   */
+  byWhen: index("startup_game_verdicts_created_idx").on(table.createdAt),
 }));
 
 export const insertStartupGameSchema = createInsertSchema(startupGames).omit({ id: true, startedAt: true });

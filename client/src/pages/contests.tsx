@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, HandCoins, Layers, Loader2, Rocket, Sparkles, Store, Trophy, Upload, User, Users, type LucideIcon } from "lucide-react";
+import { Check, Gamepad2, HandCoins, Layers, Loader2, Rocket, Sparkles, Store, Trophy, Upload, User, Users, type LucideIcon } from "lucide-react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { money } from "@shared/sprints/budget";
+import { CONTEST_SCORERS } from "@shared/contests";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -32,6 +35,29 @@ interface Contest {
    * nothing offered to file.
    */
   submission: { url: string | null; note: string | null } | null;
+  /** Set when the product scores this contest itself; see CONTEST_SCORERS. */
+  scoredBy: string | null;
+}
+
+/** One row of a scored contest's table, as `GET /api/contests/:id/standings` returns it. */
+interface Standing {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+  best: number | null;
+  gameId: string | null;
+  company: string | null;
+  played: number;
+  rank: number | null;
+}
+
+interface Standings {
+  from: string;
+  to: string;
+  open: boolean;
+  standings: Standing[];
+  played: number;
+  entrants: number;
 }
 
 /** Open to entries, which is what belongs on a page people come to to enter something. */
@@ -116,6 +142,17 @@ export default function Contests() {
     setFiling(c);
   };
 
+  /*
+   * The table for a scored contest, fetched when opened rather than per card: a
+   * standings query is a join across every entrant's games and there is no
+   * reason to run one for a contest nobody clicked.
+   */
+  const [viewing, setViewing] = useState<Contest | null>(null);
+  const standings = useQuery<Standings>({
+    queryKey: [`/api/contests/${viewing?.id}/standings`],
+    enabled: !!viewing,
+  });
+
   const submit = useMutation({
     mutationFn: async (c: Contest) => (await apiRequest("POST", `/api/contests/${c.id}/submit`, {
       submissionUrl: url.trim(),
@@ -182,13 +219,41 @@ export default function Contests() {
                       )}
                     </div>
                     <p className="text-sm text-muted-foreground">{c.description}</p>
+                    {/* How it is decided, when it isn't a person reading entries. */}
+                    {c.scoredBy && (
+                      <p className="text-xs text-muted-foreground inline-flex items-start gap-1.5" data-testid={`text-scored-${c.id}`}>
+                        <Gamepad2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                        {CONTEST_SCORERS.find((sc) => sc.id === c.scoredBy)?.blurb ?? "Scored from your games."}
+                      </p>
+                    )}
                     <div className="mt-auto flex items-center justify-between gap-2 pt-1">
                       <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
                         <Users className="h-3.5 w-3.5" />
                         {c.participantCount.toLocaleString()}{c.maxParticipants != null ? ` of ${c.maxParticipants.toLocaleString()}` : ""} entered
                       </span>
                       {user && (
-                        c.isParticipant ? (
+                        /*
+                         * A scored contest has nothing to file. The next thing is
+                         * to play, and the thing worth seeing is where everybody
+                         * stands — so the buttons are those, for entrants and
+                         * onlookers alike.
+                         */
+                        c.scoredBy ? (
+                          <span className="flex items-center gap-2">
+                            <Button size="sm" variant="outline" onClick={() => setViewing(c)} data-testid={`button-standings-${c.id}`}>
+                              <Trophy className="h-4 w-4 mr-1" />Standings
+                            </Button>
+                            {c.isParticipant ? (
+                              <Button size="sm" asChild data-testid={`button-play-${c.id}`}>
+                                <Link href="/sprints">Play</Link>
+                              </Button>
+                            ) : (
+                              <Button size="sm" disabled={busy || full} onClick={() => enter.mutate(c)} data-testid={`button-enter-${c.id}`}>
+                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : full ? "Full" : "Enter"}
+                              </Button>
+                            )}
+                          </span>
+                        ) : c.isParticipant ? (
                           /*
                            * In, so the next thing is the work. An upcoming contest
                            * takes entrants and not submissions, so it says it is
@@ -265,6 +330,72 @@ export default function Contests() {
             </ul>
           )}
         </section>
+      {/*
+        * The table for a scored contest. Your own row is marked rather than
+        * pulled to the top: a leaderboard that moves you out of position is
+        * harder to read than one that highlights you in place.
+        */}
+      <Dialog open={!!viewing} onOpenChange={(open) => !open && setViewing(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Standings</DialogTitle>
+            <DialogDescription>{viewing?.title}</DialogDescription>
+          </DialogHeader>
+          {standings.isLoading ? (
+            <div className="py-10 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : !standings.data ? (
+            <p className="py-6 text-sm text-muted-foreground">Couldn't load the standings.</p>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {standings.data.played} of {standings.data.entrants} entrants have played.
+                {standings.data.open ? " Still open." : " Closed — these are final."}
+              </p>
+              <ul className="overflow-y-auto divide-y" data-testid="list-standings">
+                {standings.data.standings.map((row) => (
+                  <li
+                    key={row.userId}
+                    className={`flex items-center gap-3 py-2 ${row.userId === user?.id ? "bg-primary/5 rounded-md px-2 -mx-2" : ""}`}
+                    data-testid={`standing-${row.userId}`}
+                  >
+                    <span className="w-8 shrink-0 text-sm tabular-nums text-muted-foreground">
+                      {row.rank ?? "—"}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {row.name}{row.userId === user?.id ? " (you)" : ""}
+                      </span>
+                      {/*
+                        * The company, because a row that says what they built
+                        * reads like something somebody did rather than a number.
+                        */}
+                      {row.company && <span className="block truncate text-xs text-muted-foreground">{row.company}</span>}
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="block text-sm font-semibold tabular-nums">
+                        {row.best == null ? "—" : money(row.best)}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        {row.played === 0 ? "not played" : `${row.played} ${row.played === 1 ? "game" : "games"}`}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {/*
+                * Two entrants who played each other share one verdict, so they
+                * share a number and a rank. Said once here rather than leaving
+                * somebody to wonder whether the table is broken.
+                */}
+              <p className="text-[11px] text-muted-foreground">
+                Best ten-year valuation from a game played while the contest is open. The game is
+                played in pairs, so partners share a result.
+              </p>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/*
         * Filing the work: a link, and optionally a sentence about it. Mirrors the
         * phone's sheet, including leaving the question of whether something is a
