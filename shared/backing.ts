@@ -41,6 +41,22 @@ export interface DigitalRewardDef {
    * so the setup screen warns about them.
    */
   fulfilledBy: "platform" | "creator";
+  /**
+   * Whether the thing exists yet.
+   *
+   * Two of these were offerable and undeliverable: a wallpaper and a profile
+   * frame, both marked `fulfilledBy: "platform"` — meaning *we* generate them —
+   * with nothing anywhere that does. A creator could promise either, a backer
+   * could pay for a rung advertising it, and neither of them would ever receive
+   * it. A reward the platform cannot fulfil is worse than one it does not offer,
+   * because the creator is the one who looks like they broke the promise.
+   *
+   * Left defined rather than deleted. Eight tiers already name these keys, and a
+   * tier referencing a key the catalogue has never heard of renders as a raw
+   * string; this way the label still resolves while nothing new can select it,
+   * and the entry documents what is still to build.
+   */
+  available?: boolean;
 }
 
 export const DIGITAL_REWARDS: DigitalRewardDef[] = [
@@ -67,12 +83,16 @@ export const DIGITAL_REWARDS: DigitalRewardDef[] = [
     label: "Profile frame",
     description: "A ring around their avatar in your project's colours.",
     fulfilledBy: "platform",
+    /* Nothing draws this ring. See `available` above. */
+    available: false,
   },
   {
     key: "wallpaper",
     label: "Wallpaper",
     description: "Downloadable wallpaper with your logo and the tagline.",
     fulfilledBy: "platform",
+    /* Nothing generates this file, and nothing serves it. See `available` above. */
+    available: false,
   },
   {
     key: "certificate",
@@ -272,14 +292,14 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     amountCents: 1500,
     name: "Certified Believer",
     description: "Stickers for your laptop and a badge for your profile.",
-    digitalRewards: ["backer_wall", "believer_number", "digital_badge", "wallpaper"],
+    digitalRewards: ["backer_wall", "believer_number", "digital_badge"],
     merchProducts: ["sticker_pack"],
   },
   {
     amountCents: 3500,
     name: "The Shirt",
     description: "The shirt. Datestamped, so everyone knows how early you were.",
-    digitalRewards: ["backer_wall", "believer_number", "digital_badge", "wallpaper", "certificate"],
+    digitalRewards: ["backer_wall", "believer_number", "digital_badge", "certificate"],
     merchProducts: ["shirt"],
   },
   {
@@ -287,8 +307,8 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     name: "Ride or Die",
     description: "The shirt, plus I record you a thank-you with my actual face.",
     digitalRewards: [
-      "backer_wall", "believer_number", "digital_badge", "wallpaper",
-      "certificate", "profile_frame", "video_thankyou",
+      "backer_wall", "believer_number", "digital_badge",
+      "certificate", "video_thankyou",
     ],
     merchProducts: ["shirt"],
   },
@@ -297,8 +317,8 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     name: "Absolute Unit",
     description: "Founding believer. Permanent credit, and you see everything first.",
     digitalRewards: [
-      "backer_wall", "believer_number", "digital_badge", "wallpaper", "certificate",
-      "profile_frame", "video_thankyou", "founding_believer", "early_access",
+      "backer_wall", "believer_number", "digital_badge", "certificate",
+      "video_thankyou", "founding_believer", "early_access",
     ],
     merchProducts: ["shirt", "pin"],
   },
@@ -359,6 +379,30 @@ export const BADGE_LEVELS: BadgeLevelDef[] = [
   { key: "gold",     label: "Gold",     minCents: 3500,  metal: "polished 18-carat gold",  hex: "#c9962a", accentHex: "#f5d371" },
   { key: "platinum", label: "Platinum", minCents: 7500,  metal: "iridescent platinum",     hex: "#8f9bb3", accentHex: "#d7e2f5" },
 ];
+
+/**
+ * The rewards a creator may actually put on a rung.
+ *
+ * Everything the platform can deliver today. Use this for any list somebody
+ * chooses from; use `DIGITAL_REWARDS` only to look a key up, because a tier
+ * saved before a reward was withdrawn still carries it.
+ */
+export const OFFERABLE_DIGITAL_REWARDS: DigitalRewardDef[] =
+  DIGITAL_REWARDS.filter((r) => r.available !== false);
+
+/** Whether a key still names something a backer would receive. */
+export const isRewardAvailable = (key: string): boolean =>
+  DIGITAL_REWARDS.find((r) => r.key === key)?.available !== false;
+
+/**
+ * A saved tier's rewards, with the withdrawn ones dropped.
+ *
+ * Applied wherever a rung is *advertised*, not just where one is edited: eight
+ * tiers were saved while a wallpaper was still on the menu, and showing it to a
+ * backer is making a promise on the creator's behalf that nothing will keep.
+ */
+export const deliverableRewards = (keys: readonly string[] | null | undefined): string[] =>
+  (keys ?? []).filter(isRewardAvailable);
 
 export type BadgeLevelKey = (typeof BADGE_LEVELS)[number]["key"];
 

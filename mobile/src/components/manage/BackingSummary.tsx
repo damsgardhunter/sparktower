@@ -27,17 +27,13 @@ const CREATOR_TAGLINE = "They believed in me.";
 const PLATFORM_FEE_PERCENT = 10;
 const REFUND_WINDOW_DAYS = 90;
 
-const DIGITAL_REWARDS: { key: string; label: string; description: string; fulfilledBy: "platform" | "creator" }[] = [
-  { key: "backer_wall", label: "Name on the backer wall", description: "Their name listed on the project's public page.", fulfilledBy: "platform" },
-  { key: "believer_number", label: "Believer number", description: "Backer #0047. A low number costs you nothing and people genuinely care.", fulfilledBy: "platform" },
-  { key: "digital_badge", label: "Digital badge", description: "A badge on their account showing they backed you, and how early.", fulfilledBy: "platform" },
-  { key: "profile_frame", label: "Profile frame", description: "A ring around their avatar in your project's colours.", fulfilledBy: "platform" },
-  { key: "wallpaper", label: "Wallpaper", description: "Downloadable wallpaper with your logo and the tagline.", fulfilledBy: "platform" },
-  { key: "certificate", label: "Printable certificate", description: "A dated certificate they can actually print and pin up.", fulfilledBy: "platform" },
-  { key: "founding_believer", label: "Founding believer credit", description: "A permanent marker on their profile naming them as an early backer.", fulfilledBy: "platform" },
-  { key: "early_access", label: "Early access", description: "First through the door on whatever you ship next.", fulfilledBy: "creator" },
-  { key: "video_thankyou", label: "Personal video thank-you", description: "You record and send a short personal thank-you. This one is real work — don't put it on a rung you'll regret.", fulfilledBy: "creator" },
-];
+import { DIGITAL_REWARDS, deliverableRewards } from "../../backerRewards";
+
+/*
+ * Merch stayed here. Unlike the digital rewards it is not mirrored against the
+ * web — nothing compares the two lists — so moving it out would buy nothing and
+ * only separate it from its one caller.
+ */
 const MERCH_PRODUCTS: { key: string; label: string; description: string; estimatedCostCents: number; suggestedMinCents: number }[] = [
   { key: "sticker_pack", label: "Sticker pack", description: "Kiss-cut vinyl. The cheapest thing that still feels like a real object.", estimatedCostCents: 450, suggestedMinCents: 1500 },
   { key: "believer_card", label: "\"I believe'd in them\" card", description: "A printed card with nothing on it but the tagline. Made to be handed to someone.", estimatedCostCents: 350, suggestedMinCents: 1500 },
@@ -203,7 +199,7 @@ export function BackingSummary({ projectId, projectTitle }: { projectId: string;
                 {!!tier.description && <Blurb>{tier.description}</Blurb>}
                 <Row wrap gap={4}>
                   {(tier.merchProducts || []).map((k) => <Tag key={k} solid label={merchProduct(k)?.label || k} />)}
-                  {(tier.digitalRewards || []).map((k) => <Tag key={k} color={colors.textSecondary} label={DIGITAL_REWARDS.find((r) => r.key === k)?.label || k} />)}
+                  {deliverableRewards(tier.digitalRewards).map((k) => <Tag key={k} color={colors.textSecondary} label={DIGITAL_REWARDS.find((r) => r.key === k)?.label || k} />)}
                 </Row>
               </View>
               <RowAction icon="create-outline" label="Edit tier" onPress={() => setEditing(tier)} />
@@ -483,7 +479,6 @@ function BackerRecords({ projectId }: { projectId: string }) {
               {b.entitlements?.foundingBeliever && <Tag solid label="Founding" />}
               {b.entitlements?.earlyAccess && <Tag label="Early access" color={colors.textSecondary} />}
               {b.entitlements?.videoThankYou && <Tag label="Video owed" color={colors.textSecondary} />}
-              {b.entitlements?.wallpaper && <Tag label="Wallpaper" color={colors.textSecondary} />}
               {b.merch && <Tag solid label={`${(b.merch.products || []).join(" + ")} · ${b.merch.status ?? "queued"}`} />}
             </Row>
           </View>

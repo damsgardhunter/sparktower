@@ -746,8 +746,22 @@ export function registerBackingRoutes(app: Express) {
         createdAt: projectBackings.createdAt,
         backerFirstName: users.firstName,
         backerImage: users.profileImageUrl,
+        /*
+         * What they pledged, for the badge — and it does not leave the server.
+         * The level is derived below and only the level is sent: bronze through
+         * platinum is a bucket the backer chose to wear, the exact figure is
+         * nobody else's business and this wall has never shown it.
+         */
+        amountCents: projectBackings.amountCents,
+        /* The badge actually minted, which outranks the amount when it exists. */
+        badgeLevel: backerBadges.level,
+        badgeStatus: backerBadges.status,
       }).from(projectBackings)
         .leftJoin(users, eq(users.id, projectBackings.backerId))
+        .leftJoin(backerBadges, and(
+          eq(backerBadges.userId, projectBackings.backerId),
+          eq(backerBadges.projectId, projectBackings.projectId),
+        ))
         .where(and(
           eq(projectBackings.projectId, projectId),
           inArray(projectBackings.status, ["held", "released"]),
@@ -795,6 +809,21 @@ export function registerBackingRoutes(app: Express) {
           message: w.message,
           tierName: w.tierName,
           createdAt: w.createdAt,
+          /*
+           * The badge they earned, beside the name.
+           *
+           * The minted badge's own level where one exists, and otherwise the
+           * level the pledge clears — a badge is drawn asynchronously, so a
+           * backer who paid a minute ago has earned gold and has no row yet, and
+           * showing nothing there would read as having earned nothing.
+           *
+           * Shown for anonymous backers too. Anonymity hides who they are, not
+           * that somebody at that level is on the wall, and the tier name beside
+           * it has always been shown anonymously for the same reason.
+           */
+          badgeLevel: w.badgeLevel ?? badgeLevelForAmount(w.amountCents ?? 0).key,
+          /* Whether the art is drawn yet, so the wall can show a plain ring until it is. */
+          badgeReady: w.badgeStatus === "ready",
         })),
         raisedCents: totals?.raisedCents ?? 0,
         backers: totals?.backers ?? 0,

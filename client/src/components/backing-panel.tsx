@@ -19,7 +19,7 @@ import {
   Loader2, Heart, Shirt, ShieldCheck, Lock, Check, Users,
 } from "lucide-react";
 import {
-  BELIEVER_TAGLINE, DIGITAL_REWARDS, TIP_PRESET_PERCENTS, MIN_PLEDGE_CENTS,
+  BELIEVER_TAGLINE, DIGITAL_REWARDS, deliverableRewards, TIP_PRESET_PERCENTS, MIN_PLEDGE_CENTS,
   merchProduct, formatBelieverNumber, tierForAmount, tierNeedsShipping,
   badgeLevel, badgeLevelForAmount, BADGE_LEVELS,
   type MerchConfig,
@@ -247,7 +247,7 @@ export function BackingPanel({
                         <Shirt className="h-2.5 w-2.5" />{merchProduct(k)?.label || k}
                       </Badge>
                     ))}
-                    {(tier.digitalRewards || []).map((k) => (
+                    {deliverableRewards(tier.digitalRewards).map((k) => (
                       <Badge key={k} variant="secondary" className="text-[10px]">
                         {DIGITAL_REWARDS.find((r) => r.key === k)?.label || k}
                       </Badge>
@@ -487,7 +487,7 @@ function PledgeDialog({
                     <Shirt className="h-2.5 w-2.5" />{merchProduct(k)?.label || k}
                   </Badge>
                 ))}
-                {(earned.digitalRewards || []).map((k) => (
+                {deliverableRewards(earned.digitalRewards).map((k) => (
                   <Badge key={k} variant="secondary" className="text-[10px]">
                     {DIGITAL_REWARDS.find((r) => r.key === k)?.label || k}
                   </Badge>

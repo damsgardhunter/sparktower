@@ -42,6 +42,8 @@ import { auditStageLabel } from "../../client/src/lib/audit-status";
 import * as phoneBuild from "../../mobile/src/buildStages";
 import { buildThrough, buildProgress, buildStepLine, buildElapsedSeconds, buildStageLabel, STAGE_ORDER } from "../../client/src/lib/build-status";
 import { BUILD_STAGE_COPY, BUILD_STEP_CAP } from "@shared/nova-build";
+import * as phoneRewards from "../../mobile/src/backerRewards";
+import { DIGITAL_REWARDS, OFFERABLE_DIGITAL_REWARDS, deliverableRewards, isRewardAvailable } from "@shared/backing";
 import * as webProblem from "@shared/problem-reports";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
@@ -705,5 +707,60 @@ describe("a whole-business build in flight", () => {
     expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 700_000)).toBe(700);
     /* And a stale poll never drags it back. */
     expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 100_000)).toBe(600);
+  });
+});
+
+/**
+ * Which backer rewards exist, on both clients.
+ *
+ * Two of them did not: a wallpaper and a profile frame, both declared as things
+ * the *platform* generates, with nothing anywhere that does. A creator could
+ * promise either and a backer could pay for a rung advertising it, and the
+ * creator is the one who looks like they broke the promise.
+ *
+ * Withdrawn rather than deleted, because eight tiers already name those keys and
+ * an unknown key renders to a backer as the raw string. So "which of these can
+ * actually be delivered" is now a fact the two clients have to agree on — and the
+ * phone keeps its own hand copy of the catalogue, which is exactly the shape of
+ * drift this file exists for. A phone still offering a wallpaper would be the web
+ * having withdrawn it and the phone not hearing.
+ */
+describe("which backer rewards exist", () => {
+  it("is the same catalogue, key for key and label for label", () => {
+    expect(phoneRewards.DIGITAL_REWARDS.map((r) => r.key)).toEqual(DIGITAL_REWARDS.map((r) => r.key));
+    for (const web of DIGITAL_REWARDS) {
+      const phone = phoneRewards.DIGITAL_REWARDS.find((r) => r.key === web.key);
+      expect(phone, web.key).toBeTruthy();
+      expect(phone!.label, web.key).toBe(web.label);
+      expect(phone!.fulfilledBy, web.key).toBe(web.fulfilledBy);
+    }
+  });
+
+  it("agrees on which ones cannot be delivered", () => {
+    for (const web of DIGITAL_REWARDS) {
+      expect(phoneRewards.isRewardAvailable(web.key), web.key).toBe(isRewardAvailable(web.key));
+    }
+    expect(phoneRewards.OFFERABLE_DIGITAL_REWARDS.map((r) => r.key))
+      .toEqual(OFFERABLE_DIGITAL_REWARDS.map((r) => r.key));
+  });
+
+  /* Named on both sides, so putting either back has to be done twice and on purpose. */
+  it("withholds the wallpaper and the profile frame on both", () => {
+    for (const key of ["wallpaper", "profile_frame"]) {
+      expect(isRewardAvailable(key), `web: ${key}`).toBe(false);
+      expect(phoneRewards.isRewardAvailable(key), `phone: ${key}`).toBe(false);
+    }
+  });
+
+  it("filters a saved tier the same way", () => {
+    for (const saved of [
+      ["backer_wall", "wallpaper", "digital_badge"],
+      ["profile_frame"],
+      ["backer_wall", "believer_number"],
+      [],
+      ["something_new"],
+    ]) {
+      expect(phoneRewards.deliverableRewards(saved), JSON.stringify(saved)).toEqual(deliverableRewards(saved));
+    }
   });
 });

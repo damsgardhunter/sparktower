@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/user-avatar";
-import { MediaGallery } from "@/components/media-gallery";
+import { BackerWall } from "@/components/backer-wall";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackInbox, useNewFeedbackCount } from "@/components/feedback-inbox";
@@ -14,14 +14,14 @@ import { ProjectDiscussion, CommentCount } from "@/components/project-discussion
 import { ProjectOverview } from "@/components/project-overview";
 import {
   Loader2, LayoutDashboard, Users, Newspaper, Briefcase, Heart,
-  Images, MessagesSquare, ArrowRight,
+  MessagesSquare, ArrowRight,
 } from "lucide-react";
 import { isSectionVisible } from "@shared/project-sections";
 import type { Project, ProjectMember, User, UserProfile } from "@shared/schema";
 
 type MemberWithUser = ProjectMember & { user: User; profile?: UserProfile };
 
-type TabId = "overview" | "updates" | "media" | "discussion" | "followers";
+type TabId = "overview" | "updates" | "backers" | "discussion" | "followers";
 
 /*
  * Five tabs, not nine.
@@ -41,7 +41,7 @@ type TabId = "overview" | "updates" | "media" | "discussion" | "followers";
 const TABS: { id: TabId; label: string; icon: typeof Users }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "updates", label: "Updates", icon: Newspaper },
-  { id: "media", label: "Media", icon: Images },
+  { id: "backers", label: "Backer wall", icon: Heart },
   { id: "discussion", label: "Discussion", icon: MessagesSquare },
   { id: "followers", label: "Followers", icon: Heart },
 ];
@@ -127,7 +127,13 @@ export function ProjectSocialTabs({
       case "followers": return followerCount || null;
       case "discussion": return totalComments || null;
       case "updates": return updates?.posts?.length ?? null;
-      case "media": return project.mediaUrls?.length || null;
+      /*
+       * No count on the wall. It comes from a different endpoint than this
+       * component reads, and a tab that said "Backer wall 0" before that request
+       * landed would be announcing the project has no backers — the one thing a
+       * visitor should not be told wrongly.
+       */
+      case "backers": return null;
       default: return null;
     }
   };
@@ -264,9 +270,7 @@ export function ProjectSocialTabs({
         </div>
       )}
 
-      {tab === "media" && (
-        <MediaGallery projectId={project.id} mediaUrls={project.mediaUrls || []} isOwner={isOwner} />
-      )}
+      {tab === "backers" && <BackerWall projectId={project.id} />}
 
       {tab === "discussion" && (
         <Card>
