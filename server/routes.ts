@@ -23,6 +23,7 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { registerPushRoutes } from "./push-routes";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -460,6 +461,7 @@ export async function registerRoutes(
   registerProjectDiscussionRoutes(app);
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
+  registerPushRoutes(app);
   registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);

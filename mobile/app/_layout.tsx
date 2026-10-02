@@ -8,6 +8,7 @@ import {
   SpaceGrotesk_400Regular, SpaceGrotesk_500Medium,
   SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
 } from "@expo-google-fonts/space-grotesk";
+import { usePush } from "../src/hooks/usePush";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
 import { ErrorScreen } from "../src/components/ErrorBoundary";
 import { PayWallHost } from "../src/components/Pay";
@@ -40,6 +41,15 @@ function AuthGate() {
   const segments = useSegments();
   const router = useRouter();
   const onboarded = Boolean(profile?.isOnboarded);
+
+  /*
+   * Keeps this phone's push address current and sends a tapped notification to
+   * the screen it is about. Here because it needs to be inside the router and
+   * to know who is signed in; it asks for nothing — permission is offered on
+   * the Notifications tab, where somebody is looking at what they would have
+   * been told about.
+   */
+  usePush(user?.id);
 
   useEffect(() => {
     if (loading) return;

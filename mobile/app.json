@@ -136,7 +136,17 @@
         }
       ],
       "expo-apple-authentication",
-      "expo-iap"
+      "expo-iap",
+      [
+        "expo-notifications",
+        {
+          "//": "The notification icon on Android. Android draws it as a silhouette — every non-transparent pixel becomes white — so a full-colour logo arrives as a white square. The mark is a single shape and survives that; anything with detail would not.",
+          "icon": "./assets/sparktower-mark.png",
+          "//2": "The colour behind the icon in the status bar. Brand purple, so a notification is recognisable at a glance before it is read.",
+          "color": "#9745B5",
+          "//3": "No `sounds`: the default is what people expect from an app that tells them somebody replied, and a custom sound is a decision to make deliberately rather than by shipping a file."
+        }
+      ]
     ],
     "extra": {
       "//": "Production API. Every build profile in eas.json also sets EXPO_PUBLIC_API_URL explicitly, which wins over this; this value is the safe default if it is ever missing. Local development points at localhost through mobile/.env (see .env.example).",

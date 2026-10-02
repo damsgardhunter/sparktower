@@ -184,3 +184,52 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
 }
+
+/**
+ * Which notifications are worth interrupting somebody for.
+ *
+ * Push is the only thing in SparkTower that reaches a person who is not using
+ * it, so the question each kind has to answer is not "is this interesting" but
+ * "is this worth a buzz in somebody's pocket". Three things are:
+ *
+ *  - **It needs an answer from them.** A connection request, a company wanting
+ *    to talk, an invitation to a season, somebody applying to their project. The
+ *    other side is waiting, and a day of silence costs something.
+ *  - **It is money.** Backed, released, refunded, a decision on a campaign.
+ *  - **It is time-boxed.** A job due, check-in day, a teammate blocked on their
+ *    seat, a build that finished while they were away from the page.
+ *
+ * Everything else is acknowledgement — a reaction, a follow, a post from
+ * somebody they follow, a step marked done — and it belongs in the bell, where
+ * it is waiting when they next look. A product that pushes all of it trains
+ * people to turn push off, and then the twenty-two that mattered do not arrive
+ * either.
+ *
+ * Two deliberate exclusions worth naming, because both look like oversights:
+ *
+ *  - `application_rejected`. They are waiting on an answer, so by the rule above
+ *    it qualifies — but learning you were turned down from a lock screen, with
+ *    no context and nothing to do about it, is a gratuitous way to be told. The
+ *    bell has it when they look. `application_accepted` pushes.
+ *  - `company_powers`. Being *added* to a company changes what somebody can do
+ *    and pushes; having a permission adjusted inside one does not need to reach
+ *    them before they next open the app.
+ */
+export const PUSHABLE_KINDS: readonly NotificationKind[] = [
+  // Somebody spoke to them, by name or under their work.
+  "comment", "reply", "mention",
+  // Waiting on an answer.
+  "connection_request", "recruit_invite", "recruit_answer", "season_invite", "project_application",
+  "application_accepted",
+  // Money.
+  "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  // Time-boxed, or somebody is blocked on them.
+  "job_due", "checkin_due", "sim_nudge", "sprint_left", "nova_build_done",
+  // Their standing changed: added to a company, removed from a project, a result.
+  "company_added", "project_removed", "challenge_result",
+];
+
+const PUSHABLE = new Set<string>(PUSHABLE_KINDS);
+
+/** Whether this kind earns a push, as opposed to only a row in the bell. */
+export const isPushableKind = (kind: string): boolean => PUSHABLE.has(kind);

@@ -77,6 +77,7 @@ export const JOB = {
   promotions: "sparktower/promotion-sync",
   rhythm: "sparktower/company-rhythm",
   retention: "sparktower/retention-sweep",
+  pushReceipts: "sparktower/push-receipts",
 } as const;
 
 export type JobName = (typeof JOB)[keyof typeof JOB];

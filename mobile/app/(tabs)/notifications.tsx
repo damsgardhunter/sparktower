@@ -11,6 +11,7 @@ import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { appHref, isWebHref, openWebSignedIn, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
 import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
 import { useHeaderSpace } from "../../src/components/AppHeader";
+import { PushOffer } from "../../src/components/PushOffer";
 import { TAB_BAR_SPACE } from "./_layout";
 
 interface NotificationItem {
@@ -227,6 +228,8 @@ export default function Notifications() {
         ListHeaderComponent={
           <>
             {header}
+            {/* Offered here, where somebody can see what they would have missed. */}
+            <PushOffer />
             {pendingInvites > 0 && filter !== "posts" && filter !== "projects" && (
               <Pressable
                 onPress={() => router.push("/network/invitations")}

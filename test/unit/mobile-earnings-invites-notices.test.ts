@@ -151,17 +151,21 @@ describe("notifications, on the phone", () => {
     for (const route of routes) expect(all, `the phone never calls ${route}`).toContain(route);
   });
 
-  it("records that push notifications do not exist yet", () => {
+  it("has push, which it did not when this file was written", () => {
     /*
-     * This is the honest half. Nothing in either package depends on
-     * `expo-notifications`, nothing stores a device token, and the server sends
-     * no push — so a notification only exists while the app is open. When push
-     * is built, this test fails and should be replaced by real ones, which is
-     * the point of writing it: it stops "the phone has notifications" from
-     * quietly meaning only the inbox.
+     * This test used to assert the opposite — that `expo-notifications` was
+     * absent — so that "the phone has notifications" could not quietly mean only
+     * the inbox. Push was built on 2026-10-02, so the assertion is inverted
+     * rather than deleted: the pair of them is what keeps the two halves of the
+     * word apart.
+     *
+     * What push actually does is held by test/unit/push-wiring.test.ts and the
+     * two integration suites beside it; this is only the statement that it
+     * exists at all.
      */
-    const pkgs = ["package.json", "mobile/package.json"].map(readSource).join("\n");
-    expect(pkgs).not.toContain("expo-notifications");
-    expect(pkgs).not.toContain("expo-server-sdk");
+    const mobile = JSON.parse(readSource("mobile/package.json"));
+    expect(mobile.dependencies["expo-notifications"]).toBeTruthy();
+    expect(withoutComments(readSource("server/notifications.ts")),
+      "and that the bell is what triggers it").toContain("isPushableKind");
   });
 });

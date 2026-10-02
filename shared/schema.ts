@@ -6,7 +6,7 @@ import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 import { CURRENCY_CODES } from "./currency";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, pushTokens, pushReceipts, type User, type UpsertUser, type MobileRefreshToken, type McpToken, type PushToken, type PushReceipt } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -1430,9 +1430,14 @@ export type PathArtifact = typeof pathArtifacts.$inferSelect;
 /**
  * Something that happened to someone: the hook that brings them back. A post
  * from a builder or project they follow, a comment or reply or reaction on
- * their work, a mention, a follow, a connection. In-app only — SparkTower
- * sends no email or push — so this is what the bell and the "new since you
- * last looked" counts read.
+ * their work, a mention, a follow, a connection. This is what the bell and the
+ * "new since you last looked" counts read.
+ *
+ * Every row is in-app. Some of them are also pushed to a phone — see
+ * PUSHABLE_KINDS in shared/notifications.ts, which is about a third of the kinds
+ * below: the ones that need an answer, carry money, or are time-boxed. The row
+ * here is the record and the push is a courtesy on top of it, so a push that
+ * fails loses nothing.
  *
  * One row per (recipient, actor, kind, target): a second reaction from the
  * same person refreshes the row rather than stacking a duplicate.

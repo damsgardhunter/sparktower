@@ -44,6 +44,13 @@ export default defineConfig({
       "expo-linking": stub("expo-linking"),
       "expo-image-picker": stub("expo-image-picker"),
       "expo-document-picker": stub("expo-document-picker"),
+      /*
+       * Both reached from `src/push.ts`, which calls `setNotificationHandler`
+       * at import time — so a test that imports anything leading there (via
+       * AuthContext, for instance) crashes on the import without these.
+       */
+      "expo-notifications": stub("expo-notifications"),
+      "expo-device": stub("expo-device"),
     },
   },
 });

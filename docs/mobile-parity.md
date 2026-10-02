@@ -145,50 +145,91 @@ What each claim turned out to be, with where the evidence is:
   along with the response shape — the phone cannot import the server's types, so
   every interface on it is a copy, and a copy drifts.
 
-- [ ] **Push notifications do not exist.** Measured 2026-10-01, and worth stating
-  carefully, because "notifications" is two different features and only one of
-  them is missing.
+- [x] **Push notifications**, built 2026-10-02. Before this a notification only
+  existed while somebody had the app open and looked at the bell, so everything
+  the bell is *for* — an invitation, an offer, a backing decision, a teammate
+  blocked on your seat — reached a phone user only if they happened to come back.
 
-  The **in-app inbox is complete**. The phone calls all three routes the server
-  has — `GET /api/notifications`, `GET /api/notifications/unread-count`,
-  `POST /api/notifications/read` — and there is no fourth. Nothing to build.
+  **The in-app inbox was already complete** and is untouched: the phone calls all
+  three routes `server/notifications.ts` has, and there is no fourth.
 
-  **Push is absent end to end.** Neither `package.json` lists
-  `expo-notifications` or `expo-server-sdk`, nothing in the app asks permission
-  or registers a device token, there is no table to store one in, and the server
-  sends nothing. The practical consequence: a notification only exists while
-  somebody has the app open and looks at the bell. Everything the bell is *for* —
-  an invitation, an offer, a season tick, a backing decision — reaches a phone
-  user only if they happen to come back.
+  **What push added**, end to end:
 
-  The one piece of good news is the shape of the server. Every one of the 46
-  emitters across 19 files goes through a single `notify()` in
-  `server/notifications.ts`, and the block list is already filtered *there* for
-  exactly this reason: "filtering here rather than at each of the dozen emitters
-  is the whole point". Push hooks into that one function, after the block filter,
-  and no emitter has to know about it.
+  | Piece | Where |
+  |---|---|
+  | Which kinds earn a buzz | `PUSHABLE_KINDS` in [shared/notifications.ts](../shared/notifications.ts) |
+  | Device addresses, and tickets awaiting a receipt | `push_tokens`, `push_receipts` in [shared/models/auth.ts](../shared/models/auth.ts), migration `0090` |
+  | The per-person switch | `users.push_enabled` |
+  | Sending, and forgetting dead addresses | [server/push.ts](../server/push.ts) |
+  | The four routes | [server/push-routes.ts](../server/push-routes.ts) |
+  | The hook into every emitter | one line in `notify()` |
+  | Registering, permission, taps | [mobile/src/push.ts](../mobile/src/push.ts), [mobile/src/hooks/usePush.ts](../mobile/src/hooks/usePush.ts) |
+  | The offer, and the switch | [mobile/src/components/PushOffer.tsx](../mobile/src/components/PushOffer.tsx) |
 
-  What it takes, in order, and none of it is subtle:
+  Six decisions worth keeping, because each one is where this usually goes wrong:
 
-  1. `expo-notifications` in the app; ask permission at a point where the person
-     has a reason to say yes, not on first launch.
-  2. A table of device tokens — one person has several — with the platform and a
-     last-seen, plus a migration.
-  3. A route the app posts its token to, and one that forgets it on sign-out.
-     A token left behind sends somebody else's notifications to a shared phone.
-  4. `expo-server-sdk` in the server, sending from inside `notify()`, in batches,
-     off the request path. It must not be able to fail a request: the inbox row
-     is the record, and the push is a courtesy on top of it.
-  5. Expo's receipts, read later, because a token goes stale silently — an
-     uninstalled app returns `DeviceNotRegistered` and that token has to be
-     deleted or the error rate climbs for good.
-  6. A per-person switch, since the thing being added is the one way the product
-     interrupts somebody.
+  **A third of the kinds push, not all of them.** The test is not "is this
+  interesting" but "is this worth a buzz in somebody's pocket": it needs an
+  answer, it is money, or it is time-boxed. Reactions, follows and posts from
+  people you follow stay in the bell. A product that pushes everything trains
+  people to turn push off, and then the twenty-two that mattered stop arriving
+  too. Two exclusions are deliberate and argued for in the list's own comment:
+  `application_rejected` (being turned down should not arrive on a lock screen)
+  and `company_powers`.
 
-  Steps 2–5 are the real work and step 5 is the one that gets skipped and then
-  rots. **This is a feature rather than a gap-fill, so it is written down here
-  rather than started** — it wants the choice made deliberately, including
-  whether it comes before launch.
+  **One hook, at the funnel.** Every one of the forty-odd emitters goes through
+  `notify()`, which already filters blocks there for exactly this reason, so push
+  went in beside it — a notification kind added next month is covered without
+  anybody remembering to cover it.
+
+  **The row is the record; the push is a courtesy.** Nothing in the push path may
+  fail a request or roll anything back. It is not awaited, it swallows its own
+  errors, and the wording is built lazily — most notifications go to people with
+  no phone registered, and this path outlives the request that caused it, so work
+  done for nothing is work still running afterwards.
+
+  **The same sentence as the bell.** `notificationText` is shared, so a push is
+  not a third wording of one event, and the excerpt is the second line — the
+  difference between "Sam commented on your post" and knowing whether it needs
+  answering now. A tap goes through `appHref`, the inbox's own tested mapping, so
+  the tray and the row land in the same place.
+
+  **Receipts are read.** This is the step that gets skipped. A push token belongs
+  to an installation and a deleted app never says so — Expo reports it once, in a
+  receipt, fifteen minutes later, on a different endpoint. Unread, the table
+  fills with addresses reaching nobody and every send gets slower for good. So
+  tickets are written down and a job behind the leader lock reads them, deletes
+  the addresses Expo says are gone, and keeps the ones whose failure was about
+  the *send* rather than the device.
+
+  **Permission is asked once, in the right place.** iOS allows the dialog once; a
+  "no" is permanent until somebody finds the switch in Settings, which they do
+  not. So nothing is asked on launch. The offer is a card on the Notifications
+  tab — the one screen where somebody can see what they would otherwise have
+  missed — and the launch path only ever *checks*, then re-registers, because a
+  token can be reissued and a stale one reaches nobody.
+
+  Two switches exist and conflating them would be a trap. The OS one is
+  per-install and awkward to reverse. `users.push_enabled` is the account's: it
+  goes quiet without giving up the permission, survives a reinstall, and keeps
+  the device rows so turning it back on needs no reinstall.
+
+  No server dependency was added — `server/push.ts` talks to Expo over `fetch`.
+  `expo-server-sdk` would be a dependency for chunking and a regex, and would not
+  do the part that needs care. `PUSH_DISABLED=1` is the brake, read per send so
+  it takes effect without a rebuild; the bell fills either way.
+
+  Held by [push.test.ts](../test/integration/push.test.ts) (29),
+  [push-routes.test.ts](../test/integration/push-routes.test.ts) (14) and
+  [push-wiring.test.ts](../test/unit/push-wiring.test.ts) (20). Twenty-two
+  deliberate breakages were tried against them; the two that got through are
+  fixed and described in the commit.
+
+  **Still to do before it reaches anybody:** a development build has to be made
+  for the new native module (`expo-notifications` is not in Expo Go), and
+  iOS needs its APNs key uploaded to EAS — `eas credentials`. Until a build goes
+  out, the server side is live and no phone is registered, which is exactly the
+  quiet no-op it should be.
 
 - [x] **Earnings** (`mobile/app/earnings.tsx`), done 2026-10-01. Somebody paid on
   their phone could neither see what they had earned nor send the next of it to

@@ -72,6 +72,22 @@ which way, is in [ops/deploy.md](ops/deploy.md).
 | `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` | test-mode keys | unset — the webhook tests stub the client | Render → Environment |
 | `PRINTFUL_API_KEY` / `PRINTFUL_STORE_ID` | optional | unset | Render → Environment |
 | `RESEND_API_KEY` / `EMAIL_FROM` | optional — unset, emails are written to the server log and `GET /api/dev/outbox` instead | unset (tests always log) | **required in practice** — see below. `EMAIL_FROM` on a domain verified in Resend, e.g. `SparkTower <hello@yourdomain>` |
+| `EXPO_ACCESS_TOKEN` | unset | unset | unset, unless the Expo project has push security switched on — then every push is refused without it |
+| `PUSH_DISABLED` | unset | unset | unset. Set to `1` to stop every push; the bell still fills |
+
+### Push, and the one switch that turns it off
+
+Push needs no key. Expo accepts anonymous sends for a project's own tokens, so
+`EXPO_ACCESS_TOKEN` is only wanted by a project that has turned push security
+on — and if that is on and the token is absent, *every* push comes back 400
+while the bell carries on working perfectly, which is a confusing way to find
+out. Set it then, and not before.
+
+`PUSH_DISABLED=1` is the brake. It is read per send rather than at import, so
+pulling it takes effect on the next notification without a rebuild, and the
+notification rows are written either way — turning push off makes phones quiet,
+it does not lose anybody's notifications. There is no equivalent for one person:
+that is theirs, in Settings, and it is a column on their account.
 
 ### Email is not optional in production any more
 

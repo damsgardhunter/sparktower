@@ -121,24 +121,21 @@ statically. Worth doing, not urgent now that the sweep exists.
 
 ---
 
-### 5. Push notifications on the phone — absent end to end
-
-Measured 2026-10-01. The in-app inbox is complete and calls all three routes the
-server has; **push does not exist at all** — no `expo-notifications`, no stored
-device token, no server-side sending. So a notification reaches a phone user only
-while they have the app open.
-
-It hooks into one place: every emitter goes through `notify()` in
-`server/notifications.ts`, which already filters blocks there deliberately. The
-work is a token table and migration, register/forget routes, `expo-server-sdk`
-sending off the request path, and reading Expo's receipts so a stale token is
-deleted rather than retried for ever. Full breakdown in
-[mobile-parity.md](../mobile-parity.md).
-
-Open because it is a feature, not a gap-fill, and wants a decision about whether
-it lands before launch — not because it is unclear what to do.
-
 ## Closed
+
+- **Push notifications on the phone** — were absent end to end; built 2026-10-02.
+  A notification used to exist only while the app was open. Now: `push_tokens` and
+  `push_receipts` (migration `0090`), a `users.push_enabled` switch, sending over
+  `fetch` from `server/push.ts`, four routes, one hook at the `notify()` funnel,
+  and the receipt sweep behind the leader lock so an address whose app was deleted
+  is forgotten rather than written to for ever. About a third of the notification
+  kinds push — the ones needing an answer, carrying money, or time-boxed.
+  Holding tests: [push.test.ts](../test/integration/push.test.ts),
+  [push-routes.test.ts](../test/integration/push-routes.test.ts),
+  [push-wiring.test.ts](../test/unit/push-wiring.test.ts) — 63 together, checked
+  by breaking each guarantee on purpose. Reasoning in
+  [mobile-parity.md](mobile-parity.md). Not yet reaching a phone: needs a
+  development build for the new native module and an APNs key in EAS.
 
 | What | Fixed in | Held by |
 |---|---|---|
