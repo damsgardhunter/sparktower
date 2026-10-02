@@ -1,0 +1,1 @@
+CREATE INDEX "sim_ventures_lobby_idx" ON "sim_ventures" USING btree ("phase","phase_ends_at") WHERE "sim_ventures"."phase" in ('filling', 'claiming', 'naming');

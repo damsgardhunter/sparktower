@@ -4184,6 +4184,28 @@ export const simVentures = pgTable("sim_ventures", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
+  /**
+   * The rooms a sweep might have to move, and only those.
+   *
+   * `settleLobbies` and `fillWaitingLobbies` run every sixty seconds, for ever,
+   * and both ask the same shape of question: which rooms are still in a lobby
+   * phase, and is one of their clocks up? The index above cannot answer it — it
+   * leads on `season_id`, and these queries do not know a season — so the sweep
+   * was a sequential scan of every venture ever created, once a minute. Measured
+   * on a copy holding 481 of them: 22ms, every minute, growing for ever.
+   *
+   * Partial, which is the point rather than a refinement. A room leaves these
+   * three phases once and never comes back, so the index only ever holds rooms
+   * that are *currently* in a lobby — a few dozen on a busy market — while
+   * `sim_ventures` itself grows without limit. The sweep's cost stops being a
+   * function of how long the product has been running, which is the property
+   * worth having in a job that runs on a timer.
+   *
+   * Ordered by the deadline because that is the range the sweep tests.
+   */
+  byLobbyDeadline: index("sim_ventures_lobby_idx")
+    .on(table.phase, table.phaseEndsAt)
+    .where(sql`${table.phase} in ('filling', 'claiming', 'naming')`),
 }));
 
 /**
@@ -4222,6 +4244,26 @@ export const simSeats = pgTable("sim_seats", {
    */
   oneRolePerVenture: unique("sim_seats_venture_role").on(table.ventureId, table.role),
   bySeat: index("sim_seats_venture_idx").on(table.ventureId),
+  /**
+   * And the other direction: which rooms is this person in?
+   *
+   * `sim_seats_venture_user` above covers the pair, so looking up one person in
+   * one room was always indexed — but a question about a *person* across every
+   * room has `venture_id` unbound, and a composite index cannot answer one that
+   * does not know its leading column. So those scanned the whole table, and they
+   * are not rare: the rooms list that both clients poll, the rejoin check at the
+   * top of `POST /api/sim/join`, the seated check behind an invite code, and the
+   * company and talent screens. Eight call sites, several of them on a timer.
+   *
+   * This table only grows — a seat is a person's place in a season that
+   * happened, so nothing deletes them — which makes it the worst shape of
+   * missing index: fast in development, fine at launch, and linearly slower
+   * every month in a way no single measurement catches. Measured on a copy
+   * holding 2,405 seats, the rooms list went from a sequential scan of all of
+   * them to an index lookup: 3.2ms to 0.1ms, and the 3.2ms was the part that
+   * grows.
+   */
+  byPerson: index("sim_seats_user_idx").on(table.userId),
 }));
 
 /** What each seat decided in a given year — the input to the engine's tick. */
