@@ -99,6 +99,12 @@ export const DIGITAL_REWARDS: DigitalRewardDef[] = [
     label: "Printable certificate",
     description: "A dated certificate they can actually print and pin up.",
     fulfilledBy: "platform",
+    /*
+     * Nothing renders one, nothing serves one, and there is no print view. The
+     * only trace of it anywhere is a boolean in the owner's records export, which
+     * reports the promise rather than keeping it. See `available` above.
+     */
+    available: false,
   },
   {
     key: "founding_believer",
@@ -299,7 +305,7 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     amountCents: 3500,
     name: "The Shirt",
     description: "The shirt. Datestamped, so everyone knows how early you were.",
-    digitalRewards: ["backer_wall", "believer_number", "digital_badge", "certificate"],
+    digitalRewards: ["backer_wall", "believer_number", "digital_badge"],
     merchProducts: ["shirt"],
   },
   {
@@ -307,8 +313,7 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     name: "Ride or Die",
     description: "The shirt, plus I record you a thank-you with my actual face.",
     digitalRewards: [
-      "backer_wall", "believer_number", "digital_badge",
-      "certificate", "video_thankyou",
+      "backer_wall", "believer_number", "digital_badge", "video_thankyou",
     ],
     merchProducts: ["shirt"],
   },
@@ -317,7 +322,7 @@ export const DEFAULT_TIER_TEMPLATE: TierTemplate[] = [
     name: "Absolute Unit",
     description: "Founding believer. Permanent credit, and you see everything first.",
     digitalRewards: [
-      "backer_wall", "believer_number", "digital_badge", "certificate",
+      "backer_wall", "believer_number", "digital_badge",
       "video_thankyou", "founding_believer", "early_access",
     ],
     merchProducts: ["shirt", "pin"],

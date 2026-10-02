@@ -18,7 +18,7 @@ export const DIGITAL_REWARDS: { key: string; label: string; description: string;
   { key: "digital_badge", label: "Digital badge", description: "A badge on their account showing they backed you, and how early.", fulfilledBy: "platform" },
   { key: "profile_frame", label: "Profile frame", description: "A ring around their avatar in your project's colours.", fulfilledBy: "platform", available: false },
   { key: "wallpaper", label: "Wallpaper", description: "Downloadable wallpaper with your logo and the tagline.", fulfilledBy: "platform", available: false },
-  { key: "certificate", label: "Printable certificate", description: "A dated certificate they can actually print and pin up.", fulfilledBy: "platform" },
+  { key: "certificate", label: "Printable certificate", description: "A dated certificate they can actually print and pin up.", fulfilledBy: "platform", available: false },
   { key: "founding_believer", label: "Founding believer credit", description: "A permanent marker on their profile naming them as an early backer.", fulfilledBy: "platform" },
   { key: "early_access", label: "Early access", description: "First through the door on whatever you ship next.", fulfilledBy: "creator" },
   { key: "video_thankyou", label: "Personal video thank-you", description: "You record and send a short personal thank-you. This one is real work — don't put it on a rung you'll regret.", fulfilledBy: "creator" },

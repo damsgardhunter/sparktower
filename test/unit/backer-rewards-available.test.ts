@@ -23,8 +23,28 @@ import {
   deliverableRewards, isRewardAvailable,
 } from "@shared/backing";
 
-/** The two that do not exist. Named, so re-adding one has to be deliberate. */
-const UNBUILT = ["wallpaper", "profile_frame"];
+/**
+ * The ones that do not exist. Named, so re-adding any has to be deliberate.
+ *
+ * Found by auditing every reward that claims the *platform* fulfils it, which is
+ * a promise only we can keep:
+ *
+ *   backer_wall       — the project's own tab lists them. Built.
+ *   believer_number   — assigned atomically on settlement from the campaign's
+ *                       own counter, and printed beside the name. Built.
+ *   digital_badge     — the row is written when the pledge settles, the backer
+ *                       owns it, the first drawing is free, and the showcase on
+ *                       their profile renders it. Built.
+ *   founding_believer — a crown beside their name in the credits and the
+ *                       showcase. Built.
+ *   certificate       — nothing renders one, nothing serves one, there is no
+ *                       print view. Its only trace anywhere is a boolean in the
+ *                       owner's records export, which reports the promise rather
+ *                       than keeping it.
+ *   wallpaper         — nothing generates the file.
+ *   profile_frame     — nothing draws the ring.
+ */
+const UNBUILT = ["wallpaper", "profile_frame", "certificate"];
 
 describe("rewards the platform cannot deliver", () => {
   it("are still defined, so a saved tier does not render a raw key", () => {
@@ -64,7 +84,7 @@ describe("rewards the platform cannot deliver", () => {
    */
   it("drops them from a tier saved before they were withdrawn", () => {
     const saved = ["backer_wall", "wallpaper", "digital_badge", "profile_frame", "certificate"];
-    expect(deliverableRewards(saved)).toEqual(["backer_wall", "digital_badge", "certificate"]);
+    expect(deliverableRewards(saved)).toEqual(["backer_wall", "digital_badge"]);
   });
 
   it("leaves a clean tier untouched, and tolerates nothing at all", () => {
@@ -83,5 +103,41 @@ describe("rewards the platform cannot deliver", () => {
   it("passes through a key it does not recognise rather than swallowing it", () => {
     expect(isRewardAvailable("something_new")).toBe(true);
     expect(deliverableRewards(["something_new"])).toEqual(["something_new"]);
+  });
+});
+
+/**
+ * The other half of the audit, and the part worth keeping.
+ *
+ * `fulfilledBy: "platform"` is a promise only we can keep, so every reward still
+ * carrying it has to be something that actually reaches the backer. Four do, and
+ * the test names where each is delivered — not because the assertion can check
+ * that, but because the next person to add a platform reward should have to write
+ * the same line, and will notice if they cannot.
+ */
+describe("every platform reward that is still offerable", () => {
+  const DELIVERED_BY: Record<string, string> = {
+    backer_wall: "client/src/components/backer-wall.tsx — the project's Backer wall tab",
+    believer_number: "server/backing-routes.ts — assigned on settlement, shown beside the name",
+    digital_badge: "server/backer-badges.ts + backer-badge-showcase.tsx — row on settlement, first drawing free",
+    founding_believer: "backer-credits.tsx + backer-badge-showcase.tsx — the crown",
+  };
+
+  it("has somewhere it is actually delivered", () => {
+    const platform = OFFERABLE_DIGITAL_REWARDS.filter((r) => r.fulfilledBy === "platform");
+    for (const r of platform) {
+      expect(
+        DELIVERED_BY[r.key],
+        `${r.key} says the platform fulfils it. Name where, or mark it available: false — `
+        + "an offerable reward nothing delivers makes the creator look like they broke the promise.",
+      ).toBeTruthy();
+    }
+  });
+
+  /* Creator rewards are the creator's to keep, so they need no such proof. */
+  it("leaves creator-fulfilled rewards alone", () => {
+    const creator = OFFERABLE_DIGITAL_REWARDS.filter((r) => r.fulfilledBy === "creator").map((r) => r.key);
+    expect(creator).toContain("early_access");
+    expect(creator).toContain("video_thankyou");
   });
 });
