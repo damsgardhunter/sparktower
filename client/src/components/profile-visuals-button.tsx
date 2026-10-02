@@ -7,8 +7,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 import {
-  Loader2, Sparkles, ExternalLink, Trash2, RefreshCw, Upload, Eye, EyeOff, ImageIcon,
+  Loader2, Sparkles, ExternalLink, Trash2, RefreshCw, Upload, Eye, EyeOff, ImageIcon, Download,
 } from "lucide-react";
+import { downloadUrl } from "@/components/download-image";
 import type { Project } from "@shared/schema";
 import { CREDIT_COSTS } from "@shared/plans";
 import {
@@ -255,6 +256,22 @@ function VisualTile({ project, def, canRedraw, allBusy, onChanged }: {
           >
             <Upload className="h-5 w-5" />
           </TileAction>
+          {/*
+            * Take it away. These were paid for, and a picture that can only be
+            * looked at inside the product is not much of a deliverable.
+            */}
+          {src && (
+            <TileAction
+              label="Download this image"
+              short="Save"
+              disabled={false}
+              href={downloadUrl(src, `${project.title} ${def.label}`)}
+              download={`${project.title} ${def.label}`}
+              testId={`button-download-visual-${slot}`}
+            >
+              <Download className="h-5 w-5" />
+            </TileAction>
+          )}
           {src && (
             <TileAction
               label={hidden ? "Show on page" : "Hide from page"}
@@ -285,29 +302,55 @@ function VisualTile({ project, def, canRedraw, allBusy, onChanged }: {
   );
 }
 
-function TileAction({ label, short, disabled, onClick, testId, children }: {
+/**
+ * One action in a tile's hover wash.
+ *
+ * `href` makes it a link instead of a button, which the download needs: an
+ * attachment response is something the browser handles, and a link gets the
+ * progress, the downloads shelf and "Save link as" for free. Everything else
+ * about it — the wash, the icon, the word underneath, the tooltip — stays the
+ * same, so the download does not look like a different kind of control.
+ */
+function TileAction({ label, short, disabled, onClick, href, download, testId, children }: {
   label: string;
   /** Shown under the icon; the tooltip carries the full label. */
   short: string;
   disabled: boolean;
-  onClick: () => void;
+  onClick?: () => void;
+  href?: string;
+  download?: string;
   testId: string;
   children: React.ReactNode;
 }) {
+  const shared = "flex-1 min-w-0 flex flex-col items-center justify-center gap-1 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] transition-colors hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none disabled:opacity-40 disabled:hover:bg-transparent";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="flex-1 min-w-0 flex flex-col items-center justify-center gap-1 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] transition-colors hover:bg-white/15 focus-visible:bg-white/15 focus-visible:outline-none disabled:opacity-40 disabled:hover:bg-transparent"
-          aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-          data-testid={testId}
-        >
-          {children}
-          <span className="text-[10px] font-medium leading-none">{short}</span>
-        </button>
+        {href ? (
+          <a
+            href={disabled ? undefined : href}
+            download={download}
+            aria-label={label}
+            aria-disabled={disabled || undefined}
+            className={`${shared} ${disabled ? "opacity-40 pointer-events-none" : ""}`}
+            data-testid={testId}
+          >
+            {children}
+            <span className="text-[10px] font-medium leading-none">{short}</span>
+          </a>
+        ) : (
+          <button
+            type="button"
+            className={shared}
+            aria-label={label}
+            disabled={disabled}
+            onClick={onClick}
+            data-testid={testId}
+          >
+            {children}
+            <span className="text-[10px] font-medium leading-none">{short}</span>
+          </button>
+        )}
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs">{label}</TooltipContent>
     </Tooltip>

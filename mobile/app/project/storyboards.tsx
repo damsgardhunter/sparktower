@@ -8,6 +8,7 @@ import {
   Body, Btn, Card, Chip, Cost, Empty, ErrorNote, Field, H2, Icon, Label, Loading,
   Meta, Row, Screen, errText, plain, timeAgo,
 } from "../../src/components/ui";
+import { SaveImage } from "../../src/components/SaveImage";
 
 /**
  * AI storyboard generator.

@@ -146,6 +146,16 @@
           "color": "#9745B5",
           "//3": "No `sounds`: the default is what people expect from an app that tells them somebody replied, and a custom sound is a decision to make deliberately rather than by shipping a file."
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "//": "Saving a picture Nova drew to the camera roll. Only the *add* permission: the app never reads somebody's photo library through this — choosing a photo to upload is expo-image-picker, which asks for its own and says so.",
+          "savePhotosPermission": "SparkTower saves the logos and images Nova makes for you to your photos, so you can use them anywhere.",
+          "//2": "`photosPermission` is deliberately false. Asking to *read* the library would be a second dialog for something this does not do, and an unused permission is a question at review with no good answer.",
+          "photosPermission": false,
+          "//3": "And no `isAccessMediaLocationEnabled`: the GPS coordinates inside somebody's photos are not this app's business."
+        }
       ]
     ],
     "extra": {

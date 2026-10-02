@@ -25,6 +25,7 @@ import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
 import { registerPushRoutes } from "./push-routes";
 import { standingsFor } from "./contest-standings";
+import { downloadName, extensionFor } from "./download-name";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -4987,11 +4988,23 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       const scene = ((storyboard.scenes as StoryboardScene[]) || [])[index];
       if (!scene) return res.status(404).json({ message: "Scene not found" });
 
+      /*
+       * A storyboard scene is paid-for artwork like any other, so it downloads
+       * too — and it has to be handled here as well as in the objects route,
+       * because an early scene is held inline as a data URL and never becomes an
+       * object at all.
+       */
+      const wantsDownload = req.query?.download === "1" || req.query?.download === "true";
+      const asName = wantsDownload ? String(req.query?.as ?? `scene-${index + 1}`) : undefined;
+
       if (scene.inlineImage) {
         const match = scene.inlineImage.match(/^data:(image\/[\w+.-]+);base64,(.*)$/);
         if (!match) return res.status(404).json({ message: "Scene has no image" });
         res.setHeader("Content-Type", match[1]);
         res.setHeader("Cache-Control", "private, max-age=86400");
+        if (asName) {
+          res.setHeader("Content-Disposition", `attachment; filename="${downloadName(asName, extensionFor(match[1]))}"`);
+        }
         return res.send(Buffer.from(match[2], "base64"));
       }
 
@@ -5000,7 +5013,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       // downloadObject sets Cache-Control to private for private-ACL objects.
       const objStorage = new ObjectStorageService();
       const file = await objStorage.getObjectEntityFile(scene.imagePath);
-      await objStorage.downloadObject(file, res, 86400, scene.contentType);
+      await objStorage.downloadObject(file, res, 86400, scene.contentType, asName);
     } catch (error) {
       if (error instanceof ObjectNotFoundError) {
         return res.status(404).json({ message: "Scene image not found" });

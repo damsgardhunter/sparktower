@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Body, Btn, Empty, Icon, Loading, Meta, Row, assetUri, errText, type IconName } from "./ui";
+import { SaveImage } from "./SaveImage";
 import { Discussion } from "./Discussion";
 import { Composer } from "./Composer";
 import { PostCard } from "./PostCard";
@@ -631,6 +632,16 @@ export function MediaTab({ projectId, mediaUrls, isOwner, notify }: { projectId:
         <Pressable onPress={() => setLightbox(null)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.92)", alignItems: "center", justifyContent: "center" }}>
           {lightbox && <Image source={{ uri: assetUri(lightbox)! }} style={{ width: "100%", height: "80%" }} resizeMode="contain" />}
         </Pressable>
+        {/*
+          * Save whatever is open. Outside the dismiss-on-tap area, or pressing it
+          * would close the lightbox instead — and on top, because the picture
+          * fills the screen.
+          */}
+        {lightbox ? (
+          <View style={{ position: "absolute", top: 48, right: spacing.lg }}>
+            <SaveImage path={lightbox} name="sparktower image" variant="primary" testID="save-lightbox" />
+          </View>
+        ) : null}
       </Modal>
     </Block>
   );

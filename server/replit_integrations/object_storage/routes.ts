@@ -234,7 +234,28 @@ export function registerObjectStorageRoutes(app: Express): void {
        * answered with the original, because a wrong-sized picture beats a
        * missing one and none of this is worth a 500.
        */
-      const width = aclPolicy?.visibility === "private" ? null : wantedWidth(req.query?.w);
+      /*
+       * `?download=1&as=<name>` — save it, rather than show it.
+       *
+       * Every picture in the product is a path through this route, including
+       * everything Nova drew, so this is the one place that makes all of them
+       * downloadable instead of each surface inventing its own endpoint. `as` is
+       * what to call the file; it is sanitised down to word characters before it
+       * reaches a header, which is also what stops it being header injection.
+       *
+       * The browser's own `download` attribute would cover the web, being
+       * same-origin — but not an in-app browser on a phone, and not a native app
+       * fetching bytes. A real `Content-Disposition` covers all three.
+       */
+      const wantsDownload = req.query?.download === "1" || req.query?.download === "true";
+      const attachmentName = wantsDownload ? String(req.query?.as ?? "image") : undefined;
+
+      /*
+       * A download is of the original, never a resized derivative: somebody
+       * saving a logo they paid for should get the file, not a thumbnail that
+       * happened to be in the cache.
+       */
+      const width = wantsDownload || aclPolicy?.visibility === "private" ? null : wantedWidth(req.query?.w);
       if (width) {
         const served = await serveDerivative(objectStorageService, req.path, width, res);
         if (served) return;
@@ -252,7 +273,7 @@ export function registerObjectStorageRoutes(app: Express): void {
         }
       }
 
-      await objectStorageService.downloadObject(objectFile, res);
+      await objectStorageService.downloadObject(objectFile, res, 3600, undefined, attachmentName);
     } catch (error) {
       if (error instanceof ObjectNotFoundError) {
         return res.status(404).json({ error: "Object not found" });

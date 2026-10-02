@@ -728,6 +728,7 @@ export function BackingSetup({ projectId, projectTitle }: { projectId: string; p
           or an older server response missing projectLogoUrl — still resolves. */}
       <BadgePreviewCard
         projectId={projectId}
+        projectTitle={projectTitle}
         previews={data.badgePreviews || {}}
         projectLogoUrl={data.projectLogoUrl ?? config.logoUrl ?? null}
       />

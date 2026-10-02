@@ -12,6 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Body, Btn, Card, Cost, Icon, Label, ListItem, Meta, Row, assetUri } from "../ui";
+import { SaveImage } from "../SaveImage";
 import { Area, Bubble, Line, Overline, Well, openWeb, useNotify } from "./bits";
 import { BackingSummary } from "./BackingSummary";
 import { mkey } from "./shared";
@@ -90,9 +91,22 @@ export function Setup({ projectId, project, isOwner }: { projectId: string; proj
           <View style={{ flex: 1, gap: 4 }}>
             <Text style={{ fontFamily: fontFamily.semibold, fontSize: font.sm, color: colors.text }}>Project logo</Text>
             <Meta>Square. Transparent PNG prints best.</Meta>
-            {isOwner && <Btn small variant="outline" icon="cloud-upload-outline" label={project?.logoUrl ? "Change logo" : "Upload logo"} loading={uploading === "logoUrl"} onPress={() => upload("logoUrl")} style={{ alignSelf: "flex-start" }} />}
+            <Row gap={spacing.sm}>
+              {isOwner && <Btn small variant="outline" icon="cloud-upload-outline" label={project?.logoUrl ? "Change logo" : "Upload logo"} loading={uploading === "logoUrl"} onPress={() => upload("logoUrl")} />}
+              {/*
+                * Take it off the phone. A logo Nova drew was paid for, and a
+                * picture that can only be looked at inside the app is not much
+                * use to somebody putting it on a sign or sending it to a printer.
+                */}
+              <SaveImage path={project?.logoUrl} name={`${project?.title ?? "project"} logo`} testID="save-logo" />
+            </Row>
           </View>
         </Row>
+        {project?.coverUrl ? (
+          <Row gap={spacing.sm}>
+            <SaveImage path={project.coverUrl} name={`${project?.title ?? "project"} cover`} label="Save cover" testID="save-cover" />
+          </Row>
+        ) : null}
         {isOwner && project?.logoUrl && <ProfileVisuals projectId={projectId} project={project} onChanged={refresh} />}
       </Card>
 
@@ -234,6 +248,8 @@ function ProfileVisuals({ projectId, project, onChanged }: { projectId: string; 
                     <Pressable hitSlop={6} disabled={!hasBrief || generate.isPending} onPress={() => { setBusy(s.slot); generate.mutate(s.slot); }} accessibilityLabel="Redraw"><Icon name={busy === s.slot && generate.isPending ? "hourglass-outline" : "refresh"} size={17} color={colors.primary} /></Pressable>
                     <Pressable hitSlop={6} onPress={() => own(s.slot)} accessibilityLabel="Upload your own"><Icon name={busy === s.slot && !generate.isPending ? "hourglass-outline" : "cloud-upload-outline"} size={17} color={colors.primary} /></Pressable>
                     {src && <Pressable hitSlop={6} onPress={() => hide.mutate({ slot: s.slot, hidden: !isHidden })} accessibilityLabel={isHidden ? "Show" : "Hide"}><Icon name={isHidden ? "eye-off-outline" : "eye-outline"} size={17} color={colors.primary} /></Pressable>}
+                    {/* Paid for, so it can leave: straight to the camera roll. */}
+                    {src && <SaveImage path={src} name={`${project?.title ?? "project"} ${s.label}`} iconOnly testID={`save-visual-${s.slot}`} />}
                   </Row>
                 </View>
               );

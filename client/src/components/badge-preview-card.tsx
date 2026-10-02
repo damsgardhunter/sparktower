@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DownloadImage } from "@/components/download-image";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Sparkles, AlertTriangle, ImageIcon } from "lucide-react";
 import { BADGE_LEVELS } from "@shared/backing";
@@ -20,9 +21,11 @@ const money = (cents: number) => `$${cents / 100}`;
  * logo works.
  */
 export function BadgePreviewCard({
-  projectId, previews, projectLogoUrl,
+  projectId, projectTitle, previews, projectLogoUrl,
 }: {
   projectId: string;
+  /** Only for naming a downloaded file; a badge saved as "badge.png" is unfindable. */
+  projectTitle: string;
   previews: Record<string, string>;
   projectLogoUrl: string | null;
 }) {
@@ -112,14 +115,30 @@ export function BadgePreviewCard({
                   <p className="text-xs font-medium" style={{ color: level.hex }}>{level.label}</p>
                   <p className="text-[10px] text-muted-foreground">{money(level.minCents)}+</p>
                 </div>
-                <Button
-                  variant="outline" size="sm" className="w-full h-7 text-[11px]"
-                  disabled={generate.isPending}
-                  onClick={() => generate.mutate(level.key)}
-                  data-testid={`button-preview-${level.key}`}
-                >
-                  {pending === level.key ? "Drawing…" : img ? "Redo" : "Preview"}
-                </Button>
+                <div className="flex gap-1.5">
+                  <Button
+                    variant="outline" size="sm" className="flex-1 h-7 text-[11px]"
+                    disabled={generate.isPending}
+                    onClick={() => generate.mutate(level.key)}
+                    data-testid={`button-preview-${level.key}`}
+                  >
+                    {pending === level.key ? "Drawing…" : img ? "Redo" : "Preview"}
+                  </Button>
+                  {/*
+                    * A drawn badge is downloadable. It was paid for, and these are
+                    * the pictures people put on a pledge page or a thank-you
+                    * email, which is outside the product.
+                    */}
+                  {img && (
+                    <DownloadImage
+                      src={img}
+                      name={`${projectTitle} ${level.label} badge`}
+                      iconOnly
+                      className="h-7 w-7 shrink-0"
+                      testId={`button-download-badge-${level.key}`}
+                    />
+                  )}
+                </div>
               </div>
             );
           })}

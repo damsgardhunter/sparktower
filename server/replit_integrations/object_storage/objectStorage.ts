@@ -1,4 +1,5 @@
 import { Storage, File } from "@google-cloud/storage";
+import { downloadName, extensionFor } from "../../download-name";
 import { Response } from "express";
 import { randomUUID } from "crypto";
 import fs from "fs";
@@ -326,11 +327,22 @@ export class ObjectStorageService {
    * persist object metadata, so callers that already know the MIME type can
    * supply it rather than serving application/octet-stream.
    */
+  /**
+   * Stream an object to the response.
+   *
+   * `attachmentName` turns it into a download rather than something the browser
+   * shows: a name without an extension, to which the right one is added once the
+   * content type is known. That matters because the type is sometimes read from
+   * the file's own first bytes rather than from its metadata, so the extension
+   * cannot be decided before the stream opens — and a logo saved as `.png` that
+   * is actually a WebP opens to "this file is corrupt".
+   */
   async downloadObject(
     file: File,
     res: Response,
     cacheTtlSec: number = 3600,
-    contentTypeOverride?: string
+    contentTypeOverride?: string,
+    attachmentName?: string,
   ) {
     try {
       // Get file metadata
@@ -357,6 +369,9 @@ export class ObjectStorageService {
         "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`,
       });
       if (!needsSniff) res.set("Content-Type", declared);
+      if (attachmentName && !needsSniff) {
+        res.set("Content-Disposition", `attachment; filename="${downloadName(attachmentName, extensionFor(declared))}"`);
+      }
 
       const stream = file.createReadStream();
       let typeResolved = !needsSniff;
@@ -373,7 +388,16 @@ export class ObjectStorageService {
         // written — headers are already gone once the body starts.
         stream.once("data", (chunk: Buffer) => {
           if (!typeResolved) {
-            res.set("Content-Type", sniffContentType(chunk) || "application/octet-stream");
+            const sniffed = sniffContentType(chunk) || "application/octet-stream";
+            res.set("Content-Type", sniffed);
+            /*
+             * Here rather than above, because this is the first moment the
+             * extension is knowable — and still before any byte of the body, so
+             * the header is allowed.
+             */
+            if (attachmentName) {
+              res.set("Content-Disposition", `attachment; filename="${downloadName(attachmentName, extensionFor(sniffed))}"`);
+            }
             typeResolved = true;
           }
         });
