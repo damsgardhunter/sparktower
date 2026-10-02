@@ -478,6 +478,59 @@ export const projectMerchOrders = pgTable("project_merch_orders", {
 });
 
 /**
+ * A reward the creator owes a backer, once it has been done.
+ *
+ * Most of what a tier promises is the platform's job — the name on the wall, the
+ * believer number, the badge, the certificate — and those need no record here
+ * because nothing has to be remembered: they are true the moment the pledge
+ * lands. Two of them are not. `early_access` and `video_thankyou` are marked
+ * `fulfilledBy: "creator"` in shared/backing.ts, which means a person has to go
+ * and do something, and until this table existed nothing anywhere knew whether
+ * they had.
+ *
+ * That was the gap, and it was the expensive kind: the owner's list showed what
+ * each backer was *owed* and never what was *done*, so the only way to run a
+ * campaign was to keep a spreadsheet beside it — and the backer who paid for a
+ * personal video had no way to know whether it was coming.
+ *
+ * A row means done. There is no `status` column, because "owed" is the absence of
+ * a row and inventing a second way to say it is how two sources of truth start.
+ * Deleting the row is the undo, which is why the route offers one: somebody will
+ * tick the wrong person.
+ */
+export const backerRewardFulfilments = pgTable("backer_reward_fulfilments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  backingId: varchar("backing_id").notNull().references(() => projectBackings.id, { onDelete: "cascade" }),
+  /** Denormalised so the project's whole list is one indexed read. */
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** A key from DIGITAL_REWARDS whose `fulfilledBy` is "creator". */
+  rewardKey: text("reward_key").notNull(),
+  /**
+   * The video, when the reward is one: an object-storage path.
+   *
+   * Served through a route rather than made public, because it is addressed to
+   * one person. A link that works for anybody holding it is not a personal
+   * thank-you, it is a file.
+   */
+  assetPath: text("asset_path"),
+  /** What the creator wants the backer to read with it. */
+  note: text("note"),
+  /** Which member did it, so a team can see who covered what. */
+  deliveredBy: varchar("delivered_by").references(() => users.id, { onDelete: "set null" }),
+  deliveredAt: timestamp("delivered_at").defaultNow().notNull(),
+}, (table) => ({
+  /*
+   * One record per promise. Marking the same reward done twice is the same
+   * delivery, not two — and without this a double-tapped button would notify the
+   * backer twice about one video.
+   */
+  oncePerReward: unique("backer_reward_once").on(table.backingId, table.rewardKey),
+  byProject: index("backer_reward_fulfilments_project_idx").on(table.projectId),
+}));
+
+export type BackerRewardFulfilment = typeof backerRewardFulfilments.$inferSelect;
+
+/**
  * A backer's badge for one project — the reward they actually carry around.
  *
  * One row per (backer, project): backing the same project again upgrades the
@@ -1511,6 +1564,13 @@ export const NOTIFICATION_KINDS = [
   "checkin_due",
   // Money: somebody backed your project, a reviewer decided, a pledge was released or refunded.
   "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  /*
+   * A reward the creator owed has been delivered — the personal video recorded,
+   * the early access opened up. The backer paid for it and has no other way to
+   * find out: nothing else in the product changes visibly when a creator does
+   * the thing they promised.
+   */
+  "reward_delivered",
   // Someone applied to your project; the owner decided on your application.
   "project_application", "application_accepted", "application_rejected",
   // The owner removed you from their project's team.

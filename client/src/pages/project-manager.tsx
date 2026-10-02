@@ -33,6 +33,7 @@ import { Switch } from "@/components/ui/switch";
 import { SectionPathStrip, requestOpenMilestone } from "@/components/section-path-strip";
 import { SectionBar } from "@/components/manager/section-bar";
 import { SectionTabRow } from "@/components/manager/more-menu";
+import { BackersTab } from "@/components/manager/backers-tab";
 import { ManagerRail, useLatestAudit } from "@/components/manager/manager-rail";
 import { StartSectionDialog } from "@/components/manager/start-section-dialog";
 import { InviteCollaboratorDialog, PendingInvites } from "@/components/invite-collaborator-dialog";
@@ -921,6 +922,9 @@ export default function ProjectManager() {
         )}
         {activeTab === "support" && projectId && (
           <SupportTab projectId={projectId} />
+        )}
+        {activeTab === "backers" && projectId && (
+          <BackersTab projectId={projectId} />
         )}
         {activeTab === "chat" && projectId && (
           <LiveChatTab projectId={projectId} />

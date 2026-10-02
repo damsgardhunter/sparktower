@@ -125,6 +125,15 @@ export function notificationText(n: NotificationShape): string {
     case "pledge_refunding": return n.projectTitle ? `${n.projectTitle} wasn't approved — your pledge is being refunded` : "Your pledge is being refunded";
     case "pledge_released": return n.projectTitle ? `Your pledge went to ${n.projectTitle}` : "Your pledge went to the project";
     case "pledge_refunded": return "Your pledge was refunded";
+    /*
+     * The excerpt carries which reward and whatever the creator wrote with it, so
+     * the sentence stays about the thing that happened. "A reward you were
+     * promised" rather than naming it, because the kind is one row for two very
+     * different rewards — a video to watch and a door being opened.
+     */
+    case "reward_delivered": return n.projectTitle
+      ? `${n.projectTitle} delivered a reward you were promised`
+      : "A reward you were promised has been delivered";
     case "project_application": return n.projectTitle ? `${who} applied to join ${n.projectTitle}` : `${who} applied to join your project`;
     case "application_accepted": return n.projectTitle ? `You're on the team: ${who} accepted your application to ${n.projectTitle}` : `${who} accepted your application`;
     // Plain, and not dressed up: they asked, and this is the answer.
@@ -155,6 +164,12 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // Accepted: straight into the project they just joined. Declined or removed: its public page, which they can still see.
   if (n.kind === "application_accepted" && n.projectId) return `/projects/${n.projectId}/manage`;
   if ((n.kind === "application_rejected" || n.kind === "project_removed") && n.projectId) return `/projects/${n.projectId}`;
+  /*
+   * The project's public page, which is where a backer's own rewards are shown.
+   * Not the manager: the person being told is the backer, and they are usually not
+   * on the team.
+   */
+  if (n.kind === "reward_delivered" && n.projectId) return `/projects/${n.projectId}`;
   // Straight to the sprint, so the partner sees the state rather than hunting the list.
   if (n.kind === "sprint_left") return n.targetId ? `/sprints/${n.targetId}` : "/sprints";
   /*
@@ -223,6 +238,12 @@ export const PUSHABLE_KINDS: readonly NotificationKind[] = [
   "application_accepted",
   // Money.
   "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  /*
+   * A reward they paid for has been delivered. Nothing else in the product
+   * changes visibly when a creator records a video, so without this the backer
+   * finds out by chance or not at all.
+   */
+  "reward_delivered",
   // Time-boxed, or somebody is blocked on them.
   "job_due", "checkin_due", "sim_nudge", "sprint_left", "nova_build_done",
   // Their standing changed: added to a company, removed from a project, a result.

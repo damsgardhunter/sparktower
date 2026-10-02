@@ -26,6 +26,7 @@ import { registerNotificationRoutes, notify, unnotify } from "./notifications";
 import { registerPushRoutes } from "./push-routes";
 import { standingsFor } from "./contest-standings";
 import { downloadName, extensionFor } from "./download-name";
+import { registerBackerFulfilmentRoutes, registerMyRewardRoutes } from "./backer-fulfilment-routes";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -464,6 +465,8 @@ export async function registerRoutes(
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
   registerPushRoutes(app);
+  registerBackerFulfilmentRoutes(app);
+  registerMyRewardRoutes(app);
   registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);

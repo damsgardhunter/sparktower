@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { Heart, Crown, Eye, EyeOff, Award } from "lucide-react";
+import { Heart, Crown, Eye, EyeOff, Award, Download } from "lucide-react";
 import { formatBelieverNumber } from "@shared/backing";
 
 interface PublicBacking {
@@ -36,6 +36,18 @@ interface MyBacking {
  * Renders nothing when the person hasn't backed anything, so the profile can
  * include it unconditionally.
  */
+/** One reward a creator has actually delivered, from `GET /api/me/rewards`. */
+interface MyReward {
+  projectId: string;
+  projectTitle: string;
+  rewardKey: string;
+  label: string;
+  note: string | null;
+  deliveredAt: string;
+  /** Null when there is nothing to watch — early access has no file. */
+  videoUrl: string | null;
+}
+
 export function BackerCredits({ userId, isOwnProfile = false }: { userId: string; isOwnProfile?: boolean }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -77,6 +89,17 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
   });
 
   const visible = mine?.filter((b) => b.status === "held" || b.status === "released") ?? [];
+  /*
+   * What came of it. Separate from the pledges above because the two answer
+   * different questions — that is what I paid, this is what I was given — and
+   * because until now a creator could record somebody a personal video and the
+   * backer had nowhere at all to watch it.
+   */
+  const { data: rewards } = useQuery<MyReward[]>({
+    queryKey: ["/api/me/rewards"],
+    enabled: isOwnProfile,
+  });
+
   if (!data?.length && !visible.length) return null;
 
   return (
@@ -87,6 +110,53 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
+        {/*
+          * Delivered rewards first, and only on your own profile: a video somebody
+          * recorded for you is the most interesting thing on this card, and it is
+          * nobody else's business.
+          */}
+        {isOwnProfile && rewards && rewards.length > 0 && (
+          <div className="space-y-1.5 pb-1" data-testid="my-rewards">
+            {rewards.map((r) => (
+              <div
+                key={`${r.projectId}-${r.rewardKey}`}
+                className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-1"
+                data-testid={`my-reward-${r.rewardKey}`}
+              >
+                <p className="text-sm">
+                  <span className="font-medium">{r.label}</span>
+                  {" from "}
+                  <Link href={`/projects/${r.projectId}`} className="hover:underline">{r.projectTitle}</Link>
+                </p>
+                {r.note && <p className="text-xs text-muted-foreground italic">“{r.note}”</p>}
+                {r.videoUrl && (
+                  <div className="space-y-1">
+                    {/*
+                      * Played here rather than linked away. It was made for this
+                      * person; opening a bare file in a new tab is a worse way to
+                      * receive it than a player in place.
+                      */}
+                    <video
+                      src={r.videoUrl}
+                      controls
+                      preload="metadata"
+                      className="w-full rounded border bg-black"
+                      data-testid={`reward-video-${r.rewardKey}`}
+                    />
+                    <a
+                      href={`${r.videoUrl}?download=1`}
+                      download
+                      className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                      data-testid={`reward-video-download-${r.rewardKey}`}
+                    >
+                      <Download className="h-3 w-3" /> Keep a copy
+                    </a>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {/*
           * The owner's view lists every live pledge with a visibility toggle,
           * because deciding to be anonymous a week later is a normal thing to

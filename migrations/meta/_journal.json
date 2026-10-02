@@ -631,6 +631,13 @@
       "when": 1790956352799,
       "tag": "0091_long_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790960939893,
+      "tag": "0092_confused_silver_fox",
+      "breakpoints": true
     }
   ]
 }
