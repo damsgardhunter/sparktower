@@ -47,8 +47,17 @@ export function badgePrompt(opts: { projectTitle: string; metal: string; hex: st
  * These are uuids everywhere they are real, so stripping to word characters and
  * hyphens loses nothing — and it removes the newline that would otherwise let a
  * value chosen by whoever made the request write its own entry in the log.
+ *
+ * The line breaks go first and on their own, which is redundant: the allow-list
+ * on the next call already drops them, along with everything else that is not a
+ * word character or a hyphen. It is here because the analyser does not read it
+ * that way. CodeQL's log-injection query recognises a replacement of `\r` and
+ * `\n` as having removed the danger and does not infer the same from a negated
+ * character class, so without this the alert survives a sanitiser that is
+ * strictly stronger than the one it is looking for.
  */
-const logId = (value: string): string => String(value).replace(/[^\w-]/g, "").slice(0, 64);
+const logId = (value: string): string =>
+  String(value).replace(/[\r\n]/g, "").replace(/[^\w-]/g, "").slice(0, 64);
 
 /**
  * Recomputes what someone has earned on a project from their pledges.
