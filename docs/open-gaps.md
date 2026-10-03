@@ -17,6 +17,39 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 ## Open
 
+### 0. Two advisories carried on purpose, and they expire on 2026-11-15
+
+`scripts/audit-gate.mjs` is letting two high-severity advisories through, named,
+with the reasoning beside them:
+
+| Advisory | Package | Reached through |
+|---|---|---|
+| GHSA-86w9-cpqp-85rv | `node-forge` | `expo` → `@expo/cli` → `@expo/code-signing-certificates` |
+| GHSA-vfj7-8cjw-p6xm | `braces` | `expo` → `@expo/cli` → `@expo/metro-file-map` → `micromatch` |
+
+Both have an affected range of *every published version*, so there is nothing to
+upgrade to, and npm's only offered remedy is `expo@44.0.6` — SDK 44, three years
+backwards, which is a resolver artifact rather than a fix. Both are build-time:
+one signs development builds, the other globs this repository's own files while
+bundling. Neither is in the app bundle.
+
+**On 2026-11-15 the build fails again** unless somebody renews or removes them.
+That is the point of the date. The gate also fails if either stops matching
+anything, so a stale exception cannot sit there looking load-bearing.
+
+What to check when the date comes: whether `node-forge` has published a fix, and
+whether a later `expo` has dropped `@expo/code-signing-certificates`.
+
+### 0b. One CodeQL alert left, and it is a different shape of claim
+
+Seven of the eight high alerts were `js/tainted-format-string` and are fixed — a
+request-derived id in a log's format string, where a newline can forge a line. The
+eighth is `js/missing-rate-limiting` pointing at `setupAuth` in `server/routes.ts`,
+which is a claim about a route handler rather than a string, and it is not obvious
+from the alert which handler it means. Worth reading properly rather than
+guessing at.
+
+
 ### 1. Deploy verification — the public half is now observed, the private half is not
 
 `npm run check:live` was run against production on 30 September and passed
