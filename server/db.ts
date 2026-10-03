@@ -67,8 +67,42 @@ const CONNECT_WAIT_MS = Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 10_000);
  */
 const POOL_MAX = Number(process.env.DB_POOL_MAX ?? 20);
 
+/**
+ * Whether this connection needs TLS, and whether to check the certificate.
+ *
+ * A managed Postgres reached from outside its own network refuses a plaintext
+ * connection, and the refusal is `FATAL 28000` with no message — the same code
+ * a wrong password gives. Every script in `script/` goes through this pool, so
+ * running any of them against a hosted database failed identically and looked
+ * like bad credentials. That cost an evening once; it should not cost another.
+ *
+ * `sslmode` in the URL wins, because it is where the convention already lives
+ * and node-postgres reads it. Failing that, a hostname that is plainly remote
+ * gets TLS turned on rather than being left to fail. Nothing local is touched:
+ * a loopback or a container host connects exactly as before.
+ *
+ * `rejectUnauthorized` stays on. Managed providers serve real certificates, so
+ * turning verification off would buy nothing except the ability to not notice
+ * being somewhere unexpected — and `sslmode=no-verify` is still there for the
+ * one that genuinely needs it.
+ */
+function sslFor(url: string | undefined): false | { rejectUnauthorized: boolean } {
+  if (!url) return false;
+  const mode = /[?&]sslmode=([^&]+)/.exec(url)?.[1];
+  if (mode === "disable") return false;
+  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode) return { rejectUnauthorized: true };
+
+  let host = "";
+  try { host = new URL(url).hostname; } catch { return false; }
+  const local = host === "localhost" || host === "127.0.0.1" || host === "::1"
+    || host === "postgres" || host === "db" || host.endsWith(".local");
+  return local ? false : { rejectUnauthorized: true };
+}
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: sslFor(process.env.DATABASE_URL),
   max: POOL_MAX,
   connectionTimeoutMillis: CONNECT_WAIT_MS,
 });
