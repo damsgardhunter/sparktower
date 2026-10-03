@@ -42,7 +42,7 @@ function exportsOf(source: string): string[] {
  * with, and removing a line is how the disagreement gets settled.
  */
 const NOT_ON_THE_PHONE: Record<string, string> = {
-  Block: "the phone's Block in ProjectBits is a titled section with an action; the web's is a surface primitive. Same word, different component.",
+  Block: "the phone's is now ProjectSection in ProjectBits — a titled section with an action — renamed because four components shared the word. The web's is a surface primitive, and manage/bits still has its own Block for thirty-six importing files. Different components, so not merged.",
   NOVA_GRADIENT: "a Tailwind class string, which means nothing on a phone. The phone's equivalent is colors.novaGreen/Emerald/Purple, held to the web's values by nova-gradient-parity.test.ts.",
   NOVA_GRADIENT_BR: "as above.",
   NOVA_TINT: "as above.",

@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_URL, api } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Body, Btn, ErrorNote, Field, Icon, Meta, Progress, Row, assetUri, errText } from "./ui";
-import { Block, Tag } from "./ProjectBits";
+import { ProjectSection, Tag } from "./ProjectBits";
 import { CheckRow, FormGroup, ProjectFormSheet } from "./ProjectFormSheet";
 import {
   BADGE_LEVELS, BELIEVER_TAGLINE, DIGITAL_REWARD_LABELS, MERCH_LABELS, MIN_PLEDGE_CENTS, TIP_PRESET_PERCENTS,
@@ -153,13 +153,13 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
   if (isError && !data) {
     if (!isOwner) return null;
     return (
-      <Block title="Let people back this" icon="heart-outline">
+      <ProjectSection title="Let people back this" icon="heart-outline">
         <Body muted>
           Set up tiers and merch and people can put money behind you. Held by SparkTower until the project is reviewed, so backers know it's safe to give.
         </Body>
         <Btn label="Set up backing" variant="outline" small icon="settings-outline" style={{ alignSelf: "flex-start" }}
           onPress={() => router.push(`/manage/${projectId}?tab=setup` as any)} />
-      </Block>
+      </ProjectSection>
     );
   }
   if (!data) return null;
@@ -173,7 +173,7 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
 
   return (
     <>
-      <Block title="Back this project" icon="heart">
+      <ProjectSection title="Back this project" icon="heart">
         {campaign.headline ? <Body muted>{campaign.headline}</Body> : null}
         <View style={{ gap: 6 }}>
           <Row between>
@@ -270,7 +270,7 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
             ))}
           </View>
         )}
-      </Block>
+      </ProjectSection>
 
       <PledgeSheet
         visible={pledgeOpen}

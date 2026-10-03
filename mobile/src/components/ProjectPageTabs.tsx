@@ -19,7 +19,7 @@ import { SaveImage } from "./SaveImage";
 import { Discussion } from "./Discussion";
 import { Composer } from "./Composer";
 import { PostCard } from "./PostCard";
-import { Block, IconLine, ProjectVisualImage, Tag } from "./ProjectBits";
+import { ProjectSection, IconLine, ProjectVisualImage, Tag } from "./ProjectBits";
 import { FeedbackInbox } from "./project/FeedbackInbox";
 import { PROJECT_SECTIONS_BY_KEY, isSectionVisible, type ProjectSectionKey } from "../projectSections";
 import { projectVisual } from "../projectData";
@@ -138,15 +138,15 @@ export function OverviewTab({ project, members, isOwner, isMember, onApply, onMa
   return (
     <View style={{ gap: spacing.sm }}>
       {!hasAnything && isOwner && (
-        <Block>
+        <ProjectSection>
           <IconLine icon="compass-outline" color={colors.text}><Text style={{ fontFamily: fontFamily.semibold }}>Bring this page to life</Text></IconLine>
           <Body muted>Add a one-liner, mission, and project brief so visitors instantly understand what you're building.</Body>
           <Btn label="Set up your brief" small icon="settings-outline" style={{ alignSelf: "flex-start" }} onPress={onManage} />
-        </Block>
+        </ProjectSection>
       )}
 
       {hasAnything && (
-        <Block style={{ gap: spacing.lg }}>
+        <ProjectSection style={{ gap: spacing.lg }}>
           {show("oneLiner") && (
             <View style={{ borderWidth: 1, borderColor: `${colors.primary}33`, backgroundColor: colors.primarySoft, borderRadius: radius.lg, padding: spacing.lg, gap: 6 }}>
               <View style={{ position: "absolute", top: 12, right: 12 }}><Icon name="chatbox-ellipses" size={28} color={`${colors.primary}26`} /></View>
@@ -208,14 +208,14 @@ export function OverviewTab({ project, members, isOwner, isMember, onApply, onMa
               )}
             </View>
           )}
-        </Block>
+        </ProjectSection>
       )}
 
       {roles.length > 0 && (
-        <Block>
+        <ProjectSection>
           <Heading right={!isMember && !isOwner ? <Btn small icon="send" label="Apply" onPress={onApply} /> : undefined}>Open Roles</Heading>
           <Row wrap gap={6}>{roles.map((r) => <RoleBadge key={r} role={r} />)}</Row>
-        </Block>
+        </ProjectSection>
       )}
 
       {latest.length > 0 && (
@@ -255,7 +255,7 @@ export function StoryboardsBlock({ projectId, onOpen }: { projectId: string; onO
   });
   const count = data?.length ?? 0;
   return (
-    <Block>
+    <ProjectSection>
       <Row center gap={spacing.sm}>
         <Text style={{ fontSize: font.lg + 1, fontFamily: fontFamily.semibold, color: colors.text }}>AI Storyboards</Text>
         <Tag icon="lock-closed" label="Private" />
@@ -265,14 +265,14 @@ export function StoryboardsBlock({ projectId, onOpen }: { projectId: string; onO
         <Btn small variant="outline" icon="sparkles" label={`View Storyboards${count ? ` · ${count}` : ""}`} onPress={onOpen} />
         <Btn small variant="outline" icon="videocam-outline" label="Generate AI Video" onPress={onOpen} />
       </Row>
-    </Block>
+    </ProjectSection>
   );
 }
 
 export function TechStackBlock({ project }: { project: any }) {
   if (!isSectionVisible(project, "techStack")) return null;
   return (
-    <Block>
+    <ProjectSection>
       <Heading>Tech Stack</Heading>
       <Row wrap gap={6}>
         {project.techStack.map((t: string) => (
@@ -281,19 +281,19 @@ export function TechStackBlock({ project }: { project: any }) {
           </View>
         ))}
       </Row>
-    </Block>
+    </ProjectSection>
   );
 }
 
 export function LinksBlock({ project }: { project: any }) {
   if (!isSectionVisible(project, "links")) return null;
   return (
-    <Block>
+    <ProjectSection>
       <Row wrap gap={spacing.sm}>
         {project.repoUrl ? <Btn small variant="outline" icon="logo-github" label="Repository" onPress={() => openLink(project.repoUrl)} /> : null}
         {project.liveUrl ? <Btn small variant="outline" icon="open-outline" label="Live Demo" onPress={() => openLink(project.liveUrl)} /> : null}
       </Row>
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -309,12 +309,12 @@ function StatRow({ icon, label, value }: { icon: IconName; label: string; value:
 export function StatsBlock({ project, members, followerCount }: { project: any; members: any[]; followerCount: number }) {
   if (!isSectionVisible(project, "stats")) return null;
   return (
-    <Block title="Project Stats">
+    <ProjectSection title="Project Stats">
       <StatRow icon="eye-outline" label="Views" value={String(project.views ?? 0)} />
       <StatRow icon="people-outline" label="Team Size" value={`${members.length} / ${project.teamSize ?? "—"}`} />
       <StatRow icon="calendar-outline" label="Timeline" value={project.estimatedWeeks ? `${project.estimatedWeeks} weeks` : "—"} />
       <StatRow icon="heart-outline" label="Followers" value={String(followerCount)} />
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -322,7 +322,7 @@ export function TeamMembersBlock({ project, members }: { project: any; members: 
   const router = useRouter();
   if (!isSectionVisible(project, "team") || !members.length) return null;
   return (
-    <Block title="Team Members">
+    <ProjectSection title="Team Members">
       {members.map((m) => (
         <Pressable key={m.id} onPress={() => router.push(`/user/${m.userId}` as any)} style={({ pressed }) => pressed && { opacity: 0.6 }}>
           <Row center gap={spacing.md}>
@@ -334,13 +334,13 @@ export function TeamMembersBlock({ project, members }: { project: any; members: 
           </Row>
         </Pressable>
       ))}
-    </Block>
+    </ProjectSection>
   );
 }
 
 export function QuestionsBlock({ questions, onEdit }: { questions: { id: string; question: string; required: boolean }[]; onEdit: () => void }) {
   return (
-    <Block title="Application Questions" action="Edit" onAction={onEdit}>
+    <ProjectSection title="Application Questions" action="Edit" onAction={onEdit}>
       {questions.length ? questions.map((q, i) => (
         <Row key={q.id || i} gap={spacing.sm} style={{ alignItems: "flex-start" }}>
           <Meta style={{ fontSize: font.sm }}>{i + 1}.</Meta>
@@ -350,7 +350,7 @@ export function QuestionsBlock({ questions, onEdit }: { questions: { id: string;
       )) : (
         <Meta style={{ fontSize: font.sm }}>No application questions set. Tap Edit to add some.</Meta>
       )}
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -359,10 +359,10 @@ export function RailVisuals({ project }: { project: any }) {
   const bottom = projectVisual(project.profileVisuals, "railBottom");
   if (!top && !bottom) return null;
   return (
-    <Block>
+    <ProjectSection>
       <ProjectVisualImage square uri={top} />
       <ProjectVisualImage square uri={bottom} />
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -376,12 +376,12 @@ export function UpdatesTab({ projectId, isMember, notify }: { projectId: string;
     <View style={{ gap: spacing.sm }}>
       {isMember && <FeedbackInbox projectId={projectId} notify={notify} />}
       {isMember && (
-        <Block>
+        <ProjectSection>
           <Pressable onPress={() => setComposing(true)} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm, borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.md }, pressed && { opacity: 0.7 }]}>
             <Icon name="create-outline" size={18} color={colors.textSecondary} />
             <Text style={{ color: colors.textSecondary, fontFamily: fontFamily.medium, fontSize: font.sm }}>Share what you're building</Text>
           </Pressable>
-        </Block>
+        </ProjectSection>
       )}
       {isLoading ? <Loading /> : !data?.posts?.length ? (
         <DashedEmpty icon="newspaper-outline" title={isMember ? "No updates yet. Share what you're building." : "No updates yet."} />
@@ -412,7 +412,7 @@ function StepCard({ status, title, badges, description, footnote, children }: {
 }) {
   const st = STATE_ICON[status] || STATE_ICON.upcoming;
   return (
-    <Block style={{ gap: spacing.sm }}>
+    <ProjectSection style={{ gap: spacing.sm }}>
       <Row gap={spacing.md} style={{ alignItems: "flex-start" }}>
         <View style={{ marginTop: 1 }}><Icon name={st.icon} size={21} color={st.color} /></View>
         <View style={{ flex: 1, gap: 4 }}>
@@ -425,7 +425,7 @@ function StepCard({ status, title, badges, description, footnote, children }: {
         </View>
       </Row>
       <View style={{ borderTopWidth: 1, borderTopColor: colors.borderSubtle, paddingTop: spacing.sm }}>{children}</View>
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -450,11 +450,11 @@ export function RoadmapTab({ projectId, isOwner, onManage, counts }: { projectId
   const phases = data.roadmap.phases || [];
   return (
     <View style={{ gap: spacing.sm }}>
-      <Block style={{ gap: 6 }}>
+      <ProjectSection style={{ gap: 6 }}>
         <Overline>The goal</Overline>
         <Text style={{ fontFamily: fontFamily.semibold, fontSize: font.lg, color: colors.text, lineHeight: 24 }}>{data.roadmap.goal}</Text>
         {data.roadmap.summary ? <Body muted>{data.roadmap.summary}</Body> : null}
-      </Block>
+      </ProjectSection>
       {phases.map((phase: any) => {
         const count = counts?.[`roadmap_phase:${phase.id}`] || 0;
         return (
@@ -509,11 +509,11 @@ function PersonRow({ userId, name, uri, line1, line2 }: { userId: string; name: 
 export function TeamTab({ members }: { members: any[] }) {
   if (!members.length) return <DashedEmpty icon="people-outline" title="No team members listed yet." />;
   return (
-    <Block flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
+    <ProjectSection flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
       {members.map((m) => (
         <PersonRow key={m.id} userId={m.userId} uri={m.profile?.avatarUrl} name={memberName(m)} line1={m.role} line2={m.profile?.headline} />
       ))}
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -525,12 +525,12 @@ export function FollowersTab({ projectId }: { projectId: string }) {
   if (isLoading) return <Loading />;
   if (!data?.length) return <DashedEmpty icon="heart-outline" title="No followers yet." />;
   return (
-    <Block flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
+    <ProjectSection flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
       {data.map((f) => (
         <PersonRow key={f.userId} userId={f.userId} uri={f.profile?.avatarUrl}
           name={f.profile?.displayName || f.user?.firstName || "Someone"} line2={f.profile?.headline} />
       ))}
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -547,7 +547,7 @@ export function RolesTab({ project, members, isOwner, isMember, onApply }: { pro
       <Meta style={{ fontSize: font.sm, paddingHorizontal: spacing.lg }}>
         {open.length} role{open.length === 1 ? "" : "s"} still open on this project.
       </Meta>
-      <Block flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
+      <ProjectSection flush style={{ paddingBottom: 0, paddingTop: spacing.xs }}>
         {open.map((r) => (
           <View key={r} style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderSubtle }}>
             <View style={{ width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
@@ -560,7 +560,7 @@ export function RolesTab({ project, members, isOwner, isMember, onApply }: { pro
             {!isMember && !isOwner && <Btn small variant="outline" label="Apply" onPress={onApply} />}
           </View>
         ))}
-      </Block>
+      </ProjectSection>
     </View>
   );
 }
@@ -601,11 +601,11 @@ export function MediaTab({ projectId, mediaUrls, isOwner, notify }: { projectId:
   };
 
   if (!mediaUrls.length && !isOwner) {
-    return <Block><Empty icon="images-outline" title="No media yet" body="Screenshots and demo videos will show up here." /></Block>;
+    return <ProjectSection><Empty icon="images-outline" title="No media yet" body="Screenshots and demo videos will show up here." /></ProjectSection>;
   }
 
   return (
-    <Block title="Media">
+    <ProjectSection title="Media">
       <Row wrap gap={spacing.sm}>
         {mediaUrls.map((url, i) => (
           <Pressable key={`${url}-${i}`} onPress={() => (isVideo(url) ? openLink(assetUri(url)!) : setLightbox(url))}
@@ -643,7 +643,7 @@ export function MediaTab({ projectId, mediaUrls, isOwner, notify }: { projectId:
           </View>
         ) : null}
       </Modal>
-    </Block>
+    </ProjectSection>
   );
 }
 
@@ -651,9 +651,9 @@ export function MediaTab({ projectId, mediaUrls, isOwner, notify }: { projectId:
 
 export function DiscussionTab({ projectId }: { projectId: string }) {
   return (
-    <Block title="Project discussion" icon="chatbubbles-outline">
+    <ProjectSection title="Project discussion" icon="chatbubbles-outline">
       <Meta style={{ fontSize: font.sm }}>Ask questions, offer help, or share what you'd want from this.</Meta>
       <Discussion projectId={projectId} targetType="project" targetId={projectId} />
-    </Block>
+    </ProjectSection>
   );
 }

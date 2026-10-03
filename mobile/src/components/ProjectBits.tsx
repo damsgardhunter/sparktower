@@ -36,8 +36,21 @@ export function ProjectLogo({ title, uri, size = 48, bordered = true, style }: {
   );
 }
 
-/** A full-width white block on the gray canvas — LinkedIn's section. */
-export function Block({ title, icon, action, onAction, children, style, flush }: {
+/**
+ * A full-width white section on the grey canvas — LinkedIn's section.
+ *
+ * Called `Block` until now, which was one of four components of that name: this
+ * one, another in `manage/bits` taking different props, and two on the web, where
+ * `section/block` is a surface primitive and `nova/block` a counted panel. Four
+ * things called the same word, and the work of telling them apart fell on whoever
+ * was reading. Renamed rather than merged, because merging means deciding that a
+ * titled section and a surface primitive are the same kind of thing, and they are
+ * not — the same reason the three Pills stay separate.
+ *
+ * `manage/bits`'s is left alone for now: thirty-six files import it and several
+ * are open in other sessions.
+ */
+export function ProjectSection({ title, icon, action, onAction, children, style, flush }: {
   title?: string;
   icon?: IconName;
   action?: string;
