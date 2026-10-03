@@ -236,6 +236,44 @@ What each claim turned out to be, with where the evidence is:
   also appeared somewhere else in the same file, which is the failure mode this
   file's tests keep hitting.
 
+- [x] **Backers and the thank-you video**, built 2026-10-03 — Manager → Backers.
+  The web tab came first because that is where the rest of the manager lives, which
+  had it the wrong way round: a personal video is *recorded* on a phone, so the
+  camera roll being one tap away is what the feature was for. All four fulfilment
+  routes are called. No address and no email, the same as the web, because the
+  route sends neither so the whole team can open it.
+
+  Still web-only: the **backer's** own view of a delivered reward — the card on
+  their profile with the video playing in place.
+
+- [x] **`Block` was four components**, now three (2026-10-03). The phone's
+  titled-section-with-an-action is `ProjectSection`; `manage/bits` keeps the name
+  for now, with thirty-six files importing it and several open in other sessions.
+  Renamed rather than merged, for the reason `nova/Pill` already gives about the
+  three Pills: a titled section and a surface primitive are not the same kind of
+  thing.
+
+- [x] **The reward notification pointed away from the reward** (2026-10-03). It
+  linked to the project's page; the video plays on the backer's profile. Fixed on
+  both clients, with the phone mapping kept distinct from the bare `/profile` a
+  connection request uses.
+
+- [ ] **Pills: narrower than I claimed.** I recorded "54 call sites hand-picking
+  semantic colours" as a gap. Most are not: `MoreKit`'s Pill takes a colour
+  deliberately, for a tier badge or a skill or a plan name, and `nova/Pill` already
+  explains why the three are not merged. The genuine drift is a pill showing a
+  *state* with a locally decided colour — two in the backing console, now carrying
+  tones, and roughly a third of the forty in `mobile/src/components/sim/`, which are
+  another session's files and left alone.
+
+  The command, not a number:
+
+  ```sh
+  grep -rn '<Pill[^>]*\(color\|solid\)' mobile/app mobile/src
+  ```
+
+  Then read each one: a tier is decoration, a status is a state.
+
 - [x] **Push notifications**, built 2026-10-02. Before this a notification only
   existed while somebody had the app open and looked at the bell, so everything
   the bell is *for* — an invitation, an offer, a backing decision, a teammate
