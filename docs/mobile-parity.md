@@ -432,16 +432,44 @@ What each claim turned out to be, with where the evidence is:
   a list of permitted routes rather than a ban on write verbs: joining a company
   is not running one, and a verb check cannot tell the difference.
 
-- [ ] **The Companies surface — most of it still has no phone caller.**
-  Re-measured 2026-10-03: **15 of 52** routes across the six company files are
-  called, so roughly thirty-seven are not. The old heading here said "54 of 55",
-  which was true when the entry was opened and contradicted its own table within
-  a day — the table below was updated as screens landed and the headline was not.
-  A number in a heading rots faster than the table under it; count it rather than
-  quote it.
+- [x] **The Companies surface — built out 2026-10-03.** **41 of 52** routes
+  across the six company files now have a phone caller, up from 15 the same day.
+  The remaining eleven are all `company-season-routes.ts`, the training-season
+  surface another session is building under `app/sim/`, and were deliberately
+  left alone.
 
-  Measured by family rather than by screen name, which is the only signal that
-  separates a missing feature from a renamed one:
+  `mobile/app/company/[id].tsx` is tabbed the way the web's page is: About (with
+  the whole domain-verification flow), Team, Talent, Challenges, Scouting, Admin.
+
+  | File | Routes | On the phone |
+  |---|---|---|
+  | `company-routes.ts` | 14 | **14 of 14** |
+  | `challenge-routes.ts` | 12 | **8 of 12** — the sponsor's seven, plus the founder's side already there |
+  | `talent-routes.ts` | 8 | **7 of 8** |
+  | `scouting-routes.ts` | 4 | **4 of 4** |
+  | `company-verification-routes.ts` | 3 | **3 of 3** |
+  | `company-season-routes.ts` | 11 | another session's, in flight |
+
+  Two things are worth keeping from how this was done. The rules are restated,
+  never re-decided: `mobile/src/companies.ts` and `mobile/src/challenges.ts` copy
+  `shared/`'s tables because Metro cannot resolve `@shared`, and their parity
+  tests *execute* both copies over every role, power and action rather than
+  comparing them as text. Nothing on the phone decides a permission — the shared
+  helpers only grey a control out before somebody taps it, and the server checks
+  the same rule again.
+
+  And every tab is readable by anybody who can see the company, writable only
+  with the power the server asks for. Hiding a tab would be stricter than the
+  server and would hide a company's own candidate list from whoever was told to
+  look at it.
+
+  **My own sweep undercounted this at 36.** Five of the eleven "misses" were the
+  matcher's fault: four challenge routes called through a `base` template
+  variable, and one talent route whose query string put it two characters past a
+  length threshold. Checked by hand before the number went in here.
+
+  The original measurement, kept because the per-file split is still the useful
+  way to look at this:
 
   | File | Routes | On the phone |
   |---|---|---|
