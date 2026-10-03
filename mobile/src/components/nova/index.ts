@@ -17,13 +17,14 @@
  *     "the" Pill would be picking a winner by import order. The fix is one Pill
  *     with the web's tones and three call sites migrated onto it, which is a
  *     change worth making on its own rather than inside this one.
- *   - **Block.** The phone's titled-section-with-an-action is `ProjectSection` in
- *     `ProjectBits` now — renamed on 2026-10-03, because four components shared
- *     the word: that one, another in `manage/bits` taking different props, and the
- *     web's `section/block` (a surface primitive) and `nova/block` (a counted
- *     panel). `manage/bits`'s keeps the name for the moment, with thirty-six files
- *     importing it. Still not merged with the web's: a titled section and a
- *     surface primitive are not the same kind of thing.
+ *   - **Block.** Settled on 2026-10-03. Four components answered to the word:
+ *     the phone's titled-section-with-an-action, the phone's labelled block of a
+ *     section screen, and the web's `section/block` (a surface primitive) and
+ *     `nova/block` (a counted panel). The two on the phone are now
+ *     `ProjectSection` in `ProjectBits` and `SectionBlock` in `manage/bits`, so
+ *     nothing here is called `Block` any more and each name says which one it is.
+ *     Not merged with the web's, and not merged with each other: a titled section
+ *     and a surface primitive are not the same kind of thing.
  *   - **tokens.** The web's are Tailwind class strings, which mean nothing here.
  *     The phone's equivalents are `colors.novaGreen/Emerald/Purple` in the
  *     theme, held to the web's values by `nova-gradient-parity.test.ts`.

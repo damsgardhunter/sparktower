@@ -47,8 +47,9 @@ export function ProjectLogo({ title, uri, size = 48, bordered = true, style }: {
  * titled section and a surface primitive are the same kind of thing, and they are
  * not — the same reason the three Pills stay separate.
  *
- * `manage/bits`'s is left alone for now: thirty-six files import it and several
- * are open in other sessions.
+ * `manage/bits`'s is now `SectionBlock`, after the web file it is the native side
+ * of. Twenty-seven files import something from `manage/bits`; two imported the
+ * component, which is why this was smaller than it looked.
  */
 export function ProjectSection({ title, icon, action, onAction, children, style, flush }: {
   title?: string;

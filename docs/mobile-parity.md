@@ -243,12 +243,37 @@ What each claim turned out to be, with where the evidence is:
   routes are called. No address and no email, the same as the web, because the
   route sends neither so the whole team can open it.
 
-  Still web-only: the **backer's** own view of a delivered reward — the card on
-  their profile with the video playing in place.
+  The **backer's** own side of it landed the same day, on their own profile under
+  "Believed in": the creator's note, a Watch that opens the video through the
+  signed-in hand-off, and a Keep-a-copy that puts it in the camera roll.
 
-- [x] **`Block` was four components**, now three (2026-10-03). The phone's
-  titled-section-with-an-action is `ProjectSection`; `manage/bits` keeps the name
-  for now, with thirty-six files importing it and several open in other sessions.
+  Two things differ from the web deliberately. The web plays the file in a
+  `<video>` in place, which is the better way to receive something made for you;
+  the phone opens it in `WebBrowser` instead, because playing it in the app means
+  adding `expo-video` — a native module, so nobody could watch anything until a
+  new build went out. And `/api/me/rewards` now sends `videoExt`, which the web
+  has no use for: a browser reads a file's type off the response, and a camera
+  roll reads it off the name, so a `.mov` saved as `.mp4` is refused by iOS.
+
+  Closing this also closed a bug on *both* clients. The card returned null unless
+  there was a listed pledge, and the list leaves out a pledge that has converted
+  to equity — so a backer whose only pledge converted could not see the video
+  recorded for them on either device.
+
+- [x] **`Block` was four components**, and nothing on the phone is called `Block`
+  any more (2026-10-03). The titled-section-with-an-action in `ProjectBits` is
+  `ProjectSection`; the labelled block of a section screen in `manage/bits` is
+  `SectionBlock`, after `client/src/components/section/block.tsx`, the web file it
+  is the native side of. The web keeps both of its own — `section/block`, a
+  surface primitive, and `nova/block`, a counted panel — which no longer collide
+  with anything, because they are reached by different import paths in a different
+  app and each phone name now says which component it is.
+
+  The second rename looked like the expensive one and was the cheap one. Twenty-
+  seven files import something from `manage/bits`; two imported the component. The
+  earlier note said thirty-six importing files, which counted the module's
+  importers rather than the component's.
+
   Renamed rather than merged, for the reason `nova/Pill` already gives about the
   three Pills: a titled section and a surface primitive are not the same kind of
   thing.
@@ -551,12 +576,12 @@ What each claim turned out to be, with where the evidence is:
   something that is not a state. The nova one is for states and is the only one
   that should carry a severity. Merging all three would mean deciding a tier and
   a severity are the same kind of thing.
-- [ ] **`Block` is two different components sharing a name.** The phone's, in
-  `ProjectBits`, is a titled section with an action. The web's is a surface
-  primitive. Deciding which one the phone wants is the work, and it is not
-  obvious — the phone may want both, under two names.
+- [x] **`Block` was two different components sharing a name** — four, in fact.
+  Closed 2026-10-03: the phone's two are now `ProjectSection` and `SectionBlock`.
+  It turned out the phone wanted both, under two names, which is what the open
+  question here had guessed.
 
-Both open items are held by
+The items here are held by
 [`nova-kit-parity.test.ts`](../../test/unit/nova-kit-parity.test.ts): anything
 the web exports and the phone lacks must carry a written reason, a reason for
 something since built fails, and a reason for something the web has dropped

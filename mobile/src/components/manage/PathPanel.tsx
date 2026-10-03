@@ -11,7 +11,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Btn, Card, Icon, Loading, Meta, NovaGradient, Row } from "../ui";
-import { Area, Block, Bubble, Clamp, GradientOutline, Line, Overline, Pill, Tag, Tick, useNotify } from "./bits";
+import { Area, SectionBlock, Bubble, Clamp, GradientOutline, Line, Overline, Pill, Tag, Tick, useNotify } from "./bits";
 import { CapitalProfileCard } from "./CapitalProfileCard";
 import { LoopTree } from "./LoopTree";
 import { MilestoneSheet } from "./MilestoneDetail";
@@ -127,34 +127,34 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
       )}
 
       <Card style={{ paddingVertical: 0, gap: 0 }}>
-        <Block title="Progress" icon="trending-up-outline">
+        <SectionBlock title="Progress" icon="trending-up-outline">
           <ProgressStats data={data} />
           <NovaRead projectId={projectId} data={data} adopting={adopt.isPending} onReevaluate={() => adopt.mutate()} />
-        </Block>
+        </SectionBlock>
 
         {data.loopTree && (
-          <Block divider title={`Loops · ${data.loopTree.loops.length}`} icon="git-network-outline">
+          <SectionBlock divider title={`Loops · ${data.loopTree.loops.length}`} icon="git-network-outline">
             <LoopTree projectId={projectId} tree={data.loopTree} />
-          </Block>
+          </SectionBlock>
         )}
 
         {data.capital && data.capital.answered > 0 && (
-          <Block divider title="Fundability" icon="cash-outline">
+          <SectionBlock divider title="Fundability" icon="cash-outline">
             <CapitalProfileCard capital={data.capital} bare />
-          </Block>
+          </SectionBlock>
         )}
 
-        <Block divider title="Codebase" icon="code-slash-outline">
+        <SectionBlock divider title="Codebase" icon="code-slash-outline">
           <CodebaseSync projectId={projectId} data={data} onNavigate={onNavigate} />
-        </Block>
+        </SectionBlock>
 
         {events.length > 0 && (
-          <Block divider title="Recent activity" icon="pulse-outline">
+          <SectionBlock divider title="Recent activity" icon="pulse-outline">
             <RecentActivity events={events} />
-          </Block>
+          </SectionBlock>
         )}
 
-        <Block
+        <SectionBlock
           divider
           title={`Whole path · ${data.phases.length} phases`}
           icon="map-outline"
@@ -168,7 +168,7 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
           {showMap
             ? <PathMap projectId={projectId} goal={goal} data={data} isPrimary={isPrimary} onOpen={setOpenMilestone} />
             : <Clamp text={data.promise} lines={1} />}
-        </Block>
+        </SectionBlock>
       </Card>
 
       <MilestoneSheet projectId={projectId} backboneId={openMilestone?.id ?? null} title={openMilestone?.title ?? ""} onClose={() => setOpenMilestone(null)} />

@@ -19,7 +19,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { withoutComments } from "../helpers/source-parity";
 
 const read = (p: string) => readFileSync(resolve(import.meta.dirname, "../..", p), "utf8");
 
@@ -42,7 +44,7 @@ function exportsOf(source: string): string[] {
  * with, and removing a line is how the disagreement gets settled.
  */
 const NOT_ON_THE_PHONE: Record<string, string> = {
-  Block: "the phone's is now ProjectSection in ProjectBits — a titled section with an action — renamed because four components shared the word. The web's is a surface primitive, and manage/bits still has its own Block for thirty-six importing files. Different components, so not merged.",
+  Block: "nothing on the phone is called Block any more. Four components shared the word; the phone's two are now ProjectSection in ProjectBits (a titled section with an action) and SectionBlock in manage/bits (a labelled block of a section screen, named after the web file it mirrors). The web keeps section/block, a surface primitive, and nova/block, a counted panel. Different components, so renamed rather than merged.",
   NOVA_GRADIENT: "a Tailwind class string, which means nothing on a phone. The phone's equivalent is colors.novaGreen/Emerald/Purple, held to the web's values by nova-gradient-parity.test.ts.",
   NOVA_GRADIENT_BR: "as above.",
   NOVA_TINT: "as above.",
@@ -88,6 +90,68 @@ describe("the Nova kit both platforms draw from", () => {
   it("has the live dot and the glance strip on the phone", () => {
     for (const name of ["LiveDot", "Glance", "GlanceStat", "GlanceAction"]) {
       expect(phone, `${name} should be in the phone's nova kit`).toContain(name);
+    }
+  });
+});
+
+/**
+ * `Block`, which was five things and is now four, three of them unambiguous.
+ *
+ * Two exported components on the phone answered to the word, plus two on the
+ * web and one module-private helper. The cost was not aesthetic: a diff saying
+ * `<Block>` told a reader nothing about which component, and importing the
+ * wrong one compiled. The phone's two are now `ProjectSection` and
+ * `SectionBlock`.
+ *
+ * This holds the rename rather than the taste behind it. Somebody who wants
+ * `Block` back can delete the test and say why; what they cannot do is
+ * reintroduce the collision by accident.
+ */
+describe("nothing exported from the phone is called Block", () => {
+  /** Every .ts/.tsx under mobile/, minus the dependency tree. */
+  const phoneFiles = execFileSync("git", ["ls-files", "mobile"], {
+    cwd: resolve(import.meta.dirname, "../.."),
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter((f) => /\.tsx?$/.test(f));
+
+  it("finds files to check at all", () => {
+    /* Without this the suite passes loudly when the glob breaks. */
+    expect(phoneFiles.length).toBeGreaterThan(50);
+  });
+
+  it("exports no component named Block", () => {
+    const offenders = phoneFiles.filter((f) => /export (?:function|const) Block\b/.test(read(f)));
+    expect(offenders, `these export a component called Block again:\n  ${offenders.join("\n  ")}`).toEqual([]);
+  });
+
+  it("renders no element named Block", () => {
+    /*
+     * The import could be renamed and the element left, or a new local `Block`
+     * introduced. A private one is allowed by the rule above — it cannot be
+     * imported by mistake — so this looks only at what is rendered, and
+     * LandingSections is named here rather than silently skipped.
+     */
+    const allowed = "mobile/src/components/onboarding/LandingSections.tsx";
+    const offenders = phoneFiles
+      .filter((f) => f !== allowed)
+      /* Comments stripped: bits.tsx explains the rename, and the explanation
+       * has to be able to name the thing it is about. */
+      .filter((f) => /<Block[\s/>]|<\/Block>/.test(withoutComments(read(f))));
+    expect(offenders, `these render a <Block>:\n  ${offenders.join("\n  ")}`).toEqual([]);
+  });
+
+  it("keeps the two names it chose, and each is used", () => {
+    expect(read("mobile/src/components/ProjectBits.tsx")).toMatch(/export function ProjectSection\b/);
+    expect(read("mobile/src/components/manage/bits.tsx")).toMatch(/export function SectionBlock\b/);
+    for (const [name, users] of [
+      ["ProjectSection", ["mobile/src/components/ProjectPageTabs.tsx"]],
+      ["SectionBlock", ["mobile/src/components/manage/PathPanel.tsx", "mobile/src/components/manage/Dashboard.tsx"]],
+    ] as const) {
+      for (const user of users) {
+        expect(read(user), `${user} should render <${name}>`).toContain(`<${name}`);
+      }
     }
   });
 });
