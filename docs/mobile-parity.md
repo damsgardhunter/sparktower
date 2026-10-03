@@ -84,7 +84,9 @@ What each claim turned out to be, with where the evidence is:
 
 ### Genuinely still missing
 
-- [ ] **Four of the web's five missing admin consoles.** Measured by whether the
+- [ ] **The admin consoles.** The five this entry was opened for are all on the
+  phone; what is still open is *acting* from them, below, and two screens this
+  survey never looked at — see the note after the table. Measured by whether the
   phone calls the route at all, which is the only reliable signal — a path
   comparison flags renames and by-design absences as gaps:
 
@@ -100,6 +102,14 @@ What each claim turned out to be, with where the evidence is:
   the phone, because that is what somebody does away from a desk, and the half
   that moves money or removes a protection stays on the web. Each screen says
   which half it is rather than being quietly short of the web's.
+
+  **Two the survey missed entirely**, found on 2026-10-03 by listing the web's
+  admin pages rather than re-reading this table: `admin-contests.tsx` and
+  `admin-promotions.tsx`. The phone calls `/api/admin/contests`,
+  `/api/admin/promotions` and `/api/admin/promotions/refresh` nowhere at all.
+  This table was built from a chosen five and then reasoned about as if it were
+  the whole set, which is the same mistake the pill count made twice. The web has
+  eleven admin pages and the phone has ten, nine of them shared.
 
   **Problems** keeps the web's restraint — four states and a note, no priority
   and no assignment, because "a triage system with more moving parts than
@@ -422,15 +432,22 @@ What each claim turned out to be, with where the evidence is:
   a list of permitted routes rather than a ban on write verbs: joining a company
   is not running one, and a verb check cannot tell the difference.
 
-- [ ] **The Companies surface — 54 of 55 routes still have no phone caller.**
+- [ ] **The Companies surface — most of it still has no phone caller.**
+  Re-measured 2026-10-03: **15 of 52** routes across the six company files are
+  called, so roughly thirty-seven are not. The old heading here said "54 of 55",
+  which was true when the entry was opened and contradicted its own table within
+  a day — the table below was updated as screens landed and the headline was not.
+  A number in a heading rots faster than the table under it; count it rather than
+  quote it.
+
   Measured by family rather than by screen name, which is the only signal that
   separates a missing feature from a renamed one:
 
   | File | Routes | On the phone |
   |---|---|---|
-  | `company-routes.ts` | 14 | **3 of 14** — the list, one company, and accepting an invitation, 2026-10-01 |
+  | `company-routes.ts` | 14 | **6 of 14** as of 2026-10-03 — the list, one company, accepting an invitation, and three more since |
   | `challenge-routes.ts` | 12 | **5 of 12** — the builder's side, 2026-10-01 |
-  | `company-season-routes.ts` | 11 | **the door**, via `/api/sim/join-code`, 2026-10-01 |
+  | `company-season-routes.ts` | 11 | **the door**, via `/api/sim/join-code`, 2026-10-01. The season surface is being built on the phone under its own `/api/sim/*` family, so a count against this file reads as 0 and understates it. Another session's work, in flight 2026-10-03 |
   | `talent-routes.ts` | 8 | **4 of 8** — the individual's side, 2026-10-01 |
   | `scouting-routes.ts` | 4 | no |
   | `company-verification-routes.ts` | 3 | no |
@@ -510,17 +527,24 @@ What each claim turned out to be, with where the evidence is:
   because the server keeps that difference: zero covers is a bad week, no answer
   is a week nobody counted.
 
-- [ ] **The rest of the rhythm** — `/api/projects/:id/rhythm` and its siblings:
-  the check-in, the recurring jobs, the monthly report. The phone calls none of
-  them, which the family-level survey above *missed*, because these live under
-  `/api/projects` rather than `/api/companies` and that family is touched. A
-  reminder that "the phone never calls this family" finds whole absences and not
-  partial ones.
+- [x] **The rhythm**, mostly — built 2026-10-03 as `mobile/app/rhythm/[id].tsx`,
+  reached from `app/project/[id].tsx` on a Run project. It was the best next
+  slice and it was: a weekly check-in is a recurring task somebody does away
+  from a desk, and it needs no company page to reach it.
 
-  It is the best next slice and probably the most useful thing left on the phone:
-  a weekly check-in is a recurring task somebody does away from a desk, and it
-  needs no company page to reach it — the rhythm belongs to a *project* on the
-  Run path, so it hangs off `app/project/[id].tsx`, which already exists.
+  The phone calls `/api/projects/:id/rhythm`, `/rhythm/checkins/:weekOf`,
+  `/rhythm/checkins/:weekOf/nova` and `/rhythm/jobs/:jobId/done`.
+
+  **Three siblings are still web-only**, verified by grep on 2026-10-03 rather
+  than assumed: `/rhythm/goals`, `/rhythm/settings` and
+  `/rhythm/report/:month`. The monthly report is the one worth having next — it
+  is a thing to read, which is phone-shaped; goals and settings are configuration,
+  which is not.
+
+  This entry's opening line said "the phone calls none of them" for two days
+  after the phone started calling four of them. An entry about a gap has to be
+  closed by whoever closes the gap, or it becomes the most confident wrong thing
+  in the file.
 
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.
@@ -536,8 +560,13 @@ What each claim turned out to be, with where the evidence is:
   (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
   reasoning about `unknown`: dashed and blue, never red, because "nobody has
   checked" is a question and `bad` is an answer.
-- [ ] **Sixteen semantic pills still pick their colour by hand**, in eight
-  files. Count it with the command below rather than trusting a number in this
+- [ ] **Nineteen semantic pills still pick their colour by hand**, in eleven
+  files — re-counted 2026-10-03, up from sixteen in eight because the sim surface
+  grew while this entry sat here. Seventeen of the nineteen are in
+  `mobile/src/components/sim/` and `mobile/app/sim/`, which another session is
+  mid-build in; the two reachable ones are `more/UpgradeCard.tsx` and
+  `(tabs)/leaderboard.tsx`. So this is now mostly a job to do *after* the sim work
+  lands, in one pass, rather than a job somebody is avoiding. Count it with the command below rather than trusting a number in this
   file; the first survey of this said "twenty, in nine files" and was wrong in
   both halves, because it read the first few lines of a grep and then only
   examined the files it had already noticed. `leaderboard`, `admin/backing`,
