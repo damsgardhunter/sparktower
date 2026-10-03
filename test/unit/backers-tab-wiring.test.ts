@@ -123,8 +123,20 @@ describe("the backer's side", () => {
   });
 
   it("only on their own profile", () => {
-    /* Somebody else's personal video is nobody else's business. */
-    expect(withoutComments(credits)).toMatch(/isOwnProfile && rewards/);
+    /*
+     * Somebody else's personal video is nobody else's business.
+     *
+     * The gate used to be `isOwnProfile && rewards` inline at the render. It is
+     * now a `delivered` list built once, because the card's own "draw nothing"
+     * check has to count delivered rewards too — a pledge that converted to
+     * equity is not in the pledge list, and the video recorded for it is still
+     * theirs. So this asserts the gate and that the render uses what it gated,
+     * which is what the inline form was getting at.
+     */
+    const code = withoutComments(credits);
+    expect(code).toMatch(/const delivered = isOwnProfile \? rewards \?\? \[\] : \[\];/);
+    expect(code).toMatch(/\{delivered\.length > 0 && \(/);
+    expect(code).toMatch(/delivered\.map\(/);
   });
 
   it("lets them keep a copy", () => {
