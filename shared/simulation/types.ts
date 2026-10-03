@@ -99,6 +99,27 @@ export interface Segment {
   /** What this segment considers a normal price, in whole currency units. */
   referencePrice: number;
   /**
+   * How fast a company working for *these* customers gets better at the work,
+   * overriding the market's `innovationPace` for whoever is positioned here.
+   *
+   * Absent on almost every segment, and absent means "the market's pace", so
+   * nothing balanced against the seven catalogue markets moves unless a segment
+   * opts in.
+   *
+   * It exists because one pace for a whole market is wrong wherever the hard
+   * part is *which customers you serve* rather than the trade itself.
+   * Construction is the clear case: the market's pace is 0.45, the lowest of
+   * the seven, and quality is the axis its customers weigh most — so quality
+   * decayed by three a year and was bought back at forty-five per cent, and a
+   * firm doing kitchens was held to the learning curve of public infrastructure
+   * work. Measured: a one-region residential firm stuck at quality 43 and
+   * under seven per cent of its own town, against incumbents at 51–83.
+   *
+   * Fitting out a house is not slow to learn. Becoming a company a developer or
+   * a council will hire is, and that is a different thing wearing the same word.
+   */
+  innovationPace?: number;
+  /**
    * Who went and found these people, for a segment that was not in the market
    * to begin with. See `niche-openings.ts`.
    *
@@ -682,6 +703,22 @@ export function repairCompany(c: Company): Company {
 export interface World {
   seasonId: string;
   niche: Niche;
+  /**
+   * The money this business counts in, for the sentences the engine writes.
+   *
+   * Every figure the engine puts in prose used to carry a hardcoded `£`, so a
+   * season built around a business banking in dollars was told its investors
+   * wanted "£4,200,000" — the same error `shared/currency.ts` exists to prevent,
+   * made inside the engine where that module could not reach it.
+   *
+   * Optional, and absent means GBP rather than the product's default of USD.
+   * That is a compatibility choice and not a claim: a world written before this
+   * existed produced pound signs, and quietly turning every one of them into a
+   * dollar sign would rewrite the prose of every season already in flight. The
+   * tick passes the real one (`currencyForSeason`), so the fallback only reaches
+   * callers that have no season behind them — tests, probes and projections.
+   */
+  currency?: import("../currency").CurrencyCode;
   /** 1-based. Year 1 is the first day of the season. */
   year: number;
   companies: Company[];

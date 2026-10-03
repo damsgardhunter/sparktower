@@ -177,7 +177,14 @@ export function registerProjectSimulationRoutes(app: Express): void {
         if (!prior || owner?.projectId !== project.id) {
           return res.status(404).json({ code: "no_such_season", message: "That season isn't one of this project's." });
         }
-        written = prior.customMarket ? parseMarket(JSON.stringify(prior.customMarket), prior.nicheId) : null;
+        /*
+         * Unchecked, deliberately: this market is already somebody's season. A
+         * winnability check here would turn a market they have played into
+         * "nothing to replay". See `parseMarket`.
+         */
+        written = prior.customMarket
+          ? parseMarket(JSON.stringify(prior.customMarket), prior.nicheId, { check: false })
+          : null;
         if (!written) {
           return res.status(409).json({
             code: "nothing_to_replay",

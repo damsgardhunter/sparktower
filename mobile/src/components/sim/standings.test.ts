@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import {
   biggestNotBest, gapAhead, movementRead, ordinal, ownershipRead, reputationRead,
-  shareRead, soldAway, soldUp, sortRows, standingLine, trajectory, valueGapAhead,
+  shareRead, shareReading, soldAway, soldUp, sortRows, standingLine, trajectory, valueGapAhead,
   wholeValue, yourRow, type HistoryPoint, type StandingRow,
 } from "./standings";
 
@@ -360,5 +360,58 @@ describe("the shape of a season, in the unit it is scored in", () => {
   it("keeps a zero year visible as a year, whichever unit it is drawn in", () => {
     const points = trajectory(years([{ founderValue: 0 }, { founderValue: 5_000_000 }]));
     expect(points[0].height).toBe(0.06);
+  });
+});
+
+/*
+ * The two readings of a share.
+ *
+ * This is the one place on the table where a true number was useless. A market
+ * is global; a company that has opened one region holds a fraction of a per
+ * cent of it and the table said so, so a team winning everywhere it trades read
+ * as a rounding error. The headline now answers "are we doing well" and the
+ * world reading answers "how much is left".
+ */
+describe("the two readings of a share", () => {
+  it("leads with the share of where a company actually sells", () => {
+    const r = shareReading({ share: 0.002, shareWhereYouSell: 0.23 });
+    expect(r.headline).toBe("23%");
+    expect(r.world).toBe("0.2%");
+  });
+
+  it("drops the world reading when it is the same number, rather than printing it twice", () => {
+    /* A company selling everywhere: the two are one number, and "42% · 42%" teaches a lie. */
+    const r = shareReading({ share: 0.42, shareWhereYouSell: 0.42 });
+    expect(r.headline).toBe("42%");
+    expect(r.world).toBeNull();
+  });
+
+  it("drops it when the two differ but read the same, which is the case nobody would test by hand", () => {
+    /*
+     * 23.14% and 23.02% are different numbers and both print "23%". Comparing
+     * the numbers rather than the strings would put "23% · 23% of all" on the
+     * row, which is worse than saying nothing.
+     */
+    const r = shareReading({ share: 0.2302, shareWhereYouSell: 0.2314 });
+    expect(r.headline).toBe("23%");
+    expect(r.world).toBeNull();
+  });
+
+  it("falls back to the world reading when a server has not sent the other one", () => {
+    /*
+     * A payload from before this field existed. The fallback has to be `share`
+     * and not zero: a missing field is an old server, not a company with no
+     * customers.
+     */
+    expect(shareReading({ share: 0.08, shareWhereYouSell: null }).headline).toBe("8.0%");
+    expect(shareReading({ share: 0.08 }).headline).toBe("8.0%");
+    expect(shareReading({ share: 0.08, shareWhereYouSell: null }).world).toBeNull();
+  });
+
+  it("does not let a company that has sold up read as holding its whole patch", () => {
+    /* Nought stays nought in both columns, and neither is suppressed as a duplicate of the other. */
+    const r = shareReading({ share: 0, shareWhereYouSell: 0 });
+    expect(r.headline).toBe("0%");
+    expect(r.world).toBeNull();
   });
 });

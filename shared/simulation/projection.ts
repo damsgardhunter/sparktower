@@ -121,7 +121,7 @@ function run(input: {
   let target: Projection["target"] = null;
   const inv = company.investors;
   if (inv && inv.targetYear === world.year) {
-    const review = reviewInvestors(inv, report.revenue, world.year);
+    const review = reviewInvestors(inv, report.revenue, world.year, { currency: world.currency });
     target = {
       amount: inv.target,
       projected: report.revenue,

@@ -235,8 +235,14 @@ export function botCompanyName(seed: string): string {
   return `${first}${second}`;
 }
 
-/** Every venture still gathering players, so the sweep doesn't need a caller. */
-export async function fillWaitingLobbies(): Promise<number> {
+/**
+ * Every venture still gathering players, so the sweep doesn't need a caller.
+ *
+ * Returns the rooms it seated anybody into, because a room that has just been
+ * filled is a room that is ready to move and nothing else will notice. The
+ * caller advances them — see the note in `pass` in simulation-tick.ts.
+ */
+export async function fillWaitingLobbies(): Promise<{ seated: number; filled: string[] }> {
   const waiting = await db
     .select({ id: simVentures.id })
     .from(simVentures)
@@ -254,14 +260,17 @@ export async function fillWaitingLobbies(): Promise<number> {
     .limit(100);
 
   let seated = 0;
+  const filled: string[] = [];
   for (const v of waiting) {
     try {
-      seated += await fillVentureWithBots(v.id);
+      const took = await fillVentureWithBots(v.id);
+      seated += took;
+      if (took > 0) filled.push(v.id);
     } catch (err) {
       console.error(`[sim] filling lobby ${v.id} failed:`, err);
     }
   }
-  return seated;
+  return { seated, filled };
 }
 
 /**

@@ -262,3 +262,92 @@ describe("a decision keyed by whatever the client sent", () => {
     }
   });
 });
+
+/*
+ * A sealed bid, in the one number the whole table reads.
+ *
+ * The commitment meter is the only place the five of them see what they have
+ * promised between them, and a bid at auction was invisible to it. The money is
+ * committed the moment the bid is placed: `settleMarket` takes it on the tick, the
+ * bidder cannot spend it twice, and the market screen already warns whoever placed
+ * it that their bids add up to more than the company has. It had no way to tell
+ * the other four, who were filing a year against a total that looked comfortable —
+ * which is the same failure the city-entry cost had, and is fixed the same way.
+ *
+ * An exposure rather than a certainty, since most bids lose. Counted anyway:
+ * overstating what a year might cost is the safe side of a meter whose job is to
+ * stop a table committing money it has not got.
+ */
+describe("what the table has committed, including what it has bid", () => {
+  const economy = economyFor("s", 1);
+
+  it("counts a standing bid, and leaves the total alone when there is none", () => {
+    const c = company();
+    const decisions: TeamDecisions = { companyId: "t", ceo: { focus: "growth" } } as TeamDecisions;
+    const without = commitment(c, decisions, economy, niche);
+    const withBid = commitment(c, decisions, economy, niche, null, 1_500_000);
+    expect(withBid.spend - without.spend, "a 1.5m bid did not move the total").toBeCloseTo(1_500_000, 4);
+    expect(without.bidsOutstanding, "nothing bid, so nothing to report").toBe(0);
+    expect(withBid.bidsOutstanding).toBe(1_500_000);
+  });
+
+  it("puts it on the chief executive's line, because bidding is their lever", () => {
+    /*
+     * Not spread across the table and not on its own invented seat: the meter
+     * reads "this is what each of you has committed", and bidding is refused to
+     * anybody else (`BID_IS_THE_CEOS`).
+     */
+    const c = company();
+    const seat = (x: ReturnType<typeof commitment>, role: Role) => x.bySeat.find((b) => b.role === role)!.spend;
+    const base = commitment(c, { companyId: "t" } as TeamDecisions, economy, niche);
+    const bid = commitment(c, { companyId: "t" } as TeamDecisions, economy, niche, null, 900_000);
+    expect(seat(bid, "ceo") - seat(base, "ceo")).toBeCloseTo(900_000, 4);
+    for (const role of ["cmo", "cto", "coo", "cfo"] as Role[]) {
+      expect(seat(bid, role), `${role}'s line moved because of a bid`).toBeCloseTo(seat(base, role), 4);
+    }
+  });
+
+  it("can turn a comfortable year into one the company cannot pay for", () => {
+    /*
+     * The whole point. Without this a table could file a year the meter called
+     * clear, having already promised most of the cash at auction, and find out on
+     * the tick.
+     */
+    const c = company();
+    const decisions = { companyId: "t", ceo: { focus: "growth" } } as TeamDecisions;
+    const clear = commitment(c, decisions, economy, niche);
+    expect(clear.ratio, "the baseline year is meant to be affordable").toBeLessThan(1);
+    const swamped = commitment(c, decisions, economy, niche, null, clear.available * 2);
+    expect(swamped.ratio, "bidding twice what the company has still read as affordable").toBeGreaterThan(1);
+  });
+
+  it("ignores a nonsense figure rather than poisoning the whole meter", () => {
+    /*
+     * The total arrives from a database sum, and a meter that went `NaN` because
+     * one row was odd would take every other number on the screen with it.
+     */
+    const c = company();
+    const base = commitment(c, { companyId: "t" } as TeamDecisions, economy, niche).spend;
+    for (const bad of [Number.NaN, -5_000, undefined, null as unknown as number]) {
+      const out = commitment(c, { companyId: "t" } as TeamDecisions, economy, niche, null, bad);
+      expect(Number.isFinite(out.spend), `a bid of ${String(bad)} broke the total`).toBe(true);
+      expect(out.spend).toBeCloseTo(base, 4);
+      expect(out.bidsOutstanding).toBe(0);
+    }
+  });
+
+  it("warns the table when the bids are what tipped it over", () => {
+    /*
+     * `draftPreview` is what the server sends and what both clients show, so the
+     * warnings have to see the bids too — a preview that said the year was fine
+     * while the meter beside it said otherwise would be read as the meter being
+     * broken.
+     */
+    const c = company();
+    const decisions = { companyId: "t", ceo: { focus: "growth" } } as TeamDecisions;
+    const quiet = draftPreview({ company: c, niche, decisions, economy });
+    const loud = draftPreview({ company: c, niche, decisions, economy, bids: quiet.commitment.available * 3 });
+    expect(quiet.warnings.some((w) => /committed/.test(w)), "the baseline year should not warn").toBe(false);
+    expect(loud.warnings.some((w) => /committed/.test(w)), "a year swamped by bids did not warn").toBe(true);
+  });
+});

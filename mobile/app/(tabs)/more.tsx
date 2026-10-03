@@ -213,6 +213,14 @@ export default function More() {
             <MenuRow icon="search" title="Support console" subtitle="Look somebody up, and what was done to them" tint={colors.info} onPress={() => go("/admin/console")} testID="more-console" />
             <MenuRow icon="warning" title="Problem reports" subtitle="What people told us is broken" tint={colors.warning} onPress={() => go("/admin/problems")} testID="more-problems" />
             <MenuRow icon="shield-checkmark" title="Security" subtitle="Who has power, and whether they are protected" tint={colors.danger} onPress={() => go("/admin/security")} testID="more-security" />
+            {/*
+              * These two were the consoles the mobile survey never looked at —
+              * it was built from a chosen five and then read as if that were
+              * the whole set. A screen with no row here is a screen nobody can
+              * reach, which is how they stayed missing.
+              */}
+            <MenuRow icon="trophy" title="Contests" subtitle="What the whole site is invited to enter" tint={colors.novaPurple} onPress={() => go("/admin/contests")} testID="more-contests" />
+            <MenuRow icon="megaphone" title="Promotions" subtitle="The tools in the feed, and what each one offers" tint={colors.novaEmerald} onPress={() => go("/admin/promotions")} testID="more-promotions" />
           </Group>
         )}
 

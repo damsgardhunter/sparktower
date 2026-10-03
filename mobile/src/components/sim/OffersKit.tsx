@@ -20,6 +20,7 @@
  * (shared/simulation/mergers.ts) and from the respond route, quoted through
  * offers.ts rather than rewritten here.
  */
+import { periodLabel, periodWords, seasonSpan } from "./period";
 import React from "react";
 import { Text, TextInput, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
@@ -41,20 +42,25 @@ import {
  * side by side is the whole strategic question of this screen in one glance —
  * are we the buyer here, or the thing worth buying?
  */
-export function OffersBanner({ year, totalYears, reach, you, pendingIn }: {
+export function OffersBanner({ year, totalYears, totalPeriods, period, reach, you, pendingIn }: {
   year: number;
   totalYears: number;
+  /** The denominator `year` belongs over, and the word for one of them. */
+  totalPeriods?: number | null;
+  period?: { one: string; many: string; of: string } | null;
   reach: number;
   you: YourValuation;
   /** How many offers are sitting unanswered on your table. */
   pendingIn: number;
 }) {
+  const span = seasonSpan({ totalPeriods, totalYears });
+  const words = periodWords({ period });
   return (
     <NovaGradient style={{ borderRadius: radius.md, padding: spacing.lg, gap: spacing.sm, ...shadow.card }}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.md }}>
         <View style={{ flex: 1, gap: 4 }}>
           <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.6 }}>
-            YEAR {year} OF {totalYears} · ACQUISITIONS
+            {periodLabel(year, span, words).toUpperCase()} · ACQUISITIONS
           </Text>
           <Text style={{ color: "#FFFFFF", fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 }}>
             Buying a business
@@ -474,15 +480,23 @@ export function TargetCard({
                 style={{
                   flexDirection: "row", alignItems: "flex-start", gap: 6, padding: spacing.sm,
                   borderRadius: radius.sm,
-                  backgroundColor: service.over ? tintSoft(colors.danger, 0.1) : colors.surfaceRaised,
+                  backgroundColor: service.over
+                    ? tintSoft(colors.danger, 0.1)
+                    : service.tight ? tintSoft(colors.warning, 0.1) : colors.surfaceRaised,
                 }}
               >
-                <Icon name={service.over ? "warning" : "checkmark-circle"} size={14}
-                  color={service.over ? colors.danger : colors.success} />
+                {/* Three states, three icons: a colour alone does not say which
+                    way the risk runs, and "tight" is not a worse "fine". */}
+                <Icon
+                  name={service.over ? "warning" : service.tight ? "alert-circle-outline" : "checkmark-circle"}
+                  size={14}
+                  color={service.over ? colors.danger : service.tight ? colors.warning : colors.success}
+                />
                 <Text style={{
-                  flex: 1, color: service.over ? colors.danger : colors.textSecondary,
+                  flex: 1,
+                  color: service.over ? colors.danger : service.tight ? colors.text : colors.textSecondary,
                   fontSize: font.xs, lineHeight: 17,
-                  fontFamily: service.over ? fontFamily.medium : fontFamily.regular,
+                  fontFamily: service.over || service.tight ? fontFamily.medium : fontFamily.regular,
                 }}>
                   {service.line}
                 </Text>

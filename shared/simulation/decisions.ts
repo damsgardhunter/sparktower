@@ -54,23 +54,23 @@ export interface MarketingDecision {
   targetCities: string[];
   /** Customers the seat expects to end the year with. Everybody else plans on it. From year two. */
   forecast?: number;
-  /** A price per segment; one left out pays `price`, and nought is a free tier. From year three. */
+  /** A price per segment; one left out pays `price`, and nought is a free tier. From year two. */
   tiers?: Record<string, number>;
   /** PR and influencers: cheap brand when it lands, which is a little better than half the time. From year three. */
   prSpend?: number;
-  /** A referral programme: customers bringing customers, if the product is worth it. From year four. */
+  /** A referral programme: customers bringing customers, if the product is worth it. From year three. */
   referralSpend?: number;
-  /** A promotion: a free first month, or a January sale. From year five. */
+  /** A promotion: a free first month, or a January sale. From year four. */
   promo?: "none" | "free_month" | "january";
-  /** Spent bringing back last year's leavers. From year six. */
+  /** Spent bringing back last year's leavers. From year four. */
   winbackSpend?: number;
-  /** A research report: next year's expectations, or what the incumbents will charge. From year six. */
+  /** A research report: next year's expectations, or what the incumbents will charge. From year four. */
   research?: "none" | "expectations" | "rivals";
-  /** How the year's marketing attention is split across the regions you sell in. From year seven. */
+  /** How the year's marketing attention is split across the regions you sell in. From year four. */
   regionFocus?: Record<string, number>;
-  /** And across the segments you sell to. From year eight. */
+  /** And across the segments you sell to. From year four. */
   segmentFocus?: Record<string, number>;
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -101,29 +101,29 @@ export interface FinanceDecision {
   raiseAmount?: number;
   /** Held back rather than spent. Dull, and the reason a bad year isn't a fatal one. */
   cashBuffer: number;
-  /** "short" draws on the credit line; "long" issues a fixed-rate loan with a covenant. From year three. */
+  /** "short" draws on the credit line; "long" issues a fixed-rate loan with a covenant. From year two. */
   borrowTerm?: "short" | "long";
-  /** Percentage, up to 20, held back from what a seat (or everyone) committed. From year four. */
+  /** Percentage, up to 20, held back from what a seat (or everyone) committed. From year three. */
   holdBack?: number;
   /** Whose spending the hold-back applies to: a seat, or "all". */
   holdBackSeat?: string;
-  /** Discount, up to 30%, for paying a year up front. From year four. */
+  /** Discount, up to 30%, for paying a year up front. From year three. */
   annualDiscount?: number;
-  /** Overhead cut this year, up to 20%. Service and morale find out next year. From year five. */
+  /** Overhead cut this year, up to 20%. Service and morale find out next year. From year four. */
   costReview?: number;
-  /** What to insure against. From year six. */
+  /** What to insure against. From year four. */
   insurance?: "none" | "breach" | "lawsuit" | "poaching" | "all";
-  /** Share of profit paid out, 0–100. From year six. */
+  /** Share of profit paid out, 0–100. From year four. */
   dividendPct?: number;
-  /** Days customers get to pay: 0, 30, 60 or 90. From year seven. */
+  /** Days customers get to pay: 0, 30, 60 or 90. From year five. */
   terms?: number;
-  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year eight. */
+  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year five. */
   factorPct?: number;
-  /** Credit-line debt to move onto fixed terms this year. From year eight. */
+  /** Credit-line debt to move onto fixed terms this year. From year five. */
   refinance?: number;
-  /** Cash spent buying a stake back from investors. From year nine. */
+  /** Cash spent buying a stake back from investors. From year six. */
   buyback?: number;
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -146,17 +146,17 @@ export interface TechDecision {
    * real product organisation actually argues about.
    */
   researchSpend?: number;
-  /** Engineering pay as a percentage of the market, 80–130. From year three. */
+  /** Engineering pay as a percentage of the market, 80–130. From year two. */
   engineerPay?: number;
   /** Security: lowers the odds and the size of a breach. Builds up. From year two. */
   securitySpend?: number;
   /** Analytics: a gift to the other seats. Builds up. From year three. */
   dataSpend?: number;
-  /** One feature from this year's menu, by id, or "" for none. From year four. */
+  /** One feature from this year's menu, by id, or "" for none. From year three. */
   featureBet?: string;
   /** Build it (a year, full effect, might flop) or copy a rival's (now, half effect). */
   featureMode?: "build" | "copy";
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -174,23 +174,23 @@ export interface OpsDecision {
   headcount: number;
   /** Room rented for this year only: immediate, and 40% dearer than building. From year two. */
   leaseCapacity?: number;
-  /** Spent on who the year's hires are. Lands when they arrive, next year. From year four. */
+  /** Spent on who the year's hires are. Lands when they arrive, next year. From year three. */
   recruitingSpend?: number;
-  /** Spent making the staff already here better. Lands next year. From year four. */
+  /** Spent making the staff already here better. Lands next year. From year three. */
   trainingSpend?: number;
   /** One improvement programme to start this year. From year three. */
   programme?: "" | "process" | "vendor" | "quality" | "green" | "benchmarking";
-  /** Open the region announced for next year: its city id, or "". From year five. */
+  /** Open the region announced for next year: its city id, or "". From year four. */
   expand?: string;
-  /** How automated the plant should be next year, 0–100. From year seven. */
+  /** How automated the plant should be next year, 0–100. From year five. */
   automationTarget?: number;
-  /** Units of a second shift to run this year, capped at half the room built. From year seven. */
+  /** Units of a second shift to run this year, capped at half the room built. From year five. */
   shiftCapacity?: number;
-  /** Units of stock to hold for next year. From year eight. */
+  /** Units of stock to hold for next year. From year five. */
   stockTarget?: number;
-  /** Do the work in house, or buy it in. From year eight. */
+  /** Do the work in house, or buy it in. From year five. */
   sourcing?: "in_house" | "outsourced";
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
 }
 
@@ -217,18 +217,18 @@ export interface ExecutiveDecision {
   rehire?: Role[] | Role | "";
   /** Percentages of what the company can spend, per spending seat. From year two. */
   budget?: Partial<Record<"cmo" | "cto" | "coo", number>>;
-  /** How hard each other seat's next objective is pushed. From year three. */
+  /** How hard each other seat's next objective is pushed. From year two. */
   targets?: Partial<Record<Role, "easy" | "fair" | "aggressive">>;
-  /** Paid, shared equally, to the seats that meet this year's objective. From year three. */
+  /** Paid, shared equally, to the seats that meet this year's objective. From year two. */
   bonusPool?: number;
-  /** One seat whose decision this year is reversed to last year's. From year five. */
+  /** One seat whose decision this year is reversed to last year's. From year four. */
   overrule?: Role | "";
-  /** One seat to fire, and what to bid for their replacement. From year six. */
+  /** One seat to fire, and what to bid for their replacement. From year five. */
   replaceSeat?: Role | "";
   replaceBid?: number;
-  /** "ship" it, "balanced", or get it "right". From year four. */
+  /** "ship" it, "balanced", or get it "right". From year three. */
   pace?: "ship" | "balanced" | "right";
-  /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year five. */
+  /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year three. */
   deals?: Record<string, "accept" | "decline" | "vote">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -781,6 +781,38 @@ export function nextTechDebt(input: {
  *     flattening everybody.
  *   - The guard tests re-set against the new economics *afterwards*, never to
  *     make a red suite green.
+ *
+ * ## Wired in at zero, and swept — 1 Oct 2026
+ *
+ * It is called now, from its own line in `resolve.ts` beside the idle-capacity
+ * cost, so turning it on is this constant and nothing else. It was dead code
+ * before: written, measured in some other working copy, and never invoked, which
+ * is a four-line change waiting to be made differently by each person who tries.
+ * Putting it inside `fixedCosts` is the wrong one of those four lines — that
+ * function is salaries and executives, and three tests assert on what it
+ * returns.
+ *
+ * Swept against the repaired skill guard (150 seasons, all seven markets) and
+ * the winnability guards:
+ *
+ *   PLANT_OVERHEAD   deaths/20   skill guard   principle guards
+ *       0.0             2.9         holds        all pass
+ *       0.05            —           holds        2 construction failures
+ *       0.1             3.9         holds        1 construction failure
+ *       0.2             4.9         holds        3 failures
+ *       0.3             6.9         holds        —
+ *
+ * So the target death rate is reachable at about 0.25, and the skill guard is
+ * not what stops it — that holds at every setting tried, in all seven markets.
+ * **Construction is what stops it, and it stops it immediately.** At 0.05 the
+ * self-funding archetype there reaches 18% of the best way to play against a
+ * floor of 25%: a plan that will not raise capital cannot absorb a new fixed
+ * cost, and construction is already the market with the most deaths in it.
+ *
+ * Which reverses the plan above. The second half was to make the *soft* markets
+ * harder; the blocker is the *hardest* market breaking first. Construction wants
+ * easing or exempting before the cost base can come up anywhere, and that is a
+ * market-content decision rather than a constant.
  */
 export const PLANT_OVERHEAD = 0.0;
 

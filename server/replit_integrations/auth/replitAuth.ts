@@ -7,7 +7,7 @@ import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import connectPg from "connect-pg-simple";
 import { authStorage } from "./storage";
-import bcrypt from "bcryptjs";
+import { verifyPassword } from "../../password-hash";
 import { sessionSecret } from "../../secrets";
 import { isDeleted } from "../../account-data";
 import { surfaceEnabled } from "../../surfaces";
@@ -129,7 +129,7 @@ export async function setupAuth(app: Express) {
           if (!user.passwordHash) {
             return done(null, false, { message: "This account uses Google sign-in. Please log in with Google." });
           }
-          const isValid = await bcrypt.compare(password, user.passwordHash);
+          const isValid = await verifyPassword(password, user.passwordHash);
           if (!isValid) {
             return done(null, false, { message: "Invalid email or password" });
           }

@@ -249,6 +249,106 @@ describe("playing a market again, and filling the table", () => {
   }, 60_000);
 
   /*
+   * The seat the build grants is the builder's, and now actually held for them.
+   *
+   * It used to be a seat *count* rather than a reservation. `seatCensus`
+   * counted every non-bot in the season against `paid` with nothing in it that
+   * knew who built the market, so with the one granted seat the first human
+   * through the door took it: invite a colleague, let them click first, and the
+   * person who paid for a market written around their own project was refused
+   * at their own table — the exact complaint the comment in
+   * server/project-simulation-routes.ts says was fixed. The 402 made it worse,
+   * being worded for somebody holding a forwarded link ("whoever set it up
+   * needs to add one. They'll know") and read by the person who set it up.
+   *
+   * Found by driving the running app with two accounts and both dev bypasses
+   * off: the invitee joined on the code and got the seat, and the builder got
+   * `seats_required`, `people: 2, paid: 1`.
+   *
+   * `seatCensus` now holds one seat back for the builder of a project's season
+   * while they are not yet sitting at it. The other half of that decision is
+   * the test below: a colleague cannot join a one-seat season at all until
+   * somebody buys a second seat. That is what this product says it sells — the
+   * table is free and the second person at it is the thing that costs.
+   */
+  it("lets the builder sit at the table they paid for, even if the invitee clicked first", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const colleague = await person(app, "Colleague");
+    const project = await aProject(owner.id);
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
+
+    // The build's grant: one seat, for the person who built it.
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id, cadence: "quarterly" });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    await db.insert(companyMembers).values({ companyId: company.id, userId: colleague.id, role: "member", joinedAt: new Date() });
+
+    /*
+     * The code the build handed back, not whichever season a `where(companyId)`
+     * happens to return first. There are two by now — the fixture's and the one
+     * just built — and the fixture's stands in for a market rather than being a
+     * real join link, so picking it turned every assertion below into a 404 on
+     * an unrecognised code. An unordered select for a row there are two of is
+     * a coin flip, and this one had been landing heads.
+     */
+    const code = made.body.inviteCode as string;
+
+    /*
+     * The invitee goes first, which is the whole point: before the
+     * reservation they took the seat and the builder was turned away. Now the
+     * held seat is not theirs to take, so they are told there is nowhere to put
+     * them yet — and the 402's wording ("whoever set it up needs to add one")
+     * is finally being read by somebody it is true for.
+     */
+    const theirs = await colleague.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(theirs.status, "the one seat is not the invitee's to take").toBe(402);
+    expect(theirs.body.code).toBe("seats_required");
+
+    const mine = await owner.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(mine.status, `the builder is not locked out of their own market: ${JSON.stringify(mine.body)}`).toBe(200);
+
+    // And with a second seat bought, the colleague has somewhere to sit.
+    await db.update(companies).set({ simQuarterlySeatsPaid: 2 }).where(eq(companies.id, company.id));
+    const again = await colleague.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(again.status, `a bought seat seats them: ${JSON.stringify(again.body)}`).toBe(200);
+    expect(again.body.ventureId, "and at the builder's table, not a second one").toBe(mine.body.ventureId);
+  }, 60_000);
+
+  /*
+   * The builder's seat is held, and only the builder's.
+   *
+   * A company that bought five seats for five named people has reserved
+   * nothing: every one of those seats was paid for by somebody who meant it to
+   * be used, and holding one back would be this product inventing a seat
+   * shortage out of a seat it had already sold. So the reservation is tied to
+   * the one place a seat is *granted* rather than bought — a company standing in
+   * for a project — and this is the test that stops it leaking everywhere else.
+   */
+  it("holds nothing back in a season whose seats were bought", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const colleague = await person(app, "Colleague");
+    const project = await aProject(owner.id);
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
+
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id, cadence: "quarterly" });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    await db.insert(companyMembers).values({ companyId: company.id, userId: colleague.id, role: "member", joinedAt: new Date() });
+    /*
+     * Seats bought, and the company no longer standing in for a project — which
+     * is what a company that signed up on its own account looks like. Nothing
+     * is held for anybody, so whoever clicks first sits down.
+     */
+    await db.update(companies)
+      .set({ simQuarterlySeatsPaid: 2, projectId: null })
+      .where(eq(companies.id, company.id));
+
+    const theirs = await colleague.agent.post("/api/sim/join-code")
+      .set("x-forwarded-for", ip()).send({ code: made.body.inviteCode as string });
+    expect(theirs.status, `a bought seat is anybody's: ${JSON.stringify(theirs.body)}`).toBe(200);
+  }, 60_000);
+
+  /*
    * A solo project is one chair.
    *
    * `soloMode` existed and meant the opposite of this: it only changed the

@@ -31,111 +31,30 @@ import { describe, it, expect } from "vitest";
 import { buildWorld, economyFor } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { defaultDraft } from "@shared/simulation/levers";
-import { NICHES } from "@shared/simulation/niches";
+import { NICHES, nicheById } from "@shared/simulation/niches";
 import { buildCustomMarket } from "@shared/simulation/custom-market";
+import {
+  economyFalls, heldBy, playCompetently, winnabilityOf, WINNABLE_RATES, WINNABLE_SEEDS,
+} from "@shared/simulation/winnable";
 import { ROLES, type Role, type TeamDecisions, type World } from "@shared/simulation/types";
 
-const held = (c: any) => Object.values(c?.customers ?? {}).reduce((sum: number, n: any) => sum + Number(n || 0), 0);
-
-/**
- * A season played the way somebody sensible would play it: quality first while
- * the company is small, growth once it has something to grow, capacity kept
- * ahead of what is served, and a steady share of the money spent each period.
+/*
+ * The harness moved to `shared/simulation/winnable.ts`.
  *
- * `rate` is that share. Nothing here is tuned to any particular market — the
- * point is that an ordinary competent plan works everywhere, not that a
- * market-specific one does.
+ * It had to: a market Nova writes at runtime now gets the same check before
+ * players are given it (`parseMarket`), and a guard more forgiving than this test
+ * would let through exactly the markets this test exists to catch. One definition,
+ * so they cannot disagree — the comments explaining the plan, the rates and the
+ * falling-economy rule went with it.
  */
-function play(niche: any, seasonId: string, rate: number, withEvents = false, cadence: "quarterly" | "monthly" = "quarterly") {
-  let world: World = buildWorld({
-    seasonId, niche, cadence,
-    teams: [{ id: "me", name: "Mine", seats: [...ROLES] as Role[], officers: 1 }],
-  });
-  let previous: any;
-  let last: any;
-  let profitable = 0;
-  const spans = cadence === "monthly" ? 24 : 16;
-  for (let period = 1; period <= spans; period++) {
-    const me: any = world.companies.find((c) => c.id === "me")!;
-    /*
-     * A share of the bank each *year*, not each decision.
-     *
-     * `RATES` is written per quarter, and a monthly season decides three times
-     * as often — so spending the same fraction every period spends three times
-     * as much a year, which made a monthly season look like the engine was
-     * broken when it was this line. Marketing, product and operations all came
-     * out at exactly 3x annualised while salaries and idle capacity matched,
-     * which is the tell. It is the same mistake `cadence.ts` exists to warn
-     * about, made in the harness rather than the engine.
-     */
-    const spend = Math.max(0, Number(me.cash) * rate * (4 / (cadence === "monthly" ? 12 : 4)));
-    const want: Record<string, any> = {
-      ceo: { focus: period <= 6 ? "quality" : "growth" },
-      cmo: { brandSpend: Math.round(spend * 0.25), performanceSpend: Math.round(spend * 0.15) },
-      cto: { featureSpend: Math.round(spend * 0.2), reliabilitySpend: Math.round(spend * 0.2), researchSpend: Math.round(spend * 0.1) },
-      coo: { capacityTarget: Math.max(Number(me.capacity) || 0, Math.round(held(me) * 2)), supportSpend: Math.round(spend * 0.1) },
-    };
-    const filed: any = { companyId: "me" };
-    for (const role of ROLES) filed[role] = { ...defaultDraft(role, me, previous?.[role]), ...(want[role] ?? {}) };
-    /*
-     * The period's economy, which is what the server passes (`tickSeason`).
-     * Left out, `resolveYear` holds the opening economy for the whole season and
-     * demand never moves — so every level ever measured from this file was
-     * measured against an economy that does not happen.
-     */
-    const out = resolveYear(
-      { ...world, year: period },
-      [filed as TeamDecisions],
-      economyFor(seasonId, period, 4),
-      withEvents ? {} : { withoutEvent: true },
-    );
-    last = out.reports.find((r: any) => r.companyId === "me");
-    if (last.profit > 0) profitable++;
-    previous = filed;
-    world = out.world;
-  }
-  return {
-    profitable,
-    worth: last.value ?? last.founderValue ?? 0,
-    customers: held(world.companies.find((c: any) => c.id === "me")),
-    bankrupt: !!last.bankrupt,
-  };
-}
-
-/* Three seeds spanning the economy's range: below trend, near it, and a boom. */
-const SEEDS = ["w", "a", "h"];
-/* Two honest rates. The best of them is what "played competently" means here. */
-/**
- * Four honest rates, not two, and the low ones matter most.
- *
- * These were 0.06 and 0.12 of the bank *per quarter* — a quarter to a half of
- * everything the company has, every year. That is not "playing competently",
- * it is spending hard, and once the score grew a term for earnings the engine
- * started punishing it correctly: on several rising seasons the best of those
- * two rates lost to filing nothing, and the test read that as the market being
- * broken rather than as both of its candidates being bad.
- *
- * A founder has the option of spending a little, and in a thin market it is
- * usually the right one. The best of these is what "played competently" means.
- */
-const RATES = [0.01, 0.03, 0.06, 0.12];
-
-/**
- * Whether a season's economy ends below where it started.
- *
- * It decides what "playing well" even means, so it has to be asked. The economy
- * is a cycle and a season opening at the top of it falls all the way down — seed
- * "h" runs 1.118 to 0.908 over sixteen quarters. Spending into that is a
- * mistake the desk warns about a period ahead: `outlook` is computed from the
- * step to the next period, reads "tightening", and is on the screen. Holding the
- * money is the better play, and a test demanding that spending beat holding
- * would be asserting the game ought to reward a signposted mistake.
- *
- * So on a falling season the claim is only that there is still a business at the
- * end of it. On a flat or rising one, building it has to pay.
- */
-const falls = (seed: string, periods = 4, spans = 16) =>
-  economyFor(seed, spans, periods).demand < economyFor(seed, 1, periods).demand - 0.02;
+const held = heldBy;
+const play = (
+  niche: any, seasonId: string, rate: number, withEvents = false,
+  cadence: "quarterly" | "monthly" = "quarterly",
+) => playCompetently(niche, seasonId, rate, withEvents, cadence);
+const SEEDS = WINNABLE_SEEDS;
+const RATES = WINNABLE_RATES;
+const falls = economyFalls;
 
 describe("every market can be won", () => {
   for (const niche of NICHES) {
@@ -378,3 +297,65 @@ describe("a market Nova wrote can be won too", () => {
     });
   }
 }, 600_000);
+
+/*
+ * The guard that runs where markets are written, against the markets that ship.
+ *
+ * `winnabilityOf` is the cheap version of everything above, and it runs inside
+ * `parseMarket` so a market Nova writes at runtime is checked before anybody is
+ * given it. A guard has exactly one calibration available: the seven markets that
+ * are known to be playable have to pass it. If it ever rejects one of those, the
+ * guard is wrong about the market and not the other way round — and the cost of
+ * being wrong that way is invisible, because the route falls back to the catalogue
+ * and nobody is told the market they asked for was thrown away.
+ *
+ * This caught a real mistake. The first version checked eight periods on the
+ * reasoning that the faults show early; six of the seven failed, because a company
+ * does not turn a profitable quarter in its first two years.
+ */
+describe("the runtime winnability guard", () => {
+  for (const niche of NICHES) {
+    it(`passes ${niche.id}, which is known to be playable`, () => {
+      const verdict = winnabilityOf(niche);
+      expect(verdict.ok, `${niche.id} was rejected: ${verdict.problems.join("; ")}`).toBe(true);
+    }, 30_000);
+  }
+
+  it("refuses a market with nothing in it, rather than throwing at whoever asked", () => {
+    for (const nothing of [null, undefined, { ...nicheById("podcasts")!, segments: [] }]) {
+      const verdict = winnabilityOf(nothing as any);
+      expect(verdict.ok).toBe(false);
+      expect(verdict.problems.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("catches a market whose segments are already fully owned", () => {
+    /*
+     * The first of the three faults, in its simplest form: rivals seated across
+     * the whole of every segment leave a founder nobody to win. This is the shape
+     * the sweeps found by noticing a column of zeros.
+     */
+    const base = nicheById("podcasts")!;
+    const taken = {
+      ...base,
+      incumbents: base.incumbents.map((i) => ({
+        ...i,
+        startingShare: Object.fromEntries(base.segments.map((sg) => [sg.id, 1])),
+      })),
+    } as any;
+    const verdict = winnabilityOf(taken);
+    expect(verdict.ok, "a market with no unowned customers passed the guard").toBe(false);
+  }, 30_000);
+
+  it("says what was checked, so a verdict can be read back later", () => {
+    /*
+     * It is logged and then thrown away — the route falls back and carries on — so
+     * the verdict has to carry enough to tell later whether the guard was being
+     * strict or the market was being bad.
+     */
+    const verdict = winnabilityOf(nicheById("podcasts")!);
+    expect(verdict.checked.periods).toBe(16);
+    expect(verdict.checked.seeds.length).toBeGreaterThan(0);
+    expect(verdict.checked.rates.length).toBeGreaterThan(1);
+  }, 30_000);
+});

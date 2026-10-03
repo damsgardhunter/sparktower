@@ -29,6 +29,7 @@
  * writing of the season live in the route, where the entitlement is.
  */
 import { parseModelJson } from "./ai-json";
+import { winnabilityOf } from "@shared/simulation/winnable";
 import { buildCustomMarket, MIN_SEGMENT_SIZE, MAX_SEGMENT_SIZE, MIN_SEGMENTS, MAX_SEGMENTS, MIN_REGIONS, MAX_REGIONS, MIN_INCUMBENTS, MAX_INCUMBENTS, RIVALS_IN_A_CUSTOM_SEASON } from "@shared/simulation/custom-market";
 import type { Niche } from "@shared/simulation/types";
 
@@ -202,7 +203,27 @@ export function buildMarketPrompt(input: {
  * is an answer rather than an exception thrown at somebody who pressed a
  * button.
  */
-export function parseMarket(raw: string, fallbackId: string): Niche | null {
+export function parseMarket(
+  raw: string,
+  fallbackId: string,
+  opts: {
+    /**
+     * Whether to refuse a market a business cannot be built in.
+     *
+     * True when Nova has just written one, which is the only moment refusing is
+     * useful — the route falls back to the catalogue and the player is told the
+     * market is not theirs.
+     *
+     * **False when replaying a market a project already owns.** A stored market
+     * that failed this check would come back as "nothing to replay", which is a
+     * worse outcome than the one being prevented: it is a season somebody has
+     * already played being declared not to exist. If an old market is unwinnable
+     * that is worth knowing, and it is not worth taking their season away to say
+     * so.
+     */
+    check?: boolean;
+  } = {},
+): Niche | null {
   let parsed: unknown;
   try {
     parsed = parseModelJson(raw, "market");
@@ -210,5 +231,41 @@ export function parseMarket(raw: string, fallbackId: string): Niche | null {
     return null;
   }
   /* Nova has just written it, so this is the one moment the market may be changed. */
-  return buildCustomMarket(parsed, fallbackId, { fresh: true });
+  const written = buildCustomMarket(parsed, fallbackId, { fresh: true });
+  if (!written) return null;
+
+  /*
+   * And the one moment it can still be refused.
+   *
+   * `buildCustomMarket` checks the market's *shape* — every number clamped to a
+   * range the engine survives, the shares normalised rather than rejected — and
+   * says nothing about whether a business can be built in it. Three faults have
+   * produced markets nobody could play (rivals seated across the whole of a
+   * segment, the same arriving through the economy, an opening plant whose idle
+   * cost bankrupted the founder), and each was found by sweeping the catalogue
+   * rather than by anybody reporting it. They would not have been reported: a
+   * season that cannot be won is not a bug, it is a fortnight somebody spends
+   * losing and concludes they are bad at it.
+   *
+   * So a market that cannot be won is treated as a market that did not come back.
+   * Returning null is already the documented answer for an unreadable one and the
+   * route already handles it — it falls back to the nearest of the seven and tells
+   * the player the market is not theirs — which is a far better outcome than a
+   * bespoke market they cannot play. 57ms, against a model call of several
+   * seconds.
+   *
+   * Logged with what was wrong, because this is the only trace left: the fallback
+   * is silent by design, so without this nobody could tell a model writing bad
+   * markets from a guard that had become too strict.
+   */
+  if (opts.check === false) return written;
+  const verdict = winnabilityOf(written);
+  if (!verdict.ok) {
+    console.warn(
+      `[nova-market] refused an unwinnable market (${written.id}): ${verdict.problems.join("; ")} ` +
+      `— checked ${verdict.checked.periods} periods on seed(s) ${verdict.checked.seeds.join(", ")}. Falling back to the catalogue.`,
+    );
+    return null;
+  }
+  return written;
 }

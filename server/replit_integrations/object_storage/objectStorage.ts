@@ -592,49 +592,62 @@ export class ObjectStorageService {
     return objectFile;
   }
 
-  normalizeObjectEntityPath(
-    rawPath: string,
-  ): string {
-    // If this is a standard Google Storage URL, extract the path
-    if (rawPath.startsWith("https://storage.googleapis.com/")) {
-      const url = new URL(rawPath);
-      return url.pathname;
-    }
-
-    // Local fallback: if the rawPath points to our internal-local-upload endpoint,
-    // convert it to an object entity path used by the app: /objects/uploads/<id>
+  /**
+   * Turns whatever names an upload into the `/objects/...` path the app stores.
+   *
+   * Everything that uploads goes through here: the client is handed a presigned
+   * URL and an `objectPath`, PUTs to the first, and saves the second. So the
+   * answer has to be a path `GET /objects/...` can serve.
+   *
+   * It did not used to be, with a real bucket. A Google signed URL took the
+   * first branch and returned its pathname — `/<bucket>/<prefix>/uploads/<id>`
+   * — and returned before reaching the code below that strips the prefix and
+   * makes it `/objects/uploads/<id>`. Everything under that branch was
+   * unreachable for the one case it mattered in.
+   *
+   * What that looked like: the résumé upload answered "that doesn't look like
+   * an uploaded file", because `attach-resume` checks the shape. Every other
+   * upload — avatar, cover, project logo, post image — had no such check and
+   * stored the unresolvable path, so the file was really in the bucket and the
+   * row pointed somewhere nothing serves. The loud failure was the lucky one.
+   *
+   * Local development never saw it: the fallback returns an
+   * `/internal-local-upload/<id>` URL that the second branch handles, which is
+   * why this survived until a bucket was configured.
+   */
+  normalizeObjectEntityPath(rawPath: string): string {
+    /* The local-dev upload endpoint names its object directly. */
     const serverBase = process.env.SERVER_BASE_URL || `http://localhost:${process.env.PORT || 5001}`;
     if (rawPath.startsWith(serverBase + "/internal-local-upload/")) {
-      const id = rawPath.split("/internal-local-upload/")[1];
+      const id = rawPath.split("/internal-local-upload/")[1].split("?")[0];
       return `/objects/uploads/${id}`;
     }
 
-    // Unknown URL; return as-is
-    if (!rawPath.startsWith("/")) {
+    /*
+     * Reduce whatever arrived to a path. A full URL gives up its pathname; a
+     * path is already one, and is not fed to `new URL` — which throws without
+     * a base, as the line that used to do it would have on every bare path.
+     */
+    let rawObjectPath: string;
+    if (rawPath.startsWith("/")) {
+      rawObjectPath = rawPath.split("?")[0];
+    } else {
       try {
-        const url = new URL(rawPath);
-        return url.pathname;
+        rawObjectPath = new URL(rawPath).pathname;
       } catch {
         return rawPath;
       }
     }
-  
-    // Extract the path from the URL by removing query parameters and domain
-    const url = new URL(rawPath);
-    const rawObjectPath = url.pathname;
-  
+
+    /* Already an entity path: a caller normalising twice gets the same answer. */
+    if (rawObjectPath.startsWith("/objects/")) return rawObjectPath;
+
     let objectEntityDir = this.getPrivateObjectDir();
-    if (!objectEntityDir.endsWith("/")) {
-      objectEntityDir = `${objectEntityDir}/`;
-    }
-  
-    if (!rawObjectPath.startsWith(objectEntityDir)) {
-      return rawObjectPath;
-    }
-  
-    // Extract the entity ID from the path
-    const entityId = rawObjectPath.slice(objectEntityDir.length);
-    return `/objects/${entityId}`;
+    if (!objectEntityDir) return rawObjectPath;
+    if (!objectEntityDir.endsWith("/")) objectEntityDir = `${objectEntityDir}/`;
+
+    if (!rawObjectPath.startsWith(objectEntityDir)) return rawObjectPath;
+    return `/objects/${rawObjectPath.slice(objectEntityDir.length)}`;
   }
 
   // Tries to set the ACL policy for the object entity and return the normalized path.

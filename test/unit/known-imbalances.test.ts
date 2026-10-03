@@ -38,6 +38,7 @@ import { OPENING_BUDGET } from "@shared/simulation/season";
 import { BOUGHT_REACH_FLOOR } from "@shared/simulation/world";
 import { ROLES, type Role, type TeamDecisions, type World } from "@shared/simulation/types";
 import { seedIncumbents } from "@shared/simulation/incumbents";
+import { allocate } from "@shared/simulation/market";
 import { startingCompany } from "@shared/simulation/season";
 import { botDecision } from "@shared/simulation/bots";
 
@@ -268,4 +269,105 @@ describe("owning something for a whole year", () => {
     };
     expect(year([patent, deal]), "owning two good things made the year worse").toBeGreaterThan(year([]));
   });
+});
+
+/**
+ * The local business that cannot quite become the dominant one.
+ *
+ * Open, and the one live alarm in this file.
+ *
+ * Residential construction was unplayable until `Segment.innovationPace` existed:
+ * the market's pace is 0.45, the lowest of the seven and set by public
+ * infrastructure work, while quality is the axis its customers weigh most — so a
+ * firm doing kitchens was held to the learning curve of a motorway. Measured
+ * before, sixteen strategies over four seeds, one region: a peak of 6.6% of its
+ * own town, quality stuck at 43 against incumbents at 51–83, and eleven of the
+ * sixteen bankrupt in all four seeds. It is playable now: 12.6% peak, quality 70,
+ * profitable, no deaths among the strategies that reinvest.
+ *
+ * What it still cannot reliably do is what a local operator should be able to aim
+ * at — hold about a third of its own town.
+ *
+ * ## Read over seeds, and that is the point
+ *
+ * The first version of this was written against one `seasonId` and reported a
+ * ceiling of 32.9% at quality/brand/service 80. That figure was the top of a wide
+ * range rather than a ceiling: `buildWorld` seeds the incumbents from the season
+ * id, so the same stats are worth anything from 20.0% to 37.5% depending on who a
+ * table is drawn against. Measured across twelve seeds:
+ *
+ *     stats (q/b/s, rep)      min    median     max
+ *     75/77/68, rep 70       13.8%    20.4%    34.3%   ← what a season actually reaches
+ *     80/80/80, rep 70       20.0%    24.9%    37.5%
+ *     90/90/90, rep 70       24.7%    27.9%    41.1%
+ *     100/100/100, rep 90    32.2%    35.4%    48.8%
+ *
+ * So a third of a town is reachable, and only at stats near the top of the scale
+ * or against a soft draw. At the stats fourteen periods actually buy — quality
+ * around 75, brand and service in the seventies — the middle outcome is about a
+ * fifth. The season measurement agrees: a firm pushing as hard as it can afford
+ * plateaus near 15%.
+ *
+ * Whether that is a gap or the right answer for a dominant local position against
+ * four incumbents is a judgement nobody has made. This is an alarm rather than a
+ * guard so it cannot be settled by accident: anything that moves the climb makes
+ * it pass, and a passing `.fails` test is a failure that says so.
+ */
+describe("a local firm in the market that is cheapest to enter", () => {
+  const niche = nicheById("construction")!;
+  const homeowners = niche.segments.find((s) => s.id === "homeowners")!;
+  const town = [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
+  const inTown = homeowners.size * town.weight;
+  /*
+   * Twelve, because one is a coin toss: the incumbents are seeded from the season
+   * id and the same stats swing by seventeen points of share across these.
+   */
+  const SEEDS = ["cap", "imb", "s1", "s2", "s3", "s4", "loc1", "loc2", "a", "b", "c", "d"];
+
+  /** The middle share the allocator pays a firm with these stats, in its own town. */
+  const medianShare = (quality: number, brand: number, service: number, reputation: number): number => {
+    const shares = SEEDS.map((seed) => {
+      const world = buildWorld({ seasonId: seed, niche, teams: [{ id: "us", name: "Us", seats: [...ROLES] as Role[] }] });
+      const us = {
+        ...world.companies.find((c) => c.id === "us")!,
+        quality, brand, service, reputation,
+        price: homeowners.referencePrice, positioning: homeowners.id,
+        cities: [town.id], ramp: { [town.id]: 1 },
+        capacity: Number.MAX_SAFE_INTEGER,
+      } as any;
+      const { held } = allocate(
+        world.companies.map((c) => (c.id === "us" ? us : c)),
+        niche, 1,
+        { demand: 1, interestRate: 0.08, costIndex: 1, outlook: "steady" as const },
+        1,
+      );
+      return (held["us"]?.[homeowners.id] ?? 0) / inTown;
+    }).sort((a, b) => a - b);
+    return shares[Math.floor(shares.length / 2)];
+  };
+
+  it("has a third of a town available to a firm that gets very good", () => {
+    /*
+     * An ordinary guard, and it has to hold for the alarm below to mean anything:
+     * if the allocator stopped paying a third of a town to a near-perfect local
+     * firm, the alarm would start failing for the wrong reason and somebody would
+     * read it as the climb having been fixed.
+     */
+    expect(medianShare(100, 100, 100, 90), "a third of its own town is no longer available to a local firm at all")
+      .toBeGreaterThan(0.3);
+  }, 60_000);
+
+  it.fails("lets a firm reach it on the stats a season actually buys", () => {
+    /*
+     * The open problem, as the property the game ought to have. Quality around 75
+     * with brand and service in the seventies is what fourteen periods of
+     * reinvestment buys a one-region residential firm; it is worth about a fifth
+     * of the town, and a third is the aim.
+     *
+     * Read off the allocator rather than by running seasons: a sweep would be slow
+     * here and would measure the strategy as much as the market. The season
+     * figures it stands in for are in the comment above.
+     */
+    expect(medianShare(75, 77, 68, 70)).toBeGreaterThan(0.3);
+  }, 60_000);
 });

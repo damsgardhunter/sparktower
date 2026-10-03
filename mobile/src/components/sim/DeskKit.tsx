@@ -9,8 +9,22 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Pressable, Text, TextInput, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
-import { Btn, Icon, NovaGradient } from "../ui";
+import { Btn, Card, Icon, NovaGradient } from "../ui";
+import { SimSectionTitle } from "./SimKit";
+/*
+ * Two Pills in this file, deliberately.
+ *
+ * `MoreKit`'s takes a colour and is for decoration — a figure, a kind, a label
+ * keyed to something that is not a state. `nova`'s takes a *tone* and is for
+ * states, which is what "what does green mean here" has to be answered once
+ * for. `nova/Pill`'s own note explains why they are not merged: a tier and a
+ * severity are not the same kind of thing.
+ *
+ * Imported as `StatePill` so a reader can tell at the call site which question
+ * the pill is answering.
+ */
 import { Pill, tintSoft } from "../MoreKit";
+import { Pill as StatePill } from "../nova/Pill";
 import {
   OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, RAISE_VALUATION_FLOOR, bump, capUse,
   citiesOpening, clampToField,
@@ -23,7 +37,13 @@ import {
   type Covenant, type DeskCity, type DeskDistress, type DeskEconomy, type DeskRival, type DeskRole,
   type DeskTableSeat, type LeverField, type RecoveryKind, type RecoveryOption, type ReportEvent,
   type TargetProgress, type TargetResult,
-} from "./desk";
+  canNudge,
+  type DeskExpansion,
+  expansionOutcome,
+  voteOf,
+  voteLabel,
+  type DeskNiche,
+  type DeskResearch,} from "./desk";
 
 type IconName = React.ComponentProps<typeof Icon>["name"];
 
@@ -204,6 +224,22 @@ export function CommitmentMeter({ commitment, live, titleOf }: {
             </Text>
             <Text style={{ color: colors.warning, fontSize: font.sm, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}>
               {money(commitment.openingCost)}
+            </Text>
+          </View>
+        ) : null}
+        {/* And anything standing at auction, which is the one part of this total
+            nobody on this screen filed: it arrives from the market and moves
+            without a lever being touched here. Most bids lose, which is why it is
+            named as an exposure rather than folded in silently — but it is money
+            the company has promised and cannot spend twice. */}
+        {commitment.bidsOutstanding > 0 ? (
+          <View testID="desk-commitment-bids" style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <Text style={{ width: 44, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.bold }} />
+            <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
+              of which bid at auction, not yet settled
+            </Text>
+            <Text style={{ color: colors.warning, fontSize: font.sm, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}>
+              {money(commitment.bidsOutstanding)}
             </Text>
           </View>
         ) : null}
@@ -662,7 +698,7 @@ export function CitiesField({ field, cities, value, error, onChange, disabled }:
     <View style={{ gap: spacing.sm }} testID="desk-cities">
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
-        <Pill label={`${percent(after, 0)} reach`} icon="map-outline" color={after >= 0.999 ? colors.success : colors.info} />
+        <StatePill label={`${percent(after, 0)} reach`} icon="map-outline" tone={after >= 0.999 ? "good" : "info"} />
       </View>
 
       <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
@@ -770,7 +806,7 @@ function CityRow({ city, selected, disabled, onPress }: {
           <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
             {percent(city.weight, 0)} of the market
           </Text>
-          {locked ? <Pill label="Already open" color={colors.success} /> : null}
+          {locked ? <StatePill label="Already open" tone="good" /> : null}
         </View>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
           {city.note}
@@ -1204,10 +1240,23 @@ export function EventCard({ event, year }: { event: ReportEvent; year: number })
   );
 }
 
-export function ReportCard({ report }: { report: CompanyReport }) {
+export function ReportCard({ report, onOpen }: {
+  report: CompanyReport;
+  /**
+   * Opens the full year-end accounts, where they exist.
+   *
+   * This card is a summary and was, on the phone, the whole of it — six figures
+   * and a few notes, with no way through to which of the five seats spent the
+   * money. Tapping it is the gesture the web has from the same card.
+   */
+  onOpen?: () => void;
+}) {
   const good = report.profit >= 0;
+  const Frame: any = onOpen ? Pressable : View;
   return (
-    <View style={{
+    <Frame
+      {...(onOpen ? { onPress: onOpen, accessibilityRole: "button", testID: "desk-report-open" } : {})}
+      style={{
       borderRadius: radius.md, backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.md,
       borderWidth: 1, borderColor: colors.border,
       borderLeftWidth: 3, borderLeftColor: report.bankrupt ? colors.danger : good ? colors.success : colors.warning,
@@ -1221,7 +1270,10 @@ export function ReportCard({ report }: { report: CompanyReport }) {
         {/* The rank is by founder-owned value now, and saying which is not a
             detail: a team that gained customers and slipped a place would
             otherwise read the number as broken. */}
-        <Pill label={`#${report.rank} by what you own`} color={report.rank <= 2 ? colors.success : colors.info} />
+        <StatePill label={`#${report.rank} by what you own`} tone={report.rank <= 2 ? "good" : "info"} />
+        {/* Last, so the row reads title → standing → "there is more", which is
+            the order the eye travels. */}
+        {onOpen ? <Icon name="chevron-forward" size={16} color={colors.textTertiary} /> : null}
       </View>
 
       {report.bankrupt ? (
@@ -1295,16 +1347,31 @@ export function ReportCard({ report }: { report: CompanyReport }) {
           ))}
         </View>
       )}
-    </View>
+    </Frame>
   );
 }
 
 // --- The rest of the table -----------------------------------------------
 
 /** One seat, and whether it has filed this year. */
-export function FiledRow({ seat, spend }: { seat: DeskTableSeat; spend?: number }) {
+export function FiledRow({ seat, spend, onNudge, nudging, onOpen }: {
+  seat: DeskTableSeat;
+  spend?: number;
+  /** Offered only where the server would accept it — see `canNudge`. */
+  onNudge?: () => void;
+  nudging?: boolean;
+  /** Opens the seat's own screen, which is where a season's worth of turnout is. */
+  onOpen?: () => void;
+}) {
+  /*
+   * The row opens the person; the button nudges them. Two different intentions on
+   * one line, so the button stops the press from reaching the row — otherwise
+   * reminding somebody also navigates away from the table you were reading.
+   */
+  const Row = onOpen ? Pressable : View;
   return (
-    <View
+    <Row
+      {...(onOpen ? { onPress: onOpen, accessibilityRole: "button" as const } : {})}
       testID={`desk-filed-${seat.role ?? seat.userId}`}
       style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 7 }}
     >
@@ -1334,15 +1401,39 @@ export function FiledRow({ seat, spend }: { seat: DeskTableSeat; spend?: number 
           {spend > 0 ? money(spend) : "—"}
         </Text>
       ) : null}
-    </View>
+      {/*
+        * A reminder, for a seat the table is actually waiting on. Shown only
+        * where the server would accept it, because a button that offers itself
+        * and then explains why it could not is worse than no button.
+        */}
+      {onNudge && canNudge(seat) ? (
+        <Btn
+          label={nudging ? "…" : "Nudge"}
+          icon="alarm-outline"
+          variant="outline"
+          onPress={onNudge}
+          disabled={!!nudging}
+          testID={`desk-nudge-${seat.role}`}
+        />
+      ) : null}
+    </Row>
   );
 }
 
 /** A company you're up against, as it stood at the end of last year. */
-export function RivalRow({ rival, yourCustomers }: { rival: DeskRival; yourCustomers: number }) {
+export function RivalRow({ rival, yourCustomers, onOpen }: {
+  rival: DeskRival;
+  yourCustomers: number;
+  /** Opens the rival's own screen. Omitted where there is nowhere to go. */
+  onOpen?: () => void;
+}) {
   const ahead = rival.customers > yourCustomers;
+  const Row = onOpen ? Pressable : View;
   return (
-    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm, paddingVertical: 6 }}>
+    <Row
+      {...(onOpen ? { onPress: onOpen, accessibilityRole: "button" as const, testID: `desk-open-rival-${rival.id}` } : {})}
+      style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm, paddingVertical: 6 }}
+    >
       <View style={{ width: 54, alignItems: "flex-end" }}>
         <Text style={{ color: ahead ? colors.text : colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
           {money(rival.customers)}
@@ -1362,7 +1453,7 @@ export function RivalRow({ rival, yourCustomers }: { rival: DeskRival; yourCusto
           </Text>
         ) : null}
       </View>
-    </View>
+    </Row>
   );
 }
 
@@ -1857,5 +1948,227 @@ export function CovenantStrip({ covenant, spend }: { covenant: Covenant; spend: 
         </Text>
       </View>
     </View>
+  );
+}
+
+/**
+ * The region on the table, and what the table has said about it.
+ *
+ * The phone could already *cast* this vote — `expandVote` is a `levels` lever
+ * and `LevelsField` draws it, with the region's name and price in the option's
+ * own help text. What it could not do was show the rest of the table: who had
+ * voted, which way, and whether it carried. On the one decision in the game whose
+ * whole point is finding out what your colleagues think, a phone player was
+ * voting blind while the person beside them on a laptop watched the tally move.
+ *
+ * The data was in the desk payload the whole time. This reads it.
+ *
+ * Two states, and the difference matters more than it looks. A region is
+ * *announced* to everybody every year; until the operations seat actually puts it
+ * up, nobody's vote counts and nothing is being decided. So an unproposed region
+ * says so plainly rather than showing five seats that have all "not voted" — the
+ * difference between a table that is undecided and a question nobody has asked.
+ */
+export function ExpansionVoteCard({ data, seats }: {
+  data: DeskExpansion;
+  seats: DeskTableSeat[];
+}) {
+  const money = (n: number) => Math.round(n).toLocaleString();
+  /*
+   * Operations first, because operations is the seat that puts a region up and
+   * putting it up counts as its vote. The rest keep the table's own order.
+   */
+  const ordered = [...seats.filter((s) => s.role)]
+    .sort((a, b) => (a.role === "coo" ? 0 : 1) - (b.role === "coo" ? 0 : 1));
+
+  return (
+    <Card accent={data.proposed ? (data.carried ? colors.success : colors.warning) : colors.textTertiary}>
+      <View style={{ gap: spacing.sm }}>
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Icon name="location-outline" size={14} color={colors.textSecondary} />
+              <Text numberOfLines={1} style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>
+                {data.region.name}
+              </Text>
+            </View>
+            <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular, marginTop: 2 }}>
+              {data.region.note}
+            </Text>
+          </View>
+          <Pill
+            label={expansionOutcome(data)}
+            color={data.proposed ? (data.carried ? colors.success : colors.warning) : colors.textTertiary}
+          />
+        </View>
+
+        <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+          {data.proposed
+            ? `Operations has put it to the table at ${money(data.cost)} now, opening next year. `
+              + `${data.yes} for and ${data.no} against so far — `
+              + (data.carried
+                ? "as it stands, it opens."
+                : "as it stands, it stays shut. A tie or silence leaves the region closed.")
+            : `Announced for next year at ${money(data.cost)}. Operations has not put it up, so nothing is `
+              + "being decided and no vote counts yet."}
+        </Text>
+
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md, marginTop: 2 }}>
+          {ordered.map((seat) => {
+            const vote = voteOf(data, seat.role);
+            return (
+              <View key={seat.userId} style={{ width: 62, alignItems: "center", gap: 3 }} testID={`expansion-voter-${seat.role}`}>
+                <View style={{
+                  width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center",
+                  backgroundColor: vote === "yes" ? tintSoft(colors.success) : vote === "no" ? tintSoft(colors.danger) : colors.surfaceRaised,
+                  opacity: vote ? 1 : 0.55,
+                }}>
+                  <Icon
+                    name={vote === "yes" ? "checkmark" : vote === "no" ? "close" : "ellipsis-horizontal"}
+                    size={15}
+                    color={vote === "yes" ? colors.success : vote === "no" ? colors.danger : colors.textTertiary}
+                  />
+                </View>
+                <Text numberOfLines={1} style={{ color: colors.text, fontSize: 11, fontFamily: fontFamily.medium, textAlign: "center" }}>
+                  {seat.isYou ? "You" : seat.name.split(/\s+/)[0]}
+                </Text>
+                <Text style={{ color: colors.textTertiary, fontSize: 10, fontFamily: fontFamily.regular, textAlign: "center" }}>
+                  {voteLabel(vote, data.proposed)}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    </Card>
+  );
+}
+
+// --- What the table bought ------------------------------------------------
+
+/**
+ * The niche this table went and found.
+ *
+ * The lever has always been filable on the phone — `openNiche` is a `choice`
+ * field and `ChoiceField` draws it — and the phone showed nothing afterwards, so
+ * a table could spend a year's research carving out a group of customers and
+ * never learn what it bought. Four things decide whether it was worth it: how
+ * many of them there are, how many are yours, what they pay over the segment they
+ * came from, and how long before everybody else notices.
+ */
+export function OurNicheCard({ ours }: { ours: DeskNiche }) {
+  const gone = ours.headStartLeft <= 0;
+  const shared = ours.sharedWith.length > 0;
+  return (
+    <Card testID="desk-our-niche" accent={gone ? colors.textTertiary : colors.novaPurple}>
+      <SimSectionTitle icon="sparkles-outline" title={ours.name} color={colors.novaPurple} />
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular, marginTop: 2 }}>
+        Found in year {ours.foundInYear}, out of {ours.from}. These people were not a group until you made them one.
+      </Text>
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md }}>
+        <Stat label="Yours" value={exact(ours.held)}
+          hint={`of ${exact(ours.people)} who exist`}
+          tone={ours.held > 0 ? colors.success : colors.warning} />
+        <Stat label="They pay" value={`${ours.premium >= 0 ? "+" : ""}${ours.premium}%`}
+          hint={`against ${ours.from}`}
+          tone={ours.premium > 0 ? colors.success : undefined} />
+        <Stat
+          label="Head start"
+          value={gone ? "Gone" : `${ours.headStartLeft}y`}
+          hint={gone ? "an ordinary segment now" : "before everybody notices"}
+          tone={gone ? colors.textTertiary : colors.info}
+        />
+      </View>
+
+      {/*
+        * Two tables can go looking in the same place and come back with the same
+        * people, and neither of them has found a secret. Worth saying loudly: it
+        * is the difference between a head start and a race.
+        */}
+      {shared ? (
+        <View
+          testID="desk-niche-shared"
+          style={{
+            flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: spacing.sm,
+            padding: spacing.md, borderRadius: radius.sm,
+            backgroundColor: tintSoft(colors.warning, 0.08),
+            borderWidth: 1, borderColor: tintSoft(colors.warning, 0.3),
+          }}
+        >
+          <Icon name="eye-outline" size={14} color={colors.warning} />
+          <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+            {ours.sharedWith.join(" and ")} went looking in the same place and found the same people. This is a race, not a secret.
+          </Text>
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * The research report, which a table paid a year's budget for.
+ *
+ * Read by neither client until now, which made this the one lever in the game
+ * that took money and produced nothing anybody could see — the spend was charged,
+ * the report was built on the server, and it went into a payload field nothing
+ * looked at. Both reports are forward-looking, which is the whole value: what a
+ * segment will expect *next* year, or what the incumbents will charge next year.
+ */
+export function ResearchCard({ research }: { research: DeskResearch }) {
+  return (
+    <Card testID="desk-research" accent={colors.info}>
+      <SimSectionTitle
+        icon="search-outline"
+        title={research.kind === "expectations" ? "What your customers will want next year" : "What the incumbents will charge next year"}
+        color={colors.info}
+      />
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular, marginTop: 2 }}>
+        The report marketing bought. It is about next year, not this one — which is what makes it worth buying.
+      </Text>
+
+      <View style={{ marginTop: spacing.md }}>
+        {research.kind === "expectations"
+          ? research.segments.map((segment) => (
+              <View
+                key={segment.id}
+                testID={`desk-research-segment-${segment.id}`}
+                style={{ gap: 4, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border }}
+              >
+                <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{segment.name}</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+                  {segment.floors.map((floor) => (
+                    <Pill key={floor.axis} label={`${floor.axis} ${floor.atLeast}+`} color={colors.info} />
+                  ))}
+                  <Pill label={`stops listening above ${money(segment.priceCeiling)}`} color={colors.textTertiary} />
+                </View>
+              </View>
+            ))
+          : research.rivals.map((rival) => {
+              const move = rival.priceNext - rival.priceNow;
+              return (
+                <View
+                  key={rival.id}
+                  testID={`desk-research-rival-${rival.id}`}
+                  style={{
+                    flexDirection: "row", alignItems: "center", gap: spacing.xs,
+                    paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border,
+                  }}
+                >
+                  <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.medium }}>{rival.name}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular, fontVariant: ["tabular-nums"] }}>
+                    {money(rival.priceNow)} →{" "}
+                  </Text>
+                  <Text style={{
+                    color: move > 0 ? colors.success : move < 0 ? colors.danger : colors.textSecondary,
+                    fontSize: font.sm, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"],
+                  }}>
+                    {money(rival.priceNext)}
+                  </Text>
+                </View>
+              );
+            })}
+      </View>
+    </Card>
   );
 }

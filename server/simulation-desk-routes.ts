@@ -23,7 +23,7 @@ import type { Express } from "express";
 import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles, companies, projects } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, simBids, users, userProfiles, companies, projects } from "@shared/schema";
 import { currencyOf, DEFAULT_CURRENCY, type CurrencyCode } from "@shared/currency";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, rateLimit } from "./moderation";
@@ -251,7 +251,24 @@ export function registerSimulationDeskRoutes(app: Express): void {
       .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
       .where(eq(simSeats.ventureId, venture.id));
 
-    const preview = draftPreview({ company, niche, decisions, economy });
+    /*
+     * Sealed bids the chief executive has standing this year, totalled.
+     *
+     * On the desk because the commitment meter is the only place the five of them
+     * see what they have promised between them, and a bid is promised money the
+     * meter could not see: the market screen warns the one person placing them,
+     * and had no way to tell the other four, who were filing a year against a
+     * total that looked comfortable. The seal is not broken by this — it is this
+     * company's own bids, shown to this company's own table, and the amounts of
+     * everybody else's stay where they were.
+     */
+    const bidRows = await db
+      .select({ amount: simBids.amount })
+      .from(simBids)
+      .where(and(eq(simBids.ventureId, company.id), eq(simBids.year, season.year)));
+    const bidsOutstanding = bidRows.reduce((sum, row) => sum + Math.max(0, Number(row.amount) || 0), 0);
+
+    const preview = draftPreview({ company, niche, decisions, economy, bids: bidsOutstanding });
 
     const [mine] = seat.role
       ? await db.select().from(simChallenges).where(and(
@@ -967,6 +984,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
       /** Every filed decision, so nobody has to guess what the others committed. */
       filed: decisions,
       preview,
+      /** Sealed bids this table has standing, so the commitment meter can count them. */
+      bidsOutstanding,
       lastYear: lastReport?.report ?? null,
       lastFiled: lastFiled ? { decisions: lastFiled.decisions, filedBy: lastFiled.filedBy } : null,
       rivals,

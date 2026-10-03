@@ -62,26 +62,134 @@ meter simply name the exposure without the amount?
 9. ~~Raising the price loses nobody.~~ **Done.** A price *level* was judged;
    a price *rise* was not. `priceWas` carries last period's, and a rise churns
    a little, scaled by how big it is and forgiven by loyal segments.
-10. Capacity "maxed at 8,000" was the quarterly build lag, not a cap: asking
-    20,000 from 5,064 opens 8,798. Explained on the lever and marked on the
-    forecast bar already; nothing further owed.
+10. ~~Capacity "maxed at 8,000" was the quarterly build lag, not a cap: asking
+    20,000 from 5,064 opens 8,798.~~ **Nothing owed** — explained on the lever and
+    marked on the forecast bar already. Struck through rather than left looking
+    open, which is what it was doing.
 
-### Market share reads as nothing on a world map
-A company that opens in Leeds holds about 0.2% of the world market, and the
+### ~~Market share reads as nothing on a world map~~
+~~A company that opens in Leeds holds about 0.2% of the world market, and the
 standings say so. That is true and it is useless: a team winning its own
-continent reads as a rounding error.
+continent reads as a rounding error.~~
 
-Probably: the headline share should be share *of the regions you sell in*, with
-the world share beside it. Not decided.
+**Done**, as proposed: the headline is the share of the regions you sell in, and
+the world reading sits beside it — `sharesWhereSold` in `market.ts`,
+`shareWhereYouSell` on the report and the standings payload, `shareReading` on
+both clients.
+
+Two decisions worth knowing about, because both are the kind a later change
+would undo without noticing:
+
+- The denominator is everyone's customers scaled by the company's own `reachOf`,
+  which makes it **exactly** `marketShares` at full reach. That is deliberate and
+  tested: the two numbers sit on one row, so a company that has finished
+  expanding has to see them agree to the last decimal, or the table is arguing
+  with itself. It is an approximation in the other direction — it assumes a
+  company's regions hold their weighted share of the market's customers, because
+  `allocate` reports who was won per segment and not per region.
+- The world reading is suppressed when the two render the same *string*, not when
+  they are the same number. 23.14% and 23.02% both print "23%", and a row reading
+  "23% where it sells · 23% of all" is worse than printing nothing.
+- The bar on the phone's table stays on the world reading, so bars remain
+  comparable down the table.
+
+### Closed: the phone had no Past and no Future
+
+The web desk has three tabs — what just happened, what to do about it, where that
+leads — and the phone had one long scroll that was almost entirely the middle one.
+Both missing screens now exist as routes, `/sim/past/<venture>` and
+`/sim/future/<venture>`, linked from the desk in the places they belong: the
+record under last year's report, the forecast above the levers.
+
+**Nothing new was added to the wire.** `lastFiled`, `standing`, `forecast` and
+`idleCostPerUnit` had all been in the desk payload since the web screens were
+built; no phone code had ever read any of them. That is the whole shape of this
+bug and it is worth remembering next time something looks absent.
+
+What each screen was costing:
+
+- **Past.** The phone could say what happened to a company and never what the
+  five of them did to cause it. Decisions live on the desk for a fortnight and
+  then vanish; sealed bids are deleted the moment they settle. A phone-only table
+  could lose a third of its cash at auction and afterwards have nothing to look at
+  but one line of prose saying so. Now: every lever as filed, per seat, with the
+  seats that filed nothing named — the caretaker ran those, which is the most
+  useful thing a table can learn from the year behind it — plus how each sealed lot
+  settled, and where every company sits.
+- **Future.** The sharper loss. A phone operations seat set capacity against
+  *nothing at all*, while a teammate on a laptop had the demand range, the room,
+  what empty shelves cost if the year came in low and what walks to a rival if it
+  came in high. Capacity is the one lever that binds in both directions and it was
+  the one the phone asked people to guess at.
+
+Two things found while building it, both fixed:
+
+- `desk.niche` on the phone was typed `{ id, name, premise }` and the server has
+  always sent `voice` as well, so every phone screen said "customers" whatever the
+  business was. Construction calls them **clients**; a restaurant counts covers.
+- `Card` in `mobile/src/components/ui.tsx` took no `testID`, so every card in the
+  app tagged an inner `View` instead — putting the handle on a box inside the card
+  rather than on the card, and on a pressable card, not on the thing taking the
+  press.
+
+The arithmetic lives in `mobile/src/components/sim/past.ts` and `future.ts`, both
+free of React Native so `test/unit/mobile-mirror.test.ts` can load them. It now
+checks the phone's `capacityRisk` against the engine's at every verdict boundary,
+its `readDecision` against the web's on the same payload, and its
+`ORDER_FAR_TOO_MUCH` against the web's by reading the constant out of the source —
+that last one textually, because it is a local const inside `ForecastCard` and
+nothing else in either suite would notice it moving.
+
+`mobile/scripts/phone-contract.ts` drives both screens against a live server, and
+now resolves a year first so the Past checks run against a real record rather than
+reporting "not reached" in year one. 37 checks, construction: forecast likely
+1,205 in a band of 0.35, idle room at 125.13 each, "Room to spare: room 1,875 vs
+783–1,627", four of five seats named as having run on the caretaker, and the
+market's word for its customers arriving as "clients".
 
 ### The phone has not caught up
-The expansion vote is the sharp one: a phone player can cast the vote (it is a
+~~The expansion vote is the sharp one: a phone player can cast the vote (it is a
 `levels` lever and `LevelsField` draws it) but never sees the region, its cost,
 who voted or whether it carried — the card whose whole point is showing what
-your colleagues think is web-only. The teammate and rival-company profiles have
-no phone counterpart either, so nudging a seat that has not filed is web-only,
-and neither is URL-addressable, so the in-app browser fallback cannot catch
-them.
+your colleagues think is web-only.~~ **Done 1 Oct 2026**, and half of it was
+already untrue: `LevelsField` does render an option's `help`, and the desk route
+puts the region's name, its price and the brand-ramp warning in there, so the
+phone always showed *what* was being voted on. What it could not show was the
+rest of the table — who had voted, which way, and whether it carried — on the one
+decision whose whole point is finding out what your colleagues think.
+
+`ExpansionVoteCard` reads the `expansion` the payload has always carried, at the
+same slot the web uses. The semantics worth knowing are in `proposed`: a region
+is *announced* to everybody every year and nothing is decided until the
+operations seat puts it up, so an unproposed region says "Not put up" rather than
+showing five seats that have all failed to vote — telling four people their
+colleagues refused something none of them was asked is worse than saying nothing.
+Pinned by `mobile/src/components/sim/expansion.test.ts`. ~~The teammate and rival-company profiles have
+no phone counterpart either, so nudging a seat that has not filed is web-only~~ —
+**nudging is done, 1 Oct 2026**; the two profile screens are not.
+
+Nudging was the wrong way round rather than merely missing: a phone player could
+already *receive* one — `sim_nudge` has had an icon in the notifications tab all
+along — and had no way to send one, on the client somebody actually has in their
+pocket when a year is closing. It is a button on the table card now, and
+`canNudge` agrees with the server's four refusals (yourself, a seat that has
+filed, a stand-in that files without being asked, an empty chair) so that the
+button never appears where the request would be turned down. The server's own
+wording is passed through rather than flattened, because "that seat is a stand-in"
+and "they have already filed" are different things to be told.
+
+~~What is still web-only is the two profile screens themselves — the teammate's and
+the rival company's — and neither is URL-addressable, so the in-app browser
+fallback cannot catch them either.~~ **Done 1 Oct 2026**, as *routes* rather than
+modals — `/sim/seat/<venture>/<user>` and `/sim/company/<venture>/<company>` —
+which is the half of the complaint that mattered: the web's are dialogs with no
+address, so nothing could link to them and the in-app browser fallback had
+nowhere to land. The desk's table rows and rival rows open them.
+
+The seat screen answers the question a desk cannot: the desk says "still
+deciding" and nothing about the eleven periods before it. `turnoutRead`
+distinguishes somebody who missed three early from somebody who has missed the
+last three, which read identically when only totals were reported.
 
 The new desk fields (a region's continent, whether the company is foreign
 there, whether it can be entered at all), the two Past-tab cards and the
@@ -433,44 +541,73 @@ human is never handed the 2.0% death sentence. Bots have no such floor.
 
 **Two things worth someone's time, neither of them a one-line fix:**
 
-15. **Bots never expand.** `bots.ts` files an empty `expand` every period
-    (`if (field.id === "programme" || field.id === "expand") draft[field.id] = ""`)
-    and deletes `expandVote`, so a bot never puts a region up and never votes
-    on a person's. Bot-run companies grow only through `targetCities`. A bot
-    that lands somewhere small therefore has no way out at all, which is why
-    the 2.0% company above sat on one region for six years with the money to
-    leave.
+15. ~~**Bots never expand.**~~ **Not a defect in the configuration that ships.**
+    Chased twice on 1 Oct 2026, fixed, reverted, and then measured properly —
+    which is the only part of this worth keeping.
 
-16. **`targetCities` bypasses the expansion mechanic entirely.** There are two
-    doors into a new region, and the designed one is worse on five axes out of
-    six:
+    The entry claimed bots never expand, pointing at the empty `expand` lever.
+    That lever is deliberately empty (a bot table voting with itself is noise);
+    bots open regions through the marketing seat's `targetCities`. The question is
+    whether they do it enough, and the answer depends entirely on **what else is
+    in the market** — which is what made this so easy to get wrong:
 
-        | | targetCities (cmo) | expand (coo) |
+    | measured over sixteen quarters | regions a bot reaches, of ten |
+    |---|---|
+    | one bot alone against the incumbents | **2–4** |
+    | four bots and a competent team, as a season actually runs | **6–10** |
+
+    A bot alone has an uncontested market, so its plant never fills, so the
+    `load > 0.8` trigger never fires and it looks trapped. Put rivals in the
+    market and demand is contested, plants fill, and the trigger fires plenty. The
+    first figure is the one that produced this entry, and it is not a season.
+
+    Two attempted fixes are recorded because both are tempting and both are wrong.
+    Adding the opposite trigger (`held > 0 && load < 0.45`) makes **every bot in
+    every market open its second region in period two** — a two-period-old company
+    is serving a handful of people against the plant it opened with, which looks
+    identical to being stranded and is just being new. Narrowing it to the recorded
+    symptom (one region, three years in, money to leave) fixes that and still
+    changes five markets of seven, because one extra region brings customers,
+    which fills the plant, which trips `load > 0.8`, which opens another: a narrow
+    nudge cascades.
+
+    The recorded symptom — a bot holding 2.0% in one region for six years — is
+    real and rare: **1 of 42** bots never leaves its opening region. Whatever was
+    wrong with that company, "bots cannot expand" was not it.
+
+16. ~~**`targetCities` bypasses the expansion mechanic entirely.**~~ **Largely
+    landed, and this entry had gone stale.** Re-read 1 Oct 2026: the change this
+    entry says was "tried and reverted" was in fact landed, at a floor rather than
+    at nothing. `boughtReach` floors a bought region at **50%**
+    (`BOUGHT_REACH_FLOOR`) against the announced door's 15%, applied in
+    `resolve.ts` to every region `targetCities` opens — so the row in the table
+    below that said "first-year reach: full" has not been true for some time, and
+    the comment on `BOUGHT_REACH_FLOOR` records the measurement: 0.15 fails the
+    catalogue, 0.4 upwards passes, and at 0.5 "the rule bites through both doors
+    now, and the door you pay 30% more for is the one that gets you further in."
+
+    What remains is a real choice rather than one door and a worse door:
+
+        | | buying (cmo `targetCities`) | announcing (coo `expand`) |
         |---|---|---|
         | available | period 1 | year 4 |
         | which region | any | the one announced |
         | agreement | none | a majority of the table |
         | opens | immediately | next year |
-        | first-year reach | full | brand / 60, floored at 15% |
+        | first-year reach | `brand/60`, floor **50%** | `brand/60`, floor 15% |
         | cost | 100% | 70% |
 
-    The player guide teaches the ramp as a rule of the game — "a region opened
-    this period is reached only as far as your brand carries" — and it is
-    simply untrue for anybody who has found the marketing seat's lever. The
-    announced region, the vote, the discount and the brand ramp are all
-    bypassed by a lever available on day one.
+    **The part that was still broken was the guide, and that is fixed.**
+    `docs/playing-your-own-season.md` taught one floor — 15%, the announced
+    door's — and worked an example through it: "a brand of 20 reaches a third of
+    it in the first period." For the door available from period one, which is the
+    one most people find first, the answer is *half*. It now carries the table
+    above, and both mentions of the ramp say which floor applies to which door.
 
-    **Tried and reverted.** Applying the same ramp to a bought region is a
-    four-line change and it costs the catalogue its balance: `balance.test.ts`
-    went from two-plus teams finishing with a business to one. Those markets
-    are tuned against regions being fully reached the period they are paid
-    for. Making the rule consistent means re-tuning expansion economics, not
-    adding a ramp, so it is written down here rather than half-done.
-
-    There is a reading in which this is not a defect at all: full price for
-    immediate full reach, against 70% for slow and announced. That reading
-    does not survive the other four axes — year four, one region, a vote, and
-    a year's delay is a lot to pay for 30% off.
+    `test/unit/two-doors-into-a-region.test.ts` pins the guide's numbers against
+    the engine — both floors, the shared `brand/60` rate above them, the two
+    unlock years and the discount — so the next drift fails a test rather than
+    quietly misleading somebody who read the instructions.
 
 17. ~~Bots opened where no company could build a business.~~ **Done.** A person
     is given the cheapest region that is still a real place to sell — the
@@ -570,6 +707,361 @@ hiring forty people flipped +$18,112 to −$45,932 and was equally reversible.
 Not tested, and worth its own sitting: multiplayer, bots as rivals, the
 auction, and mergers. This was one founder against the market.
 
+### From driving the app at two hundred players, 30 Sept – 1 Oct 2026
+
+Measured rather than reasoned about, with `scripts/sim-load.ts` — the HTTP
+driver `docs/ops/scaling-to-2000.md` step 0 asks for, which did not exist until
+now. Two hundred real accounts, joined to one market in the same instant, racing
+for the same seat, then polling at the intervals the client actually uses.
+
+**What held.** Every concurrency invariant, at two hundred: 44 rooms, none over
+five seats, nobody seated twice, one person per chair, and the seat race
+producing exactly 156 `role_taken` refusals (39 tables × 4 losers). Joins queued
+through their per-market advisory lock at ~85/s, worst wait 2.9s. The simulation
+was never the bottleneck at this size.
+
+**Fixed on the way through, both found by running it and neither findable by
+reading:**
+
+- A lobby the bots had just filled sat unstarted for its whole fifteen minutes
+  if nobody was watching it, and a season starts only once every one of its
+  rooms has left the lobby — so one person who joined and closed their tab held
+  up the other thirty-nine in their season. `settleLobbies` sweeps only lobbies
+  whose *deadline* has passed; the bot filler ran an hour earlier and advanced
+  nothing. Measured before the fix: bots seated at 60s, and ten minutes later
+  the room was still `filling` with five seats and 2m40s left on its clock,
+  while the tick ran every minute throughout and settled other lobbies. After:
+  111s. (`simulation-tick.ts`, the `bots.filled` loop; held by
+  `sim-tick.test.ts`.)
+- The room screen polled every two seconds for the whole season rather than
+  only while the room was gathering, which made it the largest single source of
+  requests in the product — about a hundred a second at two hundred players,
+  each one advancing the lobby and joining three tables to answer a question
+  whose answer had stopped changing. Thirty seconds once running, and nothing at
+  all for a retired room (`roomPollMs`, held by `credit-refresh.test.ts`).
+- Every simulation filing triggered a re-read of `/api/subscription`, and a
+  period deadline has every table filing inside the same minute: two hundred
+  needless requests arriving together, measured at p95 2.5s purely from queueing
+  (the endpoint itself is 17ms). No route under `/api/sim/` charges for
+  anything, and the test that skips them also walks the routes and fails if one
+  ever starts.
+
+**Not worth doing, with the reason, so nobody re-opens it:**
+
+- *Shortening the join queue.* The 2.9s worst case is queue time, not work —
+  about 13.5ms of lock held per joiner, which is already tight. The lock is
+  per-market because two joiners who cannot see each other both create a season;
+  narrowing it to per-season reintroduces that race to save a wait nobody would
+  abandon the product over.
+- *`/api/subscription`'s four sequential awaits.* 17ms idle. The p95 was
+  queueing behind the filing burst above, and "optimising" it off that reading
+  was very nearly done before it was measured on an idle server.
+
+**Owed.**
+
+20. **A season waits for its slowest table, and at two hundred players it always
+    pays.** *(The wait is accepted; what it was being explained as, on the phone,
+    was not — fixed 1 Oct 2026, see the end of this entry.)* Measured: the first table ready waits **358 seconds** for the last in
+    its season. That is the designed chain — 60s for bots, 180s claiming, 120s
+    naming — triggered by one human who sits idle, which at forty people a
+    season is near-certain. Accepted deliberately for launch rather than fixed:
+    the options are to shorten a straggler's clocks once the rest of its season
+    is ready, or to start without them, and both change what the lobby promises.
+    Worth revisiting against a real session rather than a load run.
+    **What was fixed, since the wait itself is accepted.** The web desk has long
+    explained it properly — "Year one begins once the 3 rooms still choosing seats
+    have finished — usually a minute or two, and never more than twenty" — and
+    distinguishes a solo table, a market where every room is in, and one still
+    waiting. The phone said **"The table is still filling"** whatever was true, and
+    that is usually the wrong reason: a season waits for *every* room, so the
+    common case by far is a table that has claimed every seat and named itself,
+    waiting on strangers. Telling those five people they are the hold-up, for the
+    six minutes this entry measures, is the worst version of an accepted wait.
+
+    `roomsStillChoosing`, `yourRoomReady` and `solo` have been in the payload since
+    the wait was given a shape; the phone did not read them. `notStartedReason`
+    now says which of the three is true, and says "Your table is ready" when it is.
+    Held by `mobile/src/components/sim/expansion.test.ts`.
+
+21. ~~The crowded-market balance is verified on one market.~~ **Done.**
+    `balance.test.ts` runs eight teams — what a full public season actually
+    deals, since `MATCH_MAX_ROOMS` caps a season at eight tables — in **every**
+    market, three season ids each. Crowding turns out to *improve* every measure
+    rather than strain it: in `dating_apps` the best team's share falls from 26.6%
+    at four teams to 13.2% at eight, and across all seven the worst case of each
+    measure leaves a wide margin on every threshold the suite asserts:
+
+    | | best team's share | incumbents keep | also-rans standing |
+    |---|---|---|---|
+    | threshold | under 60% | over 20% | at least 2 of 7 |
+    | worst market | 24.1% (`project_saas`) | 49.4% (`project_saas`) | 5 of 7 |
+    | best market | 3.1% (`drone_delivery`) | 70.1% (`restaurant_chain`) | 7 of 7 |
+
+    One thing it corrected: the note below about a wiped-out plan says "always
+    `cheap`", and that was only ever true of `dating_apps`. Across the other
+    markets `grower` is wiped out too — in construction, project_saas and mmos —
+    and `project_saas` loses somebody in five seasons out of eight against
+    `dating_apps`' three. Which is the better evidence for the conclusion in that
+    note: it is about what a fixed plan does after a bad year, not about which
+    plan it was.
+22. ~~No fixture strategy ever responds to distress.~~ **Done, and it found
+    something.** `balance.test.ts` has a `survivor` plan that reads `distressOf`
+    and acts — cuts spending to `focus: "survival"`, prices up rather than down,
+    stops opening regions, holds cash back — and a `makeSurvivorRescue` that takes
+    recovery moves. Recovery is applied the way the tick applies it: a move chosen
+    during the year, applied to the world *before* `resolveYear`.
+
+    **The module's central promise now has a test.** "A team that trades well can
+    still climb back" was unchecked by anything that plays; the best available
+    move is worth more than 1.2× doing nothing, and the rescue raise is the one
+    that actually clears insolvency rather than slowing the fall.
+
+    **What the measurement found.** Forcing exactly one move, the first year the
+    company is in trouble — insolvent after one ruinous year, with debt and no
+    assets:
+
+    | | nothing | restructure | dissolve_seat | rescue_raise |
+    |---|---|---|---|---|
+    | seed arc | 59m | 57m | **92m** | 78m |
+    | seed arc2 | 51m | 46m | **158m** | 83m |
+    | seed arc3 | 47m | 45m | **73m** | 70m |
+
+    `dissolve_seat` is much the strongest, and it is not a fixture artifact —
+    `decisionsForYear` iterates `company.seats`, so the dissolved chair's levers
+    really are gone, and the salary saving outweighs them anyway. `restructure` is
+    **negative**: six reputation and a two-year spending cap against three points
+    of interest relief on a modest debt. That is not a defect — `recoveryOptions`
+    says it orders by how much of the company survives a move, not by how much the
+    move helps, and each one's copy states its cost plainly. It does mean **a team
+    taking the first thing offered takes the worst of the three**, which is worth
+    knowing before anybody treats the order as advice.
+
+    Two things the tests deliberately do *not* claim. The ranking above is for one
+    position; a company that owns things would be offered the fire sale, which is
+    never offered here. And the rescue's value turned out to be mostly in clearing
+    `bankruptSince` rather than in the cash — removing the cash injection entirely
+    left the season-level test passing, because the flag is what lifts a company
+    out of administration. The money is pinned by a direct test of `applyRecovery`
+    instead.
+
+23. **The load harness has only ever run on one laptop**, with the generator and
+    the database beside the server, so every latency is pessimistic and every
+    throughput a floor.
+
+    **Demonstrated rather than merely asserted, 1 Oct 2026.** Three attempts at a
+    `--client mixed` measurement were abandoned because the machine was carrying a
+    load average of 21, then 57, then 59 — twice from another session building, once
+    from this one running its own unit suite alongside the load run. On a shared
+    laptop the latency columns cannot be measured at all when anything else is
+    happening, which is a stronger statement than "the numbers are floors": for
+    latency there are no numbers. Request *counts* and the invariants are unaffected,
+    which is why those are the figures quoted elsewhere in this file. Step 0 of `docs/ops/scaling-to-2000.md` is not actually
+    closed until it is run from a second machine against the tier being bought.
+    It is at least runnable by name now — `npm run load:sim -- --users 200` — and
+    it exits non-zero on a broken invariant or a missed budget, so it can be a
+    gate. Nothing uses it as one yet, which wants a decision about where: it
+    takes nine minutes and needs a database, so it is a nightly job rather than a
+    pull-request check.
+24. ~~The phone's polling was never inventoried.~~ **Inventoried 1 Oct 2026, and
+    it differs enough to matter.** `sim-load.ts --client mobile` now replays it,
+    so the comparison is measurable rather than arguable. Every simulation screen
+    on the phone shares one constant — `ROOM_POLL_MS = 2_500` in
+    `mobile/src/components/sim/useSim.ts` — where the browser tunes each screen:
+
+    | | browser | phone | |
+    |---|---|---|---|
+    | the desk | 8,000ms | **2,500ms** | 3.2× |
+    | standings, embedded | 60,000ms | **2,500ms** | **24×** |
+    | standings, own page | 30,000ms | **2,500ms** | 12× |
+    | the market | 15,000ms | **2,500ms** | 6× |
+    | offers | 15,000ms | **2,500ms** | 6× |
+    | the venture list | not on a timer at all | **2,500ms** | phone only |
+    | credit balance after a write | skipped for `/api/sim/` | no such hook | phone lighter |
+    | messages count | 10,000ms | 20,000ms | phone lighter |
+
+    Two of those are worth a decision rather than a shrug.
+
+    **The venture list was polled from a tab.** ~~`useVentures` is mounted by the
+    Sprints tab as well as the simulation index, so a phone user who never opens a
+    season asks for `/api/sim/ventures` twenty-four times a minute.~~ **Fixed.**
+    The poll exists because `ventureRoute` reads a row's phase, and the only
+    route-changing flip is *into* `running`, which can only happen to a row that
+    is not running yet — so `venturesPollMs` keeps the fast rate exactly while
+    one of those is on the list and goes to thirty seconds when none is. That is
+    the stated reason for the poll, honoured rather than overridden. Measured at
+    two hundred players: 6,905 requests in ninety seconds became **600**, the
+    phone's total fell 15,327 → **9,325**, and the run went from failing its
+    filing budget to passing.
+
+    **Still owed: standings and the desk, which are now almost all of it.**
+    `useStandings` at 2.5s is deliberate and was priced before anybody measured
+    it — the comment makes the trade openly, "one number to change is worth more
+    than the handful of requests a slower one would save" — and that is a fair
+    call; it is just that the handful is 24× the browser's rate on a figure that
+    changes once a period. With the list poll fixed, standings (3,483 requests)
+    and the desk (3,442) are **74% of everything the phone asks for**, and the
+    phone is still 2.2× the browser rather than 3.6×.
+
+    **Both now done, and the desk's answer did follow from its own purpose after
+    all.** The reason given for its 2,500ms was "the year resolving underneath the
+    screen is precisely what a player wants to be told about" — true of the minute
+    before a year resolves and not of the twenty-three hours before it, and the
+    desk payload already carries `resolvesAt`, so it does not have to guess which
+    it is in. `deskPollMs` is 2,500ms inside a minute of the resolution (and past
+    it, since the tick can run a little late) and the browser's 8,000ms otherwise,
+    which is still live enough to watch a teammate's filing arrive. Note the
+    direction: nothing about the moment that matters got slower.
+
+    Standings could not be adaptive the same way, because `StandingsView` carried
+    the year, the status and the rows and no deadline — so the standings response
+    now carries `resolvesAt` too, as the desk's always has, and
+    `standingsPollMs` is 2,500ms around the tick and 30,000ms between ticks. Both
+    directions improved: the screen somebody is most likely to be staring at when
+    a year lands is now *quicker* than the old flat rate, and it costs nothing for
+    the rest of a period during which the table cannot change at all. A response
+    with no deadline rests rather than racing — an unknown deadline is not an
+    imminent one.
+
+    **Two left alone, deliberately.** The market and offers screens still poll at
+    2,500ms where the browser uses 15,000ms, and their reasons are specific and
+    about somebody else acting on their own phone: a rival can list an asset at any
+    moment, and "an offer is a question put to five other people… both the asking
+    and the answering happen on somebody else's phone." Those are live
+    negotiations on screens a person visits deliberately rather than sits on, so
+    the pattern that fixed the others does not apply, and applying it anyway would
+    be the mistake this entry started out making.
+
+    Measured end to end, two hundred players, ninety seconds of play:
+    **15,327 → 9,325 → 4,099 polled requests**, which is now lighter than the
+    browser's 4,261. Filing p95 went 3,071ms → 819ms, and the phone profile went
+    from failing its budget to passing.
+
+    One behavioural difference, not a load one: `useVenture` stops polling
+    entirely once the phase is `running`, so a phone left on a running room never
+    notices the season ending. The browser catches it within thirty seconds.
+
+25. ~~A phone left on a running room never notices the season ending.~~ **Fixed.**
+    `useVenture` stopped polling on `running` as well as `retired`, on the
+    reasonable-looking grounds that a trading company has nothing left to
+    announce. It has one thing left: the season ending. So the screen went on
+    saying "your company is trading… it's yours for the season" about a season that
+    was over, with the `retired` branch that would have said otherwise two hundred
+    lines below it and unreachable. `venturePollMs` now rests at 30s while running
+    — the browser's rate, and for exactly this reason — and stops only on
+    `retired`, which is genuinely final.
+
+26. ~~The harness measured itself wrong three times.~~ **Fixed — and the fixes
+    are worth knowing about before trusting its output.** All three were found in one
+    suspicious `--client mixed` run — p95s of five to ten seconds across every
+    endpoint at the *lowest* request volume ever measured — which is the shape of
+    a result that is about the instrument rather than the subject.
+
+    - **The bystander probe was not signed in.** It asked for `/api/sim/niches`
+      with no cookie; `isAuthenticated` answers 401 and returns before `next()`,
+      so it never reached the session store, the database or a handler. It
+      measured whether the process would accept a connection and run one
+      middleware, and reported a steady 3ms while everything around it took five
+      seconds. It holds a real session now and asks an authenticated count.
+      What that invalidates: the reading "a bystander was as fast as idle while
+      200 played". What it does not: every request *count*, every invariant, and
+      the password-hashing finding — a 401 the process cannot answer is a thread
+      that is not running, which is exactly the symptom, and that one was
+      corroborated by measuring event-loop lag directly.
+    - **`--client mixed` only ever produced two of its four combinations.** The
+      client and the screen were both chosen on `i % 2`, so every browser user was
+      at a desk and every phone user in a room. The giveaway was `poll room·w`
+      missing from the results table altogether.
+    - **It could not tell a busy laptop from a slow server.** That run's real cause
+      was a load average of 21 from another process building on the same machine.
+      It prints the load average now and says so when it exceeds the core count,
+      because uniform slowness across unrelated endpoints is the signature of
+      contention and remembering to check by hand is not a plan.
+
+27. **The join queue costs about six milliseconds a joiner, and the obvious way
+    to shorten it is unsafe.** Every joiner for a market waits for the one in
+    front, so the wait is that figure times the people ahead: two hundred at once
+    measured p50 2.7s end to end, a queue draining at a steady rate rather than
+    contention.
+
+    Taken apart with `explain analyze` on a copy with real volume and a timer
+    inside the locked section itself (`JOIN_LOCK_SLOW_MS` logs a joiner that holds
+    the queue too long). Of the ~6ms: about 1ms of queries, 1.06ms of commit, and
+    the rest spread across the seven sequential round trips the section makes.
+    Client-side p50 at twelve joiners was 178ms against ~96ms of queue, so about
+    half of a join's latency is the queue and half is work outside it — the rejoin
+    check, `advanceVenture` after the commit, and the request itself.
+
+    **So round trips are the lever, and the first one anybody reaches for breaks
+    the lock.** Folding the advisory lock into the season select as a materialised
+    CTE is wrong: `MATERIALIZED` promises the CTE is evaluated once and nothing
+    about *when*, so the planner may scan `sim_seasons` first and lock afterwards.
+    Measured, twelve simultaneous joiners produced **ten rooms across two seasons
+    instead of three rooms in one**, and the hold got four times worse from the
+    contention it had stopped preventing. The warning is in the code beside the
+    lock. `sim-lobby.test.ts` catches it — and did, when the broken version was
+    put back deliberately to check: "five people who press join at the same
+    moment" went to 2 rooms instead of 1. That is the test to run after touching
+    anything in there, and reaching for the load harness instead is how an hour
+    gets spent.
+
+    What is left, if this is ever worth more work: collapse the room search,
+    recount and seat insert into one statement. That removes two round trips but
+    gives up the authoritative recount, which the advisory lock makes redundant
+    *in theory* and which is the defence in depth that caught a six-person
+    five-seat room once already. Not worth it for two milliseconds a joiner on a
+    machine that cannot measure two milliseconds.
+
+28. ~~**Nothing drives the phone's own screens.**~~ **Addressed 1 Oct 2026, with a
+    stated limit.** `mobile/scripts/phone-contract.ts` signs up two accounts
+    through the real flow, takes a table through joining, claiming and naming, and
+    then runs **the phone's own code against the live payloads** — the poll rules,
+    the "why has year one not started" sentence, the nudge predicate, the turnout
+    line, the vote's outcome.
+
+    What it does not do is render a screen. `mobile/` has no renderer — its tests
+    stub React Native for logic that does not need one — and adding one is a
+    dependency decision rather than a test, in a package another session is
+    actively editing. So this drives everything between the socket and the pixels,
+    which is where both phone bugs found this week actually lived: a room screen
+    that told a finished season it was still trading, and a vote whose tally the
+    phone received and never showed.
+
+    The check worth having is the **nudge contract**: for every seat at the table
+    it asks the phone whether it would offer the button and the server whether it
+    would accept the request, and fails on any disagreement in either direction —
+    a button that fails, or a reminder nobody can send. That is a class of bug no
+    fixture can catch, because a fixture is written by whoever also wrote the
+    predicate.
+
+    It distinguishes **"not reached" from "disagrees"**: a season does not start
+    until every room in its market leaves the lobby, so a short run legitimately
+    never sees a table or a rival, and calling that a failure would make the script
+    cry wolf. Unreached checks are counted and named instead.
+
+    `cd mobile && npm run check:phone -- --base http://localhost:5021`. The table
+    is **four accounts and a stand-in**, which is a measurement decision rather
+    than a convenience: two accounts take six minutes to reach year one, because
+    two people cannot satisfy "every seat is taken" so the claiming and naming
+    clocks both run in full, and leaving the fifth chair to a bot is the only way
+    the "that seat is a stand-in" refusal gets exercised at all. First full run,
+    24 checks, including the contract itself:
+
+        nudge agrees for ceo (you)       — phone hides,  server refuses 400
+        nudge agrees for cfo             — phone offers, server accepts
+        nudge agrees for coo (stand-in)  — phone hides,  server refuses 409 is_bot
+
+    One thing it cannot be: a script up in `scripts/` beside `sim-load.ts`. The
+    root package is `"type": "module"` and `mobile/` is not, so importing these
+    files from there gets named exports out of what Node treats as CommonJS and
+    refuses to load. It lives in the package it tests, and resolves as the app
+    does.
+
+29. *(was 28)* `--client mobile` replays the
+    phone's *intervals* against the same HTTP API, which answers "what does a
+    phone cohort cost the server". It does not drive the Expo app, so anything
+    that is wrong in the phone's own code — the stale running room above, for
+    instance — is still only found by hand.
+
 ## The half of this file that runs
 
 `test/unit/known-imbalances.test.ts` states the properties the sections above
@@ -582,15 +1074,33 @@ failing**, because a `.fails` test that passes is a failure. That is the alarm
 telling you what you changed. Drop the `.fails` and the assertion becomes an
 ordinary guard against the bug returning.
 
-What is in there now:
+**Corrected, 2 Oct 2026.** The four items this section used to list as live
+`it.fails` tests are not in that file and have not been for some time — and the
+file's own header says so: four were fixed (bots opening where no company could
+survive; bots unable to pay for a region out of a period's marketing budget; the
+annual discount best at its cap; a bot in a thin-margin market borrowing to spend
+for ever, which turned out to be drone delivery's biggest segment priced below
+what a business there costs) and price tiers were **withdrawn**, because the
+measurement behind it compared the best tier setting against no tiers at all,
+which asks whether a well-set lever beats not using it. That is true of every
+lever in the game.
 
-  - an annual discount that is the right call in every market at every level
-  - price tiers that are never the wrong call
-  - a bot that never proposes a region in a whole season
-  - a region bought outright reaching further than one opened as announced
+So the cycle worked, five times, and this section went on naming the inputs. It
+mattered because of what it implied: that four known problems had alarms wired to
+them. They did not — there was no `it.fails` anywhere in the suite, so fixing or
+worsening any of them would have gone unnoticed.
 
-One has already come out of that file, which is the cycle working: bots opening
-below the floor a person is given. See below.
+What is in there now: five ordinary guards, left behind by the five that closed,
+plus one live alarm —
+
+  - **`it.fails`: a well-played local firm cannot reach 30% of its own town.**
+    Measured 2 Oct 2026 after `Segment.innovationPace` made residential
+    construction playable at all: peak share went 6.6% → 12.6%, and a firm pushing
+    harder plateaus near 15% with quality ~75, against a ceiling of 32.9% that the
+    allocator will pay out at quality/brand/service 80. So the target exists and
+    the climb to it does not fit in fourteen periods. Whether that is a gap or the
+    right answer for a dominant local position against four incumbents is a
+    judgement; the alarm is there so that if anything moves it, somebody is told.
 
 Anything measured and deliberately left should go in there as well as here, so
 that the backlog cannot quietly stop being true.
@@ -1157,9 +1667,53 @@ over the filler fell below ten points. Reverted.
 
 1. **Make the bots and the strategy fixtures cost-aware** before touching the
    cost base again. This is the blocker, not the constants.
-2. **Rebuild MMOs' market content** — it needs incumbents that are beatable by
-   more than one strategy *and* a margin that makes coasting unsafe. Both at
+
+   **The instrument this needed now exists** (1 Oct 2026): "a competent team
+   against bot-run rivals" in `balance.test.ts` plays one strategy against four
+   bot companies and reports the person's share, value, rank and survival, plus
+   whether the bots are still a market. Every other balance test in that file
+   plays against the *incumbents*, so a change in rival strength was invisible —
+   which is why the bot expansion attempt above had to be reverted and why
+   `plantOverhead`'s "suppresses strong companies too" could not be checked.
+
+   The baseline it records: a competent plan comes first in six markets of seven,
+   bots hold 3.5–7.8% of a market between them, and 2–4 of 4 survive a season.
+   Those are the numbers a cost-base change has to be measured against.
+2. **Rebuild MMOs' market content** — ~~it needs incumbents that are beatable by
+   more than one strategy~~ *and* a margin that makes coasting unsafe. Both at
    once, measured against the skill guard, not one and then the other.
+
+   **Half of this is already true, measured 1 Oct 2026.** All four strategies end
+   MMOs with a real business — grower 63m, premium 110m, cheap 217m, local 78m,
+   a spread of 2.4x best to worst — and its skill premium is 1.55x, the second
+   highest of the seven. So "beatable by more than one strategy" is not what is
+   wrong with MMOs. What is left is the margin: MMOs is the market where nobody
+   dies, and that belongs to the cost base rather than to its incumbents.
+
+   **And the skill guard it was to be measured against was not fit to measure
+   anything, which is now fixed.** It ran four markets of seven and ten seasons
+   each:
+
+   - `drone_delivery`, `restaurant_chain` and `construction` were never checked,
+     and two of those three are the markets where skill pays *least* —
+     1.18–1.25x against 1.25–2.09x elsewhere. Exactly what the gap was hiding.
+   - Ten seasons was inside the noise. Renaming the seeds moved `dating_apps`
+     from 1.24x to **1.07x**, below the threshold it asserts, without touching the
+     engine. The guard was passing on the seeds it happened to hold.
+   - Averaging several seed "families" does not fix that, and this is the part
+     worth remembering: a season's whole economy derives from its id, so a naming
+     scheme is not a *sample* of economies, it is one fixed set of them. Three
+     sets averaged is still one deterministic answer per scheme, and two schemes
+     disagreed by 0.13 at twenty-five seasons each.
+   - Only the count closes it. Measured at 25 / 75 / 200 / 400, two independent
+     schemes converge from 0.131 apart to about 0.03. The guard now runs **150
+     seasons per market per skill, all seven markets** — 2,100 seasons, 27s — and
+     the threshold stays at 1.15 rather than being raised to a figure only five
+     markets could meet.
+
+   Drone delivery sitting near the floor is not a fault: its customers are novelty
+   orderers with a loyalty of 0.12, cheap to win and gone whatever you do, so there
+   is less there for care to buy.
 3. **Then** raise the cost base, with the guards re-set against the new
    economics afterwards.
 
@@ -1193,6 +1747,67 @@ never paid `fixedCosts` at all.** They run on a simplified model. That was
 ignorable while the cost base was £320,000; at £1.2m it is a tax on being the
 newcomer rather than a harder game. Charging them symmetrically did not on its
 own fix the share collapse, so there is more to it.
+
+**Swept properly, 1 Oct 2026, and the plan below is the wrong shape.** It is
+wired now — called from its own line in `resolve.ts`, with the constant at 0 —
+so turning it on is one number. Measured against the repaired skill guard (150
+seasons, all seven markets) and the winnability guards:
+
+| PLANT_OVERHEAD | deaths/20 | skill guard | principle guards |
+|---|---|---|---|
+| 0.0 | 2.9 | holds | all pass |
+| 0.05 | — | holds | 2 construction failures |
+| 0.1 | 3.9 | holds | 1 construction failure |
+| 0.2 | 4.9 | holds | 3 failures |
+| 0.3 | 6.9 | holds | — |
+
+The target is reachable at about **0.25**, and **the skill guard is not what
+stops it** — that holds at every setting tried, in all seven markets, which is
+the opposite of the fear recorded above. **Construction stops it, and
+immediately.** At 0.05 the self-funding archetype there reaches 18% of the best
+way to play against a floor of 25%: a plan that will not raise capital cannot
+absorb a new fixed cost, and construction already has the most deaths of the
+seven (12/20 at an overhead of 0.35, against dating apps' 2/20).
+
+So the second half of the plan — harder opening segments in the *soft* markets —
+is aimed at the wrong end. The blocker is the hardest market breaking first.
+
+**And it is not really about construction either.** Two things were checked next,
+and both say the lever is fine and the room is not there:
+
+- **The lever is well normalised.** At 0.35 it costs 15–24% of a company's own
+  revenue in the median year in every market — construction 22%, mid-pack. The
+  worry that it falls unevenly because it is anchored to the cheapest segment's
+  per-unit margin (34 in dating apps, 560 in construction) does not survive the
+  measurement: bigger per-unit margins come with proportionately smaller plants.
+- **The "nobody locked out" floor has about four points of headroom, today, with
+  no overhead at all.** Every way of playing, every market:
+
+  | | tightest archetype | share of the best plan | floor |
+  |---|---|---|---|
+  | construction | `outOfRevenue` | **29%** | 25% |
+  | podcasts | `frugal` | **29%** | 25% |
+
+  `frugal` is the weakest approach nearly everywhere (29–39%) and `outOfRevenue`
+  is weakest in construction. Four points is all a global cost increase has to
+  spend, which is why every setting above 0.05 breaches it somewhere.
+
+So raising the cost base needs the floor's headroom widened first — which means
+making the self-funding and frugal approaches stronger, not making the soft
+markets harder. That is the opposite end of the problem from where the plan above
+points.
+Construction wants easing, or exempting, before the cost base can come up
+anywhere; and the spread at 0.35 (2/20 to 12/20) says these markets stop
+resembling each other well before the average reaches six.
+
+Two things that also came out of the sweep and are worth not re-finding:
+
+- **`plantOverhead` had no callers at all.** It was written, measured in some
+  other working copy, and never invoked — so every attempt at this starts by
+  wiring it, and there is more than one way to do that.
+- **Inside `fixedCosts` is the wrong way.** That function is salaries and
+  executives; three tests assert on what it returns, and they fail for reasons
+  that have nothing to do with balance. It belongs beside `idleCapacityCost`.
 
 The route from here, in order:
 
@@ -1886,6 +2501,28 @@ company running away with a market now attracts company.
 small-market answer: a £2m market Nova wrote for one business supports a
 handful of companies, not a dozen.
 
+### One approach is the best in five markets of seven
+
+Measured 1 Oct 2026 while sweeping the cost base. Across the seven ways of
+playing in `every-way-of-playing.test.ts`, `undercut` is the best in **five** of
+the seven markets; `premium` takes construction and `grower` takes MMOs.
+
+`balance.test.ts` already guards against a dominant plan — "has no strategy that
+wins every market" — but it asks four hand-written strategies and passes as soon
+as two different ones win anything, so it reads five-of-seven as three distinct
+winners and is satisfied. It is a guard against winning *all* of them, and it
+cannot see concentration.
+
+Whether five of seven is too many is a judgement about the product, so nothing
+asserts a stricter standard than the product has chosen. Two tests now pin the
+figure where it is — no approach best in more than five markets, and at least
+three approaches winning something — so a change that makes undercutting best in
+six or seven fails with the count in the message.
+
+Worth weighing together with the floor measurement above: every approach reaches
+29–100% of the best, so nobody is locked out; it is just that the same one is
+usually ahead.
+
 ### The rest of the living market, in the order it should come
 
 Recorded rather than started, and this is the sequence they depend on:
@@ -1900,10 +2537,18 @@ Recorded rather than started, and this is the sequence they depend on:
    the segment list assuming it never changes.
 4. **Failure and what it leaves** — a company going under, and its patents or
    its niche coming up for sale. Needs entrants and niches.
-5. **Quarters and months** — 4 or 12 periods a year, at $6 and $10 a seat,
+5. ~~**Quarters and months** — 4 or 12 periods a year, at $6 and $10 a seat,
    with a developer bypass. Independent of all of the above and the largest
    plumbing job: the year is the atom in about thirty places, and every rate,
-   lag and threshold has to scale per period.
+   lag and threshold has to scale per period.~~ **Done** — the conversion is
+   written up under *Years, quarters and months* below, including the rule the
+   arithmetic rests on.
+
+   One thing the entry above records that the code no longer says: monthly was
+   planned at **$10** a seat and ships at **$6**. It was introduced at $10
+   (`fd26a7cb`) and repriced alongside Nova's seat (`61093735`), so that was a
+   decision rather than a drift — worth knowing if anybody is wondering why the
+   dearest cadence costs the same as the middle one.
 
 ## Bots that make the decisions a person makes
 
@@ -2995,3 +3640,630 @@ together with the valuation having no profit term (above).
 Four experiments are written down here so the fifth person does not run them
 again.
 
+
+## The small local business, 2 Oct 2026
+
+Prompted by a flat domain correction: construction is not a hard market, it is a
+hard market to become *commercial* in. Residential work is cheap to enter and a
+local operator can do very well out of it. The simulation disagreed, and it was
+the simulation that was wrong.
+
+### Closed: residential construction was unplayable, and it looked like market balance
+
+Construction had been measured as the catalogue's harshest market — 12 deaths in
+20 at a plant overhead of 0.35 against dating apps' 2 — and the explanation on
+file was its costs. It was not its costs.
+
+Its three segments are not one trade. Fitting kitchens for homeowners (210,000
+customers at £900), building for developers (29,000 at £3,800) and tendering for
+councils (6,000 at £14,000) are different businesses sharing a word, and the
+market had one `innovationPace` for all three. It was 0.45, the lowest of the
+seven, set by the slowest of them — while quality is the axis construction's
+customers weigh most heavily. So quality decayed by 3 a year and could be bought
+back only at 45%, and a firm doing extensions was held to the learning curve of
+public infrastructure.
+
+Measured, a one-region residential firm, 16 strategies over 4 seeds: a peak of
+**6.6%** of its own town, quality stuck at **43** against incumbents at 51–83,
+and **11 of the 16 strategies bankrupt in all four seeds**. There was no way to
+play it.
+
+Fixed with `Segment.innovationPace`, an optional per-segment override read
+through `paceFor`. Domestic work declares 1.0; developers and public declare
+nothing and stay at the market's 0.45, which is the whole point — cheap to enter,
+hard to become commercial in. Absent means "the market's pace", so no other
+market moves: the full unit suite (202 files, 2,393 tests) is unchanged.
+
+After: peak **12.6%** of its own town, quality **70**, brand 80, service 74,
+£781k profit in year 14, and **no deaths** in the strategies that reinvest.
+Pinned by three tests in `balance.test.ts`, all three of which fail when
+`homeowners.innovationPace` is put back to the market's.
+
+The ceiling was never the allocator, which is worth recording because it was the
+first suspicion. Asked directly, a one-region firm with quality/brand/service at
+80 takes **32.9%** of its own town and at 100 takes 39.7%. The 30% a local
+operator should be able to aim at was always there; what was missing was any
+affordable route to the stats that reach it. A well-played firm now plateaus near
+15% with quality ~75, so 30% stays something to play towards rather than a floor,
+which seems right for a dominant local position against four incumbents.
+
+Also measured and worth not re-deriving: price barely moves this segment despite
+a `priceSensitivity` of 0.85 — 7.8% of town at £900 against 7.6% at £450. That is
+why construction is the one market where `premium` beats `undercut`.
+
+### Rejected, with the measurement: scaling marketing by the footprint you sell in
+
+The first attempt at the above, and it is written down because it is an
+attractive idea that does not work.
+
+`fixedCosts` already discounts a one-region company's payroll through its
+footprint, so a local firm got 40% of the costs and was quoted 100% of the price
+of competing: `atScale(220_000, scale)` keys the brand threshold to the *market's*
+scale, which is 1.0 for all seven catalogue markets, and `reachOf` never touched
+it. Being the best-known builder in Leeds cost what a national campaign costs.
+The asymmetry is real.
+
+Scaling those thresholds by a compressed `reachOf` fixed it and broke something
+worse. `lift` curves are **concave**, so halving a threshold helps the *smallest*
+spender most — and the smallest spender is not only the handyman, it is also the
+company that does nothing. A filler never expands, so it collects the largest
+discount of anyone on the table. `balance.test.ts` caught it exactly there:
+"pays a survivor better than a filler" failed on restaurant_chain, playing well
+£21.7M against going through the motions £22.0M, where the margin has to be 15%.
+The filler had risen; the good player had not moved.
+
+It was reverted rather than tuned. Measured against `paceFor` alone, it was worth
+12.6% → 15.4% of the town — a fifth of the benefit, for a change that touches the
+early game of all seven markets and subsidises passivity in every one of them.
+
+If anyone picks this up again, the thing to find is a mechanism that rewards a
+*deliberate* local strategy without rewarding a passive one; a cheaper threshold
+cannot tell them apart.
+
+### Open, found in passing: one service threshold is not at the market's scale
+
+`serviceGain` in `resolve.ts` reads a bare `150_000 * per` where every lever
+around it reads `atScale(..., company.scale)`. Harmless in the seven catalogue
+markets, which are all scale 1 — and wrong in a market Nova wrote a two-hundredth
+of that size, where keeping service up costs more than the market is worth. The
+same class of bug `atScale` was introduced to fix, in the one place it was never
+applied.
+
+Left alone rather than fixed in passing: it moves every custom market and so
+wants its own change and its own measurement.
+
+### Closed: no bot had ever declared who its company was for
+
+Found while asking why the construction change moved `scripts/balance-report.mjs`
+by *nothing at all* — 48 seasons in each of 7 markets, identical to the pound
+with the new segment pace on and off.
+
+The reason: `positioning` is the only lever of kind `segment`, the bot's field
+loop has a branch for `choice` and none for that, and the field's default is a
+string — so it fell through the `typeof value === "number"` catch at the bottom
+of the loop and nothing was ever written. Every bot company in the history of the
+game played undeclared, taking a flat 1 from `positioningFor` where a player who
+chooses gets 1.18 on their own people and 0.92 on everybody else.
+
+It mattered most where it was least visible. `balance-report.mjs` is the
+instrument this project judges its markets by, and it runs bots — so the verdict
+on every market was measured against a strategy no competent table plays, and any
+market whose difficulty turns on positioning read as harder than it is. That is
+the same trap as "most of the catalogue's weakness was the harness", one layer
+down.
+
+**The trade, which is the part worth keeping.** Positioning is not a bonus. With a
+fraction `s` of demand in the chosen segment, appeal moves by `0.92 + 0.26s`,
+which clears 1 at `0.08 / 0.26` — so declaring pays only above about **31%**
+(`POSITIONING_BREAK_EVEN` in `market.ts`, derived from the two multipliers rather
+than tuned). Which segments that leaves is worth writing down:
+
+    restaurant chain  lunch 60%   ·  delivery 25%  ·  families 15%
+    drone delivery    novelty 63% ·  rural 32%     ·  clinics 5%
+    construction      homeowners 86% · developers 12% · public 2%
+
+So most markets have exactly one segment worth declaring for, and a company that
+declares for any of the others has made itself worse. `bestSegment` in
+`bot-play.ts` weighs fit, size and loyalty but **not** this penalty, so taking its
+answer unconditionally made bots worse in every market whose best-fitting segment
+is small: it drove "pays a survivor better than a filler" *below 1.0* in
+restaurant chain, a competent bot losing to a careless one. Measuring that was
+what found the break-even.
+
+Now: a survivor declares only when the sum works and declares for nobody when it
+does not; a filler does not decide this at all, because a warm body in a seat
+nobody took does not do segment analysis, and that is one of the few things
+separating the two skills.
+
+**Measured, 48 seasons × 14 years × 7 markets, before → after:**
+
+    survivor   survived 328/336 → 336/336
+    filler     survived 334/336 → 325/336
+    construction, survivor   41/48, median £0.1m → 48/48, median £7.4m
+    construction, filler     48/48, median £1.3m → 39/48, median £0.0m
+
+Every market's competent median rose and every market's careless median fell or
+held, which is the shape the three questions at the top of `balance.test.ts` ask
+for. Construction's harshness did not go away — it is still the lowest median and
+the narrowest spread of the seven — but it moved off competent teams and onto
+careless ones, which is the difference between a hard market and a broken one.
+
+Skill now pays 2.3× (dating apps) to 15.6× (drone delivery) on the median.
+
+### Closed: the phone had no year-end report, and no way out of a season
+
+Two of the three gaps the parity audit found. Both were on the wire already; the
+pattern by now is familiar.
+
+**The report.** `/api/sim/ventures/:id/reports{/:year}` was never called from
+`mobile/` at all, so a phone player saw the one-line summary of the period just
+gone on their desk and could reach neither the accounts behind it nor any year
+before it. In a fourteen-period season that is thirteen years of a team's own
+history visible only to whoever happened to be on a laptop — and the web file's
+own header calls this the most important screen in the simulation, on the
+reasoning that a decision you cannot trace to an outcome is one you cannot learn
+from.
+
+Now `/sim/report/<venture>`, in the web's order — the result, the accounts, the
+cash, the customers, everybody else — with the year in the address and a row of
+years rather than the web's route per year, so a season is one tap away instead of
+a walk through a navigation stack. Reached by tapping the desk's own report card,
+which is the gesture the web has from the same card.
+
+The accounts are the point of it: every cost with the seat that spent it named
+beside it, which is what turns "we lost two million" into "marketing spent 2.1m to
+win 900k". That is also the thing most likely to rot, so it is the thing pinned
+hardest. `accountsReconcile` in `mobile/src/components/sim/report.ts` returns the
+discrepancy between the phone's own cost lines and the operating profit the engine
+wrote, and the mirror test runs real seasons in all seven markets and asserts it
+stays under a pound. Mutation-checked: dropping one line fails with *"worst at
+construction year 13, out by 173620.29 — a cost was probably added to
+ProfitAndLoss and not to accountLines"*, which is the failure this is for. A cost
+added to the engine and not to the reading leaves a report wrong by exactly the
+new line and looking entirely reasonable; nobody reconciles a screen by hand.
+
+**Leaving.** `POST /api/sim/ventures/:id/leave` had no caller in `mobile/`. The
+phone had `release`, which gives up a seat you have not started playing, and
+nothing for the other thing — so once a season was running a phone-only player was
+in it until it ended, with no way out of a company, a market or a table on the
+client most of them use.
+
+One button, two acts, and the confirm has to say which: before the season starts
+the seat goes back and the room may close behind you; once it is running the chair
+is handed to a stand-in, cannot be taken back, and the company cannot be rejoined.
+`Alert.alert` with a `destructive` option, as `BlockAction` does it.
+
+Two things worth keeping from building it:
+
+- The success message is an `Alert`, not this screen's notice banner. The banner
+  is rendered by the room and the room has just been replaced, so a notice shown
+  there unmounts in the same frame and nobody reads it.
+- The server hands the chair to a bot *or* deletes the seat if it cannot seat one.
+  The confirm promises a stand-in, so when the other thing happens the phone says
+  so rather than repeating the promise — the seat is then empty and the company
+  runs it on the caretaker rules.
+
+Both are driven by `mobile/scripts/phone-contract.ts`, which now resolves a year
+and leaves at the end (destructive, so last). 51 checks against a live server:
+accounts reconciling against the stored P&L to the penny, 11 cost lines each with
+a seat, 3 cash steps, 3 segments, 4 rivals, a year fetched by number — and leaving
+mid-season answering "passed to a stand-in, as the confirm promised", the desk
+then 404, and a second leave returning 200 rather than an error.
+
+Also fixed in passing: `ReportCard` in `DeskKit` had no way to be opened, so the
+desk's summary was a dead end.
+
+## The four gaps, 2 Oct 2026
+
+### Decided: harder bots stay
+
+Giving bots the positioning lever made every rival in the game meaningfully
+stronger, and that was put to the owner rather than assumed: it is realistic, so
+it stays. Recorded here because it is the kind of change that gets re-litigated by
+whoever next reads a balance table and finds the rivals tougher than the old
+figures say.
+
+### Closed: neither client warned you could not serve what you were buying
+
+The sharpest of the four. `GET /offers` has sent `you.capacity` and
+`you.customers` since the mechanic was built, with a comment saying why — *"A
+screen without this cannot warn about the one mistake this mechanic punishes
+hardest."* `applyAcquisition` hands the buyer every customer the seller had and
+none of their plant, so anybody beyond capacity is turned away, in public, in the
+year every other team is watching the company that just bought somebody; and
+`allocate` then gives those people to whoever does have room. The asking price
+says nothing about it and `canOffer` will not refuse it.
+
+The phone had the sum (`serviceGap`); the **web had nothing**, so the two clients
+disagreed about whether a deal was survivable — which is worse than neither
+warning, because one of them gets trusted.
+
+Now `servingAfter` in `shared/simulation/mergers.ts` owns the arithmetic and the
+threshold, the web imports it, and the phone mirrors it. Three states on both,
+including the reassuring one: a warning that only ever appears when something is
+wrong teaches people that its absence means nothing was checked.
+
+`SERVING_TIGHT` (one tenth of your own room) is the new middle case the phone was
+missing — a deal that lands you exactly at capacity has no slack for a good year,
+and "everybody who arrives gets served" is true of it this period and misleading
+about the next.
+
+One refactor fell out of it: the sum moved to its own module
+(`mobile/src/components/sim/serving.ts`) because `offers.ts` imports `../../theme`
+for the eleven colours its verdict copy carries, which puts React Native in its
+graph and out of reach of `mobile-mirror.test.ts`. `offers.ts` re-exports it, so
+nothing that imported it had to change. Pinned across eight boundary cases
+including the exact tight line, and mutation-checked: drifting the phone's
+threshold to 0.25 fails.
+
+### Corrected: there were no alarms, and the one that exists now is new
+
+The backlog claimed `known-imbalances.test.ts` held four live `it.fails` tests.
+It held none, and had not for some time — the file's own header records four fixed
+and one withdrawn. So the cycle had worked five times and the backlog went on
+naming the inputs, implying four known problems were being watched when nothing
+was watching anything.
+
+Corrected above, and the convention is back in use with one alarm, for the one
+thing measured-and-open: a well-played local firm in construction cannot reliably
+reach a third of its own town.
+
+**And a figure of mine needed correcting with it.** The "32.9% ceiling at
+quality/brand/service 80" reported earlier was one `seasonId`. `buildWorld` seeds
+the incumbents from the season id, so the same stats are worth anything from 20.0%
+to 37.5% depending on the draw. Over twelve seeds:
+
+    stats (q/b/s, rep)      min    median     max
+    75/77/68, rep 70       13.8%    20.4%    34.3%   ← what a season actually reaches
+    80/80/80, rep 70       20.0%    24.9%    37.5%
+    90/90/90, rep 70       24.7%    27.9%    41.1%
+    100/100/100, rep 90    32.2%    35.4%    48.8%
+
+So a third of a town is reachable only near the top of the scale or against a soft
+draw, and the honest gap is "about a fifth where a third is the aim" rather than
+"half the ceiling". The alarm reads the median over twelve seeds for that reason.
+Mutation-checked: making the aim reachable fires it.
+
+### Closed: three things the server sent and nothing read
+
+- **`desk.research`** — the worst of the three, and it was on *both* clients. A
+  table pays a year's marketing budget for a report, the server builds it, and it
+  went into a payload field nothing looked at. The one lever in the game that took
+  money and produced nothing anybody could see. Now on both desks, with the point
+  of it said plainly: both reports are about *next* year.
+- **`desk.ours`** — the niche a table spent a year's research carving out. The
+  lever was filable on the phone and the phone showed nothing afterwards: not what
+  was bought, not the premium those people pay, not how long the head start lasts,
+  and not that a rival went looking in the same place and found the same people.
+- **`desk.staffQuality`** — unread on both. It is what `staffLeverage` multiplies
+  the support budget by, so a table that trained its people could not see it
+  working. Now a reading on the phone's desk.
+
+### Rejected, with the measurement: making a plant need people
+
+`workforce.ts` has `canServe`, `staffFor` and `UNMANNED_FLOOR` — written, tested,
+and with no callers. The obvious reading is that somebody left it half-done.
+
+Wired as an experiment (capping each company's serving room at what its staff can
+look after, floored at `UNMANNED_FLOOR`, in `effectiveOf` where the market sees
+the company) and measured with `sim:balance`, 48 seasons × 7 markets:
+
+    market            median before   median after
+    Dating apps            £43.1m          £1.0m
+    Project saas           £33.7m          £2.0m
+    MMOs                   £37.5m          £1.9m
+    Restaurant chain       £26.2m          £0.4m   (and 48/48 → 44/48)
+    Construction            £7.4m          £0.8m
+
+Medians fall by ten to forty times and the winners-versus-losers spread collapses
+from £11–66m to £0.4–8.5m, which is the part that matters: skill stops deciding
+anything. Everything in the game is calibrated against capacity that runs itself,
+and the bots never hire for a constraint that has never existed.
+
+So this is not an unwired function, it is an unbuilt feature: it needs hiring
+re-balanced across all seven markets and bots taught to hire before the constraint
+can be switched on. Reverted. Anybody picking it up should start from these
+figures rather than from the fact that the functions exist.
+
+### Closed: a sealed bid was invisible to the commitment meter
+
+The meter is the one number on the desk that no individual seat could work out for
+itself — each person sees their own spend and nobody sees the sum — and a bid at
+auction was not in it.
+
+The money is committed the moment the bid is placed: `settleMarket` takes it on the
+tick and the bidder cannot spend it twice. The market screen already warned
+whoever placed it that their bids added up to more than the company had. It had no
+way to tell the other four, who were filing a year against a total that looked
+comfortable. Measured live on a construction season: £2.5m standing at auction
+against £722k of filed spend, so the meter read **722,318** where the table had
+promised **3,222,318** — understated by four and a half times.
+
+This is the same failure the city-entry cost had, and the comment on `openingCost`
+already argues the case: the engine books one as spend and the other as a cash
+movement, which is bookkeeping, and what the five of them have promised is the same
+money either way.
+
+Fixed the same way. `commitment()` takes an optional `bids` total, folds it into the
+chief executive's line because bidding is their lever (`BID_IS_THE_CEOS`), and names
+it as `bidsOutstanding` so a screen can say "of which bid at auction, not yet
+settled" rather than leaving the table to wonder why the total moved when nobody
+filed anything. `draftPreview` passes it through so the warnings see it too — a
+preview calling the year fine beside a meter saying otherwise reads as the meter
+being broken. The desk route totals the table's live bids for the year and sends
+them.
+
+The seal is not touched: these are this company's own bids shown to this company's
+own table, which is the premise the whole product rests on — *five people privately
+making reasonable decisions that are collectively ruinous is the failure this game
+is built around, and the only defence is being able to see what the others have
+committed while there is still time to argue.*
+
+An exposure rather than a certainty, since most bids lose. Counted anyway, for the
+reason the announced region is counted before the vote: overstating what a year
+might cost is the safe side of a meter whose job is to stop a table committing
+money it has not got.
+
+Pinned three ways — a case in the phone/engine mirror (mutation-checked: a phone
+that shows the line but leaves it out of the total is caught), five tests in
+`levers.test.ts` covering the seat it lands on, the ratio tipping over, a `NaN`
+total not poisoning the meter, and the preview's warnings, and three live checks in
+`phone-contract.ts` that place a real bid and watch the meter move.
+
+### Closed: nothing checked that a market Nova wrote could be won
+
+`test/unit/every-market-winnable.test.ts` has asked this of the seven catalogue
+markets since three separate faults produced markets nobody could play — rivals
+seated across the whole of a segment, the same arriving through the economy, and an
+opening plant whose idle cost bankrupted the founder. Each was found by sweeping
+markets against seeds and noticing a column of zeros. None of them was reported,
+and none of them would be: a season that cannot be won is not a bug anybody files,
+it is a fortnight somebody spends losing and concludes they are bad at it.
+
+None of that protected the markets players actually get. `buildCustomMarket` checks
+a generated market's *shape* and nothing checked whether a business could be built
+in it.
+
+The harness moved out of that test into `shared/simulation/winnable.ts`, which the
+test now imports — one definition, because a guard more forgiving than the test
+would let through exactly what the test exists to catch. `parseMarket` runs
+`winnabilityOf` and returns null for a market that cannot be won, which is already
+its documented answer for an unreadable one: the route falls back to the nearest of
+the seven and tells the player the market is not theirs. A far better outcome than a
+bespoke market they cannot play.
+
+**Two things measurement changed.**
+
+*The guard was calibrated wrong first time.* It checked eight periods, on the
+reasoning that the faults show up early — true of the zeros and the bankruptcy,
+false of "can it be run at a profit". At eight periods **six of the seven catalogue
+markets fail**, because a company does not turn a profitable quarter in its first
+two years. A guard calibrated that way would have rejected almost everything Nova
+wrote and quietly handed every player a catalogue market, and the only trace would
+have been a log line. Sixteen periods costs the same 57ms and the seven pass, which
+is the only calibration available: a guard that rejects a shipped market is wrong
+about the market.
+
+*The cleaner is better than expected, and the guard still has teeth.* Three
+fixtures written to be unwinnable all came back playable, each one showing where
+the real defence already is — incumbents given the whole of every segment are
+**normalised** back down, and a `baseUnitCost` above the price of everything is
+**clamped** (2,000 became 420 against a cheapest price of 600). So every one of the
+three historical faults is already repaired upstream when written on its own. What
+the cleaner cannot see is a *combination* of individually legal numbers: smallest
+segments allowed, no growth, customers 95% loyal, the most incumbents allowed, all
+at 98 and all undercutting at half price. Every field inside its range; a competent
+founder wins **nobody** in sixteen quarters. That is the fixture now, and only
+playing the market finds it.
+
+**And the replay path is deliberately unguarded.** `parseMarket` is also called to
+replay a market a project already owns, where a refusal returns "nothing to
+replay" — taking away a season somebody has already played in order to tell them it
+was unfair. That call passes `check: false`.
+
+### Closed: the service lever did nothing in a small market
+
+`serviceGain` in `resolve.ts` read a bare `150_000` where every lever around it
+read `atScale(..., company.scale)`. Right for the seven catalogue markets, which
+are all worth about £400m and so all scale one; wrong for a market Nova wrote a
+two-hundredth of that size.
+
+How wrong is worth writing down, because "the lever was weak" understates it. In a
+generated market turning over £1.5m a year, the threshold should be about £657 and
+was £150,000 — a tenth of the entire market's annual turnover to move service one
+notch. Service decays by 3.5 a year, so:
+
+    support spend    service it bought    against 3.5 of decay
+       £2,000             0.20             fell behind
+       £5,000             0.48             fell behind
+      £15,000             1.36             fell behind
+
+Every affordable spend lost ground. The lever was not weak, it was impossible:
+service in a small market could only ever decline, whatever anybody did. At the
+scaled threshold £15,000 buys 14.37.
+
+Fixed in `resolve.ts` and in `forecast.ts`, which mirrors it — fixing one alone
+would have left a small market's forecast promising service the year would not
+deliver. Nothing in the catalogue moves: `atScale(150_000, 1)` is `150_000`, and
+all seven markets are scale 1.0000.
+
+### Closed: the engine wrote £ into every season's prose
+
+Every figure the engine put in a sentence carried a hardcoded pound sign, so a
+season built around a business banking in dollars was told its investors wanted
+"£4,200,000" — the error `shared/currency.ts` exists to prevent, made inside the
+engine where that module could not reach it.
+
+`World.currency` now carries it, `buildWorld` takes it, and `startSeason` reads
+the project's currency once and writes it on the world — which every later tick
+loads back, so it rides along for the season's life with no further lookups.
+
+Two decisions in it:
+
+- **`money` is a factory, not a function with module state.** One server resolves
+  many seasons; a mutable "current currency" would leak one table's pound signs
+  into another table's dollars with nothing failing. The symbol is a closure made
+  per resolve.
+- **Absent means GBP, not the product's default of USD.** A compatibility choice
+  and not a claim: a world written before this existed produced pound signs, and
+  turning every one of them into a dollar sign would rewrite the prose of every
+  season already in flight. The fallback only reaches callers with no season
+  behind them — tests, probes and projections.
+
+### Closed: every project outside America began life in dollars
+
+The currency field on a new project started on USD for everybody. A field that is
+already filled in is a field people skip, so the default was doing real work and
+doing it wrong.
+
+`suggestedCurrency` in `shared/currency.ts` now picks what the dropdown starts on
+from the browser's locales and the chosen language. It is a suggestion and never a
+decision — what a business counts in belongs to the business, which is the whole
+premise of that module, so a Leeds café still reads in pounds for every viewer in
+every language.
+
+**The region decides and the language only fills in**, because that is the
+direction the information runs: `en-GB` and `en-US` are one language and two
+currencies, and knowing somebody reads English tells you nothing about which. The
+language is asked only when no locale carries a region at all.
+
+Three things it deliberately refuses to guess, each of which a shorter version
+gets wrong:
+
+- **An unrecognised region stops the guess** rather than falling through to the
+  language. `de-CH` is Swiss francs, which this product cannot write honestly;
+  knowing somebody is in Switzerland is positive evidence that "German, therefore
+  euros" is wrong, so it falls to the default. The first draft of this returned
+  EUR and the test caught it.
+- **A bare `es` or `pt` is not evidence of euros.** Spanish is spoken by far more
+  people in the Americas than in Spain and Portuguese more in Brazil than in
+  Portugal, and offering euros to somebody in Mexico is a wrong number in a field
+  they may not re-read.
+- **The EU is not the eurozone.** Sweden, Denmark, Poland and the Czech Republic
+  are in the first and none of them in the second, so the euro countries are
+  listed out rather than inferred.
+
+Decided once, when the form mounts: switching language afterwards does not move a
+field somebody may have already set on purpose.
+
+### Closed: thirty-six of the forty-nine "From year N" notes were wrong
+
+`UNLOCKS` in `responsibilities.ts` is the only schedule anything runs on —
+`isUnlocked` reads it, the desk builds a seat's form from it, the bots skip a
+lever because of it. The notes on the decision types in `decisions.ts` are prose
+beside a type, and prose cannot be wrong in a way that fails. So when the ramp was
+compressed ("the ramp is short… by year five it has all of it") the schedule moved
+and the notes stayed.
+
+Measured rather than estimated: **36 wrong, 13 right**, and every single wrong one
+named a *later* year than the truth. `tiers` said three and arrives in two.
+`segmentFocus` said eight and arrives in four. `regionFocus` said seven, also
+four. `deals` said five, arrives in three.
+
+Nothing was broken by it. Every lever worked, every test passed. The cost was that
+the most authoritative place to read what a seat gets and when had been quietly
+lying — to anybody reading the type to answer a player's question, and to anybody
+setting a new lever's year by looking at its neighbours.
+
+All thirty-six corrected, and `test/unit/unlock-comments.test.ts` now compares the
+two so it cannot happen again. Four checks, each for a way this actually goes
+wrong:
+
+- a note that names a different year from `UNLOCKS` — the drift that just
+  happened, and it lists all of them rather than failing on the first, because
+  finding thirty-six one test run at a time is its own small punishment;
+- a note that promises a wait for a lever nothing gates, which would have a player
+  waiting for something they already have;
+- the same lever described with two different years, which several of these were:
+  `dealVotes` appears on all five decision types and all four copies had drifted
+  to year five together. Two copies disagreeing is worse than both being wrong,
+  because then the file contradicts itself;
+- and that the extraction is reading both halves at all, because a regex that
+  quietly stops matching passes every other assertion in the file for ever.
+
+Mutation-checked on all three failure modes.
+
+### Closed: the phone's market screen was three fields behind the payload
+
+An audit of the whole screen rather than the one gap already on this list. The
+route sends eleven fields; the phone read eight. The three it missed had all been
+added with a comment saying what they were for.
+
+**An asset's life was printed in the wrong unit, and that was the worst of it.**
+`expiresIn` is decremented once a *tick*, so a three-year licence in a quarterly
+season arrives as twelve — and this screen printed that number with "years" after
+it. "12 years, then it lapses" for a three-year asset, on the one screen where
+somebody is deciding what to bid for it: a four-fold overstatement of the thing
+being bought. Fixed on the web when `periods` was added and missed here.
+
+`lastsFor` now mirrors the web's: whole years in years, a remainder in the unit the
+table decides in — because "2.5 years" is not a sentence and rounding it would be
+the same bug in a smaller coat. `lifeRead` keeps the phone's spelled "One year"
+for the sentence while `lifePill` stays numeric for the label.
+
+**"+6 quality" became "quality 54 → 60".** The route sends `you` with a comment
+saying a listing said "+6 quality" and left a founder doing arithmetic against
+numbers held on a different screen — which is the whole decision. Measured live on
+a construction season, the room reading is the one that gained most: `room 1.1k →
+16k` where it used to say `+14.9k capacity`, and a fifteen-fold increase is not
+something a delta conveys.
+
+**The screen stopped calling every decision a "year".** The banner, the
+sealed-bid explanation and the "argue for it before the year resolves" line all
+now use the season's own word.
+
+`currency` is read for completeness and deliberately not used for a symbol: this
+phone's `money()` carries none on purpose, so that a figure on a card reads the
+same as the same figure inside a sentence the server wrote.
+
+Twelve new tests, mutation-checked on both substantive fixes (printing a tick
+count as years, and dropping the before-and-after). The live driver confirms all
+three fields arrive and that a lot reads as a before and after; the quarterly
+arithmetic is unit-tested rather than driven, because the public season a driver
+can reach decides yearly.
+
+### Closed: the phone had no period vocabulary, and said "Year 7 of 4"
+
+`year` on every sim payload counts *periods*; `totalYears` is in years. Four phone
+screens divided one by the other, so a quarterly season four years long told its
+players:
+
+    before   Year 7 of 4        ← past its own end, progress bar pinned at full
+    after    Quarter 7 of 16    9 to go
+
+The server's own comment on `totalPeriods` names this exact failure and says the
+field was added to fix it — *"The engine has never been confused about this; only
+the screens were."* The web was fixed. The phone read `totalPeriods` **nowhere at
+all**, on any screen.
+
+It was never only arithmetic. A season can be run yearly, quarterly or monthly,
+and every word on these screens said "year", so a table deciding every quarter
+read "Year 7", "this year" and "12 years, then it lapses" about a three-year asset.
+
+`mobile/src/components/sim/period.ts` now holds the vocabulary: the words, the
+decisions in a year, the span of a season, the heading, and `lastsFor` — which
+moved here from `market.ts` because four screens had the same bug and were each
+going to need their own copy otherwise.
+
+**Where the words come from, in order.** The route's own `period` and
+`totalPeriods` first, because the server knows the cadence and the client should
+not have to agree with it independently. Then the cadence, for the room route
+(`GET /api/sim/ventures/:id`), which sends that instead — and which is why the
+phone needs mirrors of `PERIOD_NAME` and `totalPeriods` rather than this being a
+pure reading of the payload. Then "year" last, which is what an older server would
+have meant anyway.
+
+Fixed on four screens: the room's season progress, the standings banner, the
+acquisitions banner, and the market screen (done in the previous pass). The count
+is also clamped to the span, because a season resolving its last period can
+momentarily report a `year` one beyond it, and "Quarter 17 of 16" is the same
+nonsense in a smaller coat.
+
+Pinned three ways: 16 tests on the reading, four in `mobile-mirror.test.ts`
+against `shared/simulation/cadence.ts` — including a sweep over every length and
+cadence, and a check that every cadence the engine has exists on the phone, so a
+fourth one added there cannot silently fall back to "year" — and seven live checks
+that each route carries the span and that no screen reads past its own end.
+
+Mutation-checked: a phone that disagrees about quarters per year, one that words a
+quarter differently, and one missing a cadence entirely are all caught.

@@ -32,6 +32,7 @@
  * to your teammates — which is the pressure that actually gets someone back
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
+import type { CurrencyCode } from "../currency";
 import { defaultDraft } from "./levers";
 import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from "./decisions";
 import type { City, Company, Niche, Role, World } from "./types";
@@ -579,8 +580,15 @@ export function buildWorld(input: {
   opening?: Opening;
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
+  /**
+   * The money this business counts in, for the sentences the engine writes.
+   *
+   * Absent is GBP, which is what every one of them said before this existed.
+   * See `World.currency`.
+   */
+  currency?: CurrencyCode;
 }): World {
-  const { seasonId, teams, cadence } = input;
+  const { seasonId, teams, cadence, currency } = input;
   const periods = periodsPerYear(cadence);
   /*
    * Grown to the size of the field before anything is seeded from it, so the
@@ -616,6 +624,7 @@ export function buildWorld(input: {
     seasonId,
     niche,
     year: 1,
+    currency,
     companies: [
       ...seedIncumbents(niche, seasonId, seatedAgainst),
       /*

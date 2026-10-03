@@ -13,7 +13,7 @@
 import type { Express, RequestHandler } from "express";
 import { sendVerificationEmail } from "./email-verification";
 import crypto from "node:crypto";
-import bcrypt from "bcryptjs";
+import { hashPassword, verifyPassword } from "./password-hash";
 import { OAuth2Client } from "google-auth-library";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { db } from "./db";
@@ -270,7 +270,7 @@ export function registerMobileAuthRoutes(app: Express) {
         return res.status(401).json(invalid);
       }
 
-      const ok = await bcrypt.compare(password, user.passwordHash);
+      const ok = await verifyPassword(password, user.passwordHash);
       if (!ok) {
         return res.status(401).json(invalid);
       }
@@ -319,7 +319,7 @@ export function registerMobileAuthRoutes(app: Express) {
 
       const [user] = await db.insert(users).values({
         email: normalized,
-        passwordHash: await bcrypt.hash(password, 12),
+        passwordHash: await hashPassword(password),
         firstName: firstName || "",
         lastName: lastName || "",
         authProvider: "local",

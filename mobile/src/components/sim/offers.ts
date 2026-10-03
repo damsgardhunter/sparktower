@@ -31,6 +31,7 @@
 import { colors } from "../../theme";
 import type { Distress, DeskRole } from "./desk";
 import { seasonOver, type SeasonStatus } from "./lobby";
+import { SERVING_TIGHT, serviceGap, type ServiceGap } from "./serving";
 
 /** Mirrors OfferStatus in shared/simulation/mergers.ts. */
 export type OfferStatus = "pending" | "accepted" | "declined" | "lapsed" | "withdrawn";
@@ -107,6 +108,10 @@ export interface ReceivedOffer {
 }
 
 export interface OffersView {
+  /** How many decisions the season is, which is what `year` counts. See `seasonSpan`. */
+  totalPeriods?: number | null;
+  /** What one decision is called here. */
+  period?: { one: string; many: string; of: string } | null;
   year: number;
   totalYears: number;
   /**
@@ -286,47 +291,18 @@ export const NOT_AN_ELIMINATION =
 export const GOES_WITH_THE_BUSINESS =
   "The customers, what you own and what you owe all go with it when the year resolves.";
 
-/**
- * Whether you could actually serve the customers you are about to buy.
+/*
+ * Whether you could serve what you are buying lives in `./serving`, and is
+ * re-exported here so that this module is still the one place the offers screen
+ * imports from.
  *
- * This is the mistake the mechanic punishes hardest and the one an asking
- * price says nothing about. `applyAcquisition` hands the buyer every customer
- * the seller had; anybody beyond capacity is turned away, and being turned
- * away costs reputation in public, in the year when everybody is already
- * watching the company that just bought somebody. An acquirer who over-reaches
- * is the most vulnerable company in the market.
- *
- * Both numbers are returned as well as the sentence, so a screen can show the
- * arithmetic beside the warning rather than asking anyone to take it on faith.
+ * It moved because this file imports `../../theme` for the colours its verdict
+ * copy carries, which puts React Native in its dependency graph and puts it out
+ * of reach of `test/unit/mobile-mirror.test.ts` — and that sum is one of the few
+ * here worth pinning against the engine, because it decides whether a deal is
+ * survivable and nothing else on the screen checks that.
  */
-export function serviceGap(input: {
-  you: Pick<YourValuation, "capacity" | "customers"> | null | undefined;
-  target: Pick<OfferTarget, "customers">;
-}): { held: number; capacity: number; short: number; over: boolean; line: string | null } {
-  const { you, target } = input;
-  const capacity = Number.isFinite(you?.capacity) ? Number(you?.capacity) : Number.NaN;
-  const yours = Number.isFinite(you?.customers) ? Number(you?.customers) : Number.NaN;
-  const arriving = Number.isFinite(target.customers) ? Math.max(0, target.customers) : 0;
-
-  // Without the server's figures there is nothing honest to say, and a
-  // reassuring guess here would be worse than silence.
-  if (!Number.isFinite(capacity) || !Number.isFinite(yours)) {
-    return { held: arriving, capacity: 0, short: 0, over: false, line: null };
-  }
-
-  const held = Math.max(0, yours) + arriving;
-  const short = Math.max(0, held - capacity);
-
-  return {
-    held,
-    capacity,
-    short,
-    over: short > 0,
-    line: short > 0
-      ? `You would hold ${held.toLocaleString()} customers and can serve ${capacity.toLocaleString()}. ${short.toLocaleString()} of them get turned away — in public, and it costs reputation. Operations have a year to fix that.`
-      : `You would hold ${held.toLocaleString()} customers and can serve ${capacity.toLocaleString()}. Everybody who arrives gets served.`,
-  };
-}
+export { SERVING_TIGHT, serviceGap, type ServiceGap };
 
 export interface OfferCheck {
   ok: boolean;

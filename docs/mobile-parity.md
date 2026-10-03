@@ -84,9 +84,9 @@ What each claim turned out to be, with where the evidence is:
 
 ### Genuinely still missing
 
-- [ ] **The admin consoles.** The five this entry was opened for are all on the
-  phone; what is still open is *acting* from them, below, and two screens this
-  survey never looked at — see the note after the table. Measured by whether the
+- [x] **The admin consoles.** Every web admin page has a phone counterpart as
+  of 2026-10-03. What is still open is *acting* from the support console, below,
+  which is its own entry. Measured by whether the
   phone calls the route at all, which is the only reliable signal — a path
   comparison flags renames and by-design absences as gaps:
 
@@ -105,11 +105,20 @@ What each claim turned out to be, with where the evidence is:
 
   **Two the survey missed entirely**, found on 2026-10-03 by listing the web's
   admin pages rather than re-reading this table: `admin-contests.tsx` and
-  `admin-promotions.tsx`. The phone calls `/api/admin/contests`,
-  `/api/admin/promotions` and `/api/admin/promotions/refresh` nowhere at all.
-  This table was built from a chosen five and then reasoned about as if it were
-  the whole set, which is the same mistake the pill count made twice. The web has
-  eleven admin pages and the phone has ten, nine of them shared.
+  `admin-promotions.tsx`. This table was built from a chosen five and then
+  reasoned about as if it were the whole set, which is the same mistake the pill
+  count made twice.
+
+  Both built the same day, with all seven of their routes called and — the part
+  that actually mattered — a row each in the More menu. A screen with no row is
+  a screen nobody can reach, which is how they stayed missing after the web
+  pages existed. Contests can be made and edited from the phone, unlike the
+  consoles where acting stays on the web: a grant moves money and a suspension
+  takes an account away, whereas a contest is a page of text with two dates on
+  it, and the edit most likely to be wanted in a hurry is a date or a status.
+
+  Eleven web admin pages, eleven on the phone, plus the phone's own backing
+  console.
 
   **Problems** keeps the web's restraint — four states and a note, no priority
   and no assignment, because "a triage system with more moving parts than
@@ -141,12 +150,25 @@ What each claim turned out to be, with where the evidence is:
   is recoverable only in the sense that money can be taken off a balance after
   somebody has seen it.
 
-- [ ] **Acting from the support console**: suspend, restore, grant credit,
-  issue a day pass. Wanted eventually, and wants its own change: a confirmation
-  that names the person and the amount, the per-operator daily remainder shown
-  before the field rather than after the refusal, and the reason the server
-  already requires. The test pairs the two halves, so if the actions arrive the
-  line telling people they are elsewhere fails until it goes.
+- [x] **Acting from the support console**, built 2026-10-03 with exactly the
+  three things this entry asked for: a confirmation that names the person and the
+  amount, the per-operator daily remainder shown before the field rather than
+  after the refusal, and the reason the server already requires. Undo came with
+  it, because an action taken by a slipped thumb is only recoverable if the way
+  back is on the same screen.
+
+  The action catalogue is not restated on the phone.
+  `/api/admin/console/actions` sends `CONSOLE_ACTION_DEFS` whole and the phone
+  renders what it is given — a power over somebody who is not in the room is
+  exactly the list that must not exist twice. Owner-only actions are absent for
+  an admin rather than greyed out, and the ones whose subject is a project stay
+  on the web, which has the project open beside them.
+
+  Two things this turned up. The grant was sending `amountCents` where the
+  handler reads `cents`, so every grant would have been refused as not-a-number
+  — found by reading the handler rather than trusting the field name. And the
+  per-account history had to start sending `targetId`, without which no client
+  can tell that an action has already been undone.
 
   Each new one needs a row in the Admin group of `(tabs)/more.tsx` or it is dead
   code that typechecks, and owner-only routes need `access?.owner` on the row or
@@ -293,13 +315,13 @@ What each claim turned out to be, with where the evidence is:
   both clients, with the phone mapping kept distinct from the bare `/profile` a
   connection request uses.
 
-- [ ] **Pills: narrower than I claimed.** I recorded "54 call sites hand-picking
-  semantic colours" as a gap. Most are not: `MoreKit`'s Pill takes a colour
-  deliberately, for a tier badge or a skill or a plan name, and `nova/Pill` already
-  explains why the three are not merged. The genuine drift is a pill showing a
-  *state* with a locally decided colour — two in the backing console, now carrying
-  tones, and roughly a third of the forty in `mobile/src/components/sim/`, which are
-  another session's files and left alone.
+- [x] **Pills: narrower than I claimed, and now closed.** I recorded "54 call
+  sites hand-picking semantic colours" as a gap. Most were not: `MoreKit`'s Pill
+  takes a colour deliberately, for a tier badge or a skill or a plan name, and
+  `nova/Pill` already explains why the three are not merged. The genuine drift
+  was a pill showing a *state* with a locally decided colour — two in the
+  backing console, then the six in the sim surface, all now carrying tones. See
+  the settled entry below for the rule that replaced the count.
 
   The command, not a number:
 
@@ -432,16 +454,44 @@ What each claim turned out to be, with where the evidence is:
   a list of permitted routes rather than a ban on write verbs: joining a company
   is not running one, and a verb check cannot tell the difference.
 
-- [ ] **The Companies surface — most of it still has no phone caller.**
-  Re-measured 2026-10-03: **15 of 52** routes across the six company files are
-  called, so roughly thirty-seven are not. The old heading here said "54 of 55",
-  which was true when the entry was opened and contradicted its own table within
-  a day — the table below was updated as screens landed and the headline was not.
-  A number in a heading rots faster than the table under it; count it rather than
-  quote it.
+- [x] **The Companies surface — built out 2026-10-03.** **41 of 52** routes
+  across the six company files now have a phone caller, up from 15 the same day.
+  The remaining eleven are all `company-season-routes.ts`, the training-season
+  surface another session is building under `app/sim/`, and were deliberately
+  left alone.
 
-  Measured by family rather than by screen name, which is the only signal that
-  separates a missing feature from a renamed one:
+  `mobile/app/company/[id].tsx` is tabbed the way the web's page is: About (with
+  the whole domain-verification flow), Team, Talent, Challenges, Scouting, Admin.
+
+  | File | Routes | On the phone |
+  |---|---|---|
+  | `company-routes.ts` | 14 | **14 of 14** |
+  | `challenge-routes.ts` | 12 | **8 of 12** — the sponsor's seven, plus the founder's side already there |
+  | `talent-routes.ts` | 8 | **7 of 8** |
+  | `scouting-routes.ts` | 4 | **4 of 4** |
+  | `company-verification-routes.ts` | 3 | **3 of 3** |
+  | `company-season-routes.ts` | 11 | another session's, in flight |
+
+  Two things are worth keeping from how this was done. The rules are restated,
+  never re-decided: `mobile/src/companies.ts` and `mobile/src/challenges.ts` copy
+  `shared/`'s tables because Metro cannot resolve `@shared`, and their parity
+  tests *execute* both copies over every role, power and action rather than
+  comparing them as text. Nothing on the phone decides a permission — the shared
+  helpers only grey a control out before somebody taps it, and the server checks
+  the same rule again.
+
+  And every tab is readable by anybody who can see the company, writable only
+  with the power the server asks for. Hiding a tab would be stricter than the
+  server and would hide a company's own candidate list from whoever was told to
+  look at it.
+
+  **My own sweep undercounted this at 36.** Five of the eleven "misses" were the
+  matcher's fault: four challenge routes called through a `base` template
+  variable, and one talent route whose query string put it two characters past a
+  length threshold. Checked by hand before the number went in here.
+
+  The original measurement, kept because the per-file split is still the useful
+  way to look at this:
 
   | File | Routes | On the phone |
   |---|---|---|
@@ -527,7 +577,7 @@ What each claim turned out to be, with where the evidence is:
   because the server keeps that difference: zero covers is a bad week, no answer
   is a week nobody counted.
 
-- [x] **The rhythm**, mostly — built 2026-10-03 as `mobile/app/rhythm/[id].tsx`,
+- [x] **The rhythm**, finished — built 2026-10-03 as `mobile/app/rhythm/[id].tsx`,
   reached from `app/project/[id].tsx` on a Run project. It was the best next
   slice and it was: a weekly check-in is a recurring task somebody does away
   from a desk, and it needs no company page to reach it.
@@ -535,19 +585,32 @@ What each claim turned out to be, with where the evidence is:
   The phone calls `/api/projects/:id/rhythm`, `/rhythm/checkins/:weekOf`,
   `/rhythm/checkins/:weekOf/nova` and `/rhythm/jobs/:jobId/done`.
 
-  **Three siblings are still web-only**, verified by grep on 2026-10-03 rather
-  than assumed: `/rhythm/goals`, `/rhythm/settings` and
-  `/rhythm/report/:month`. The monthly report is the one worth having next — it
-  is a thing to read, which is phone-shaped; goals and settings are configuration,
-  which is not.
+  The quarter's goals, the settings and the monthly report followed in
+  `07329442`, and the recurring jobs in `eff6c40d`: the card could tick a job
+  off and not create one, which its own comment admitted, and it only appeared
+  once a job existed — so the first could never be added from the phone even in
+  principle. Stopping a job and deleting it are kept apart, as the web keeps
+  them: a job that ran for a year and then stopped is part of the record of how
+  the company was run.
 
-  This entry's opening line said "the phone calls none of them" for two days
-  after the phone started calling four of them. An entry about a gap has to be
-  closed by whoever closes the gap, or it becomes the most confident wrong thing
-  in the file.
+  **Two routes still have no phone caller and that is correct**, not a gap:
+  `GET /rhythm/jobs` and `GET /rhythm/checkins` return lists that `GET /rhythm`
+  already includes, so calling them would be a second request for data in hand.
+  `rhythm-jobs-on-the-phone.test.ts` pins that reasoning, because a bare
+  route-coverage count reads it as a hole and somebody would rediscover it as
+  one.
 
-- [ ] **The customer console.** Nothing on the phone, and still reasonably last:
-  it is an operator tool and an operator has a laptop.
+  Two corrections this entry earned. Its opening line said "the phone calls none
+  of them" for two days after the phone started calling four of them. Then I
+  reported goals, settings and the report as still web-only — true when
+  measured, and another session had landed them by the time I wrote it down. An
+  entry about a gap has to be closed by whoever closes the gap, and a measurement
+  has a date on it.
+
+- [x] **The customer console** — which is `admin-console.tsx`, the same screen as
+  the support console above, and complete on the phone as of 2026-10-03: the
+  lookup, the history, every action whose subject is a person, and undo. This
+  entry and that one were the same gap counted twice.
 - [x] **`LiveDot` and `Glance`** — built 2026-10-01
   (`mobile/src/components/nova/`). `Glance` is the web's own phone layout rather
   than a new design: the web is `grid-cols-1` with ruled columns only from `sm`,
@@ -560,13 +623,27 @@ What each claim turned out to be, with where the evidence is:
   (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
   reasoning about `unknown`: dashed and blue, never red, because "nobody has
   checked" is a question and `bad` is an answer.
-- [ ] **Nineteen semantic pills still pick their colour by hand**, in eleven
-  files — re-counted 2026-10-03, up from sixteen in eight because the sim surface
-  grew while this entry sat here. Seventeen of the nineteen are in
-  `mobile/src/components/sim/` and `mobile/app/sim/`, which another session is
-  mid-build in; the two reachable ones are `more/UpgradeCard.tsx` and
-  `(tabs)/leaderboard.tsx`. So this is now mostly a job to do *after* the sim work
-  lands, in one pass, rather than a job somebody is avoiding. Count it with the command below rather than trusting a number in this
+- [x] **The pills, settled 2026-10-03 — by rule rather than by count.**
+
+  This entry's number was wrong three times: "54 call sites", then "sixteen in
+  eight", then "nineteen in eleven". Each count was taken honestly and was stale
+  within a day, because the sim surface was growing underneath it. The count was
+  never the thing.
+
+  The thing is the *shape*. A pill whose colour is chosen by a condition is
+  answering "what does green mean here" at the call site, and that question gets
+  answered once, in `PILL_TONE`. An unconditional colour is a different thing
+  and stays: `MoreKit`'s Pill takes a colour deliberately, for a tier, a plan
+  name, a figure or a kind — decoration keyed to something that is not a state.
+
+  There were five conditional-colour pills left, plus one unconditional
+  "Already open" that was plainly a state. All six now use `nova/Pill`'s tones,
+  and `nova-kit-parity.test.ts` holds the rule: **no file may decide a pill's
+  colour with a conditional.** That cannot go stale, which a number can.
+
+  Three files hold both kinds, because they show figures and states side by
+  side, and import the tone one as `Pill as StatePill` so a reader can tell at
+  the call site which question is being answered. Count it with the command below rather than trusting a number in this
   file; the first survey of this said "twenty, in nine files" and was wrong in
   both halves, because it read the first few lines of a grep and then only
   examined the files it had already noticed. `leaderboard`, `admin/backing`,

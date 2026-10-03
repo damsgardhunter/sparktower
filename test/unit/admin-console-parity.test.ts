@@ -175,22 +175,31 @@ describe("the support console on the phone", () => {
    * Either it does not act, or it stops claiming it does not. Both halves fail
    * together on purpose, so the screen and its explanation cannot disagree.
    */
-  it("does not act, and says where acting happens", () => {
+  /*
+   * This used to assert the opposite — that the screen did *not* act, and said
+   * where acting happened. It was a paired assertion on purpose: the day the
+   * actions arrived, the line telling people to go to the web would become a
+   * lie, and the test would fail until it went. That day was 2026-10-03, and
+   * this is the other half of the pair.
+   */
+  it("acts, and no longer sends anybody to a desk for it", () => {
     /*
-     * The boundary matters: `/api/admin/console/act` is a prefix of
-     * `.../actions`, which the screen's own comment names when it explains why
-     * acting is elsewhere — so without it this test matched the explanation and
-     * reported that the screen acts.
+     * The boundary still matters: `/api/admin/console/act` is a prefix of
+     * `.../actions`, so the negative lookahead is what tells the two apart.
      */
-    const acts = /\/api\/admin\/console\/(act|undo)(?![A-Za-z])/.test(screen);
-    const saysSo = /on the web console/.test(screen);
-    expect(
-      acts,
-      acts && saysSo
-        ? "the screen acts now — remove the line telling people acting is on the web"
-        : "the screen should not grant credit or suspend accounts yet",
-    ).toBe(false);
-    expect(saysSo, "if it cannot act it has to say where to").toBe(true);
+    expect(/\/api\/admin\/console\/act(?![A-Za-z])/.test(screen), "the screen should act").toBe(true);
+    expect(/\/api\/admin\/console\/undo\//.test(screen), "and be able to put an action back").toBe(true);
+    expect(screen, "nothing should still say acting is on the web console").not.toMatch(/granting credit and issuing a day pass are on the web console/);
+  });
+
+  it("keeps on the web only the actions whose subject is a project", () => {
+    /*
+     * The one thing still deliberately elsewhere, and it is about what the
+     * screen has open rather than about care: this screen is looking at a
+     * person, and the web console has the project beside it.
+     */
+    expect(screen).toMatch(/a\.subject === "user"/);
+    expect(screen).toMatch(/are on the web console, which has the project open beside them/);
   });
 
   it("is open to a reviewer, because the route is requireAdmin rather than requireOwner", () => {
@@ -333,7 +342,24 @@ describe("being scouted, on the phone", () => {
  */
 describe("companies on the phone", () => {
   const list = read("mobile/app/companies.tsx");
-  const detail = read("mobile/app/company/[id].tsx");
+  /*
+   * The detail screen plus its tabs. It was one file; on 2026-10-03 it became a
+   * tabbed screen with `src/components/company/*` behind it, and the
+   * verification fields moved into `VerifyDomain.tsx` — so reading only
+   * `company/[id].tsx` reported a field as unread that a tab beside it reads.
+   * This is "what the company surface reads", not "what one file reads".
+   */
+  const detail = [
+    "mobile/app/company/[id].tsx",
+    "mobile/src/components/company/VerifyDomain.tsx",
+    "mobile/src/components/company/TeamTab.tsx",
+    "mobile/src/components/company/AdminTab.tsx",
+    "mobile/src/components/company/TalentTab.tsx",
+    "mobile/src/components/company/ChallengesTab.tsx",
+    "mobile/src/components/company/ScoutingTab.tsx",
+    "mobile/src/components/company/TrainingTab.tsx",
+    "mobile/src/components/company/kit.ts",
+  ].map(read).join("\n");
   const routes = read("server/company-routes.ts");
 
   it("reads the list and one company", () => {
@@ -370,29 +396,78 @@ describe("companies on the phone", () => {
   });
 
   /*
-   * The phone reads companies and does not run them: members, seasons and
-   * challenges are forms with consequences, and they stayed on the web. The one
-   * exception is accepting an invitation, which is not administering a company
-   * but joining one — the same thing the sim's join-by-code does, and the point
-   * at which somebody has nothing to read yet.
+   * The phone runs companies now, and this test changed shape rather than
+   * going away.
    *
-   * Written as a list of the routes allowed rather than as "no writes", because
-   * the ban is on particular powers and a bare verb check cannot tell the
-   * difference. A new write here fails this until it is argued for by name.
+   * It used to say "does not run a company from the phone", with one allowed
+   * write — accepting an invitation. On 2026-10-03 the surface was built out to
+   * 52 of 52 routes, so the ban became a list of what was decided instead. The
+   * virtue of the original is kept: it is a list of *names*, not a verb check,
+   * so a new write fails this until somebody adds it deliberately and can say
+   * what it is.
+   *
+   * Still not here, and the list is short: deleting a company (owner-only, and
+   * nothing on a phone should end a business), editing the company's own
+   * details, and the three console actions whose subject is a project.
    */
-  it("does not run a company from the phone", () => {
-    const JOINING = ["/api/company-invites/accept"];
+  it("writes only what was argued for, by name", () => {
+    const ALLOWED = [
+      /* Joining, which is not administering a company. */
+      "/api/company-invites/accept",
+      /* Proving the domain, which everything else on the surface waits on. */
+      "/api/company-verifications",
+      "/api/company-verifications/${id}/check",
+      "/api/companies/${companyId}/verify",
+      /* The team. */
+      "/api/companies/${companyId}/invite-link",
+      "/api/companies/${companyId}/invite-link/reset",
+      "/api/companies/${companyId}/members",
+      "/api/companies/${companyId}/members/${userId}",
+      "/api/companies/${companyId}/members/${member.userId}",
+      "/api/companies/${companyId}/members/${member.userId}/permissions",
+      /* Recruiting, scouting, challenges, seasons. */
+      "/api/companies/${companyId}/talent/${userId}/invite",
+      "/api/companies/${companyId}/follows/${projectId}",
+      "/api/companies/${companyId}/watches",
+      "/api/companies/${companyId}/challenges",
+      "/api/companies/${companyId}/seasons",
+      "/api/companies/${companyId}/seasons/nova",
+      "/api/companies/${companyId}/simulation-seats/buy",
+      "/api/companies/${companyId}/simulation-seats/checkout",
+      /*
+       * The challenge and season sub-routes are built from a `base` template,
+       * so this is what the matcher sees of them. Their own suites assert the
+       * full paths.
+       */
+      "${base}/close-entries",
+      "${base}/announce",
+      "${base}/entries/${entry.id}/status",
+      "${base}/invite",
+      "${base}/start",
+      "${base}/resolve-year-now",
+      "base, { ",
+    ];
     const code = withoutComments(list + detail);
     /* `api<Shape>("/url", { method })` — the generic is optional and easy to forget. */
     const writes = [...code.matchAll(/api(?:<[^>]*>)?\(\s*`?"?([^"`]+)"?`?[^)]*method:\s*"(?:POST|PATCH|PUT|DELETE)"/g)]
       .map((m) => m[1]);
     /*
-     * Anchor on the allowed one. Without this the test passes when the pattern
+     * Anchor on one known write. Without this the test passes when the pattern
      * stops matching anything at all, which is how a check like this rots.
      */
-    expect(writes, "the pattern no longer finds the writes it is filtering").toContain(JOINING[0]);
-    expect(writes.filter((r) => !JOINING.includes(r))).toEqual([]);
-    expect(code, "and the screens have to say the rest is on the web").toMatch(/on the web/);
+    expect(writes, "the pattern no longer finds the writes it is filtering").toContain("/api/companies/${companyId}/members");
+    const unexpected = [...new Set(writes.filter((r) => !ALLOWED.includes(r)))];
+    expect(
+      unexpected,
+      `new writes on the company surface — add them to ALLOWED with a line saying what they are:\n  ${unexpected.join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  it("still leaves deleting a company and editing its details on the web", () => {
+    const code = withoutComments(list + detail);
+    /* Nothing on a phone should end a business. */
+    expect(code).not.toMatch(/api\(`\/api\/companies\/\$\{[^}]*\}`, \{ method: "DELETE"/);
+    expect(code).not.toMatch(/api\(`\/api\/companies\/\$\{[^}]*\}`, \{ method: "PATCH"/);
   });
 
   it("is reachable, behind the companies switch", () => {
@@ -448,29 +523,37 @@ describe("the weekly rhythm on the phone", () => {
   });
 
   /*
-   * This used to assert the opposite: that the week's screen touched neither the
-   * goals nor the settings, because "choosing metrics and goals is a desk job".
-   * Two of the three turned out not to be. The goals are read every week and set
-   * once a quarter, and the check-in day and the reminder list are *about the
-   * phone* — the person who wants the chasing moved to Sunday is holding the
-   * thing it arrives on. So both moved, each to its own screen, and the week's
-   * screen links to them.
+   * This assertion has now been reversed twice, and both reversals are the
+   * point of writing it as a line rather than as a count.
    *
-   * What stayed is the line this now draws: the two long forms about the
-   * project's shape, which are the recurring jobs and which numbers it tracks.
+   * It first said the week's screen touched neither the goals nor the settings,
+   * because "choosing metrics and goals is a desk job". Two of the three turned
+   * out not to be: the goals are read every week and set once a quarter, and
+   * the check-in day and the reminder list are *about the phone* — the person
+   * who wants the chasing moved to Sunday is holding the thing it arrives on.
+   *
+   * Then it said the recurring jobs were the remaining desk job. They were not
+   * either: the card could mark a job done and not create one, which made the
+   * phone able to tick off a thing it could not make.
+   *
+   * What is left on the web is one form — which numbers the project tracks.
    */
-  it("keeps the two long setup forms on the web, and nothing else", () => {
+  it("reaches the whole rhythm, and leaves only the metrics form on the web", () => {
     const code = withoutComments(screen);
     expect(code, "the week should link to the goals").toContain("/rhythm/goals/");
     expect(code, "and to the check-in day").toContain("/rhythm/settings/");
     expect(code, "and to the month").toContain("/rhythm/report/");
 
+    /* The jobs are managed here now: added, edited, stopped and deleted. */
+    expect(code, "a job can be added").toMatch(/rhythm\/jobs`, \{ method: "POST"/);
+    expect(code, "and edited").toMatch(/rhythm\/jobs\/\$\{job\.id\}`, \{ method: "PATCH"/);
+    expect(code, "and marking one done is still here").toMatch(/rhythm\/jobs\/\$\{jobId\}\/done`/);
+
     /*
-     * The jobs' own CRUD is the remaining desk job. Marking one done is here and
-     * always was, so the check is on writing a job rather than on the word.
+     * Stopping is not deleting, and the distinction is the reason both exist: a
+     * job that ran for a year is part of the record of how the company was run.
      */
-    expect(code, "editing the recurring jobs is still a desk job").not.toMatch(/rhythm\/jobs`|rhythm\/jobs\/\$\{[^}]*\}`/);
-    expect(code, "and the screen has to say what is still elsewhere").toMatch(/still on the web/);
+    expect(code, "stopping sets active false rather than deleting").toMatch(/body: \{ active: false \}/);
   });
 });
 

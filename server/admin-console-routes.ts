@@ -260,6 +260,19 @@ export function registerAdminConsoleRoutes(app: Express) {
         id: h.id, action: h.action, actorId: h.actorId, reason: h.reason,
         details: h.details, createdAt: h.createdAt,
         previousState: h.previousState, resultingState: h.resultingState,
+        /*
+         * Which entry this one is about, so a reader can tell that an action
+         * has already been undone.
+         *
+         * A `console:undo` entry carries the id of the entry it reversed here,
+         * which is how `GET /api/admin/console/log` works out its `undone`
+         * flag. This payload left it out, so a client reading one account's
+         * history could not make the same deduction and would offer to undo
+         * something already undone — refused by the route, but after the tap.
+         *
+         * It is a log row's id, not anything of the customer's.
+         */
+        targetId: h.targetId,
       })),
     });
   });

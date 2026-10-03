@@ -75,9 +75,24 @@ market, 9% is the most of that market you can ever hold, however good you get.
 Opening a region costs money once and costs more to run for ever.
 
 **A region opened this period is reached only as far as your brand carries** —
-`brand / 60`, with a floor of 15%. Opening a second region with a brand of 20
-reaches a third of it in the first period. Expansion rewards companies that are
-already known.
+`brand / 60`. Expansion rewards companies that are already known.
+
+There are two doors into a region and the floor under that rule differs between
+them, which is the part worth knowing before you choose:
+
+| | buying one (marketing's `targetCities`) | announcing one (operations' `expand`) |
+|---|---|---|
+| when | from period one | from period four |
+| which region | any of them | the one announced that year |
+| who agrees | nobody; it is marketing's call | a majority of the table |
+| opens | immediately | next period |
+| first-period reach | `brand / 60`, **floor 50%** | `brand / 60`, **floor 15%** |
+| what it costs | full price | 30% less |
+
+So with a brand of 20 you reach half a region you buy, and a third of one you
+announce — and you pay a third more for the half. The slower door is cheaper and
+the quicker door gets you further in; neither is free, and a weak brand makes
+both of them rent.
 
 ### 2. You keep only what you can serve
 
@@ -178,9 +193,10 @@ than features but lands a period later. If your company is stable, this is when
 to take the slower option — it is the only window where being behind on purpose
 pays back before the season ends.
 
-Expansion arrives in period four, and remember the ramp: a new region is
-reached as far as your brand carries. Expanding on a weak brand buys rent and
-very little else.
+*Announced* expansion arrives in period four — marketing can buy a region from
+period one — and either way, remember the ramp: a new region is reached as far as
+your brand carries, from a floor of 50% if you bought it and 15% if you announced
+it. Expanding on a weak brand buys rent and very little else.
 
 ### Later: own something nobody else has
 

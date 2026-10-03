@@ -56,3 +56,6 @@ packages/*/*.vsix
 .vscode/
 # Vite's dependency pre-bundle, per checkout (see cacheDir in vite.config.ts).
 .vite-cache/
+
+# One-off scratch scripts for simulation balancing — the working-out, not the product.
+.sim-lab/

@@ -10,8 +10,8 @@ import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
   BufferCutWarning, BufferHoldNote, ChallengeCard, ChoiceField, CitiesField, CommitmentMeter,
-  DeskBanner, DilutionNote, DistressCard, EconomyStrip, EventCard, FiledRow, LastChallengeCard,
-  LevelsField, MapField, NewLeversNote, NumberField, PipelineNote, ReportCard, RivalRow, ScoreBar, Stat, TechDebtNote,
+  DeskBanner, DilutionNote, DistressCard, EconomyStrip, EventCard, ExpansionVoteCard, FiledRow, LastChallengeCard,
+  LevelsField, MapField, NewLeversNote, NumberField, OurNicheCard, PipelineNote, ReportCard, ResearchCard, RivalRow, ScoreBar, Stat, TechDebtNote,
 } from "../../../src/components/sim/DeskKit";
 import { MarketResultCard } from "../../../src/components/sim/MarketKit";
 import { ProjectionCard } from "../../../src/components/sim/ProjectionCard";
@@ -20,7 +20,8 @@ import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
   ROLE_ORDER, bufferCut, challengeProgress, challengeStanding, commitment, covenantSpend, debtCostRead,
-  debtSeverity, discretionarySpend, draftMatches, exact, formatUntil, inTrouble, money, reachOf,
+  debtSeverity, discretionarySpend, draftMatches, exact, formatUntil, inTrouble, money,
+  notStartedReason, reachOf,
   reachRead, seatShare, secondsUntil, shareOwnedRead, tableStatus, validateDraft, validateRecovery,
   withYourDraft,
   type DeskDistress, type DeskRole, type FileDecisionResult, type RecoveryKind,
@@ -103,6 +104,26 @@ export default function Desk() {
       delete next[fieldId];
       return next;
     });
+
+  /*
+   * A reminder to a seat the table is waiting on.
+   *
+   * Web-only until now, which was the wrong way round: a phone player could
+   * already *receive* one (`sim_nudge` has an icon in the notifications tab) and
+   * had no way to send one — on the client somebody actually has in their pocket
+   * when a year is closing.
+   *
+   * The server's refusals each have their own words, so they are shown rather
+   * than flattened into "couldn't do that": a stand-in files without being asked,
+   * and somebody who has already filed is a different thing from somebody who
+   * has not.
+   */
+  const nudge = useMutation({
+    mutationFn: (userId: string) =>
+      api<{ ok: boolean; message: string }>(`/api/sim/ventures/${id}/nudge`, { method: "POST", body: { userId } }),
+    onSuccess: (result) => show({ tone: "success", text: result?.message ?? "Told them." }),
+    onError: (err) => show({ tone: "error", text: errText(err, "Couldn't send that reminder.") }),
+  });
 
   const file = useMutation({
     mutationFn: () => api<FileDecisionResult>(`/api/sim/ventures/${id}/decisions`, { method: "POST", body: { decision: draft } }),
@@ -207,6 +228,8 @@ export default function Desk() {
         company,
         decisions: withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
         costIndex: economy.costIndex,
+        /* Sealed bids standing at auction — promised money the meter could not see. */
+        bids: data.bidsOutstanding,
         /*
          * The cities the company is *already* open in, not the ones this
          * year's draft would open. The engine charges the fixed bill against
@@ -277,9 +300,17 @@ export default function Desk() {
         <Screen canvas>
           <Card accent={colors.info}>
             <SimSectionTitle icon="hourglass" title="Year one hasn't started" color={colors.info} />
-            <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
-              The table is still filling. Once the season opens, this is where you'll file a decision each day — one real day is
-              one year of trading, and the year resolves for all five of you at once.
+            {/*
+              * Why it has not started, rather than "the table is still filling"
+              * — which was said whatever was true and was usually the wrong
+              * reason. A season waits for every room in it, so a finished table
+              * waiting on strangers is the common case. See `notStartedReason`.
+              */}
+            <Text testID="desk-not-started-reason" style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
+              {notStartedReason(data)}
+            </Text>
+            <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+              Once the season opens, this is where you'll file a decision each period — and the year resolves for everyone at once.
             </Text>
             {data.yourRole ? (
               <Pill label={`Your seat: ${data.yourRole.toUpperCase()}`} icon="ribbon-outline" color={colors.primary} />
@@ -452,7 +483,7 @@ export default function Desk() {
 
           {/* 1a. What happened to the company. Before anything about what to do next. */}
           {data.lastYear ? (
-            <ReportCard report={data.lastYear} />
+            <ReportCard report={data.lastYear} onOpen={() => router.push(`/sim/report/${id}?year=${data.lastYear?.year}` as any)} />
           ) : (
             <Card style={{ borderStyle: "dashed" }}>
               <SimSectionTitle icon="newspaper-outline" title="No results yet" color={colors.textTertiary} />
@@ -473,6 +504,27 @@ export default function Desk() {
               onOpen={() => router.push(`/sim/market/${id}`)}
             />
           ) : null}
+
+          {/* 1a. And what the five of you actually filed to cause it.
+              A link rather than a section: it is a seat-by-seat record of every
+              lever, which is three screens of reading on a phone, and the desk
+              is long enough. It is also the only place the sealed bids are ever
+              shown — they are deleted the moment they settle — so a table that
+              lost a lot at auction had nothing to look at afterwards. */}
+          <Card onPress={() => router.push(`/sim/past/${id}` as any)} testID="desk-to-past">
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+              <Icon name="hammer" size={20} color={colors.textSecondary} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+                  {data.lastYear ? `What the table decided in year ${data.lastYear.year}` : "What the table decided"}
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                  Every lever as it was filed, who filed nothing, how the sealed bids settled, and where everybody ended up.
+                </Text>
+              </View>
+              <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+            </View>
+          </Card>
 
           {/* 1b. How your own year went, and what this one asks of you.
               Directly under the company's report because that is the order the
@@ -516,6 +568,24 @@ export default function Desk() {
                 <Stat label="Landing next year" value={company.pipeline ? `+${company.pipeline}` : "Nothing"}
                   hint={company.pipeline ? "Quality already bought and waiting" : "No research in the pipeline"}
                   tone={company.pipeline ? colors.info : undefined} />
+                {/* How good the staff are at looking after people.
+                    Sent since training existed and read by neither client, so a
+                    table that spent a year training its people had no way to see
+                    it working — and this is the figure `staffLeverage`
+                    multiplies the support budget by, so it decides how much
+                    service the same money buys. */}
+                {data.staffQuality != null ? (
+                  <Stat
+                    label="Your people"
+                    value={`${Math.round(data.staffQuality)}`}
+                    hint={data.staffQuality >= 65
+                      ? "Well trained — support money goes further"
+                      : data.staffQuality <= 40
+                        ? "Green — support money buys less than it should"
+                        : "About ordinary at looking after people"}
+                    tone={data.staffQuality <= 40 ? colors.warning : data.staffQuality >= 65 ? colors.success : undefined}
+                  />
+                ) : null}
                 {/* What the product owes itself. A bare 62 means nothing to
                     four of the five seats, so the figure carries what it is
                     costing them right now — both halves computed by the engine
@@ -667,6 +737,39 @@ export default function Desk() {
               draft={dirty ? draft : null}
               filedStamp={JSON.stringify((data as any).filed ?? {})}
             />
+          ) : null}
+
+          {/* What the table has already bought and could not see.
+
+              The niche is a year of research spent carving out a group of
+              customers; the report is a year's marketing budget spent on what
+              happens next. Both were filable on this phone and neither was
+              readable on it, so the money left and nothing arrived. Above the
+              levers, because both are inputs to the decision being filed. */}
+          {data.ours ? <OurNicheCard ours={data.ours} /> : null}
+          {data.research ? <ResearchCard research={data.research} /> : null}
+
+          {/* How many people are coming, and what the room costs if that is
+              wrong in either direction.
+
+              Above the levers deliberately: the forecast is the thing capacity
+              is set against, and until this screen existed a phone operations
+              seat typed that number against nothing at all while a teammate on
+              a laptop had the range, the room and the price of being wrong. */}
+          {!finished ? (
+            <Card onPress={() => router.push(`/sim/future/${id}` as any)} testID="desk-to-future">
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+                <Icon name="telescope" size={20} color={colors.info} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>What's coming</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                    How many {data.niche?.voice?.customers ?? "customers"} this year could bring, whether you have the room for
+                    them, and what is already paid for and still on its way.
+                  </Text>
+                </View>
+                <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+              </View>
+            </Card>
           ) : null}
 
           {/* 3 & 4. The table's money, then your levers. The total sits above the
@@ -923,9 +1026,30 @@ export default function Desk() {
               {[...data.table]
                 .sort((a, b) => rank(a.role) - rank(b.role))
                 .map((seat) => (
-                  <FiledRow key={seat.userId} seat={seat} spend={seat.role ? filedBySeat.get(seat.role) : undefined} />
+                  <FiledRow
+                    key={seat.userId}
+                    seat={seat}
+                    spend={seat.role ? filedBySeat.get(seat.role) : undefined}
+                    onOpen={() => router.push(`/sim/seat/${id}/${seat.userId}` as any)}
+                    onNudge={() => nudge.mutate(seat.userId)}
+                    nudging={nudge.isPending && nudge.variables === seat.userId}
+                  />
                 ))}
             </Card>
+          )}
+
+          {/*
+            * 7. The region on the table.
+            *
+            * Slot seven was empty on the phone and holds this on the web. The
+            * payload has carried `expansion` all along, so a phone player could
+            * cast the vote — `expandVote` is drawn by `LevelsField` with the
+            * region and price in its own help text — while seeing nothing of who
+            * else had voted or whether it carried. Voting blind on the one
+            * decision whose whole point is what the rest of the table thinks.
+            */}
+          {data.expansion && data.table && data.table.length > 0 && (
+            <ExpansionVoteCard data={data.expansion} seats={data.table} />
           )}
 
           {/* 8. Who you're up against. */}
@@ -936,7 +1060,12 @@ export default function Desk() {
                 As they stood at the end of last year. What they'll do next is their business.
               </Text>
               {data.rivals.map((rival) => (
-                <RivalRow key={rival.id} rival={rival} yourCustomers={company.customers} />
+                <RivalRow
+                  key={rival.id}
+                  rival={rival}
+                  yourCustomers={company.customers}
+                  onOpen={() => router.push(`/sim/company/${id}/${rival.id}` as any)}
+                />
               ))}
             </Card>
           )}

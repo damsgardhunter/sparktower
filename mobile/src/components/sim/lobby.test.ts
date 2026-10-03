@@ -10,7 +10,10 @@ import { describe, it, expect } from "vitest";
 import {
   clockIsUrgent, formatCount, formatCountdown, incumbentHold, liveVentures, loyaltyRead,
   phaseCopy, remainingSeconds, seasonOver, seatStatus, ventureAction, ventureRoute,
-  ventureSubtitle, ventureTitle, type LiveVenture, type SimPhase, type SimSeat,
+  ventureSubtitle, ventureTitle, venturesPollMs, VENTURES_POLL_FAST_MS, VENTURES_POLL_IDLE_MS,
+  deskPollMs, DESK_POLL_CLOSING_MS, DESK_POLL_IDLE_MS, DESK_CLOSING_WINDOW_MS, standingsPollMs, STANDINGS_POLL_CLOSING_MS, STANDINGS_POLL_IDLE_MS,
+  venturePollMs, VENTURE_POLL_GATHERING_MS, VENTURE_POLL_RUNNING_MS,
+  type LiveVenture, type SimPhase, type SimSeat,
 } from "./lobby";
 
 const seat = (over: Partial<SimSeat> = {}): SimSeat => ({
@@ -177,6 +180,47 @@ describe("getting back into a company you are already running", () => {
     }
   });
 
+  /*
+   * The list is polled because the route above depends on a row's phase. How
+   * often it is worth polling follows from which flips can actually happen —
+   * see `venturesPollMs`. It matters more than it looks: this query is mounted
+   * by the Sprints tab, so the fast rate applied to people who were nowhere
+   * near a simulation, and at two hundred players it was 45% of everything the
+   * phone asked the server for.
+   */
+  it("keeps asking quickly while a row could still change which screen it opens", () => {
+    for (const phase of ["filling", "claiming", "naming"] as SimPhase[]) {
+      expect(venturesPollMs([venture({ phase })]), phase).toBe(VENTURES_POLL_FAST_MS);
+    }
+    // One row still deciding is reason enough, however many are already running.
+    expect(venturesPollMs([venture({ phase: "running" }), venture({ phase: "claiming" })]))
+      .toBe(VENTURES_POLL_FAST_MS);
+  });
+
+  it("slows down once every row is somewhere it will stay", () => {
+    // `running` is the only phase with a desk behind it, and nothing moves from
+    // running back to a lobby — so no row here can start opening a different
+    // screen, and there is nothing to be quick about.
+    expect(venturesPollMs([venture({ phase: "running" })])).toBe(VENTURES_POLL_IDLE_MS);
+    expect(venturesPollMs([venture({ phase: "running" }), venture({ phase: "retired" })]))
+      .toBe(VENTURES_POLL_IDLE_MS);
+  });
+
+  it("does not poll an empty or missing list quickly", () => {
+    /*
+     * Nothing is waiting on this query to notice a new room: joining a market
+     * navigates straight into the one it returns (`app/sim/index.tsx`), so an
+     * empty list has nothing to be fast for.
+     */
+    expect(venturesPollMs([])).toBe(VENTURES_POLL_IDLE_MS);
+    expect(venturesPollMs(undefined)).toBe(VENTURES_POLL_IDLE_MS);
+  });
+
+  it("asks more often while something is in flight than when nothing is", () => {
+    // The relationship, so tuning the two numbers cannot invert them.
+    expect(VENTURES_POLL_FAST_MS).toBeLessThan(VENTURES_POLL_IDLE_MS);
+  });
+
   it("leaves retired rooms out of the list entirely", () => {
     // A retired room is one that ended before it started; a "resume" pointing
     // at it is an invitation to a screen that can only say no.
@@ -214,5 +258,125 @@ describe("getting back into a company you are already running", () => {
   it("says out loud which of the two screens the tap opens", () => {
     expect(ventureAction(venture({ phase: "running" }))).toBe("Open your desk");
     expect(ventureAction(venture({ phase: "filling" }))).toBe("Back to the room");
+  });
+});
+
+describe("how often the desk asks about itself", () => {
+  const NOW = 1_700_000_000_000;
+  const at = (msFromNow: number) => new Date(NOW + msFromNow).toISOString();
+
+  it("asks quickly while the year is closing, which is what the screen is for", () => {
+    // Inside the window, and exactly on its edge.
+    expect(deskPollMs({ phase: "running", resolvesAt: at(30_000) }, NOW)).toBe(DESK_POLL_CLOSING_MS);
+    expect(deskPollMs({ phase: "running", resolvesAt: at(DESK_CLOSING_WINDOW_MS) }, NOW)).toBe(DESK_POLL_CLOSING_MS);
+  });
+
+  it("keeps asking quickly once the deadline has passed", () => {
+    /*
+     * The year is resolving right now, or the tick is a little behind it. Either
+     * way this is the moment somebody is watching for, and a slow poll here
+     * would be slow at precisely the wrong time.
+     */
+    expect(deskPollMs({ phase: "running", resolvesAt: at(-5_000) }, NOW)).toBe(DESK_POLL_CLOSING_MS);
+  });
+
+  it("settles down for the rest of the period", () => {
+    // Still live enough to watch a teammate's filing arrive, which is the other
+    // thing this screen is for — and the rate the browser's desk uses.
+    expect(deskPollMs({ phase: "running", resolvesAt: at(6 * 60 * 60_000) }, NOW)).toBe(DESK_POLL_IDLE_MS);
+    // And when the server says nothing about a deadline at all.
+    expect(deskPollMs({ phase: "running" }, NOW)).toBe(DESK_POLL_IDLE_MS);
+    expect(deskPollMs({ phase: "running", resolvesAt: null }, NOW)).toBe(DESK_POLL_IDLE_MS);
+    expect(deskPollMs({ phase: "running", resolvesAt: "not a date" }, NOW)).toBe(DESK_POLL_IDLE_MS);
+    expect(deskPollMs(undefined, NOW)).toBe(DESK_POLL_IDLE_MS);
+  });
+
+  it("keeps asking before year one, because year one is the thing that changes", () => {
+    /*
+     * `not_started` was once in the stop list, on the reasoning that nothing
+     * changes before year one. Something does: year one. This is the one screen
+     * whose whole content is "this will change shortly".
+     */
+    expect(deskPollMs({ phase: "not_started" }, NOW)).toBe(DESK_POLL_IDLE_MS);
+  });
+
+  it("stops once the season can no longer move", () => {
+    for (const phase of ["finished", "over"]) {
+      expect(deskPollMs({ phase, resolvesAt: at(10_000) }, NOW), phase).toBe(false);
+    }
+  });
+
+  it("never asks more slowly while closing than at rest", () => {
+    // The relationship, so tuning the two numbers cannot invert them.
+    expect(DESK_POLL_CLOSING_MS).toBeLessThan(DESK_POLL_IDLE_MS);
+  });
+});
+
+describe("how often the standings table asks", () => {
+  const NOW = 1_700_000_000_000;
+  const at = (ms: number) => new Date(NOW + ms).toISOString();
+
+  it("is quick around the tick, which is the only moment the table changes", () => {
+    /*
+     * Quicker than the flat rate it replaced, on the screen somebody is most
+     * likely to be staring at when a year lands — the original reason this
+     * polled hard, now applied only when it is true.
+     */
+    expect(standingsPollMs({ status: "running", resolvesAt: at(20_000) }, NOW)).toBe(STANDINGS_POLL_CLOSING_MS);
+    expect(standingsPollMs({ status: "running", resolvesAt: at(-3_000) }, NOW)).toBe(STANDINGS_POLL_CLOSING_MS);
+  });
+
+  it("barely asks between ticks, because the table cannot change", () => {
+    expect(standingsPollMs({ status: "running", resolvesAt: at(4 * 60 * 60_000) }, NOW)).toBe(STANDINGS_POLL_IDLE_MS);
+  });
+
+  it("treats a missing deadline as not imminent", () => {
+    /*
+     * The safe direction. Guessing "imminent" from an absent field would make
+     * every screen poll hard for ever on any response that omitted it.
+     */
+    expect(standingsPollMs({ status: "running" }, NOW)).toBe(STANDINGS_POLL_IDLE_MS);
+    expect(standingsPollMs({ status: "running", resolvesAt: null }, NOW)).toBe(STANDINGS_POLL_IDLE_MS);
+    expect(standingsPollMs(undefined, NOW)).toBe(STANDINGS_POLL_IDLE_MS);
+  });
+
+  it("stops on a finished season, which is a final table", () => {
+    expect(standingsPollMs({ status: "finished", resolvesAt: at(1_000) }, NOW)).toBe(false);
+  });
+
+  it("rests more slowly than the desk does, and wakes just as fast", () => {
+    // The desk has filings arriving between ticks; this table has nothing.
+    expect(STANDINGS_POLL_IDLE_MS).toBeGreaterThan(DESK_POLL_IDLE_MS);
+    expect(STANDINGS_POLL_CLOSING_MS).toBe(DESK_POLL_CLOSING_MS);
+  });
+});
+
+describe("how often the room screen asks about itself", () => {
+  it("asks quickly while the room is still gathering", () => {
+    for (const phase of ["filling", "claiming", "naming"] as SimPhase[]) {
+      expect(venturePollMs(phase), phase).toBe(VENTURE_POLL_GATHERING_MS);
+    }
+    // And before the first response, when the phase is not known yet.
+    expect(venturePollMs(undefined)).toBe(VENTURE_POLL_GATHERING_MS);
+  });
+
+  it("keeps asking once the company is trading, slowly, so it learns the season ended", () => {
+    /*
+     * This used to stop. A season ends, the room goes `retired`, and the screen
+     * never found out — so it went on saying "your company is trading… it's
+     * yours for the season" about a season that was over, with the branch that
+     * would have said otherwise sitting unreachable below it.
+     */
+    expect(venturePollMs("running")).toBe(VENTURE_POLL_RUNNING_MS);
+    expect(venturePollMs("running")).not.toBe(false);
+  });
+
+  it("stops once the room is retired, which is genuinely final", () => {
+    expect(venturePollMs("retired")).toBe(false);
+  });
+
+  it("asks less often once trading than while gathering", () => {
+    // Gathering is the live part; trading changes once, at the end.
+    expect(VENTURE_POLL_GATHERING_MS).toBeLessThan(VENTURE_POLL_RUNNING_MS);
   });
 });
