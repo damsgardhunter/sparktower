@@ -96,7 +96,7 @@ export async function assignBelieverNumbers(projectId: string, dryRun = false): 
  * stores: the id for the entitlements, the name so renaming a rung later
  * cannot rewrite history.
  */
-async function nameTiers(projectId: string, dryRun: boolean): Promise<number> {
+export async function nameTiers(projectId: string, dryRun = false): Promise<number> {
   const tierless = await db.select({
     id: projectBackings.id,
     amountCents: projectBackings.amountCents,
