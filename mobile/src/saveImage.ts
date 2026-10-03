@@ -1,5 +1,6 @@
 /**
- * Getting a picture Nova drew onto the phone it is being looked at on.
+ * Getting a file the product made onto the phone it is being looked at on —
+ * a picture Nova drew, or a thank-you video a creator recorded for this backer.
  *
  * Everything the product generates is paid for — a logo, the cover built from
  * it, the visuals drawn from both, a storyboard scene, a badge — and until now
@@ -57,13 +58,32 @@ export function downloadUrl(path: string, name: string): string {
 }
 
 /**
- * Save it to the camera roll, falling back to the share sheet.
- *
- * Never throws: a failure to save a picture is a sentence on the screen, not
- * something that takes a screen down with it.
+ * What is being saved. Only two things ever are, and they differ in three
+ * details: the default extension, the type handed to the share sheet, and the
+ * noun in the sentence somebody reads when it fails.
  */
-export async function saveImage(input: { path: string; name: string; extension?: string }): Promise<SaveResult> {
-  const local = `${FileSystem.cacheDirectory}${fileName(input.name, input.extension ?? "png")}`;
+const KINDS = {
+  image: { extension: "png", mimeType: "image/png", noun: "image" },
+  video: { extension: "mp4", mimeType: "video/mp4", noun: "video" },
+} as const;
+
+/**
+ * Save a generated file to the camera roll, falling back to the share sheet.
+ *
+ * Never throws: a failure to save is a sentence on the screen, not something
+ * that takes a screen down with it.
+ */
+export async function saveFile(
+  input: { path: string; name: string; extension?: string; kind?: keyof typeof KINDS },
+): Promise<SaveResult> {
+  const kind = KINDS[input.kind ?? "image"];
+  const extension = input.extension ?? kind.extension;
+  /*
+   * The share sheet's type follows the extension, not the kind: a .mov offered
+   * as video/mp4 opens in nothing. The kind only supplies the default.
+   */
+  const mimeType = extension === kind.extension ? kind.mimeType : `${input.kind ?? "image"}/${extension}`;
+  const local = `${FileSystem.cacheDirectory}${fileName(input.name, extension)}`;
   try {
     const token = await getAccessToken();
     const { status, uri } = await FileSystem.downloadAsync(
@@ -74,11 +94,14 @@ export async function saveImage(input: { path: string; name: string; extension?:
     if (status !== 200) {
       /*
        * Deleted first. `downloadAsync` writes whatever came back, so a 404's JSON
-       * body is now sitting on disk under a .png name — and the share sheet would
-       * happily offer it.
+       * body is now sitting on disk named as a picture or a video — and the share
+       * sheet would happily offer it.
        */
       await FileSystem.deleteAsync(local, { idempotent: true }).catch(() => {});
-      return { ok: false, reason: status === 404 ? "That image isn't there any more." : "Couldn't fetch that image." };
+      return {
+        ok: false,
+        reason: status === 404 ? `That ${kind.noun} isn't there any more.` : `Couldn't fetch that ${kind.noun}.`,
+      };
     }
 
     const permission = await MediaLibrary.requestPermissionsAsync(/* writeOnly */ true).catch(() => null);
@@ -93,7 +116,7 @@ export async function saveImage(input: { path: string; name: string; extension?:
      * carries its own "Save Image" if they change their mind.
      */
     if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(uri, { mimeType: "image/png", dialogTitle: input.name });
+      await Sharing.shareAsync(uri, { mimeType, dialogTitle: input.name });
       return { ok: true, where: "shared" };
     }
 
@@ -101,11 +124,18 @@ export async function saveImage(input: { path: string; name: string; extension?:
       ok: false,
       reason: Platform.OS === "ios"
         ? "SparkTower can't add to your photos. You can turn that on in Settings."
-        : "Couldn't save that image to your photos.",
+        : `Couldn't save that ${kind.noun} to your photos.`,
     };
   } catch (err) {
-    console.warn("[saveImage] failed:", err);
+    console.warn("[saveFile] failed:", err);
     await FileSystem.deleteAsync(local, { idempotent: true }).catch(() => {});
-    return { ok: false, reason: "Couldn't save that image." };
+    return { ok: false, reason: `Couldn't save that ${kind.noun}.` };
   }
 }
+
+/**
+ * Save a picture. The original name, kept because thirty call sites use it and
+ * because "save this image" is what nearly every caller means.
+ */
+export const saveImage = (input: { path: string; name: string; extension?: string }): Promise<SaveResult> =>
+  saveFile({ ...input, kind: "image" });

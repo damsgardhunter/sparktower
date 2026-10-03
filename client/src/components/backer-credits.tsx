@@ -100,7 +100,13 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
     enabled: isOwnProfile,
   });
 
-  if (!data?.length && !visible.length) return null;
+  /*
+   * A delivered reward is reason enough on its own. `visible` deliberately
+   * leaves out a pledge that has converted to equity, and the video somebody
+   * recorded for that pledge is still theirs to watch.
+   */
+  const delivered = isOwnProfile ? rewards ?? [] : [];
+  if (!data?.length && !visible.length && !delivered.length) return null;
 
   return (
     <Card className="border-border/50" data-testid="backer-credits">
@@ -115,9 +121,9 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
           * recorded for you is the most interesting thing on this card, and it is
           * nobody else's business.
           */}
-        {isOwnProfile && rewards && rewards.length > 0 && (
+        {delivered.length > 0 && (
           <div className="space-y-1.5 pb-1" data-testid="my-rewards">
-            {rewards.map((r) => (
+            {delivered.map((r) => (
               <div
                 key={`${r.projectId}-${r.rewardKey}`}
                 className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-1"

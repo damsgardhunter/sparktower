@@ -447,6 +447,41 @@ describe("what the backer sees", () => {
     expect(list[0].videoUrl).toBe(
       `/api/projects/${projectId}/backing/fulfilment/${pledge.id}/video_thankyou/video`,
     );
+    /*
+     * And no extension in the path, so the fallback answers. A browser would
+     * not care — it reads the type off the response — but the phone has to name
+     * the local file before it fetches it, and iOS decides what it is looking
+     * at from that name.
+     */
+    expect(list[0].videoExt).toBe("mp4");
+    /* The path itself stays on the server. */
+    expect(list[0]).not.toHaveProperty("assetPath");
+  });
+
+  it("names the extension the file actually has, and refuses a path's invention", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "own14b");
+    const projectId = await aProject(owner.agent);
+    const tier = await aTier(projectId, ["video_thankyou"]);
+
+    for (const [assetPath, expected] of [
+      ["/objects/uploads/a-recording.mov", "mov"],
+      ["/objects/uploads/a-recording.MP4", "mp4"],
+      ["/objects/uploads/a-recording.webm", "webm"],
+      /* Not in the allow-list, and this value is used to build a filename. */
+      ["/objects/uploads/a-recording.exe", "mp4"],
+      ["/objects/uploads/no-extension-at-all", "mp4"],
+    ] as const) {
+      const backer = await person(app, `ext${expected}${assetPath.length}`);
+      const pledge = await aPledge(projectId, backer.id, tier.id);
+      await owner.agent.post(`/api/projects/${projectId}/backing/fulfilment`)
+        .set("x-forwarded-for", ip())
+        .send({ backingId: pledge.id, rewardKey: "video_thankyou", assetPath })
+        .expect(200);
+
+      const list = (await backer.agent.get("/api/me/rewards")).body;
+      expect(list[0].videoExt, assetPath).toBe(expected);
+    }
   });
 
   it("is empty rather than missing for somebody who was given nothing", async () => {

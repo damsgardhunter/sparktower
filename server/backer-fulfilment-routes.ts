@@ -361,6 +361,21 @@ export function registerBackerFulfilmentRoutes(app: Express) {
 }
 
 /**
+ * What a stored thank-you video should be called locally, from the object path.
+ *
+ * Allow-listed rather than "whatever came after the last dot": the path is
+ * ours, but the extension in it came from whatever the uploader's phone named
+ * the recording, and this value is used to build a filename. `mp4` is the
+ * fallback because that is what the web recorder and Android both produce.
+ */
+const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm"] as const;
+function videoExtension(assetPath: string | null): string | null {
+  if (!assetPath) return null;
+  const found = /\.([a-z0-9]{1,5})(?:\?|$)/i.exec(assetPath)?.[1]?.toLowerCase();
+  return VIDEO_EXTENSIONS.includes(found as any) ? found! : "mp4";
+}
+
+/**
  * The other side of it: what *I* have been given, for the things I backed.
  *
  * In this file rather than beside `GET /api/me/backings`, which lives in
@@ -399,6 +414,17 @@ export function registerMyRewardRoutes(app: Express) {
         videoUrl: r.fulfilment.assetPath
           ? `/api/projects/${r.projectId}/backing/fulfilment/${r.backingId}/${r.fulfilment.rewardKey}/video`
           : null,
+        /*
+         * The extension, for the phone.
+         *
+         * A browser takes the file's type from the response and needs nothing
+         * from us. Saving to a camera roll does not work that way: the local
+         * file has to be named before it is fetched, and iOS decides what it is
+         * looking at from that name — a .mov written as .mp4 is refused. So the
+         * one thing the client cannot work out goes in the payload, and the
+         * path it came from stays out of it.
+         */
+        videoExt: videoExtension(r.fulfilment.assetPath),
       })));
     } catch (error) {
       console.error("My rewards error:", error);
