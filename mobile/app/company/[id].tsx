@@ -7,15 +7,16 @@ import { colors, spacing } from "../../src/theme";
 import { Loading, Screen, TabStrip } from "../../src/components/ui";
 import { Callout, PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { Pill } from "../../src/components/nova/Pill";
-import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { NoticeBanner, useNotice, type Notice } from "../../src/components/Sheet";
 import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components/more/AdminKit";
-import { hasPower } from "../../src/companies";
+import { isLeader } from "../../src/companies";
 import { companyKey, type CompanyView } from "../../src/components/company/kit";
 import { TeamTab } from "../../src/components/company/TeamTab";
 import { AdminTab } from "../../src/components/company/AdminTab";
 import { TalentTab } from "../../src/components/company/TalentTab";
 import { ScoutingTab } from "../../src/components/company/ScoutingTab";
 import { ChallengesTab } from "../../src/components/company/ChallengesTab";
+import { VerifyDomain } from "../../src/components/company/VerifyDomain";
 
 /**
  * One company — the phone's half of the web's company page.
@@ -91,7 +92,7 @@ export default function CompanyDetail() {
           */}
         <TabStrip options={TABS} value={tab} onChange={setTab} />
 
-        {tab === "about" ? <About view={q.data} /> : null}
+        {tab === "about" ? <About view={q.data} companyId={id!} notify={show} /> : null}
         {tab === "team" ? <TeamTab companyId={id!} notify={show} /> : null}
         {tab === "talent" ? <TalentTab companyId={id!} notify={show} /> : null}
         {tab === "challenges" ? <ChallengesTab companyId={id!} notify={show} /> : null}
@@ -105,28 +106,30 @@ export default function CompanyDetail() {
   );
 }
 
-function About({ view }: { view: CompanyView }) {
+function About({ view, companyId, notify }: { view: CompanyView; companyId: string; notify: (n: Notice) => void }) {
   const { company: c, me } = view;
   /* The server's answer, not the phone's. */
   const can = Object.entries(me.powers ?? {}).filter(([, v]) => v).map(([k]) => k);
+  /* `manage` on the server's own scale — attaching a proved domain is a leader's act. */
+  const mayVerify = isLeader(me.role);
 
   return (
     <View style={{ gap: spacing.md }}>
       {/*
-        * Verification first when it is missing, because it is the answer to
-        * "why can't this company post a challenge" and nothing else on the
-        * screen explains that.
+        * Verification first, because it is the answer to "why can't this
+        * company post a challenge" and nothing else on the screen explains it.
+        *
+        * It used to say "verifying it is on the web". It is not any more: a
+        * leader gets the whole flow, and anybody else is told who can do it.
         */}
-      {c.verifiedAt ? (
-        <Callout icon="checkmark-circle" tone="success" body={`Domain verified${c.verifiedDomain ? ` — ${c.verifiedDomain}` : ""}${c.verifiedMethod ? ` (${c.verifiedMethod})` : ""}.`} />
+      {c.verifiedAt || mayVerify ? (
+        <VerifyDomain companyId={companyId} notify={notify} />
       ) : (
         <Callout
           icon="alert-circle"
           tone="warn"
           title="Domain not verified"
-          body={hasPower(me, "manage_team")
-            ? "Until a domain is verified this company cannot post challenges or recruit. Verifying it is on the web — it needs a DNS record or a file on the site."
-            : "Until a domain is verified this company cannot post challenges or recruit. An owner or admin can verify it on the web."}
+          body="Until a domain is verified this company cannot post challenges or recruit. An owner or admin can prove it — it takes a file on the site or a DNS record."
         />
       )}
 
