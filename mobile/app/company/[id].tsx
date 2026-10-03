@@ -15,6 +15,7 @@ import { TeamTab } from "../../src/components/company/TeamTab";
 import { AdminTab } from "../../src/components/company/AdminTab";
 import { TalentTab } from "../../src/components/company/TalentTab";
 import { ScoutingTab } from "../../src/components/company/ScoutingTab";
+import { ChallengesTab } from "../../src/components/company/ChallengesTab";
 
 /**
  * One company — the phone's half of the web's company page.
@@ -37,12 +38,13 @@ import { ScoutingTab } from "../../src/components/company/ScoutingTab";
  * `app/sim/` and the Team tab points at it rather than guessing its shape.
  */
 
-type Tab = "about" | "team" | "talent" | "scouting" | "admin";
+type Tab = "about" | "team" | "talent" | "challenges" | "scouting" | "admin";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "about", label: "About" },
   { value: "team", label: "Team" },
   { value: "talent", label: "Talent" },
+  { value: "challenges", label: "Challenges" },
   { value: "scouting", label: "Scouting" },
   { value: "admin", label: "Admin" },
 ];
@@ -92,6 +94,7 @@ export default function CompanyDetail() {
         {tab === "about" ? <About view={q.data} /> : null}
         {tab === "team" ? <TeamTab companyId={id!} notify={show} /> : null}
         {tab === "talent" ? <TalentTab companyId={id!} notify={show} /> : null}
+        {tab === "challenges" ? <ChallengesTab companyId={id!} notify={show} /> : null}
         {tab === "scouting" ? <ScoutingTab companyId={id!} notify={show} /> : null}
         {tab === "admin" ? <AdminTab companyId={id!} notify={show} /> : null}
 
