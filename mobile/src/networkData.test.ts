@@ -3,6 +3,16 @@ import { describe, it, expect } from "vitest";
 import { appHref } from "./networkData";
 
 describe("appHref", () => {
+  /*
+   * A delivered reward is on the person's own profile, under "Believed in".
+   * `/profile` on its own means something else here — for a connection request it
+   * is where the invitations are — so the two must not collide.
+   */
+  it("sends a delivered reward to the profile tab, and a bare /profile to invitations", () => {
+    expect(appHref("/profile?rewards=1", "u1")).toBe("/(tabs)/profile");
+    expect(appHref("/profile", "u1")).toBe("/network/invitations");
+  });
+
   it("keeps the manager's section, tab and focus", () => {
     expect(appHref("/projects/p1/manage?section=systemize_business&tab=nova&focus=FUND.M1.2", "u1")).toBe("/manage/p1?section=systemize_business&tab=nova&focus=FUND.M1.2");
     expect(appHref("/projects/p1/manage", "u1")).toBe("/manage/p1");

@@ -165,11 +165,20 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   if (n.kind === "application_accepted" && n.projectId) return `/projects/${n.projectId}/manage`;
   if ((n.kind === "application_rejected" || n.kind === "project_removed") && n.projectId) return `/projects/${n.projectId}`;
   /*
-   * The project's public page, which is where a backer's own rewards are shown.
-   * Not the manager: the person being told is the backer, and they are usually not
-   * on the team.
+   * Their own profile, which is where the reward actually is.
+   *
+   * This pointed at the project's page, which was wrong in a way only visible
+   * once both halves existed: the delivered reward — the creator's note, and the
+   * video playing in place — is rendered by `BackerCredits` under "Believed in"
+   * on the backer's profile. Sending them to the project left them looking for
+   * something that was somewhere else.
+   *
+   * The query string carries no meaning to the web, which renders the card
+   * regardless; it is there so the phone can tell this apart from the bare
+   * `/profile` that a connection request uses, where "/profile" means "your
+   * invitations".
    */
-  if (n.kind === "reward_delivered" && n.projectId) return `/projects/${n.projectId}`;
+  if (n.kind === "reward_delivered") return "/profile?rewards=1";
   // Straight to the sprint, so the partner sees the state rather than hunting the list.
   if (n.kind === "sprint_left") return n.targetId ? `/sprints/${n.targetId}` : "/sprints";
   /*
