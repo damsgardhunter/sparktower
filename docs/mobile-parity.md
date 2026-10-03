@@ -150,12 +150,25 @@ What each claim turned out to be, with where the evidence is:
   is recoverable only in the sense that money can be taken off a balance after
   somebody has seen it.
 
-- [ ] **Acting from the support console**: suspend, restore, grant credit,
-  issue a day pass. Wanted eventually, and wants its own change: a confirmation
-  that names the person and the amount, the per-operator daily remainder shown
-  before the field rather than after the refusal, and the reason the server
-  already requires. The test pairs the two halves, so if the actions arrive the
-  line telling people they are elsewhere fails until it goes.
+- [x] **Acting from the support console**, built 2026-10-03 with exactly the
+  three things this entry asked for: a confirmation that names the person and the
+  amount, the per-operator daily remainder shown before the field rather than
+  after the refusal, and the reason the server already requires. Undo came with
+  it, because an action taken by a slipped thumb is only recoverable if the way
+  back is on the same screen.
+
+  The action catalogue is not restated on the phone.
+  `/api/admin/console/actions` sends `CONSOLE_ACTION_DEFS` whole and the phone
+  renders what it is given — a power over somebody who is not in the room is
+  exactly the list that must not exist twice. Owner-only actions are absent for
+  an admin rather than greyed out, and the ones whose subject is a project stay
+  on the web, which has the project open beside them.
+
+  Two things this turned up. The grant was sending `amountCents` where the
+  handler reads `cents`, so every grant would have been refused as not-a-number
+  — found by reading the handler rather than trusting the field name. And the
+  per-account history had to start sending `targetId`, without which no client
+  can tell that an action has already been undone.
 
   Each new one needs a row in the Admin group of `(tabs)/more.tsx` or it is dead
   code that typechecks, and owner-only routes need `access?.owner` on the row or
@@ -302,13 +315,13 @@ What each claim turned out to be, with where the evidence is:
   both clients, with the phone mapping kept distinct from the bare `/profile` a
   connection request uses.
 
-- [ ] **Pills: narrower than I claimed.** I recorded "54 call sites hand-picking
-  semantic colours" as a gap. Most are not: `MoreKit`'s Pill takes a colour
-  deliberately, for a tier badge or a skill or a plan name, and `nova/Pill` already
-  explains why the three are not merged. The genuine drift is a pill showing a
-  *state* with a locally decided colour — two in the backing console, now carrying
-  tones, and roughly a third of the forty in `mobile/src/components/sim/`, which are
-  another session's files and left alone.
+- [x] **Pills: narrower than I claimed, and now closed.** I recorded "54 call
+  sites hand-picking semantic colours" as a gap. Most were not: `MoreKit`'s Pill
+  takes a colour deliberately, for a tier badge or a skill or a plan name, and
+  `nova/Pill` already explains why the three are not merged. The genuine drift
+  was a pill showing a *state* with a locally decided colour — two in the
+  backing console, then the six in the sim surface, all now carrying tones. See
+  the settled entry below for the rule that replaced the count.
 
   The command, not a number:
 
@@ -594,8 +607,10 @@ What each claim turned out to be, with where the evidence is:
   entry about a gap has to be closed by whoever closes the gap, and a measurement
   has a date on it.
 
-- [ ] **The customer console.** Nothing on the phone, and still reasonably last:
-  it is an operator tool and an operator has a laptop.
+- [x] **The customer console** — which is `admin-console.tsx`, the same screen as
+  the support console above, and complete on the phone as of 2026-10-03: the
+  lookup, the history, every action whose subject is a person, and undo. This
+  entry and that one were the same gap counted twice.
 - [x] **`LiveDot` and `Glance`** — built 2026-10-01
   (`mobile/src/components/nova/`). `Glance` is the web's own phone layout rather
   than a new design: the web is `grid-cols-1` with ruled columns only from `sm`,
@@ -608,13 +623,27 @@ What each claim turned out to be, with where the evidence is:
   (`mobile/src/components/nova/Pill.tsx`), with the web's six tones and its
   reasoning about `unknown`: dashed and blue, never red, because "nobody has
   checked" is a question and `bad` is an answer.
-- [ ] **Nineteen semantic pills still pick their colour by hand**, in eleven
-  files — re-counted 2026-10-03, up from sixteen in eight because the sim surface
-  grew while this entry sat here. Seventeen of the nineteen are in
-  `mobile/src/components/sim/` and `mobile/app/sim/`, which another session is
-  mid-build in; the two reachable ones are `more/UpgradeCard.tsx` and
-  `(tabs)/leaderboard.tsx`. So this is now mostly a job to do *after* the sim work
-  lands, in one pass, rather than a job somebody is avoiding. Count it with the command below rather than trusting a number in this
+- [x] **The pills, settled 2026-10-03 — by rule rather than by count.**
+
+  This entry's number was wrong three times: "54 call sites", then "sixteen in
+  eight", then "nineteen in eleven". Each count was taken honestly and was stale
+  within a day, because the sim surface was growing underneath it. The count was
+  never the thing.
+
+  The thing is the *shape*. A pill whose colour is chosen by a condition is
+  answering "what does green mean here" at the call site, and that question gets
+  answered once, in `PILL_TONE`. An unconditional colour is a different thing
+  and stays: `MoreKit`'s Pill takes a colour deliberately, for a tier, a plan
+  name, a figure or a kind — decoration keyed to something that is not a state.
+
+  There were five conditional-colour pills left, plus one unconditional
+  "Already open" that was plainly a state. All six now use `nova/Pill`'s tones,
+  and `nova-kit-parity.test.ts` holds the rule: **no file may decide a pill's
+  colour with a conditional.** That cannot go stale, which a number can.
+
+  Three files hold both kinds, because they show figures and states side by
+  side, and import the tone one as `Pill as StatePill` so a reader can tell at
+  the call site which question is being answered. Count it with the command below rather than trusting a number in this
   file; the first survey of this said "twenty, in nine files" and was wrong in
   both halves, because it read the first few lines of a grep and then only
   examined the files it had already noticed. `leaderboard`, `admin/backing`,

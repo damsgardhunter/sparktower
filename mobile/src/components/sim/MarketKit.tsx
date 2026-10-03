@@ -21,7 +21,20 @@ import React from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
 import { Btn, Icon, NovaGradient } from "../ui";
+/*
+ * Two Pills in this file, deliberately.
+ *
+ * `MoreKit`'s takes a colour and is for decoration — a figure, a kind, a label
+ * keyed to something that is not a state. `nova`'s takes a *tone* and is for
+ * states, which is what "what does green mean here" has to be answered once
+ * for. `nova/Pill`'s own note explains why they are not merged: a tier and a
+ * severity are not the same kind of thing.
+ *
+ * Imported as `StatePill` so a reader can tell at the call site which question
+ * the pill is answering.
+ */
 import { Pill, tintSoft } from "../MoreKit";
+import { Pill as StatePill } from "../nova/Pill";
 import { exact, money, type ReportMarketNote } from "./desk";
 import {
   KIND_ICON, KIND_LABEL, effectLines, lifePill, lifeRead, saleRead,
@@ -183,7 +196,7 @@ export function ListingCard({
           <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{listing.name}</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
             <Pill label={KIND_LABEL[listing.kind] ?? listing.kind} color={colors.textSecondary} />
-            <Pill label={lifePill(listing.expiresIn, period, periods)} icon="time-outline" color={listing.expiresIn == null ? colors.success : colors.info} />
+            <StatePill label={lifePill(listing.expiresIn, period, periods)} icon="time-outline" tone={listing.expiresIn == null ? "good" : "info"} />
             {listing.seller ? <Pill label={`From ${listing.seller}`} icon="people-outline" color={colors.novaPurple} /> : null}
           </View>
         </View>
@@ -432,7 +445,7 @@ export function HoldingCard({
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
         <Icon name={KIND_ICON[holding.kind] ?? "cube"} size={17} color={colors.textSecondary} />
         <Text style={{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{holding.name}</Text>
-        <Pill label={lifePill(holding.expiresIn, period, periods)} color={holding.expiresIn == null ? colors.success : colors.info} />
+        <StatePill label={lifePill(holding.expiresIn, period, periods)} tone={holding.expiresIn == null ? "good" : "info"} />
       </View>
 
       <EffectChips effect={holding.effect} you={you} />

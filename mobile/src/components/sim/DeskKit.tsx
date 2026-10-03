@@ -11,7 +11,20 @@ import { Animated, Pressable, Text, TextInput, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
 import { Btn, Card, Icon, NovaGradient } from "../ui";
 import { SimSectionTitle } from "./SimKit";
+/*
+ * Two Pills in this file, deliberately.
+ *
+ * `MoreKit`'s takes a colour and is for decoration — a figure, a kind, a label
+ * keyed to something that is not a state. `nova`'s takes a *tone* and is for
+ * states, which is what "what does green mean here" has to be answered once
+ * for. `nova/Pill`'s own note explains why they are not merged: a tier and a
+ * severity are not the same kind of thing.
+ *
+ * Imported as `StatePill` so a reader can tell at the call site which question
+ * the pill is answering.
+ */
 import { Pill, tintSoft } from "../MoreKit";
+import { Pill as StatePill } from "../nova/Pill";
 import {
   OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, RAISE_VALUATION_FLOOR, bump, capUse,
   citiesOpening, clampToField,
@@ -685,7 +698,7 @@ export function CitiesField({ field, cities, value, error, onChange, disabled }:
     <View style={{ gap: spacing.sm }} testID="desk-cities">
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
-        <Pill label={`${percent(after, 0)} reach`} icon="map-outline" color={after >= 0.999 ? colors.success : colors.info} />
+        <StatePill label={`${percent(after, 0)} reach`} icon="map-outline" tone={after >= 0.999 ? "good" : "info"} />
       </View>
 
       <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
@@ -793,7 +806,7 @@ function CityRow({ city, selected, disabled, onPress }: {
           <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
             {percent(city.weight, 0)} of the market
           </Text>
-          {locked ? <Pill label="Already open" color={colors.success} /> : null}
+          {locked ? <StatePill label="Already open" tone="good" /> : null}
         </View>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
           {city.note}
@@ -1257,7 +1270,7 @@ export function ReportCard({ report, onOpen }: {
         {/* The rank is by founder-owned value now, and saying which is not a
             detail: a team that gained customers and slipped a place would
             otherwise read the number as broken. */}
-        <Pill label={`#${report.rank} by what you own`} color={report.rank <= 2 ? colors.success : colors.info} />
+        <StatePill label={`#${report.rank} by what you own`} tone={report.rank <= 2 ? "good" : "info"} />
         {/* Last, so the row reads title → standing → "there is more", which is
             the order the eye travels. */}
         {onOpen ? <Icon name="chevron-forward" size={16} color={colors.textTertiary} /> : null}

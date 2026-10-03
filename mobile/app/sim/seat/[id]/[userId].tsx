@@ -14,7 +14,20 @@ import { Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { colors, font, fontFamily, spacing } from "../../../../src/theme";
 import { Btn, Card, Empty, Loading, Screen, errText } from "../../../../src/components/ui";
+/*
+ * Two Pills in this file, deliberately.
+ *
+ * `MoreKit`'s takes a colour and is for decoration — a figure, a kind, a label
+ * keyed to something that is not a state. `nova`'s takes a *tone* and is for
+ * states, which is what "what does green mean here" has to be answered once
+ * for. `nova/Pill`'s own note explains why they are not merged: a tier and a
+ * severity are not the same kind of thing.
+ *
+ * Imported as `StatePill` so a reader can tell at the call site which question
+ * the pill is answering.
+ */
 import { Pill } from "../../../../src/components/MoreKit";
+import { Pill as StatePill } from "../../../../src/components/nova/Pill";
 import { SimSectionTitle } from "../../../../src/components/sim/SimKit";
 import { useSeat } from "../../../../src/components/sim/useSim";
 import { turnoutRead } from "../../../../src/components/sim/profiles";
@@ -101,7 +114,7 @@ export default function Seat() {
                     {c.title ?? `Period ${c.year}`}
                   </Text>
                   {c.met === null ? null : (
-                    <Pill label={c.met ? "Met" : "Missed"} color={c.met ? colors.success : colors.danger} />
+                    <StatePill label={c.met ? "Met" : "Missed"} tone={c.met ? "good" : "bad"} />
                   )}
                 </View>
                 {c.brief ? (

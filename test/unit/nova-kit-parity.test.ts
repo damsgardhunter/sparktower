@@ -203,6 +203,58 @@ describe("the Pill's tones", () => {
    * converted, so a hand-picked semantic colour reappearing in them is a
    * regression rather than a style choice.
    */
+  /**
+   * The rule the whole migration rests on, stated as a test rather than as an
+   * intention: a pill whose colour is chosen by a *condition* is answering
+   * "what does green mean here", and that question gets answered once, in
+   * PILL_TONE — not at the call site.
+   *
+   * An unconditional colour is a different thing and stays. `MoreKit`'s Pill
+   * takes a colour deliberately, for a tier, a plan name, a figure or a kind —
+   * decoration keyed to something that is not a state. Merging the two would
+   * mean deciding a tier and a severity are the same kind of thing.
+   *
+   * So this looks for the shape of the drift, not for a count. The count was
+   * wrong twice in this file's history; the shape is checkable.
+   */
+  it("never picks a pill's colour with a conditional", () => {
+    const files = execFileSync("git", ["ls-files", "mobile"], {
+      cwd: resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+    }).split("\n").filter((f) => /\.tsx?$/.test(f));
+
+    const offenders: string[] = [];
+    for (const f of files) {
+      const source = withoutComments(read(f));
+      /* `<Pill ... color={x ? a : b}` — the colour decided where it is used. */
+      for (const line of source.split("\n")) {
+        if (/<Pill\b/.test(line) && /color=\{[^}]*\?/.test(line)) offenders.push(`${f}: ${line.trim()}`);
+      }
+    }
+    expect(
+      offenders,
+      `these decide a pill's colour from a condition — use nova/Pill's tone instead:\n  ${offenders.join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  it("imports the tone pill under a name that says which one it is", () => {
+    /*
+     * Three files hold both kinds, because they show figures and states side by
+     * side. `Pill as StatePill` is how a reader tells at the call site which
+     * question is being answered.
+     */
+    for (const f of [
+      "mobile/src/components/sim/DeskKit.tsx",
+      "mobile/src/components/sim/MarketKit.tsx",
+      "mobile/app/sim/seat/[id]/[userId].tsx",
+    ]) {
+      const source = read(f);
+      expect(source, `${f} should import the tone pill as StatePill`).toMatch(/Pill as StatePill/);
+      expect(source, `${f} should still use MoreKit's Pill for decoration`).toMatch(/<Pill /);
+      expect(source, `${f} should use the tone pill for states`).toMatch(/<StatePill /);
+    }
+  });
+
   it("are used instead of a hand-picked colour, in the screens that were converted", () => {
     const converted = [
       "mobile/app/admin/surfaces.tsx",
