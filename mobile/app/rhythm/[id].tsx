@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Btn, Loading, Screen, errText } from "../../src/components/ui";
+import { Btn, Field, Loading, Row, Screen, errText } from "../../src/components/ui";
 import { Callout, MenuRow, PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { Pill } from "../../src/components/nova/Pill";
-import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { NoticeBanner, Sheet, useNotice, type Notice } from "../../src/components/Sheet";
 import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components/more/AdminKit";
 
 /**
@@ -49,6 +49,7 @@ import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components
  */
 
 interface Metric { id: string; label: string; unit: string; better: "up" | "down"; advice?: string }
+interface RhythmMember { id: string; name: string; profileImageUrl: string | null }
 interface Job {
   id: string; title: string; notes: string | null;
   every: "week" | "fortnight" | "month";
@@ -75,7 +76,7 @@ interface Rhythm {
   checkins: Checkin[];
   jobs: Job[];
   overdue: Job[];
-  members: unknown[];
+  members: RhythmMember[];
 }
 
 export default function ProjectRhythm() {
@@ -83,6 +84,8 @@ export default function ProjectRhythm() {
   const router = useRouter();
   const qc = useQueryClient();
   const { notice, show, clear } = useNotice();
+  /** The job being edited, or "new" for one that does not exist yet. */
+  const [editingJob, setEditingJob] = useState<Job | "new" | null>(null);
 
   const q = useQuery<Rhythm>({
     queryKey: ["rhythm", id],
@@ -293,11 +296,20 @@ export default function ProjectRhythm() {
           </TitledCard>
         ) : null}
 
-        {d.jobs.length ? (
-          <TitledCard icon="repeat" title="Recurring jobs">
-            {d.jobs.filter((j) => j.active).map((j) => (
+        {/*
+          * Always drawn, even with no jobs, because the card is now where a
+          * first one gets added. It used to appear only once a job existed and
+          * said "adding and editing them is configuration, and that is on the
+          * web" — which left the phone able to tick a job off and not to create
+          * the thing it was ticking.
+          */}
+        <TitledCard icon="repeat" title="Recurring jobs">
+          {!d.jobs.filter((j) => j.active).length ? (
+            <Text style={text.small}>Nothing recurring yet. A job is something that comes round — paying people, a backup, a report.</Text>
+          ) : null}
+          {d.jobs.filter((j) => j.active).map((j) => (
+            <Pressable key={j.id} onPress={() => setEditingJob(j)} testID={`job-${j.id}`}>
               <CountRow
-                key={j.id}
                 label={j.title}
                 value={j.nextDue}
                 note={j.every}
@@ -308,23 +320,29 @@ export default function ProjectRhythm() {
                   />
                 }
               />
-            ))}
-            {/*
-              * One tap, because marking a job done is the other recurring act.
-              * Adding and editing them is configuration, and that is on the web.
-              */}
-            {d.overdue.length ? (
-              <Btn
-                label={`Mark "${d.overdue[0].title}" done`}
-                variant="outline"
-                style={{ marginTop: spacing.sm }}
-                loading={done.isPending}
-                onPress={() => done.mutate(d.overdue[0].id)}
-                testID="mark-job-done"
-              />
-            ) : null}
-          </TitledCard>
-        ) : null}
+            </Pressable>
+          ))}
+          {/*
+            * One tap, because marking a job done is the other recurring act.
+            */}
+          {d.overdue.length ? (
+            <Btn
+              label={`Mark "${d.overdue[0].title}" done`}
+              variant="outline"
+              style={{ marginTop: spacing.sm }}
+              loading={done.isPending}
+              onPress={() => done.mutate(d.overdue[0].id)}
+              testID="mark-job-done"
+            />
+          ) : null}
+          <Btn
+            small
+            variant="ghost"
+            label="Add a recurring job"
+            onPress={() => setEditingJob("new")}
+            testID="add-job"
+          />
+        </TitledCard>
 
         {/*
           * The rest of the rhythm, each at its own frequency. Rows rather than a
@@ -364,7 +382,174 @@ export default function ProjectRhythm() {
         />
         <View style={{ height: spacing.xl }} />
       </Screen>
+      {editingJob ? (
+        <JobSheet
+          projectId={id!}
+          job={editingJob === "new" ? null : editingJob}
+          members={d.members}
+          today={d.today}
+          onClose={() => setEditingJob(null)}
+          onSaved={() => { void qc.invalidateQueries({ queryKey: ["rhythm", id] }); setEditingJob(null); }}
+          notify={show}
+        />
+      ) : null}
       <NoticeBanner notice={notice} onDismiss={clear} />
     </>
+  );
+}
+
+/** How often a job comes round — shared/company-rhythm.ts's JOB_INTERVALS. */
+const JOB_INTERVALS = ["week", "fortnight", "month"] as const;
+
+/**
+ * Adding, changing and stopping a recurring job.
+ *
+ * Stopping is `active: false` rather than a delete, which is what the web does
+ * and what the data wants: a job that ran for a year and then stopped is part
+ * of the record of how the company was run, and deleting it takes that away.
+ * The route for deleting exists and is offered separately, worded as what it
+ * is — for a job added by mistake, which has no history to lose.
+ */
+function JobSheet({
+  projectId, job, members, today, onClose, onSaved, notify,
+}: {
+  projectId: string;
+  job: Job | null;
+  members: RhythmMember[];
+  today: string;
+  onClose: () => void;
+  onSaved: () => void;
+  notify: (n: Notice) => void;
+}) {
+  const [title, setTitle] = useState(job?.title ?? "");
+  const [notes, setNotes] = useState(job?.notes ?? "");
+  const [every, setEvery] = useState<Job["every"]>(job?.every ?? "month");
+  const [nextDue, setNextDue] = useState(job?.nextDue ?? today);
+  const [ownerId, setOwnerId] = useState<string | null>(job?.ownerId ?? null);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = { title: title.trim(), notes: notes.trim() || null, every, nextDue, ownerId };
+      return job
+        ? api(`/api/projects/${projectId}/rhythm/jobs/${job.id}`, { method: "PATCH", body })
+        : api(`/api/projects/${projectId}/rhythm/jobs`, { method: "POST", body });
+    },
+    onSuccess: () => { notify({ text: job ? "Saved" : "Added", tone: "success" }); onSaved(); },
+    /*
+     * The server's sentences, which name the field: "Say how often it comes
+     * round: every week, fortnight or month", "The due date should be a date,
+     * as YYYY-MM-DD", and the one about an owner who is not on the project.
+     */
+    onError: (e) => notify({ text: errText(e, "Couldn't save that job."), tone: "error" }),
+  });
+
+  const stop = useMutation({
+    mutationFn: () => api(`/api/projects/${projectId}/rhythm/jobs/${job!.id}`, { method: "PATCH", body: { active: false } }),
+    onSuccess: () => { notify({ text: "Stopped. It stays in the record.", tone: "success" }); onSaved(); },
+    onError: (e) => notify({ text: errText(e, "Couldn't stop that job."), tone: "error" }),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api(`/api/projects/${projectId}/rhythm/jobs/${job!.id}`, { method: "DELETE" }),
+    onSuccess: () => { notify({ text: "Deleted", tone: "success" }); onSaved(); },
+    onError: (e) => notify({ text: errText(e, "Couldn't delete that job."), tone: "error" }),
+  });
+
+  return (
+    <Sheet visible onClose={onClose} title={job ? job.title : "A recurring job"} subtitle="Something that comes round">
+      <View style={{ gap: spacing.sm }}>
+        <Field label="What it is" value={title} onChangeText={setTitle} maxLength={140} placeholder="Run payroll" testID="job-title" />
+        <Field label="Anything to remember (optional)" value={notes} onChangeText={setNotes} multiline maxLength={2000} testID="job-notes" />
+
+        <Text style={text.small}>How often</Text>
+        <Row gap={6}>
+          {JOB_INTERVALS.map((i) => (
+            <Pressable
+              key={i}
+              onPress={() => setEvery(i)}
+              testID={`job-every-${i}`}
+              style={{
+                paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radius.sm, borderWidth: 1,
+                borderColor: every === i ? colors.primary : colors.border,
+                backgroundColor: every === i ? colors.primarySoft : "transparent",
+              }}
+            >
+              <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: every === i ? colors.primary : colors.textSecondary }}>
+                every {i}
+              </Text>
+            </Pressable>
+          ))}
+        </Row>
+
+        <Field label="Next due (YYYY-MM-DD)" value={nextDue} onChangeText={setNextDue} autoCapitalize="none" placeholder={today} testID="job-next-due" />
+
+        {/* Whose job it is. The server refuses anybody who is not on the project. */}
+        {members.length ? (
+          <>
+            <Text style={text.small}>Whose job it is</Text>
+            <Row wrap gap={6}>
+              <Pressable
+                onPress={() => setOwnerId(null)}
+                testID="job-owner-none"
+                style={{
+                  paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radius.sm, borderWidth: 1,
+                  borderColor: !ownerId ? colors.primary : colors.border,
+                  backgroundColor: !ownerId ? colors.primarySoft : "transparent",
+                }}
+              >
+                <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: !ownerId ? colors.primary : colors.textSecondary }}>nobody yet</Text>
+              </Pressable>
+              {members.map((m) => (
+                <Pressable
+                  key={m.id}
+                  onPress={() => setOwnerId(m.id)}
+                  testID={`job-owner-${m.id}`}
+                  style={{
+                    paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radius.sm, borderWidth: 1,
+                    borderColor: ownerId === m.id ? colors.primary : colors.border,
+                    backgroundColor: ownerId === m.id ? colors.primarySoft : "transparent",
+                  }}
+                >
+                  <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: ownerId === m.id ? colors.primary : colors.textSecondary }}>{m.name}</Text>
+                </Pressable>
+              ))}
+            </Row>
+          </>
+        ) : null}
+
+        <Btn
+          label={job ? "Save" : "Add it"}
+          loading={save.isPending}
+          disabled={!title.trim() || !nextDue.trim()}
+          onPress={() => save.mutate()}
+          testID="save-job"
+        />
+
+        {job ? (
+          <Row gap={spacing.sm} wrap>
+            <Btn
+              small
+              variant="outline"
+              label="Stop it coming round"
+              loading={stop.isPending}
+              onPress={() => stop.mutate()}
+              testID="stop-job"
+            />
+            <Btn
+              small
+              variant="danger"
+              label="Delete"
+              loading={remove.isPending}
+              testID="delete-job"
+              onPress={() => Alert.alert(
+                `Delete "${job.title}"?`,
+                "For a job added by mistake. If it ran for a while, stop it instead — that keeps it in the record of how the company was run.",
+                [{ text: "Keep it", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => remove.mutate() }],
+              )}
+            />
+          </Row>
+        ) : null}
+      </View>
+    </Sheet>
   );
 }
