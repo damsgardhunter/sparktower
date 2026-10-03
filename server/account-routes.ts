@@ -9,7 +9,7 @@
  * What each one does with which tables is in server/account-data.ts.
  */
 import type { Express } from "express";
-import bcrypt from "bcryptjs";
+import { verifyPassword } from "./password-hash";
 import { pledgeRefunded } from "./backing-notices";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
@@ -173,7 +173,7 @@ export function registerAccountRoutes(app: Express) {
       // Proof it's them, not a borrowed tab. An account with no password (Google only) is asked to type the phrase instead.
       if (user.passwordHash) {
         const password = String(req.body?.password ?? "");
-        if (!password || !(await bcrypt.compare(password, user.passwordHash))) {
+        if (!password || !(await verifyPassword(password, user.passwordHash))) {
           return res.status(401).json({ message: "That password isn't right.", code: "bad_password", field: "password" });
         }
       } else if (String(req.body?.confirm ?? "").trim().toLowerCase() !== "delete my account") {

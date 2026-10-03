@@ -58,7 +58,7 @@ import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
+  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope, Search,
   Crosshair,
   ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
@@ -149,6 +149,24 @@ interface Desk {
     id: string; name: string; foundInYear: number; from: string; people: number;
     premium: number; headStartLeft: number; sharedWith: string[]; held: number;
   } | null;
+  /**
+   * The report marketing paid a year's budget for, if it bought one.
+   *
+   * Sent since the lever existed and read by neither client, which made this the
+   * one lever in the game that took money and produced nothing anybody could see.
+   */
+  research:
+    | { kind: "expectations"; segments: { id: string; name: string; floors: { axis: string; atLeast: number }[]; priceCeiling: number }[] }
+    | { kind: "rivals"; rivals: { id: string; name: string; priceNow: number; priceNext: number }[] }
+    | null;
+  /**
+   * Sealed bids this table has standing at auction, totalled.
+   *
+   * The meter could not see them: the market screen warns whoever is placing them
+   * and had no way to tell the other four, who file a year against a total that
+   * looks comfortable. Promised money either way.
+   */
+  bidsOutstanding?: number;
   /** The region operations may put to the table this year, and where the vote stands. */
   expansion: ExpansionVoteData | null;
   table: {
@@ -160,7 +178,7 @@ interface Desk {
   }[];
   filed: Record<string, any>;
   preview: {
-    commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[]; openingCost: number };
+    commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[]; openingCost: number; bidsOutstanding?: number };
     notes: string[];
     warnings: string[];
   };
@@ -369,7 +387,7 @@ export default function SimulationDeskPage() {
        */
       const market: any = { cities: desk.cities, segments: desk.segments };
       // Capacity priced as the server priced it: the desk's segments carry no sizes to price it from.
-      return commitment(desk.company as any, decisions, desk.economy, market, desk.prices ?? null);
+      return commitment(desk.company as any, decisions, desk.economy, market, desk.prices ?? null, desk.bidsOutstanding);
     } catch {
       /*
        * Fall back to the server's own figure rather than taking the screen
@@ -680,6 +698,8 @@ export default function SimulationDeskPage() {
         {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
         {/* What the year's research bought, if this table went looking. */}
         {desk.ours && <OurNiche niche={desk.ours} customersWord={v.customers} />}
+        {/* And the report it paid for, which until now went nowhere. */}
+        {desk.research && <ResearchReport research={desk.research} />}
 
         {/*
           * The region on the table. Shown to every seat, not only the one
@@ -959,6 +979,66 @@ export default function SimulationDeskPage() {
     </Shell>
     </DeskPeriod.Provider>
     </DeskCurrency.Provider>
+  );
+}
+
+/**
+ * The research report, which a table paid a year's marketing budget for.
+ *
+ * Read by neither client until now: the spend was charged, the report was built
+ * on the server, and it went into a payload field nothing looked at — so this was
+ * the one lever in the game that took money and produced nothing a player could
+ * see. Both reports are about *next* year, which is the whole value of them.
+ */
+function ResearchReport({ research }: {
+  research:
+    | { kind: "expectations"; segments: { id: string; name: string; floors: { axis: string; atLeast: number }[]; priceCeiling: number }[] }
+    | { kind: "rivals"; rivals: { id: string; name: string; priceNow: number; priceNext: number }[] };
+}) {
+  const { money } = useMoney();
+  return (
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-research">
+      <CardContent className="p-5">
+        <h3 className="flex items-center gap-2 text-sm font-bold">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg nova-chip"><Search className="h-3.5 w-3.5" /></span>
+          {research.kind === "expectations" ? "What your customers will want next year" : "What the incumbents will charge next year"}
+        </h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          The report marketing bought. It is about next year, not this one — which is what makes it worth buying.
+        </p>
+
+        <div className="mt-4 divide-y divide-border">
+          {research.kind === "expectations"
+            ? research.segments.map((segment) => (
+                <div key={segment.id} className="py-2" data-testid={`research-segment-${segment.id}`}>
+                  <p className="text-sm font-medium">{segment.name}</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {segment.floors.map((floor) => (
+                      <Badge key={floor.axis} variant="secondary" className="text-[10px] font-normal">
+                        {floor.axis} {floor.atLeast}+
+                      </Badge>
+                    ))}
+                    <Badge variant="outline" className="text-[10px] font-normal">
+                      stops listening above {money(segment.priceCeiling)}
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            : research.rivals.map((rival) => {
+                const move = rival.priceNext - rival.priceNow;
+                return (
+                  <div key={rival.id} className="flex items-center gap-2 py-2" data-testid={`research-rival-${rival.id}`}>
+                    <p className="flex-1 text-sm">{rival.name}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">{money(rival.priceNow)} →</p>
+                    <p className={`text-sm font-semibold tabular-nums ${move > 0 ? "text-emerald-600 dark:text-emerald-400" : move < 0 ? "text-destructive" : ""}`}>
+                      {money(rival.priceNext)}
+                    </p>
+                  </div>
+                );
+              })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

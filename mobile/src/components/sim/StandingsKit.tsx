@@ -14,6 +14,7 @@
  * which is the single easiest way to make this screen a lie. Fourth of nine is
  * the honest answer and it is the one on the card.
  */
+import { periodLabel, periodWords, seasonSpan } from "./period";
 import React from "react";
 import { Text, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
@@ -21,7 +22,7 @@ import { Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
 import { exact, money, signed } from "./desk";
 import {
-  ordinal, ownershipRead, reputationRead, shareRead, soldUp, wholeValue,
+  ordinal, ownershipRead, reputationRead, shareRead, shareReading, soldUp, wholeValue,
   type StandingRow, type TrajectoryPoint,
 } from "./standings";
 
@@ -32,7 +33,7 @@ import {
  * the sentence somebody repeats to four other people in a group chat, and the
  * share is the number that explains it.
  */
-export function StandingsBanner({ year, totalYears, you, line, gap }: {
+export function StandingsBanner({ year, totalYears, you, line, gap, totalPeriods, period}: {
   year: number;
   totalYears: number;
   you: StandingRow | null;
@@ -40,13 +41,18 @@ export function StandingsBanner({ year, totalYears, you, line, gap }: {
   line: string | null;
   /** How far behind whoever is immediately ahead. */
   gap: string | null;
+  /** The denominator `year` belongs over, and the word for one of them. */
+  totalPeriods?: number | null;
+  period?: { one: string; many: string; of: string } | null;
 }) {
+  const span = seasonSpan({ totalPeriods, totalYears });
+  const words = periodWords({ period });
   return (
     <NovaGradient style={{ borderRadius: radius.md, padding: spacing.lg, gap: spacing.sm, ...shadow.card }}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.md }}>
         <View style={{ flex: 1, gap: 4 }}>
           <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.6 }}>
-            YEAR {year} OF {totalYears} · STANDINGS
+            {periodLabel(year, span, words).toUpperCase()} · STANDINGS
           </Text>
           <Text style={{ color: "#FFFFFF", fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 }}>
             {line ?? "Where everyone stands"}
@@ -91,11 +97,18 @@ export function StandingsBanner({ year, totalYears, you, line, gap }: {
 export function StandingRowView({ row, leaderShare }: { row: StandingRow; leaderShare: number }) {
   const tone = row.isYou ? colors.primary : row.kind === "incumbent" ? colors.textSecondary : colors.novaPurple;
   const fraction = leaderShare > 0 ? Math.max(0, Math.min(1, row.share / leaderShare)) : 0;
+  /*
+   * The bar stays on the world reading deliberately: every row is measured
+   * against the same market, so the bars are comparable down the table, and a
+   * bar drawn from each company's own footprint would make a one-region team
+   * look level with the market leader.
+   */
+  const reading = shareReading(row);
 
   return (
     <View
       testID={`standings-row-${row.id}`}
-      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${exact(row.founderValue ?? 0)} of founder-owned value, ${shareRead(row.share)} of the market`}
+      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${exact(row.founderValue ?? 0)} of founder-owned value, ${reading.headline} of where it sells${reading.world ? `, ${reading.world} of the whole market` : ""}`}
       style={{
         flexDirection: "row", alignItems: "flex-start", gap: spacing.sm,
         paddingVertical: spacing.sm, paddingHorizontal: row.isYou ? spacing.sm : 0,
@@ -145,12 +158,30 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
           <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.surfaceRaised, overflow: "hidden" }}>
             <View style={{ width: `${fraction * 100}%`, height: "100%", backgroundColor: tone }} />
           </View>
-          <Text style={{
-            width: 48, color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.semibold,
-            fontVariant: ["tabular-nums"], textAlign: "right",
-          }}>
-            {shareRead(row.share)}
-          </Text>
+          {/*
+            * The share of where this company sells, with the world reading under
+            * it — and nothing under it at all for a company selling everywhere,
+            * because there the two are the same number. See `shareReading`.
+            */}
+          <View style={{ width: 64, alignItems: "flex-end" }}>
+            <Text style={{
+              color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.semibold,
+              fontVariant: ["tabular-nums"], textAlign: "right",
+            }}>
+              {reading.headline}
+            </Text>
+            {reading.world ? (
+              <Text
+                testID={`standings-world-share-${row.id}`}
+                style={{
+                  color: colors.textTertiary, fontSize: 9, fontFamily: fontFamily.regular,
+                  fontVariant: ["tabular-nums"], textAlign: "right",
+                }}
+              >
+                {reading.world} of all
+              </Text>
+            ) : null}
+          </View>
         </View>
 
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular, fontVariant: ["tabular-nums"] }}>

@@ -171,6 +171,64 @@ describe("a lobby nobody is watching", () => {
     const [after] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
     expect(after.phase, "a room with time left is not swept").toBe(before.phase);
   }, 120_000);
+
+  /*
+   * Full, with time left, and nobody watching — which the two tests above
+   * leave in the gap between them.
+   *
+   * Bots arrive after a minute (`BOT_FILL_AFTER_SECONDS`); the lobby deadline
+   * is fifteen. `settleLobbies` sweeps only rooms whose deadline has passed —
+   * correctly, as the test above insists — and the join route advances only
+   * the room the joiner is in. So a room that the bot filler had just made
+   * full moved on *only* if somebody happened to be polling it, and a season
+   * starts only once every one of its rooms has left the lobby: one person who
+   * joined and closed the tab held up everybody else in their season for the
+   * rest of the quarter of an hour.
+   *
+   * Found by running it rather than by reading it, which is why the gap
+   * survived two tests either side of it. With a one-person room nobody was
+   * polling, bots seated at 60s and ten minutes later the room was still
+   * `filling` with five seats and 2m40s left on its clock, while the tick ran
+   * every minute throughout and settled other lobbies. After the fix the same
+   * room reached `claiming` in 111s.
+   *
+   * The clock is deliberately left in the future: if this ever passes because
+   * the room expired, it has stopped testing anything.
+   */
+  it("moves a room the bots have just filled, without waiting out its clock", async () => {
+    const app = await getTestApp();
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const ventureId = join.body.ventureId as string;
+
+    await db.update(simVentures)
+      .set({
+        // Old enough for the sweep's cheap pre-filter to take an interest…
+        createdAt: new Date(Date.now() - 5 * 60_000),
+        // …and nowhere near its own deadline, so the sweep must not be what moves it.
+        phaseEndsAt: new Date(Date.now() + 14 * 60_000),
+      })
+      .where(eq(simVentures.id, ventureId));
+    /*
+     * And the seat, which is what actually decides.
+     * `fillVentureWithBots` measures the wait from the most recent *arrival*
+     * rather than from the room's `createdAt`, so that a room gaining a real
+     * player every twenty seconds is not declared stalled. Backdating only the
+     * venture left the room looking busy and seated no bots at all.
+     */
+    await db.update(simSeats)
+      .set({ joinedAt: new Date(Date.now() - 5 * 60_000) })
+      .where(eq(simSeats.ventureId, ventureId));
+
+    await runSimulationPass();
+
+    const [after] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, ventureId));
+    expect(seats.length, "the bot filler seated a full table").toBe(5);
+    expect(after.phase, "a full room does not wait out a clock it no longer needs").not.toBe("filling");
+    expect(after.phaseEndsAt!.getTime(), "and it is still inside its lobby deadline, so the sweep is not what moved it")
+      .toBeLessThan(Date.now() + 15 * 60_000);
+  }, 120_000);
 });
 
 describe("the clock the whole schema runs on", () => {

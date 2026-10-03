@@ -73,9 +73,11 @@ function projected(company: Company, d: TeamDecisions | undefined, innovationPac
   const brandGain = brand.now + lift(d?.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per);
   const qualityGain = Math.max(0, company.pipeline ?? 0) * per;
   const staff = staffing(company, d?.coo?.headcount ?? 0, per);
+  /* At the market's scale, as `resolveYear` now reads it — a forecast on the old
+     bare threshold would promise a small market's table service it will not get. */
   const serviceGain = lift(
     (d?.coo?.supportSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
-    150_000 * per, 15 * per,
+    atScale(150_000, company.scale) * per, 15 * per,
   );
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
   return {

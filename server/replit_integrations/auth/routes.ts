@@ -3,7 +3,7 @@ import { sendVerificationEmail } from "../../email-verification";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import passport from "passport";
-import bcrypt from "bcryptjs";
+import { hashPassword, verifyPassword } from "../../password-hash";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
 import { enforceRateLimit, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "../../moderation";
@@ -69,7 +69,7 @@ export function registerAuthRoutes(app: Express): void {
       if (existing) {
         return res.status(409).json({ message: "An account with this email already exists" });
       }
-      const passwordHash = await bcrypt.hash(password, 12);
+      const passwordHash = await hashPassword(password);
       const user = await authStorage.upsertUser({
         email,
         passwordHash,
@@ -261,7 +261,7 @@ export function registerAuthRoutes(app: Express): void {
       }
 
       const current = String(req.body?.currentPassword ?? "");
-      if (!current || !(await bcrypt.compare(current, user.passwordHash))) {
+      if (!current || !(await verifyPassword(current, user.passwordHash))) {
         return res.status(401).json({ message: "That isn't your current password.", code: "bad_password", field: "currentPassword" });
       }
       const next = String(req.body?.newPassword ?? "");
@@ -276,7 +276,7 @@ export function registerAuthRoutes(app: Express): void {
         return res.status(400).json({ message: "That's the password you already have.", code: "invalid_input", field: "newPassword" });
       }
 
-      const passwordHash = await bcrypt.hash(next, 12);
+      const passwordHash = await hashPassword(next);
       await db.update(users).set({ passwordHash, accessTokensRevokedAt: new Date() }).where(eq(users.id, userId));
 
       // Everywhere else, now. This session's row is spared so the person isn't signed out of the page they're on.

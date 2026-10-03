@@ -50,7 +50,8 @@ import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type 
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
 import { PROJECT_CATEGORIES } from "@shared/categories";
-import { CURRENCIES } from "@shared/currency";
+import { CURRENCIES, DEFAULT_CURRENCY, suggestedCurrency } from "@shared/currency";
+import { useLanguage } from "@/lib/i18n";
 
 interface Message {
   role: "user" | "assistant";
@@ -210,6 +211,8 @@ export default function ProjectCreate() {
   const draftKey = user?.id ? `new-project-draft:${user.id}` : null;
   const [draftRestored, setDraftRestored] = useState(false);
   const [input, setInput] = useState("");
+  /* For the currency the money field starts on — see `suggestedCurrency`. */
+  const { language } = useLanguage();
   const [roleSelectKey, setRoleSelectKey] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
   // Fields the builder changed by hand — Nova's later updates leave them alone —
@@ -220,8 +223,23 @@ export default function ProjectCreate() {
     title: "",
     description: "",
     category: "",
-    // The business's own money; SparkTower's prices stay in dollars.
-    currency: "USD",
+    /*
+     * The business's own money; SparkTower's prices stay in dollars.
+     *
+     * Suggested from where the browser says this person is and what language they
+     * chose, rather than starting on US dollars for everybody — which meant every
+     * project built outside America began life mis-denominated, and a field that
+     * is already filled in is a field people skip. Still a dropdown, and still
+     * the business's call: see `suggestedCurrency`.
+     *
+     * Decided once, when the form mounts. Switching language afterwards does not
+     * move it — by then it may be a figure somebody has chosen on purpose, and
+     * changing a filled field under them is worse than starting it wrong.
+     */
+    currency: suggestedCurrency({
+      locales: typeof navigator !== "undefined" ? (navigator.languages ?? [navigator.language]) : [],
+      language: language.code,
+    }),
     rolesNeeded: [],
     techStack: [],
     teamSize: 1,
@@ -712,7 +730,7 @@ export default function ProjectCreate() {
                     <Coins className="h-3 w-3" /> Its money
                   </label>
                   <Select
-                    value={projectData.currency || "USD"}
+                    value={projectData.currency || DEFAULT_CURRENCY}
                     onValueChange={(val) => editField("currency", val)}
                   >
                     <SelectTrigger className="mt-1" data-testid="select-project-currency">

@@ -524,7 +524,16 @@ export const NICHES: Niche[] = [
       rivals: "the other firms",
     },
     segments: [
-      { id: "homeowners", name: "Homeowners", description: "A kitchen, an extension, a fence. Get three quotes, pick the cheapest, and tell the whole street how it went.", size: 210_000, growth: 0.03, priceSensitivity: 0.85, qualityFocus: 0.55, brandFocus: 0.35, serviceFocus: 0.6, loyalty: 0.15, referencePrice: 900 },
+      { id: "homeowners", name: "Homeowners", description: "A kitchen, an extension, a fence. Get three quotes, pick the cheapest, and tell the whole street how it went.", size: 210_000, growth: 0.03, priceSensitivity: 0.85, qualityFocus: 0.55, brandFocus: 0.35, serviceFocus: 0.6, loyalty: 0.15, referencePrice: 900,
+        /*
+         * Domestic work is quick to get good at — the market's pace is 0.45,
+         * set by public infrastructure, and holding a kitchen fitter to it was
+         * what made residential construction unplayable. See
+         * `Segment.innovationPace`. The two commercial segments below override
+         * nothing and stay at the market's pace, which is the point: this is a
+         * cheap trade to enter and a hard one to become commercial in.
+         */
+        innovationPace: 1.0 },
       { id: "developers", name: "Developers", description: "Ten jobs a year to whoever finished the last one on time. Slow to win, and they'll bring you along for the next decade.", size: 29_000, growth: 0.06, priceSensitivity: 0.5, qualityFocus: 0.8, brandFocus: 0.4, serviceFocus: 0.75, loyalty: 0.82, referencePrice: 3_800 },
       { id: "public", name: "Public sector", description: "Schools, roads, a hospital wing. A tender process longer than the build, and a blacklist that never expires.", size: 6_000, growth: 0.04, priceSensitivity: 0.45, qualityFocus: 0.85, brandFocus: 0.55, serviceFocus: 0.8, loyalty: 0.92, referencePrice: 14_000 },
     ],

@@ -26,6 +26,7 @@ import { exact, money, type ReportMarketNote } from "./desk";
 import {
   KIND_ICON, KIND_LABEL, effectLines, lifePill, lifeRead, saleRead,
   type BidCheck, type Holding, type MarketListing, type SellingRow,
+  type MarketView,
 } from "./market";
 
 /**
@@ -36,24 +37,33 @@ import {
  * numbers for the money it has on two screens of the same app stops trusting
  * both of them.
  */
-export function MarketBanner({ year, funds, outstanding }: {
+export function MarketBanner({ year, funds, outstanding, period }: {
   year: number;
   funds: number;
   outstanding: { count: number; overcommitted: boolean; line: string | null };
+  /**
+   * What one decision is called here.
+   *
+   * The auction settles once a tick and always has, so a quarterly season's bids
+   * were already decided every quarter — only the words on this screen said
+   * "year". Absent is "year", which is what every season used to be.
+   */
+  period?: { one: string; many: string; of: string };
 }) {
+  const unit = period?.one ?? "year";
   return (
     <NovaGradient style={{ borderRadius: radius.md, padding: spacing.lg, gap: spacing.sm, ...shadow.card }}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.md }}>
         <View style={{ flex: 1, gap: 4 }}>
           <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.6 }}>
-            YEAR {year} · THE MARKET
+            {unit.toUpperCase()} {year} · THE MARKET
           </Text>
           <Text style={{ color: "#FFFFFF", fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 }}>
             Sealed bids
           </Text>
           <Text style={{ color: "rgba(255,255,255,0.92)", fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>
-            Everyone in the season sees the same things for sale. Nobody sees anybody's bid — including yours — until the year
-            resolves, and the highest offer over the reserve takes it.
+            Everyone in the season sees the same things for sale. Nobody sees anybody's bid — including yours — until the{" "}
+            {unit} resolves, and the highest offer over the reserve takes it.
           </Text>
         </View>
         <View
@@ -85,9 +95,18 @@ export function MarketBanner({ year, funds, outstanding }: {
   );
 }
 
-/** What a thing does, as chips: the same 0–100 scores the desk draws bars for. */
-export function EffectChips({ effect }: { effect: MarketListing["effect"] }) {
-  const lines = effectLines(effect);
+/**
+ * What a thing does, as chips: the same 0–100 scores the desk draws bars for.
+ *
+ * With `you`, each chip says what winning the lot would *make* this company —
+ * "quality 54 → 60" rather than "+6 quality", which is the arithmetic nobody can
+ * do while holding a phone against numbers on another screen.
+ */
+export function EffectChips({ effect, you }: {
+  effect: MarketListing["effect"];
+  you?: MarketView["you"];
+}) {
+  const lines = effectLines(effect, you);
   if (lines.length === 0) {
     return (
       <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
@@ -125,8 +144,14 @@ export function EffectChips({ effect }: { effect: MarketListing["effect"] }) {
  */
 export function ListingCard({
   listing, open, draft, check, onOpen, onDraft, onBid, onWithdraw, busy, canBid = true,
+  you, period, periods,
 }: {
   listing: MarketListing;
+  /** Where this company stands, so the chips can read as a before and after. */
+  you?: MarketView["you"];
+  /** What one decision is called here, and how many make a year. See `lastsFor`. */
+  period?: MarketView["period"];
+  periods?: number;
   open: boolean;
   draft: string;
   check: BidCheck;
@@ -158,7 +183,7 @@ export function ListingCard({
           <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{listing.name}</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
             <Pill label={KIND_LABEL[listing.kind] ?? listing.kind} color={colors.textSecondary} />
-            <Pill label={lifePill(listing.expiresIn)} icon="time-outline" color={listing.expiresIn == null ? colors.success : colors.info} />
+            <Pill label={lifePill(listing.expiresIn, period, periods)} icon="time-outline" color={listing.expiresIn == null ? colors.success : colors.info} />
             {listing.seller ? <Pill label={`From ${listing.seller}`} icon="people-outline" color={colors.novaPurple} /> : null}
           </View>
         </View>
@@ -168,7 +193,7 @@ export function ListingCard({
         {listing.blurb}
       </Text>
 
-      <EffectChips effect={listing.effect} />
+      <EffectChips effect={listing.effect} you={you} />
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
         <View style={{ flex: 1, gap: 1 }}>
@@ -177,7 +202,7 @@ export function ListingCard({
             {exact(listing.reserve)}
           </Text>
           <Text style={{ color: colors.textTertiary, fontSize: 10, lineHeight: 15, fontFamily: fontFamily.regular }}>
-            {lifeRead(listing.expiresIn)}
+            {lifeRead(listing.expiresIn, period, periods)}
           </Text>
         </View>
         {bid != null ? (
@@ -251,7 +276,7 @@ export function ListingCard({
           style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}
         >
           {bid != null
-            ? "Your chief executive has bid on this. Argue for it before the year resolves."
+            ? `Your chief executive has bid on this. Argue for it before the ${period?.one ?? "year"} resolves.`
             : "Nothing bid on this yet. Bidding is the chief executive's call."}
         </Text>
       )}
@@ -377,8 +402,12 @@ export function StepSquare({ icon, label, onPress, disabled, testID }: {
  */
 export function HoldingCard({
   holding, canSell, open, draft, check, onOpen, onDraft, onList, busy, listedReserve, onUnlist,
+  you, period, periods,
 }: {
   holding: Holding;
+  you?: MarketView["you"];
+  period?: MarketView["period"];
+  periods?: number;
   canSell: boolean;
   open: boolean;
   draft: string;
@@ -403,12 +432,12 @@ export function HoldingCard({
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
         <Icon name={KIND_ICON[holding.kind] ?? "cube"} size={17} color={colors.textSecondary} />
         <Text style={{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{holding.name}</Text>
-        <Pill label={lifePill(holding.expiresIn)} color={holding.expiresIn == null ? colors.success : colors.info} />
+        <Pill label={lifePill(holding.expiresIn, period, periods)} color={holding.expiresIn == null ? colors.success : colors.info} />
       </View>
 
-      <EffectChips effect={holding.effect} />
+      <EffectChips effect={holding.effect} you={you} />
       <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
-        {lifeRead(holding.expiresIn)} · cost {exact(holding.bookValue)}
+        {lifeRead(holding.expiresIn, period, periods)} · cost {exact(holding.bookValue)}
       </Text>
 
       <View style={{ flexDirection: "row", gap: spacing.xs }}>

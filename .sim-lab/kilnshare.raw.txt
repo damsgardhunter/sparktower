@@ -1,0 +1,262 @@
+```json
+{
+  "name": "Kilnshare",
+  "premise": "A marketplace for pottery enthusiasts to book kiln space from studios with spare capacity.",
+  "baseUnitCost": 5,
+  "innovationPace": 2,
+  "voice": {
+    "customer": "hobbyist",
+    "customers": "hobbyists",
+    "unit": "firing",
+    "per": "shelf",
+    "capacity": "kiln capacity",
+    "place": "studio",
+    "places": "studios",
+    "quality": "firing quality",
+    "brand": "studio reputation"
+  },
+  "segments": [
+    {
+      "id": "hobbyists",
+      "name": "Solo Hobbyists",
+      "description": "Pottery enthusiasts who need occasional kiln access for personal projects.",
+      "size": 3000,
+      "growth": 0.05,
+      "priceSensitivity": 0.7,
+      "qualityFocus": 0.4,
+      "brandFocus": 0.3,
+      "serviceFocus": 0.5,
+      "loyalty": 0.3,
+      "referencePrice": 15
+    },
+    {
+      "id": "collectives",
+      "name": "Pottery Collectives",
+      "description": "Small groups sharing resources for collective projects.",
+      "size": 1500,
+      "growth": 0.03,
+      "priceSensitivity": 0.6,
+      "qualityFocus": 0.6,
+      "brandFocus": 0.4,
+      "serviceFocus": 0.5,
+      "loyalty": 0.5,
+      "referencePrice": 25
+    },
+    {
+      "id": "workshops",
+      "name": "Workshop Trainers",
+      "description": "Individuals or small enterprises running pottery workshops and needing additional kiln space.",
+      "size": 1000,
+      "growth": 0.04,
+      "priceSensitivity": 0.5,
+      "qualityFocus": 0.7,
+      "brandFocus": 0.5,
+      "serviceFocus": 0.7,
+      "loyalty": 0.6,
+      "referencePrice": 50
+    },
+    {
+      "id": "painters",
+      "name": "Ceramic Painters",
+      "description": "Artists focusing on painting pre-made ceramics who need reliable firing schedules.",
+      "size": 800,
+      "growth": 0.02,
+      "priceSensitivity": 0.8,
+      "qualityFocus": 0.5,
+      "brandFocus": 0.2,
+      "serviceFocus": 0.4,
+      "loyalty": 0.2,
+      "referencePrice": 20
+    }
+  ],
+  "workforce": [
+    {
+      "id": "matchers",
+      "name": "Firing Coordinators",
+      "one": "coordinator",
+      "does": "service",
+      "pay": 0.8,
+      "share": 0.4
+    },
+    {
+      "id": "techs",
+      "name": "Marketplace Technicians",
+      "one": "technician",
+      "does": "product",
+      "pay": 1.2,
+      "share": 0.4
+    },
+    {
+      "id": "bizdev",
+      "name": "Studio Relations Managers",
+      "one": "manager",
+      "does": "room",
+      "pay": 1,
+      "share": 0.2
+    }
+  ],
+  "assets": [
+    {
+      "kind": "distribution",
+      "name": "Studio Partnerships",
+      "blurb": "Agreements with studios to share kiln capacity."
+    },
+    {
+      "kind": "distribution",
+      "name": "Workshop Ties",
+      "blurb": "Connections with local pottery workshops for increased listings."
+    },
+    {
+      "kind": "celebrity",
+      "name": "Pottery Influencers",
+      "blurb": "Influencers to promote the service among hobbyists."
+    },
+    {
+      "kind": "patent",
+      "name": "Kiln Scheduling Software",
+      "blurb": "Proprietary technology for optimizing firing schedules."
+    },
+    {
+      "kind": "patent",
+      "name": "Booking Platform",
+      "blurb": "Unique platform structure for booking and managing kiln space."
+    },
+    {
+      "kind": "facility",
+      "name": "Kiln Network Expansion",
+      "blurb": "Investment in more studio partnerships to expand firing options."
+    },
+    {
+      "kind": "facility",
+      "name": "Regional Hub",
+      "blurb": "Central location for increased studio visibility and coordination."
+    },
+    {
+      "kind": "brand_licence",
+      "name": "Art Studio Brand Partnership",
+      "blurb": "Co-branding initiatives with well-known art studio chains."
+    },
+    {
+      "kind": "brand_licence",
+      "name": "Craft Retailers",
+      "blurb": "Partnership with craft retailers for cross-promotional activities."
+    }
+  ],
+  "regions": [
+    {
+      "id": "bristol",
+      "name": "Bristol",
+      "weight": 0.3,
+      "entryCost": 1000,
+      "note": "Current base of operations with existing studio partnerships.",
+      "segmentMix": {"hobbyists": 1.2, "collectives": 0.8, "workshops": 1.0, "painters": 1.1}
+    },
+    {
+      "id": "bath",
+      "name": "Bath",
+      "weight": 0.2,
+      "entryCost": 800,
+      "note": "Nearby city with established pottery community.",
+      "segmentMix": {"hobbyists": 1.1, "collectives": 0.9, "workshops": 1.0, "painters": 0.9}
+    },
+    {
+      "id": "cardiff",
+      "name": "Cardiff",
+      "weight": 0.2,
+      "entryCost": 1200,
+      "note": "Potential market with growing arts scene.",
+      "segmentMix": {"hobbyists": 0.9, "collectives": 1.2, "workshops": 0.8, "painters": 0.9}
+    },
+    {
+      "id": "oxford",
+      "name": "Oxford",
+      "weight": 0.15,
+      "entryCost": 1500,
+      "note": "Affluent area with potential for high-quality demands.",
+      "segmentMix": {"hobbyists": 1.0, "collectives": 1.1, "workshops": 0.9, "painters": 1.0}
+    },
+    {
+      "id": "southampton",
+      "name": "Southampton",
+      "weight": 0.15,
+      "entryCost": 600,
+      "note": "Smaller market but with low entry costs.",
+      "segmentMix": {"hobbyists": 0.9, "collectives": 1.3, "workshops": 0.7, "painters": 1.1}
+    }
+  ],
+  "incumbents": [
+    {
+      "id": "kilnco",
+      "name": "KilnCo",
+      "posture": "fortress",
+      "startingShare": 0.3,
+      "quality": 70,
+      "brand": 75,
+      "service": 65,
+      "priceIndex": 1.2,
+      "persona": {
+        "tagline": "Your Firing Solutions Partner",
+        "boss": "Jane Kilner",
+        "character": "Trustworthy and dependable",
+        "known": "Reliable on-time firings",
+        "knock": "High costs",
+        "voice": "Formal and professional"
+      }
+    },
+    {
+      "id": "firely",
+      "name": "Firely",
+      "posture": "brawler",
+      "startingShare": 0.2,
+      "quality": 60,
+      "brand": 60,
+      "service": 55,
+      "priceIndex": 0.9,
+      "persona": {
+        "tagline": "Affordable Firing for All",
+        "boss": "John Potts",
+        "character": "Energetic and persuasive",
+        "known": "Good value for money",
+        "knock": "Inconsistent quality",
+        "voice": "Casual and lively"
+      }
+    },
+    {
+      "id": "studiofire",
+      "name": "StudioFire",
+      "posture": "coaster",
+      "startingShare": 0.15,
+      "quality": 65,
+      "brand": 55,
+      "service": 60,
+      "priceIndex": 1.0,
+      "persona": {
+        "tagline": "Always There When You Need Us",
+        "boss": "Sara Clay",
+        "character": "Reliable but uninspired",
+        "known": "Steady reliability",
+        "knock": "Lacks innovation",
+        "voice": "Warm and accommodating"
+      }
+    },
+    {
+      "id": "craftconnect",
+      "name": "CraftConnect",
+      "posture": "innovator",
+      "startingShare": 0.1,
+      "quality": 55,
+      "brand": 50,
+      "service": 45,
+      "priceIndex": 0.8,
+      "persona": {
+        "tagline": "Connecting Crafters with Creativity",
+        "boss": "Alex Potter",
+        "character": "Futuristic and dynamic",
+        "known": "Innovative scheduling tools",
+        "knock": "Limited market presence",
+        "voice": "Exciting and encouraging"
+      }
+    }
+  ]
+}
+```

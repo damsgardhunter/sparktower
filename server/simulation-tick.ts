@@ -39,6 +39,7 @@ import {
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
 import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
+import { currencyForSeason } from "./simulation-desk-routes";
 import type { BotSkill } from "@shared/simulation/bots";
 import { incumbentBids, marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
@@ -298,6 +299,21 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
    * season.
    */
   let botSkill: BotSkill = "filler";
+  /*
+   * The money this season's business counts in, read before the transaction and
+   * written onto the world inside it.
+   *
+   * Once, here, because the world is built once: every later tick loads it back
+   * from the stored JSON, so the currency rides along with it and nothing has to
+   * look it up again. A season already running has no `currency` on its world and
+   * keeps the pound signs it has always had — see `World.currency`.
+   */
+  const [ahead] = await db
+    .select({ companyId: simSeasons.companyId })
+    .from(simSeasons)
+    .where(eq(simSeasons.id, seasonId));
+  const currency = await currencyForSeason(ahead?.companyId);
+
   const result = await db.transaction(async (tx): Promise<{ outcome: StartOutcome; world?: World; niche?: NonNullable<ReturnType<typeof nicheById>> }> => {
     const [peek] = await tx.select({ nicheId: simSeasons.nicheId, companyId: simSeasons.companyId })
       .from(simSeasons).where(eq(simSeasons.id, seasonId));
@@ -373,6 +389,8 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       seasonId: season.id,
       niche,
       cadence: season.cadence as Cadence,
+      /* So the year's prose quotes figures in this business's own money. */
+      currency,
       /*
        * Funded and level, or where the project actually is. Taken from the
        * season rather than decided here, and the standing was snapshotted when
@@ -1567,9 +1585,34 @@ export async function runSimulationPass(now = new Date()): Promise<{ settled: nu
    */
   if (!(await schemaMatchesBuild())) return null;
   return withLock(LOCK_SIM_TICK, async () => {
-    // Before settling: a room that has waited its minute gets its bots, so the
-    // deadline it is about to hit finds five players rather than one.
-    await fillWaitingLobbies().catch((err) => console.error("[sim] filling lobbies failed:", err));
+    /*
+     * Before settling: a room that has waited its minute gets its bots, so the
+     * deadline it is about to hit finds five players rather than one.
+     *
+     * And then the room is moved on, which is the part that was missing. Bots
+     * arrive after a minute; the lobby deadline is fifteen. `settleLobbies`
+     * only sweeps rooms whose deadline has *passed*, and the join route only
+     * advances the room the joiner is in, so between minute one and minute
+     * fifteen a room that is already full sat there unless somebody happened
+     * to be watching it — and because a season starts only once every one of
+     * its rooms has left the lobby, one person who joined and closed the tab
+     * held up everybody else in their season for the rest of that quarter of
+     * an hour.
+     *
+     * Measured before this line existed, with a one-person room nobody was
+     * polling: bots seated at 60s, and ten minutes later the room was still
+     * `filling` with five seats and 2m40s left on its clock, while the tick
+     * ran every minute throughout and settled other lobbies.
+     *
+     * Each is advanced on its own, because one room that throws must not stop
+     * the others from moving — the same reason `settleLobbies` catches per
+     * room rather than around its loop.
+     */
+    const bots = await fillWaitingLobbies()
+      .catch((err) => { console.error("[sim] filling lobbies failed:", err); return { seated: 0, filled: [] as string[] }; });
+    for (const id of bots.filled) {
+      await advanceVenture(id).catch((err) => console.error(`[sim] advancing filled lobby ${id} failed:`, err));
+    }
     const settled = await settleLobbies();
     const started = (await startReadySeasons()).length;
     const resolved = await runDueTicks(now);

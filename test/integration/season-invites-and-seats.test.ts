@@ -122,6 +122,46 @@ describe("inviting a room to a company's season", () => {
   }, 180_000);
 
   /*
+   * A retired table is not a table to be sent back to.
+   *
+   * `ventureId` on this response is the whole of the invite page's decision:
+   * truthy shows "Go to your table" and no Join button at all, so a retired
+   * room left somebody looking at a dead end, with the join that would have
+   * seated them at a fresh table never offered. The join itself has always
+   * filtered retired rooms; the two answers to "am I already at a table?"
+   * simply disagreed, and only one of them was on the screen.
+   *
+   * Found by running it: a two-person lobby that never reached three retired
+   * itself on the clock, and the invite link then offered its own dead room.
+   * Pressing join by hand made a new table and seated both of them in it.
+   */
+  it("stops offering a retired table, so the invite link is not a dead end", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+    await giveSeats(companyId, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+
+    const join = await owner.agent.post("/api/sim/join-code").send({ code: inviteCode });
+    expect(join.status, JSON.stringify(join.body)).toBe(200);
+    const ventureId = join.body.ventureId as string;
+
+    const atTable = await owner.agent.get(`/api/sim/join-code/${inviteCode}`);
+    expect(atTable.body.ventureId, "while they are at it, the page points at it").toBe(ventureId);
+
+    // What the lobby does to a table too empty to play (shared/simulation/lobby.ts).
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
+
+    const after = await owner.agent.get(`/api/sim/join-code/${inviteCode}`);
+    expect(after.status, JSON.stringify(after.body)).toBe(200);
+    expect(after.body.ventureId, "a retired room is not somewhere to go back to").toBeNull();
+
+    // And the offer the page makes instead actually works.
+    const again = await owner.agent.post("/api/sim/join-code").send({ code: inviteCode });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.ventureId, "a fresh table, not the retired one").not.toBe(ventureId);
+  }, 180_000);
+
+  /*
    * More than one table in a season is the point of running one: the companies
    * are each other's market, and a workshop with ten people should end with two
    * of them competing rather than one playing against bots.

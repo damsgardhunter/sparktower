@@ -195,6 +195,17 @@ const readySince = (phase: Phase): { runningSince?: Date } =>
  * season. Neither applies to a company's season, which is reached by code and
  * started by hand.
  */
+/**
+ * When a joiner has held the market's queue long enough to say so.
+ *
+ * Not a budget — it is a tripwire. The section it times is a handful of indexed
+ * statements, so anything approaching this is either a plan that has changed
+ * underneath it or a machine that cannot keep up, and both are worth a line in
+ * the log. Chosen above the ~14.5ms a laptop measured under two hundred
+ * simultaneous joiners so that an ordinary busy moment stays quiet.
+ */
+export const JOIN_LOCK_SLOW_MS = 50;
+
 export const MATCH_ROOM_WAIT_MINUTES = 10;
 export const MATCH_MAX_ROOMS = 8;
 
@@ -439,7 +450,53 @@ function pgErrorCode(err: unknown): string | undefined {
          * transaction ends, and per-market, so a queue for one never waits on
          * another.
          */
+        /*
+         * Its own statement, and it has to stay that way.
+         *
+         * This looks like an obvious round trip to save — the section it guards
+         * is about six milliseconds of which most is round trips, so folding the
+         * lock into the select below is the first thing anybody tries. It was
+         * tried, as:
+         *
+         *   with locked as materialized (select pg_advisory_xact_lock(...))
+         *   select s.* from sim_seasons s, locked where ...
+         *
+         * and it is wrong. `MATERIALIZED` promises the CTE is evaluated once; it
+         * promises nothing about *when*. The planner is free to scan
+         * `sim_seasons` as the outer relation and pull from `locked` afterwards,
+         * so the lock is taken after the decision it was meant to protect.
+         * Measured: twelve people joining together produced ten rooms across two
+         * seasons instead of three rooms in one, and the lock hold got four times
+         * worse from the contention it had stopped preventing.
+         *
+         * `test/integration/sim-lobby.test.ts` catches this — "five people who
+         * press join at the same moment" went to 2 rooms instead of 1 — which is
+         * the test to run after touching anything in here.
+         */
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${nicheId}, 0))`);
+        /*
+         * How long this joiner holds the queue, which is the one number that
+         * decides whether the lock needs rethinking.
+         *
+         * Every joiner for a market waits for the one in front, so the wait a
+         * person experiences is this figure times the number of people ahead of
+         * them. Two hundred joining at once measured p50 2.7s end to end — a
+         * queue draining at a steady ~14.5ms each, which is the shape of strict
+         * serialisation rather than of contention.
+         *
+         * What that 14.5ms is made of could not be settled from outside. The
+         * queries under the lock are about a millisecond (`explain analyze` on a
+         * copy with real volume) and a commit on that machine is 1.06ms, which
+         * leaves most of it unaccounted — most likely the seven sequential round
+         * trips this section makes, each inflated by an event loop serving
+         * everybody else. "Most likely" is not good enough to restructure a lock
+         * on, and it cannot be measured from the client side, so it is measured
+         * from in here.
+         *
+         * Logged only when it is slow, because the interesting case is the one
+         * that makes a queue and a line per join would be a line per join.
+         */
+        const lockedAt = Date.now();
 
         const [season] = await tx
           .select()
@@ -480,7 +537,19 @@ function pgErrorCode(err: unknown): string | undefined {
           createdAt: new Date(),
         }).returning())[0].id;
 
-        return takeSeatInSeason(tx, seasonId, req.user.id);
+        const seated = await takeSeatInSeason(tx, seasonId, req.user.id);
+        /*
+         * Measured before the commit, so it is the work rather than the whole
+         * transaction — the commit happens after this and the lock is held
+         * through it, which is itself worth knowing when reading the figure.
+         */
+        const heldMs = Date.now() - lockedAt;
+        if (heldMs >= JOIN_LOCK_SLOW_MS) {
+          console.warn(`[sim] join held the ${nicheId} queue for ${heldMs}ms`
+            + ` (${season ? "existing" : "new"} season, ${seated === undefined ? "no" : "a"} seat).`
+            + ` Everyone behind this joiner waited for it.`);
+        }
+        return seated;
       });
 
       await advanceVenture(ventureId);
@@ -507,9 +576,29 @@ function pgErrorCode(err: unknown): string | undefined {
     const [company] = await db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, season.companyId));
     const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
       .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
+    /*
+     * A table they are still at — not one that has been retired under them.
+     *
+     * The same `phase <> 'retired'` the join below applies, and it has to be
+     * the same: this field is the whole of the page's decision about what to
+     * offer. A truthy `ventureId` shows "Go to your table" and no Join
+     * button at all (client/src/pages/join-season.tsx), so counting a retired
+     * room sent somebody back to a dead one with nothing on the page to get
+     * them out of it — while the join they were not being offered would have
+     * happily seated them at a fresh table.
+     *
+     * Reachable without anybody doing anything wrong: a lobby that fails to
+     * reach three people retires itself (shared/simulation/lobby.ts), which
+     * is the normal end of a private season whose colleagues did not arrive,
+     * and the invite link is exactly what they press next.
+     */
     const [seated] = await db.select({ id: simVentures.id }).from(simSeats)
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
-      .where(and(eq(simSeats.userId, req.user.id), eq(simVentures.seasonId, season.id)))
+      .where(and(
+        eq(simSeats.userId, req.user.id),
+        eq(simVentures.seasonId, season.id),
+        sql`${simVentures.phase} <> 'retired'`,
+      ))
       .limit(1);
     const niche = marketOf(season);
     res.json({
@@ -578,11 +667,18 @@ function pgErrorCode(err: unknown): string | undefined {
          */
         const [company] = await tx.select().from(companies).where(eq(companies.id, season.companyId!));
         if (company) {
-          const { kind, seated, paid } = await seatCensus(season, company);
+          /*
+           * `free` rather than `paid - seated`, because one seat may be held
+           * for the person who built this market — see `seatCensus`. The
+           * builder is never refused their own table; everybody else is
+           * counted against what is left once that seat is set aside.
+           */
+          const { kind, seated, paid, free, isBuilder } = await seatCensus(season, company, req.user.id);
+          const noRoom = !isBuilder && free <= 0;
           const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));
-          if (devFreeSeat && seated >= paid) {
+          if (devFreeSeat && noRoom) {
             console.warn(`[sim] development seats — seating ${req.user.id} in season ${season.id} with ${seated} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
-          } else if (seated >= paid) {
+          } else if (noRoom) {
             return { unpaid: { kind, seated, paid } as const };
           }
         }

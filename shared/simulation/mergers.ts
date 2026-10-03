@@ -199,6 +199,78 @@ export function assessOffer(amount: number, target: Company): {
   return { fair, ratio, verdict, note };
 }
 
+/**
+ * What buying this company would do to your ability to serve anybody.
+ *
+ * ## Why this is not about money
+ *
+ * Every other reading on the offers screen is financial: what they are worth,
+ * what the number on the table is against that, whether you can reach it. All of
+ * that is checked before an offer can even be made (`canOffer`), so the mistake
+ * the screen protects against is the one it cannot refuse for you.
+ *
+ * Customers bought are customers who must be *served*. An acquirer takes on the
+ * other company's customers and none of its plant — the deal moves the business,
+ * not the building — so a company that buys a rival twice its size and does not
+ * build the room for them turns the difference away. That happens in public, it
+ * costs reputation at the moment every other team is watching the deal, and
+ * `allocate` then hands those people to whoever does have room, which is
+ * generally the third company in the market. Paying to make a rival stronger is
+ * the most expensive outcome available on this screen and the only one the
+ * arithmetic above cannot see.
+ *
+ * ## Why it is here rather than on either screen
+ *
+ * It was on neither. The route has sent `you.capacity` and `you.customers` for
+ * exactly this since the mechanic was built, both clients declared the fields,
+ * both wrote a comment explaining why they mattered, and no line of code on
+ * either client ever read them. Putting the sum in the engine means the web
+ * imports it and the phone mirrors it against this, rather than two screens
+ * each inventing a threshold.
+ *
+ * Room already ordered is not counted. A build lands next period and the crowd
+ * arrives with the deal, so headroom that has not opened yet cannot serve them —
+ * counting it would be the reassuring answer rather than the true one.
+ */
+export interface ServingAfter {
+  /** Everybody you would hold, yours plus theirs. */
+  holding: number;
+  /** What you can actually serve, now. */
+  room: number;
+  /** Nobody, if the room covers them. */
+  turnedAway: number;
+  /** How much more room you would need, as a fraction of what you have. */
+  shortBy: number;
+  verdict: "fine" | "tight" | "short";
+}
+
+/**
+ * One in ten of your own room is the line between "tight" and "fine".
+ *
+ * Not zero: a deal that lands you exactly at capacity is a deal with no slack
+ * for a good year, and the screen should say so without crying wolf. Not a
+ * quarter either — a company deliberately buying a crowd it intends to build for
+ * is playing well, and a warning it sees every time is a warning it stops
+ * reading.
+ */
+export const SERVING_TIGHT = 0.1;
+
+export function servingAfter(input: {
+  /** Your capacity now, including anything leased or lent by an asset. */
+  capacity: number;
+  /** Customers you hold now. */
+  customers: number;
+  /** Customers they hold. */
+  theirs: number;
+}): ServingAfter {
+  const room = Math.max(0, Number(input.capacity) || 0);
+  const holding = Math.max(0, Number(input.customers) || 0) + Math.max(0, Number(input.theirs) || 0);
+  const turnedAway = Math.max(0, holding - room);
+  const shortBy = room > 0 ? turnedAway / room : holding > 0 ? 1 : 0;
+  const verdict = turnedAway > 0 ? "short" : holding > room * (1 - SERVING_TIGHT) ? "tight" : "fine";
+  return { holding, room, turnedAway, shortBy, verdict };
+}
+
 export interface AcquisitionOutcome {
   buyer: Company;
   seller: Company;

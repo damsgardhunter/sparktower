@@ -416,8 +416,52 @@ export function reachOf(company: Company, niche: Niche): number {
  * product, more appealing to the people it was built for and slightly less to
  * everybody else.
  */
+export const POSITIONING_FOR_THEM = 1.18;
+export const POSITIONING_FOR_OTHERS = 0.92;
+
 export const positioningFor = (company: Company, segmentId: string): number =>
-  !company.positioning ? 1 : company.positioning === segmentId ? 1.18 : 0.92;
+  !company.positioning ? 1 : company.positioning === segmentId ? POSITIONING_FOR_THEM : POSITIONING_FOR_OTHERS;
+
+/**
+ * How much of your business has to be in a segment before declaring for it pays.
+ *
+ * Positioning is a trade, not a bonus, and it is easy to read it as a bonus:
+ * 1.18 to the people you chose and 0.92 to everybody else. Declare for a segment
+ * holding a tenth of your customers and you have bought eighteen per cent more
+ * appeal to a tenth of the market by giving up eight per cent of the other nine
+ * tenths, which is a worse company.
+ *
+ * Break-even falls out of those two numbers and is not tuned: with a fraction s
+ * of demand in the chosen segment, appeal moves by
+ * `0.92 + (1.18 - 0.92) * s`, which clears 1 at `0.08 / 0.26`. So a little under
+ * a third.
+ *
+ *     restaurant chain  lunch 60%  ·  delivery 25%  ·  families 15%
+ *     construction      homeowners 86%  ·  developers 12%  ·  public 2%
+ *
+ * Which is to say: in construction there is one segment worth declaring for and
+ * in a restaurant chain there is one, and a company that declares for either of
+ * the others has made itself worse. `bestSegment` in `bot-play.ts` weighs fit,
+ * size and loyalty but not this penalty, so on its own it will happily choose a
+ * small segment that suits the company and cost it the market.
+ */
+export const POSITIONING_BREAK_EVEN =
+  (1 - POSITIONING_FOR_OTHERS) / (POSITIONING_FOR_THEM - POSITIONING_FOR_OTHERS);
+
+/**
+ * The share of this company's demand that sits in one segment.
+ *
+ * Its own customers once it has any, and the segment's share of the market
+ * before that — a company in year one has nobody, and "nobody" is not evidence
+ * that a segment is small.
+ */
+export function demandShareOf(company: Pick<Company, "customers">, niche: Niche, segmentId: string): number {
+  const mine = company.customers ?? {};
+  const held = Object.values(mine).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  if (held > 0) return (Number(mine[segmentId]) || 0) / held;
+  const total = niche.segments.reduce((sum, g) => sum + g.size, 0);
+  return total > 0 ? (niche.segments.find((g) => g.id === segmentId)?.size ?? 0) / total : 0;
+}
 
 export function allocate(
   companies: Company[],
@@ -979,3 +1023,77 @@ export function marketShares(held: Record<string, Record<string, number>>): Reco
  */
 export const atScale = (amount: number, scale = 1): number =>
   amount * Math.max(0.001, scale);
+
+/**
+ * The pace this company gets better at its work, which is its customers' pace.
+ *
+ * `niche.innovationPace` is one number for a whole market, and that is right
+ * wherever the trade is the trade. Where a market's segments are different
+ * businesses wearing one name — fitting out houses and tendering for public
+ * infrastructure are both "construction" — the pace belongs to the segment the
+ * company declared itself for. See `Segment.innovationPace`.
+ *
+ * Falls back to the market's own pace, so a company that has declared no
+ * positioning, or declared one for a segment that does not override it, gets
+ * exactly what it got before.
+ */
+export const paceFor = (
+  company: Pick<Company, "positioning">,
+  niche: Pick<Niche, "innovationPace" | "segments">,
+): number => {
+  const aimed = company.positioning
+    ? niche.segments.find((s) => s.id === company.positioning)
+    : undefined;
+  return aimed?.innovationPace ?? niche.innovationPace;
+};
+
+/**
+ * Everyone's share of the regions they actually sell in, 0–1.
+ *
+ * `marketShares` answers "how much of this market is yours", and on a world map
+ * that question has an honest answer nobody can use: a company trading well in
+ * Leeds and nowhere else holds about two tenths of one per cent of a global
+ * market, and the standings said so. A team winning its own continent read as a
+ * rounding error, so the number everybody looks at first was the number least
+ * worth looking at.
+ *
+ * This is the other reading, and both belong on the table — one says how big a
+ * business it is, the other says how well it is being run.
+ *
+ * The denominator is the market inside the company's own footprint: everybody's
+ * customers, scaled by how far this company reaches. That is an approximation —
+ * it assumes the regions a company trades in hold their weighted share of the
+ * market's customers, because `allocate` reports who was won per segment and
+ * not per region — and it has the property that matters: at full reach it is
+ * `reachOf` of one, so this is *exactly* `marketShares` for any company selling
+ * everywhere, and the two columns agree the moment a company has finished
+ * expanding. It is only ever the local reading that differs, which is the only
+ * place the old number was misleading.
+ */
+export function sharesWhereSold(
+  held: Record<string, Record<string, number>>,
+  companies: Company[],
+  niche: Niche,
+): Record<string, number> {
+  const totals: Record<string, number> = {};
+  let everyone = 0;
+  for (const [companyId, bySegment] of Object.entries(held)) {
+    const mine = Object.values(bySegment).reduce((sum, n) => sum + n, 0);
+    totals[companyId] = mine;
+    everyone += mine;
+  }
+  const out: Record<string, number> = {};
+  for (const id of Object.keys(totals)) {
+    const company = companies.find((c) => c.id === id);
+    /*
+     * A floor on the footprint rather than a guard against dividing by zero: a
+     * company part-way through opening its first region has a `ramp` well under
+     * one, and without this its share of "the market it sells in" climbs towards
+     * infinity as the denominator vanishes.
+     */
+    const footprint = company ? Math.max(0.01, reachOf(company, niche)) : 1;
+    const within = everyone * footprint;
+    out[id] = within > 0 ? Math.min(1, totals[id] / within) : 0;
+  }
+  return out;
+}

@@ -755,6 +755,15 @@ export interface Commitment {
   bySeat: { role: Role; spend: number }[];
   /** Of which, the one-off cost of opening somewhere new. */
   openingCost: number;
+  /**
+   * Of which, sealed bids already standing at auction.
+   *
+   * An exposure rather than a certainty — a bid can lose, and most do — but it is
+   * money the company has promised and cannot spend twice. Named separately so a
+   * screen can say "of which 1.2m is bid" rather than leaving the table to wonder
+   * why the total moved when nobody filed anything.
+   */
+  bidsOutstanding: number;
 }
 
 /**
@@ -771,6 +780,22 @@ export function commitment(
   economy: { costIndex: number },
   niche?: Niche,
   prices?: UnitPrices | null,
+  /**
+   * Sealed bids the chief executive has standing at auction, totalled.
+   *
+   * Passed in rather than read off the decisions, because a bid is not a
+   * decision: it lives in its own table, it is placed and withdrawn from the
+   * market screen between filings, and it settles on the tick. Optional, so every
+   * existing caller keeps the number it had.
+   *
+   * It belongs here for exactly the reason opening a city does — see the comment
+   * on `openingCost` below. The money is promised either way, and this total is
+   * the only place the five of them ever see what they have promised between
+   * them. The market screen warns the one person placing bids that they add up to
+   * more than the company has; it has no way to tell the other four, who are
+   * filing a year against a number that looks comfortable.
+   */
+  bids?: number,
 ): Commitment {
   const bySeat: { role: Role; spend: number }[] = [
     { role: "cmo", spend: (decisions.cmo?.brandSpend ?? 0) + (decisions.cmo?.performanceSpend ?? 0) + (decisions.cmo?.celebritySpend ?? 0) + (decisions.cmo?.prSpend ?? 0) + (decisions.cmo?.referralSpend ?? 0) + (decisions.cmo?.winbackSpend ?? 0) + oneOff(decisions.cmo?.research && decisions.cmo.research !== "none", niche, prices, "research", researchCost) },
@@ -795,8 +820,14 @@ export function commitment(
      * met, and what firing somebody costs — the bid and the severance. Most
      * years nothing; the year it is not, it is the table's money too.
      */
+    /*
+     * The sealed bids ride on the chief executive's line because bidding is the
+     * chief executive's lever (`BID_IS_THE_CEOS`), so the meter reads "this is
+     * what each of you has committed" and stays true.
+     */
     { role: "ceo", spend: Math.max(0, decisions.ceo?.bonusPool ?? 0) + (decisions.ceo?.replaceSeat ? Math.max(0, decisions.ceo?.replaceBid ?? 0) + SEVERANCE : 0)
-      + oneOff(decisions.ceo?.shockAnswer === "statement", niche, prices, "statement", statementCost) },
+      + oneOff(decisions.ceo?.shockAnswer === "statement", niche, prices, "statement", statementCost)
+      + Math.max(0, Number(bids) || 0) },
   ];
 
   /*
@@ -820,6 +851,7 @@ export function commitment(
     marketing.spend += openingCost;
   }
 
+  const bidsOutstanding = Math.max(0, Number(bids) || 0);
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
   /*
    * The same reach the engine will charge against. A preview that assumed a
@@ -856,6 +888,7 @@ export function commitment(
     ratio: available > 0 ? (spend + fixed) / available : Infinity,
     bySeat,
     openingCost,
+    bidsOutstanding,
   };
 }
 
@@ -887,9 +920,11 @@ export function draftPreview(input: {
   niche: Niche;
   decisions: TeamDecisions;
   economy: { costIndex: number };
+  /** Sealed bids standing at auction, so the warnings below count them too. */
+  bids?: number;
 }): DraftPreview {
-  const { company, niche, decisions, economy } = input;
-  const money = commitment(company, decisions, economy, niche);
+  const { company, niche, decisions, economy, bids } = input;
+  const money = commitment(company, decisions, economy, niche, null, bids);
   const lock = interlock(company, decisions, niche);
   const warnings: string[] = [];
 

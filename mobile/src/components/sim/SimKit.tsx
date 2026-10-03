@@ -6,6 +6,7 @@
  * gradient phase banner, a seat in a list, an open seat with its levers, and
  * the two ways of reading a market.
  */
+import { periodLabel, periodWords, periodsLeft, seasonSpan, type PeriodWords } from "./period";
 import React from "react";
 import { Pressable, Text, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
@@ -341,22 +342,36 @@ export function VentureResumeRow({ venture, roleTitle, onPress }: {
  * is changes what a rank means — 6th in year two is a start, and 6th in year
  * thirteen is how it ended.
  */
-export function SeasonProgress({ year, totalYears, standing, movement }: {
+export function SeasonProgress({ year, totalYears, totalPeriods, cadence, period, standing, movement }: {
+  /** The period counter, which is what every sim payload's `year` is. */
   year: number;
   totalYears: number;
+  /**
+   * The denominator `year` actually belongs over, where the route sends it.
+   *
+   * Without it this divided a period count by a year count, so a quarterly
+   * season four years long reported "Year 7 of 4" — past its own end, with the
+   * bar below pinned at full. See `seasonSpan`.
+   */
+  totalPeriods?: number | null;
+  /** For the room route, which sends the cadence rather than the derived fields. */
+  cadence?: unknown;
+  period?: Partial<PeriodWords> | null;
   /** "4th of 9 in the market, 2nd of the 5 teams." */
   standing: string | null;
   /** "Share up 1.2 points and you climbed a place to 3rd." */
   movement: string | null;
 }) {
-  const through = totalYears > 0 ? Math.min(1, Math.max(0, year / totalYears)) : 0;
-  const left = Math.max(0, totalYears - year);
+  const words = periodWords({ period, cadence });
+  const span = seasonSpan({ totalPeriods, totalYears, cadence });
+  const through = span > 0 ? Math.min(1, Math.max(0, year / span)) : 0;
+  const left = periodsLeft(year, span);
 
   return (
     <View style={{ gap: spacing.sm }} testID="sim-season-progress">
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.xs }}>
         <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
-          Year {year} of {totalYears}
+          {periodLabel(year, span, words)}
         </Text>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
           {left === 0 ? "the last one" : `${left} to go`}

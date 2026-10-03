@@ -75,6 +75,27 @@ function mobileCalls(): Map<string, string[]> {
   return found;
 }
 
+/**
+ * An Express 5 optional segment, as the two paths it actually serves.
+ *
+ * `app.get("/api/sim/ventures/:id/reports{/:year}")` answers both
+ * `.../reports` and `.../reports/3`, and the matcher below compares segment
+ * counts — so without this the shorter form looks like a route the server does
+ * not have. It read `reports{` as a segment name and matched nothing.
+ *
+ * Only one route in the server uses the syntax today (the year-end report, where
+ * a comment records that Express 5 rejects the `/:year?` spelling outright), and
+ * nothing had ever called the shorter form from the phone, so the blind spot sat
+ * there unexercised until it wasn't. Written generally rather than special-cased,
+ * because the next route to use it should not have to find this again.
+ */
+function expandOptional(path: string): string[] {
+  if (!path.includes("{")) return [path];
+  const without = path.replace(/\{[^}]*\}/g, "");
+  const with_ = path.replace(/\{([^}]*)\}/g, "$1");
+  return without === with_ ? [without] : [without, with_];
+}
+
 const segments = (p: string) => p.split("/").filter(Boolean);
 /** A route matches when it has the same shape and every segment agrees, a param matching anything. */
 const matches = (call: string, route: string) => {
@@ -85,7 +106,9 @@ const matches = (call: string, route: string) => {
 
 describe("the endpoints the phone calls", () => {
   const calls = mobileCalls();
-  const routes = buildRouteCoverage(serverSourceFiles() as any).rows.filter((r) => r.mounted).map((r) => r.path);
+  const routes = buildRouteCoverage(serverSourceFiles() as any).rows
+    .filter((r) => r.mounted)
+    .flatMap((r) => expandOptional(r.path));
 
   /*
    * A test that reads source and finds nothing passes for the wrong reason

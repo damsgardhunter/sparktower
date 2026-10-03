@@ -180,8 +180,10 @@ export const seatsHeld = (company: {
  */
 export async function seatCensus(
   season: { id: string; origin?: string | null; cadence?: string | null },
-  company: Parameters<typeof seatsHeld>[0],
-): Promise<{ kind: SeatKind; seated: number; paid: number; free: number }> {
+  company: Parameters<typeof seatsHeld>[0] & { createdBy?: string | null; projectId?: string | null },
+  /** Who is asking, when the answer depends on whether it is the builder. */
+  forUserId?: string,
+): Promise<{ kind: SeatKind; seated: number; paid: number; free: number; isBuilder: boolean }> {
   const kind = seatKindFor(season.origin, season.cadence);
   const seated = await db
     .selectDistinct({ userId: simSeats.userId })
@@ -190,7 +192,43 @@ export async function seatCensus(
     .innerJoin(users, eq(users.id, simSeats.userId))
     .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
   const paid = seatsHeld(company)[kind];
-  return { kind, seated: seated.length, paid, free: Math.max(0, paid - seated.length) };
+
+  /*
+   * The seat the build granted belongs to the person who built it.
+   *
+   * A market written around somebody's project tops the company up to one seat
+   * — "the builder's own seat, so what they made is theirs to play"
+   * (server/project-simulation-routes.ts). That was a seat *count* and not a
+   * reservation, and this census is a plain head count, so the first person
+   * through the door took it: invite a colleague, let them click first, and the
+   * person who paid ten dollars for a market around their own project was
+   * refused at their own table and told that "whoever set it up needs to add
+   * one" — which they are.
+   *
+   * So one seat is held back for them while they are not yet sitting at it. The
+   * consequence is deliberate and is the other half of the decision: a
+   * colleague cannot join a one-seat season at all until somebody buys a second
+   * seat. That is what this product already says it sells — the table is free
+   * and the second person at it is the thing that costs — and it is the honest
+   * version of a promise that was previously kept only for whoever was quicker.
+   *
+   * Only for a company standing in for a project, because that is the only
+   * place a seat is granted rather than bought. A company that bought five
+   * seats for five named people reserves nothing: every one of those seats was
+   * paid for by somebody who meant them to be used.
+   */
+  const builder = company.projectId ? company.createdBy ?? null : null;
+  const isBuilder = !!builder && !!forUserId && builder === forUserId;
+  const builderSeated = !!builder && seated.some((s) => s.userId === builder);
+  const reserved = builder && !builderSeated && !isBuilder ? 1 : 0;
+
+  return {
+    kind,
+    seated: seated.length,
+    paid,
+    free: Math.max(0, paid - reserved - seated.length),
+    isBuilder,
+  };
 }
 
 /** The 402 body for a season short of seats, worded for whoever hit it. */
@@ -900,6 +938,14 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * Counted against the seats left rather than the seats held, because
        * whoever is already sitting down has a place and is not being offered
        * one. The inviter's own seat is theirs and is already in `seated`.
+       *
+       * Deliberately *not* passed the inviter's id, unlike the join gate. A
+       * builder who has not sat down yet still has a seat held for them, and
+       * the question here is whether there is room for the people being
+       * offered a place — so that held seat must stay invisible to this count.
+       * Telling `seatCensus` who is asking would release it and offer the
+       * builder's own chair to a colleague, which is the bug this reservation
+       * exists to close, reintroduced one level up.
        */
       const { kind, seated, paid, free } = await seatCensus(season, found.company);
       const devFreeSeat = freeSeatsOn() || (process.env.NODE_ENV !== "production" && await devUnlimited(req.user.id));

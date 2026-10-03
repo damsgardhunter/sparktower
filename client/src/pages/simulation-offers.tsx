@@ -35,8 +35,9 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
-import { Loader2, Handshake, Check, X, Info } from "lucide-react";
+import { Loader2, Handshake, Check, X, Info, AlertTriangle } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
+import { servingAfter } from "@shared/simulation/mergers";
 
 interface Target {
   id: string; name: string; customers: number; distress: string;
@@ -48,7 +49,15 @@ interface Received {
 }
 interface Offers {
   year: number; totalYears: number; yourRole: string | null; resolvesAt: string | null;
-  you: { name: string; revenue: number; assets: number; debt: number; fair: number; notes: string[] };
+  you: {
+    name: string; revenue: number; assets: number; debt: number; fair: number; notes: string[];
+    /*
+     * Sent since the mechanic was built and read by nothing until now. Customers
+     * bought have to be served, and the deal moves the business rather than the
+     * building — see `servingAfter`.
+     */
+    capacity: number; customers: number;
+  };
   reach: number;
   targets: Target[];
   made: { id: string; to: string; toId: string; amount: number; message: string | null; status: string }[];
@@ -57,6 +66,9 @@ interface Offers {
 
 const compact = (n: number) =>
   n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+
+/** Customers, which are not money and must not be shortened to "1.2m" beside a price. */
+const count = (n: number) => Math.round(n).toLocaleString();
 
 export default function SimulationOffersPage() {
   const { id } = useParams<{ id: string }>();
@@ -129,6 +141,7 @@ export default function SimulationOffersPage() {
             ventureId={id}
             isCeo={isCeo}
             reach={data.reach}
+            you={data.you}
             existing={data.made.find((m) => m.toId === target.id && m.status === "pending")}
           />
         ))}
@@ -222,8 +235,9 @@ function ReceivedCard({ offer, ventureId, isCeo }: { offer: Received; ventureId:
   );
 }
 
-function TargetCard({ target, ventureId, isCeo, reach, existing }: {
+function TargetCard({ target, ventureId, isCeo, reach, you, existing }: {
   target: Target; ventureId: string; isCeo: boolean; reach: number;
+  you: { capacity: number; customers: number };
   existing?: { id: string; amount: number };
 }) {
   const { toast } = useToast();
@@ -279,6 +293,48 @@ function TargetCard({ target, ventureId, isCeo, reach, existing }: {
             <p className="font-semibold tabular-nums">{compact(target.fair)}</p>
           </div>
         </div>
+
+        {/*
+          * What this would do to your ability to serve anybody, which is the one
+          * mistake on this screen the money cannot warn about. `canOffer` refuses
+          * a deal you cannot pay for; nothing refuses a deal you cannot staff, and
+          * the customers arrive with it.
+          */}
+        {(() => {
+          const serving = servingAfter({ capacity: you.capacity, customers: you.customers, theirs: target.customers });
+          const short = serving.verdict === "short";
+          const tight = serving.verdict === "tight";
+          /*
+           * Shown in all three states, including the reassuring one, which is
+           * what the phone does — a warning that only ever appears when something
+           * is wrong teaches people that its absence means nothing was checked.
+           */
+          return (
+            <div
+              className={`mt-4 rounded-lg border p-3 ${short ? "border-destructive/40 bg-destructive/5" : tight ? "border-border bg-muted/60" : "border-border bg-muted/30"}`}
+              data-testid={`serving-after-${target.id}`}
+            >
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                {short
+                  ? <AlertTriangle className="h-4 w-4 text-destructive" />
+                  : tight
+                    ? <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+                    : <Check className="h-4 w-4 text-muted-foreground" />}
+                {short ? "You could not serve everyone you would own"
+                  : tight ? "No room spare if you buy them"
+                  : "You could serve everyone you would own"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+                {count(serving.holding)} customers between you, room for {count(serving.room)}.
+                {short
+                  ? ` ${count(serving.turnedAway)} get turned away — in public, and it costs reputation — and go to whoever does have room. Build ${Math.round(serving.shortBy * 100)}% more before the deal lands, or buy a smaller company.`
+                  : tight
+                    ? " That leaves nothing spare: a good year, or anybody they bring with them, and you start turning people away."
+                    : " Everybody who arrives gets served."}
+              </p>
+            </div>
+          );
+        })()}
 
         {existing ? (
           <div className="mt-4 rounded-lg border border-border p-3">

@@ -27,6 +27,26 @@ import { programmeCost, researchCost, statementCost } from "@shared/simulation/w
 import { AUTOMATION_RATE, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
 import { SEVERANCE, payEffect } from "@shared/simulation/people";
 import { describe, it, expect } from "vitest";
+import { resolveYear } from "@shared/simulation/resolve";
+import { buildWorld, economyFor, decisionsForYear, SEASON_YEARS } from "@shared/simulation/season";
+import { botDecision } from "@shared/simulation/bots";
+import { NICHES } from "@shared/simulation/niches";
+import { ROLES } from "@shared/simulation/types";
+import { accountLines, accountsReconcile } from "../../mobile/src/components/sim/report";
+import { SERVING_TIGHT, servingAfter } from "@shared/simulation/mergers";
+import { SERVING_TIGHT as PHONE_SERVING_TIGHT, serviceGap } from "../../mobile/src/components/sim/serving";
+import { CADENCES, PERIOD_NAME, periodsPerYear, totalPeriods } from "@shared/simulation/cadence";
+import {
+  PERIOD_NAME as phonePeriodName, periodsPerYear as phonePeriodsPerYear,
+  totalPeriodsIn as phoneTotalPeriodsIn,
+} from "../../mobile/src/components/sim/period";
+import { capacityRisk } from "@shared/simulation/forecast";
+import {
+  capacityRisk as phoneCapacityRisk, ORDER_FAR_TOO_MUCH as PHONE_ORDER_FAR_TOO_MUCH,
+  type Forecast as PhoneForecast,
+} from "../../mobile/src/components/sim/future";
+import { readDecision as phoneReadDecision } from "../../mobile/src/components/sim/past";
+import { readDecision as webReadDecision } from "../../client/src/components/sim/past-year";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import * as phone from "../../mobile/src/components/sim/desk";
@@ -155,6 +175,21 @@ describe("what the table has committed", () => {
       },
     },
     {
+      /*
+       * A bid standing at auction. Not a decision — it lives in its own table and
+       * is placed from the market screen between filings — so it is passed in
+       * rather than drafted, and both sides have to put it on the same seat's line
+       * or the meter tells the table a different story depending on the device.
+       */
+      name: "a sealed bid standing at auction",
+      cities: ["leeds"],
+      bids: 1_200_000,
+      decisions: {
+        cmo: { price: 22, brandSpend: 300_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] },
+        ceo: { focus: "growth", bonusPool: 50_000 },
+      },
+    },
+    {
       name: "the bets: PR, referrals, security, data and a feature",
       cities: ["leeds"],
       decisions: {
@@ -167,7 +202,8 @@ describe("what the table has committed", () => {
   for (const testCase of cases) {
     it(`agrees with the engine when ${testCase.name}`, () => {
       const c = company({ cities: testCase.cities });
-      const mine = commitment(c, { companyId: "t", ...testCase.decisions }, { costIndex: 1 }, niche);
+      const bids = (testCase as { bids?: number }).bids;
+      const mine = commitment(c, { companyId: "t", ...testCase.decisions }, { costIndex: 1 }, niche, null, bids);
       const map = niche.cities.map((city) => ({ ...city, open: testCase.cities.includes(city.id) })) as any;
       const theirs = phone.commitment({
         perHead: salaryIn(niche),
@@ -182,6 +218,7 @@ describe("what the table has committed", () => {
         } as any,
         decisions: testCase.decisions,
         costIndex: 1,
+        bids,
         // The screen works reach out from the map and passes it; so does this.
         reach: phone.reachOf(map),
         cities: map,
@@ -199,6 +236,13 @@ describe("what the table has committed", () => {
       expect(theirs.fixed, "fixed").toBeCloseTo(mine.fixed, 4);
       expect(theirs.available, "available").toBeCloseTo(mine.available, 4);
       expect(theirs.openingCost, "the cost of opening somewhere").toBeCloseTo(mine.openingCost, 4);
+      /*
+       * And the sealed bids, both as the named exposure and inside the total. A
+       * phone that showed the line but left it out of `spend` would be the worse
+       * of the two bugs: the table would read "of which 1.2m is bid" above a total
+       * that did not include it.
+       */
+      expect(theirs.bidsOutstanding, "sealed bids standing").toBeCloseTo(mine.bidsOutstanding, 4);
     });
   }
 });
@@ -335,6 +379,11 @@ describe("what keeps this file able to run at all", () => {
   const ENTRIES = [
     "mobile/src/components/sim/desk.ts",
     "mobile/src/components/sim/lobby.ts",
+    "mobile/src/components/sim/past.ts",
+    "mobile/src/components/sim/future.ts",
+    "mobile/src/components/sim/report.ts",
+    "mobile/src/components/sim/serving.ts",
+    "mobile/src/components/sim/period.ts",
   ];
 
   /**
@@ -761,6 +810,329 @@ describe("which backer rewards exist", () => {
       ["something_new"],
     ]) {
       expect(phoneRewards.deliverableRewards(saved), JSON.stringify(saved)).toEqual(deliverableRewards(saved));
+    }
+  });
+});
+
+/*
+ * The phone's Past and Future screens, against the two things they copy.
+ *
+ * Both screens existed on the web for months and on the phone not at all, and
+ * the data for both had been on the wire the whole time — `lastFiled`,
+ * `standing`, `forecast` and `idleCostPerUnit` were sent and never read. So the
+ * copies are new, which is exactly when a mirror is worth pinning: the first
+ * divergence is the one nobody is looking for.
+ */
+describe("the phone's reading of last year and next", () => {
+  it("draws the same capacity verdict as the engine, at every boundary", () => {
+    /*
+     * The verdict decides whether a seat is told it has too much room or too
+     * little, and the thresholds are a chain of comparisons with no slack in
+     * them — so this walks the boundaries rather than sampling the middles. A
+     * phone and a web client disagreeing about the same numbers is worse than a
+     * phone that shows nothing.
+     */
+    const forecast: PhoneForecast = {
+      likely: 1_000, low: 800, high: 1_200, band: 0.2,
+      bySegment: [], curve: [], price: 50,
+    };
+    const around = [
+      0, 1, 799, 800, 801, 999, 1_000, 1_001, 1_199, 1_200, 1_201,
+      Math.floor(1_200 * 1.3) - 1, Math.floor(1_200 * 1.3), Math.ceil(1_200 * 1.3) + 1, 50_000,
+    ];
+    for (const capacity of around) {
+      const args = { capacity, forecast, price: 50, idleCostPerUnit: 4.5 };
+      expect(phoneCapacityRisk(args), `capacity ${capacity} reads differently on the phone`)
+        .toEqual(capacityRisk(args));
+    }
+  });
+
+  it("keeps the phone's over-ordering threshold the same as the web's", () => {
+    /*
+     * `ORDER_FAR_TOO_MUCH` is a local const inside the web's `ForecastCard` and
+     * cannot be imported, so it is read out of the source. Textual, and that is
+     * the point: if somebody retunes the web's number the phone's has to follow,
+     * and nothing else in either suite would notice.
+     */
+    const web = readFileSync(resolve(__dirname, "../../client/src/pages/simulation-desk.tsx"), "utf-8");
+    const found = web.match(/const ORDER_FAR_TOO_MUCH = ([\d.]+)/);
+    expect(found, "the web's ORDER_FAR_TOO_MUCH has moved or been renamed").toBeTruthy();
+    expect(Number(found![1])).toBe(PHONE_ORDER_FAR_TOO_MUCH);
+  });
+
+  it("reads a filed decision exactly as the web reads it", () => {
+    /*
+     * Both clients are showing the same record of what a team committed, and the
+     * team will compare them — one person on a laptop, one on a phone, in the
+     * same conversation. Every branch of the formatter is covered here because
+     * the branches are picked by a regular expression over key names, which is
+     * the kind of thing that drifts silently when a lever is added.
+     */
+    const filed = {
+      companyId: "c1",
+      price: 1_250,
+      brandSpend: 240_000,
+      performanceSpend: 0,
+      celebritySpend: null,
+      targetCities: ["london", "leeds"],
+      regionFocus: { london: 60, leeds: 40 },
+      segmentFocus: {},
+      research: "none",
+      tiers: "",
+      holdBack: 15,
+      engineerPay: 110,
+      automationTarget: 25,
+      headcount: 14,
+      capacityTarget: 9_500,
+      positioning: "homeowners",
+      annualDiscount: 10,
+      borrow: 500_000,
+      raiseAmount: 0,
+      factorPct: 30,
+    };
+    /* The web's own money formatter, so the comparison is of the reading and not of the currency. */
+    const money = (n: number) =>
+      n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+    expect(phoneReadDecision(filed, money)).toEqual(webReadDecision(filed));
+  });
+
+  it("leaves a seat that filed nothing readable as having filed nothing", () => {
+    /*
+     * The most useful thing a table can learn from the year behind it, and the
+     * easiest to render as an empty box. Both clients have to agree that an
+     * absent payload is zero lines rather than one line saying "—".
+     */
+    expect(phoneReadDecision(undefined)).toEqual([]);
+    expect(webReadDecision(undefined)).toEqual([]);
+    expect(phoneReadDecision(null)).toEqual([]);
+  });
+});
+
+/*
+ * The phone's year-end report, against accounts the engine actually produced.
+ *
+ * The web's report screen states that every total on it is the sum of the lines
+ * above it. That is the claim worth testing from the phone's side, and it cannot
+ * be tested against a fixture somebody wrote: the failure it guards against is a
+ * cost being added to the engine and not to the phone's list of lines, which
+ * leaves a report wrong by exactly the new line and looking entirely reasonable.
+ * Nobody reconciles a screen by hand.
+ *
+ * So this runs real seasons in every market, takes the accounts out of the
+ * reports, and reconciles them through the phone's own `accountLines`.
+ */
+describe("the phone's year-end accounts", () => {
+  it("adds up to the profit the engine wrote, in every market", () => {
+    let checked = 0;
+    let worstOperating = 0;
+    let worstProfit = 0;
+    let where = "";
+
+    for (const niche of NICHES) {
+      for (const seed of ["rec1", "rec2"]) {
+        let world = buildWorld({ seasonId: seed, niche, teams: [{ id: "t", name: "T", seats: [...ROLES] }] });
+        const last = new Map<string, any>();
+        for (let year = 1; year <= SEASON_YEARS; year++) {
+          const company = world.companies.find((c) => c.id === "t");
+          if (!company || company.bankruptSince) break;
+          const submitted: Record<string, unknown> = {};
+          for (const role of ROLES) {
+            const d = botDecision({
+              ventureId: "t", company, niche, role, year, world,
+              skill: "survivor", previous: last.get(role) as any,
+            });
+            if (d) { submitted[role] = d; last.set(role, d); }
+          }
+          const { decisions } = decisionsForYear({ company, niche, submitted: submitted as any, previous: undefined });
+          const out = resolveYear({ ...world, year }, [decisions], economyFor(seed, year, 1));
+          const report = out.reports.find((r) => r.companyId === "t");
+          world = out.world;
+          if (!report?.pnl) continue;
+
+          const recon = accountsReconcile(report.pnl as any);
+          checked++;
+          if (Math.abs(recon.operatingOut) > Math.abs(worstOperating)) {
+            worstOperating = recon.operatingOut;
+            where = `${niche.id} year ${year}`;
+          }
+          if (Math.abs(recon.profitOut) > Math.abs(worstProfit)) worstProfit = recon.profitOut;
+        }
+      }
+    }
+
+    /* A sweep that checked nothing would pass every assertion below it. */
+    expect(checked, "no accounts were produced, so nothing was reconciled").toBeGreaterThan(50);
+    /*
+     * A pound of slack, not a percentage: these are floats summed in a different
+     * order from the engine's own, and the figures run to millions. Anything
+     * larger than rounding means a line is missing from `accountLines`, and the
+     * message names the market so it is findable.
+     */
+    expect(
+      Math.abs(worstOperating),
+      `the phone's cost lines do not add up to the engine's operating profit — worst at ${where}, out by ${worstOperating.toFixed(2)}. A cost was probably added to ProfitAndLoss and not to accountLines.`,
+    ).toBeLessThan(1);
+    expect(
+      Math.abs(worstProfit),
+      `operating profit less tax does not equal the profit the engine wrote, out by ${worstProfit.toFixed(2)}`,
+    ).toBeLessThan(1);
+  }, 120_000);
+
+  it("names a seat against every cost, which is the whole point of the card", () => {
+    /*
+     * "We lost two million" is not an argument a table can have. "Marketing spent
+     * 2.1m to win 900k" is. Every line needs an owner, and the owners have to be
+     * seats a player recognises rather than internal role codes.
+     */
+    const pnl = {
+      revenue: 1_000, costToServe: 1, salaries: 1, marketing: 1, product: 1, operations: 1,
+      idleCapacity: 1, capacity: 1, planning: 0, incidents: 1, partners: 1, insurance: 1,
+      interest: 1, operatingProfit: 0, tax: 0, profit: 0, lossesCarried: 0,
+    };
+    const lines = accountLines(pnl);
+    expect(lines.length).toBeGreaterThan(8);
+    const seats = new Set(lines.map((l) => l.seat));
+    for (const seat of seats) {
+      expect(["operations", "marketing", "technology", "finance", "the table"]).toContain(seat);
+    }
+    for (const line of lines) {
+      expect(line.label, "a cost line with no label").toBeTruthy();
+    }
+  });
+
+  it("keeps a nil line rather than dropping it", () => {
+    /*
+     * A zero against "Idle capacity" is a fact about the year, and a seat looking
+     * for it should find it rather than wonder whether it was left out or never
+     * happened. It also keeps the column the same height year to year.
+     */
+    const empty = {
+      revenue: 0, costToServe: 0, salaries: 0, marketing: 0, product: 0, operations: 0,
+      idleCapacity: 0, interest: 0, operatingProfit: 0, tax: 0, profit: 0, lossesCarried: 0,
+    };
+    expect(accountLines(empty).length).toBe(accountLines({ ...empty, idleCapacity: 5 }).length);
+    expect(accountsReconcile(empty).costs).toBe(0);
+  });
+});
+
+/*
+ * Whether you could serve the customers you are about to buy.
+ *
+ * Two copies of one sum, which is the condition this file exists for. The engine
+ * owns the thresholds (`servingAfter`), the web imports them, and the phone
+ * re-implements them in `serviceGap` because Metro cannot reach `@shared`.
+ *
+ * It is worth pinning harder than most mirrors because of what the sum decides.
+ * `applyAcquisition` hands the buyer every customer the seller had and none of
+ * their plant, so anybody beyond capacity is turned away — in public, in the year
+ * every other team is watching the company that just bought somebody. The asking
+ * price says nothing about it and `canOffer` will not refuse it. A phone and a web
+ * client disagreeing about whether a deal is survivable is worse than neither
+ * warning at all, because one of them is then trusted.
+ */
+describe("whether a buyer could serve what it is buying", () => {
+  it("agrees with the engine on the arithmetic and the verdict", () => {
+    const cases = [
+      { capacity: 10_000, customers: 4_000, theirs: 3_000 },   // comfortable
+      { capacity: 10_000, customers: 5_000, theirs: 4_000 },   // exactly at the tight line
+      { capacity: 10_000, customers: 5_000, theirs: 4_001 },   // just over it
+      { capacity: 10_000, customers: 6_000, theirs: 4_000 },   // exactly full
+      { capacity: 10_000, customers: 6_000, theirs: 4_001 },   // one customer short
+      { capacity: 10_000, customers: 9_000, theirs: 9_000 },   // badly short
+      { capacity: 0, customers: 0, theirs: 500 },              // no plant at all
+      { capacity: 1, customers: 0, theirs: 0 },                // nothing moving
+    ];
+    for (const c of cases) {
+      const engine = servingAfter(c);
+      const phone = serviceGap({ you: { capacity: c.capacity, customers: c.customers }, target: { customers: c.theirs } });
+      expect(phone.held, `held disagrees at ${JSON.stringify(c)}`).toBe(engine.holding);
+      expect(phone.capacity, `capacity disagrees at ${JSON.stringify(c)}`).toBe(engine.room);
+      expect(phone.short, `shortfall disagrees at ${JSON.stringify(c)}`).toBe(engine.turnedAway);
+      expect(phone.over, `"over" disagrees at ${JSON.stringify(c)}`).toBe(engine.verdict === "short");
+      expect(phone.tight, `"tight" disagrees at ${JSON.stringify(c)}`).toBe(engine.verdict === "tight");
+    }
+  });
+
+  it("keeps the tight threshold the same on both sides", () => {
+    expect(PHONE_SERVING_TIGHT).toBe(SERVING_TIGHT);
+  });
+
+  it("says nothing at all when the server sent no figures, rather than reassuring anybody", () => {
+    /*
+     * The phone's own careful bit, and the one place it is allowed to differ: with
+     * no capacity on the payload there is nothing honest to say, and a guess here
+     * would read as "this deal is fine". `line` is null and the screen draws
+     * nothing.
+     */
+    expect(serviceGap({ you: null, target: { customers: 500 } }).line).toBeNull();
+    expect(serviceGap({ you: undefined, target: { customers: 500 } }).line).toBeNull();
+    expect(serviceGap({ you: { capacity: Number.NaN, customers: 0 }, target: { customers: 5 } }).line).toBeNull();
+  });
+
+  it("always has something to say when it does have the figures", () => {
+    /*
+     * Including the reassuring case. A warning that appears only when something is
+     * wrong teaches people that its absence means nothing was checked.
+     */
+    for (const c of [{ capacity: 10_000, customers: 1, theirs: 1 }, { capacity: 10, customers: 100, theirs: 100 }]) {
+      const phone = serviceGap({ you: { capacity: c.capacity, customers: c.customers }, target: { customers: c.theirs } });
+      expect(phone.line, `no line for ${JSON.stringify(c)}`).toBeTruthy();
+    }
+  });
+});
+
+/*
+ * The phone's period vocabulary, against the engine's.
+ *
+ * Most routes send `period` and `totalPeriods` ready-made, and the phone prefers
+ * them — but the room route sends bare `cadence`, so the phone has to be able to
+ * work the words and the span out for itself. That means a copy of
+ * `PERIOD_NAME`, `PERIODS_PER_YEAR` and `totalPeriods`, and a copy is a thing
+ * that stops being true.
+ *
+ * The failure it would cause is the one the phone just had: `year` counts periods
+ * and `totalYears` is in years, and a screen dividing one by the other said
+ * "Year 7 of 4" in a quarterly season — past its own end, with the bar at full.
+ * A phone that disagreed with the engine about how many quarters are in a year
+ * would say it again, differently.
+ */
+describe("the phone's period vocabulary", () => {
+  it("uses the same words for a decision as the engine", () => {
+    for (const cadence of ["yearly", "quarterly", "monthly"] as const) {
+      expect(phonePeriodName[cadence], `${cadence} is worded differently on the phone`)
+        .toEqual(PERIOD_NAME[cadence]);
+    }
+  });
+
+  it("agrees on how many decisions a year is", () => {
+    for (const cadence of ["yearly", "quarterly", "monthly"] as const) {
+      expect(phonePeriodsPerYear(cadence), `${cadence} divides differently on the phone`)
+        .toBe(periodsPerYear(cadence));
+    }
+  });
+
+  it("agrees on how many decisions a season is, at every length and cadence", () => {
+    /*
+     * The actual sum behind "of 16". Walked across lengths rather than sampled,
+     * because the two implementations round in their own code and a disagreement
+     * would most likely be at an odd length.
+     */
+    for (const cadence of ["yearly", "quarterly", "monthly"] as const) {
+      for (const years of [1, 2, 3, 4, 5, 7, 10, 14]) {
+        expect(phoneTotalPeriodsIn(years, cadence), `${years} years ${cadence} disagrees`)
+          .toBe(totalPeriods(years, cadence));
+      }
+    }
+  });
+
+  it("covers every cadence the engine has, so a new one cannot be missed quietly", () => {
+    /*
+     * `CADENCES` is the engine's list. A fourth cadence added there and not here
+     * would fall back to "year" on the phone and read as a bug in the season
+     * rather than a gap in a mirror.
+     */
+    for (const cadence of CADENCES) {
+      expect(Object.keys(phonePeriodName), `the phone has no words for "${cadence}"`).toContain(cadence);
     }
   });
 });

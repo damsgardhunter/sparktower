@@ -18,9 +18,9 @@
 import type { Company, Economy, Niche, World } from "./types";
 import { WIND_DOWN_FROM, WIND_DOWN_RATE, WIND_UP_AFTER } from "./season";
 import { inPeriodWords } from "./cadence";
-import { allocate, marketShares } from "./market";
+import { allocate, marketShares, sharesWhereSold } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { shortfalls, expectationsFor, weightsOf } from "./criteria";
 import { assetEffects, ageAssets, stillHeld } from "./assets";
 import { brandLanding, capacityBuild, qualityLanding, staffing } from "./lag";
@@ -28,7 +28,8 @@ import {
   EMERGENCY_REPUTATION, RATING_START, applyRepayment, boardChiefExecutive, creditMultiplier,
   interestOn, justifiedRating, nextRating, ratingGrade, reviewInvestors, termsFor,
 } from "./finance";
-import { reachOf, appealFor, atScale } from "./market";
+import { reachOf, appealFor, atScale, paceFor } from "./market";
+import { symbolOf } from "../currency";
 import { eventsDue, economyWithWeather, companyWithEvents, nextWeather, type MarketEvent } from "./events";
 import {
   BOND_TERM, COVENANT_COVER, COVENANT_PENALTY, COVENANT_RATING_HIT, FREE_SERVE_COST, PREPAID_SHARE,
@@ -64,6 +65,14 @@ export interface CompanyReport {
 
   customers: number;
   marketShare: number;
+  /**
+   * Share of the regions this company actually sells in, 0–1.
+   *
+   * The same number as `marketShare` for anyone selling everywhere, and the
+   * only useful one for anyone who is not: a market is global and a young
+   * company is in one corner of it. See `sharesWhereSold`.
+   */
+  shareWhereYouSell: number;
   shareChange: number;
   /** Customers who wanted them and couldn't be served. */
   turnedAway: number;
@@ -266,7 +275,19 @@ export interface YearResult {
 const clamp = (n: number): number => Math.max(0, Math.min(100, n));
 
 
-const money = (n: number): string => `£${Math.round(n).toLocaleString()}`;
+/**
+ * A figure in the money this business counts in.
+ *
+ * A factory rather than a function with a module-level symbol, and that is the
+ * whole reason it is shaped this way: one server resolves many seasons, and a
+ * mutable "current currency" would leak one table's pound signs into another
+ * table's dollars with nothing failing. The symbol is a closure, made per
+ * resolve, so two seasons running at once cannot reach each other's.
+ *
+ * `undefined` is GBP, for the reason written on `World.currency`.
+ */
+const moneyIn = (code: World["currency"]) =>
+  (n: number): string => `${symbolOf(code ?? "GBP")}${Math.round(n).toLocaleString()}`;
 
 /**
  * Why the biggest single loss in a segment happened, in one sentence.
@@ -277,7 +298,7 @@ const money = (n: number): string => `£${Math.round(n).toLocaleString()}`;
  * was better known does not explain losing a segment that barely notices brand,
  * however large the gap.
  */
-function lossReason(me: Company, them: Company, segment: Niche["segments"][number]): string {
+function lossReason(me: Company, them: Company, segment: Niche["segments"][number], money: (n: number) => string): string {
   const w = weightsOf(segment);
   const mine = priceFor(me, segment.id);
   const theirs = priceFor(them, segment.id);
@@ -306,8 +327,10 @@ function segmentBridges(input: {
   niche: Niche;
   year: number;
   allocation: ReturnType<typeof allocate>;
+  /** This season's money, for the one sentence in here that quotes a figure. */
+  money: (n: number) => string;
 }): SegmentBridge[] {
-  const { company, before, effective, names, niche, year, allocation } = input;
+  const { company, before, effective, names, niche, year, allocation, money } = input;
   const me = effective.get(company.id) ?? company;
   const flowList = (m: Record<string, number> | undefined): Flow[] =>
     Object.entries(m ?? {})
@@ -357,7 +380,7 @@ function segmentBridges(input: {
     const biggest = lostTo[0];
     const rival = biggest ? effective.get(biggest.id) : undefined;
     const why = biggest && rival && biggest.count >= Math.max(50, start * 0.01)
-      ? `Lost ${biggest.count.toLocaleString()} ${segment.name.toLowerCase()} to ${biggest.name}, ${lossReason(me, rival, segment)}.`
+      ? `Lost ${biggest.count.toLocaleString()} ${segment.name.toLowerCase()} to ${biggest.name}, ${lossReason(me, rival, segment, money)}.`
       : null;
 
     const { floors } = expectationsFor(segment, year);
@@ -401,6 +424,11 @@ export function resolveYear(
     withoutEvent?: boolean;
   } = {},
 ): YearResult {
+  /*
+   * The money every sentence below is written in. See `World.currency`, and
+   * `moneyIn` for why this is a closure rather than module state.
+   */
+  const money = moneyIn(world.currency);
   /*
    * The market, with whatever this season has gone and found in it.
    *
@@ -641,7 +669,7 @@ export function resolveYear(
      * merely equal to shipping would make patience strictly worse and the
      * lever a tax on thinking ahead.
      */
-    const researched = lift(d.cto?.researchSpend ?? 0, atScale(150_000, company.scale) * per, 24 * per) * niche.innovationPace * eff.cto * pay.output;
+    const researched = lift(d.cto?.researchSpend ?? 0, atScale(150_000, company.scale) * per, 24 * per) * paceFor({ positioning: d.ceo?.positioning ?? company.positioning }, niche) * eff.cto * pay.output;
     /*
      * What the company already owes itself. Carried debt means a share of
      * every engineer's year goes on working around what is already there, so
@@ -707,7 +735,7 @@ export function resolveYear(
      */
     const builders = (company.staff ?? 0) > 0 ? staffLeverage(company.staffQuality ?? STAFF_QUALITY_START) : 1;
     // An automated line is a line set up for what it already makes: product work buys less.
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * paceFor({ positioning: d.ceo?.positioning ?? company.positioning }, niche) * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
     /*
      * The pace again: shipping swings the year's result either way, and puts
      * part of it in front of customers now rather than next year.
@@ -745,10 +773,26 @@ export function resolveYear(
         `${staff.newHires} new ${staff.newHires === 1 ? "hire" : "hires"} this year: on the payroll now, and not much use until next year.`,
       );
     }
-    // Staff are as good at service as they have been hired and trained to be.
+    /*
+     * Staff are as good at service as they have been hired and trained to be —
+     * and at this market's own scale, which this line was the one lever in the
+     * function not to ask for.
+     *
+     * It read a bare `150_000` while every neighbour read `atScale(..., scale)`.
+     * That is right for the seven catalogue markets, which are all worth about
+     * £400m and so all scale one, and wrong for a market Nova wrote a
+     * two-hundredth of that size: there, £150,000 is more than a tenth of the
+     * entire market, so keeping service up cost more than the business could
+     * earn and the lever did nothing anybody could see. The same class of fault
+     * `atScale` was introduced to fix, in the one place it was never applied.
+     *
+     * Identical at scale one — `atScale(150_000, 1)` is `150_000` — so nothing
+     * balanced against the catalogue moves. Only the small markets change, which
+     * is the whole point.
+     */
     const serviceGain = lift(
       (d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent * staffLeverage(company.staffQuality),
-      150_000 * per, 15 * per,
+      atScale(150_000, company.scale) * per, 15 * per,
     ) * focus.quality * eff.coo;
     const costCut = lift(d.coo?.efficiencySpend ?? 0, atScale(180_000, company.scale) * per, 0.18 * per) * eff.coo;
     // Next year's staff: this year's hires, as recruited, and everybody else, as trained.
@@ -1273,6 +1317,12 @@ export function resolveYear(
     }
   }
   const sharesAfter = marketShares(allocation.held);
+  /*
+   * And the same again, read against each company's own footprint. Both go on
+   * the report: a company's share of the world says how big it is, its share of
+   * where it trades says how well it is trading.
+   */
+  const soldShares = sharesWhereSold(allocation.held, world.companies, niche);
 
   /* 4. Money. */
   const settled: Company[] = withIncumbents.map((company) => {
@@ -1478,6 +1528,17 @@ export function resolveYear(
     // Leased room is paid for in full already; only the company's own room sits idle at a cost.
     const idle = company.kind === "player" ? Math.max(0, ownCapacity - (base0?.leased ?? 0) - units) : 0;
     const idleCost = company.kind === "player" ? idleCapacityCost(idle, niche) * per : 0;
+    /*
+     * What the whole plant costs to keep ready, full or not — `PLANT_OVERHEAD`,
+     * which is 0 today and documented at length where it is declared.
+     *
+     * Its own line beside the idle cost rather than folded into `fixedCosts`:
+     * that function is salaries and executives, and putting it there changes
+     * what it returns and breaks three tests that assert on the payroll. Wired
+     * at zero so that turning the lever on is one constant rather than a
+     * four-line change each person makes differently.
+     */
+    const plantCost = company.kind === "player" ? plantOverhead(company.capacity ?? 0, niche) * per : 0;
     if (company.kind === "player" && idleCost > 50_000 && idle > ownCapacity * 0.25) {
       notesFor[company.id] = [
         ...(notesFor[company.id] ?? []),
@@ -1567,7 +1628,7 @@ export function resolveYear(
     }
     const operatingProfit = revenue + planning - (variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium);
     const taxed = company.kind === "player" ? taxOn(operatingProfit, company.taxLosses ?? 0) : { tax: 0, carried: 0 };
-    const costs = variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium + taxed.tax - planning;
+    const costs = variable + discretionary + interest + idleCost + plantCost + incidentCost + partnerShare + premium + taxed.tax - planning;
     const profit = revenue - costs;
     /*
      * Kept, because the report used to throw this away and recompute profit as
@@ -1882,7 +1943,7 @@ export function resolveYear(
     if (investors) {
       // Investors paid a twentieth of their stake this year do not hold a missed target against the company.
       const patient = payout.investors >= (investors.raised ?? 0) * PATIENT_INVESTORS && payout.investors > 0;
-      const review = reviewInvestors(investors, revenue, world.year, { patient });
+      const review = reviewInvestors(investors, revenue, world.year, { patient, currency: world.currency });
       investors = review.investors;
       if (review.note) notesFor[company.id] = [...(notesFor[company.id] ?? []), review.note];
     }
@@ -1890,7 +1951,7 @@ export function resolveYear(
       investors = termsFor({ existing: investors, raised, revenue, year: world.year });
       notesFor[company.id] = [
         ...(notesFor[company.id] ?? []),
-        `The new investors expect revenue of at least £${investors.target.toLocaleString()} next year. Miss their target twice running and the board can remove the chief executive.`,
+        `The new investors expect revenue of at least ${money(investors.target)} next year. Miss their target twice running and the board can remove the chief executive.`,
       ];
     }
 
@@ -2257,6 +2318,7 @@ export function resolveYear(
       year: world.year,
       customers: units,
       marketShare: sharesAfter[company.id] ?? 0,
+      shareWhereYouSell: soldShares[company.id] ?? 0,
       shareChange: (sharesAfter[company.id] ?? 0) - (sharesBefore[company.id] ?? 0),
       turnedAway: allocation.unserved[company.id] ?? 0,
       revenue: traded.revenue,
@@ -2309,7 +2371,7 @@ export function resolveYear(
         ? {
             pnl: accounts[company.id].pnl,
             cashBridge: { opening: accounts[company.id].opening, lines: accounts[company.id].lines, closing: company.cash },
-            segments: segmentBridges({ company, before, effective, names, niche, year: world.year, allocation }),
+            segments: segmentBridges({ company, before, effective, names, niche, year: world.year, allocation, money }),
             rivals: moves.filter((m) => m.id !== company.id),
           }
         : {}),

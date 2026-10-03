@@ -101,6 +101,9 @@ export default function Standings() {
         <StandingsBanner
           year={data.year}
           totalYears={data.totalYears}
+          /* `year` counts periods; this is the denominator it belongs over. */
+          totalPeriods={data.totalPeriods}
+          period={data.period}
           you={you}
           line={standingLine(rows)}
           gap={gap?.line ?? null}

@@ -10,10 +10,16 @@
  * ## The room is live, and this is a polled screen
  *
  * Five people are looking at this at once while it changes. It refreshes every
- * two seconds and the countdown ticks locally in between — polling once a
- * second to move a number is a lot of requests to animate something the client
- * can work out for itself. The server advances the phase when it is read, so
- * polling is also what keeps the clock honest for everyone.
+ * two seconds *while the room is still gathering* and the countdown ticks
+ * locally in between — polling once a second to move a number is a lot of
+ * requests to animate something the client can work out for itself. The server
+ * advances the phase when it is read, so polling is also what keeps the clock
+ * honest for everyone.
+ *
+ * Once the season is running the rate drops to thirty seconds, and a retired
+ * room stops being asked about at all: see `roomPollMs`. The two-second figure
+ * is a lobby's, and leaving it on for the whole season made this the largest
+ * single source of requests in the product at two hundred players.
  *
  * ## Claiming is a race, so nothing here is optimistic
  *
@@ -295,15 +301,55 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
 
 /* ── The room ──────────────────────────────────────────────────────────── */
 
+/**
+ * How often the room screen asks the server about itself, by phase.
+ *
+ * Exported and separate from the component so it can be asserted on: the
+ * interval is a load decision as much as a interface one, and the reasoning
+ * behind it lives in the comment at the call site.
+ */
+export function roomPollMs(phase: string | undefined): number | false {
+  // Nothing about a retired room will ever change again.
+  if (phase === "retired") return false;
+  // Running: the countdown is over and only `seasonOver` can still turn over.
+  if (phase === "running") return 30_000;
+  // Still gathering — people are arriving, seats are going, a clock is running.
+  return 2000;
+}
+
 function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
   const { data: room, isLoading } = useQuery<Room>({
     queryKey: [`/api/sim/ventures/${ventureId}`],
-    // Two seconds: enough to feel live, few enough requests that five people
-    // watching one room is not a load problem. The clock below fills the gaps.
-    refetchInterval: 2000,
+    /*
+     * Two seconds while the room is still gathering, and then much less often.
+     *
+     * Two seconds is right for a lobby: people are arriving, seats are being
+     * taken, a clock is running down, and the original note here — "five people
+     * watching one room is not a load problem" — is true of a lobby and was
+     * never meant to cover the rest of the season.
+     *
+     * It did cover it, though. The interval was a flat constant for every
+     * phase, so anybody who joined and left this tab open kept asking every two
+     * seconds for the whole season. A 200-person load run
+     * (`scripts/sim-load.ts`) made this the largest single bucket of requests in
+     * the product — about 100 a second, each one running `advanceVenture` and a
+     * three-way join over the seats — and almost all of it was asking a
+     * question whose answer had stopped changing.
+     *
+     * Once the season is running there is nothing on this screen that moves at
+     * that rate: the countdown is over, the standings card fetches its own
+     * figures on its own schedule, and the only field left that can change is
+     * `seasonOver`, once, at the end of the season. Thirty seconds is plenty to
+     * notice that.
+     *
+     * A retired room stops entirely. Nothing about it will ever change again,
+     * and polling it for the rest of the session is asking the server to keep
+     * confirming that something is still over.
+     */
+    refetchInterval: (q) => roomPollMs(q.state.data?.phase),
   });
   const { data: meta } = useQuery<{ roles: RoleView[] }>({ queryKey: ["/api/sim/niches"] });
 
