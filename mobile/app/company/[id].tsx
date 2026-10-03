@@ -17,6 +17,7 @@ import { TalentTab } from "../../src/components/company/TalentTab";
 import { ScoutingTab } from "../../src/components/company/ScoutingTab";
 import { ChallengesTab } from "../../src/components/company/ChallengesTab";
 import { VerifyDomain } from "../../src/components/company/VerifyDomain";
+import { TrainingTab } from "../../src/components/company/TrainingTab";
 
 /**
  * One company — the phone's half of the web's company page.
@@ -39,11 +40,12 @@ import { VerifyDomain } from "../../src/components/company/VerifyDomain";
  * `app/sim/` and the Team tab points at it rather than guessing its shape.
  */
 
-type Tab = "about" | "team" | "talent" | "challenges" | "scouting" | "admin";
+type Tab = "about" | "team" | "training" | "talent" | "challenges" | "scouting" | "admin";
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "about", label: "About" },
   { value: "team", label: "Team" },
+  { value: "training", label: "Training" },
   { value: "talent", label: "Talent" },
   { value: "challenges", label: "Challenges" },
   { value: "scouting", label: "Scouting" },
@@ -93,7 +95,8 @@ export default function CompanyDetail() {
         <TabStrip options={TABS} value={tab} onChange={setTab} />
 
         {tab === "about" ? <About view={q.data} companyId={id!} notify={show} /> : null}
-        {tab === "team" ? <TeamTab companyId={id!} notify={show} /> : null}
+        {tab === "team" ? <TeamTab companyId={id!} notify={show} onGoToTraining={() => setTab("training")} /> : null}
+        {tab === "training" ? <TrainingTab companyId={id!} notify={show} /> : null}
         {tab === "talent" ? <TalentTab companyId={id!} notify={show} /> : null}
         {tab === "challenges" ? <ChallengesTab companyId={id!} notify={show} /> : null}
         {tab === "scouting" ? <ScoutingTab companyId={id!} notify={show} /> : null}

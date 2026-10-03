@@ -25,7 +25,7 @@ import type { Notice } from "../Sheet";
 import { ROLE_HELP, hasPower, isLeader, powerLabel } from "../../companies";
 import { companyKey, memberName, type CompanyView } from "./kit";
 
-export function TeamTab({ companyId, notify }: { companyId: string; notify: (n: Notice) => void }) {
+export function TeamTab({ companyId, notify, onGoToTraining }: { companyId: string; notify: (n: Notice) => void; onGoToTraining: () => void }) {
   const router = useRouter();
   const qc = useQueryClient();
   const { data } = useQuery<CompanyView>({ queryKey: companyKey(companyId) });
@@ -55,14 +55,12 @@ export function TeamTab({ companyId, notify }: { companyId: string; notify: (n: 
         * hunting for where to start one is two jobs for one thought.
         */}
       {/*
-        * Plain `/sim`, with no company in the link. The web navigates to its
-        * own training tab; the phone's season surface is being built under
-        * `app/sim/` by somebody else and does not read a company parameter
-        * yet, and a link carrying one it ignores is a link that looks like it
-        * works. When that surface lands this should point into it.
+        * Points at the Training tab beside this one, which is where a company's
+        * seasons now live. It used to link to plain `/sim` — the solo
+        * simulator — because this tab existed and that one did not.
         */}
       <Callout icon="game-controller" tone="info" body="Run a market simulation for these people: five of them take the seats of one company for a fortnight.">
-        <Btn small variant="outline" label="Simulations" onPress={() => router.push("/sim")} testID="go-simulations" />
+        <Btn small variant="outline" label="Training seasons" onPress={onGoToTraining} testID="go-simulations" />
       </Callout>
 
       <TitledCard icon="people" title={`People · ${members.length}`}>
