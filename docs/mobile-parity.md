@@ -84,9 +84,9 @@ What each claim turned out to be, with where the evidence is:
 
 ### Genuinely still missing
 
-- [ ] **The admin consoles.** The five this entry was opened for are all on the
-  phone; what is still open is *acting* from them, below, and two screens this
-  survey never looked at — see the note after the table. Measured by whether the
+- [x] **The admin consoles.** Every web admin page has a phone counterpart as
+  of 2026-10-03. What is still open is *acting* from the support console, below,
+  which is its own entry. Measured by whether the
   phone calls the route at all, which is the only reliable signal — a path
   comparison flags renames and by-design absences as gaps:
 
@@ -105,11 +105,20 @@ What each claim turned out to be, with where the evidence is:
 
   **Two the survey missed entirely**, found on 2026-10-03 by listing the web's
   admin pages rather than re-reading this table: `admin-contests.tsx` and
-  `admin-promotions.tsx`. The phone calls `/api/admin/contests`,
-  `/api/admin/promotions` and `/api/admin/promotions/refresh` nowhere at all.
-  This table was built from a chosen five and then reasoned about as if it were
-  the whole set, which is the same mistake the pill count made twice. The web has
-  eleven admin pages and the phone has ten, nine of them shared.
+  `admin-promotions.tsx`. This table was built from a chosen five and then
+  reasoned about as if it were the whole set, which is the same mistake the pill
+  count made twice.
+
+  Both built the same day, with all seven of their routes called and — the part
+  that actually mattered — a row each in the More menu. A screen with no row is
+  a screen nobody can reach, which is how they stayed missing after the web
+  pages existed. Contests can be made and edited from the phone, unlike the
+  consoles where acting stays on the web: a grant moves money and a suspension
+  takes an account away, whereas a contest is a page of text with two dates on
+  it, and the edit most likely to be wanted in a hurry is a date or a status.
+
+  Eleven web admin pages, eleven on the phone, plus the phone's own backing
+  console.
 
   **Problems** keeps the web's restraint — four states and a note, no priority
   and no assignment, because "a triage system with more moving parts than
@@ -555,7 +564,7 @@ What each claim turned out to be, with where the evidence is:
   because the server keeps that difference: zero covers is a bad week, no answer
   is a week nobody counted.
 
-- [x] **The rhythm**, mostly — built 2026-10-03 as `mobile/app/rhythm/[id].tsx`,
+- [x] **The rhythm**, finished — built 2026-10-03 as `mobile/app/rhythm/[id].tsx`,
   reached from `app/project/[id].tsx` on a Run project. It was the best next
   slice and it was: a weekly check-in is a recurring task somebody does away
   from a desk, and it needs no company page to reach it.
@@ -563,16 +572,27 @@ What each claim turned out to be, with where the evidence is:
   The phone calls `/api/projects/:id/rhythm`, `/rhythm/checkins/:weekOf`,
   `/rhythm/checkins/:weekOf/nova` and `/rhythm/jobs/:jobId/done`.
 
-  **Three siblings are still web-only**, verified by grep on 2026-10-03 rather
-  than assumed: `/rhythm/goals`, `/rhythm/settings` and
-  `/rhythm/report/:month`. The monthly report is the one worth having next — it
-  is a thing to read, which is phone-shaped; goals and settings are configuration,
-  which is not.
+  The quarter's goals, the settings and the monthly report followed in
+  `07329442`, and the recurring jobs in `eff6c40d`: the card could tick a job
+  off and not create one, which its own comment admitted, and it only appeared
+  once a job existed — so the first could never be added from the phone even in
+  principle. Stopping a job and deleting it are kept apart, as the web keeps
+  them: a job that ran for a year and then stopped is part of the record of how
+  the company was run.
 
-  This entry's opening line said "the phone calls none of them" for two days
-  after the phone started calling four of them. An entry about a gap has to be
-  closed by whoever closes the gap, or it becomes the most confident wrong thing
-  in the file.
+  **Two routes still have no phone caller and that is correct**, not a gap:
+  `GET /rhythm/jobs` and `GET /rhythm/checkins` return lists that `GET /rhythm`
+  already includes, so calling them would be a second request for data in hand.
+  `rhythm-jobs-on-the-phone.test.ts` pins that reasoning, because a bare
+  route-coverage count reads it as a hole and somebody would rediscover it as
+  one.
+
+  Two corrections this entry earned. Its opening line said "the phone calls none
+  of them" for two days after the phone started calling four of them. Then I
+  reported goals, settings and the report as still web-only — true when
+  measured, and another session had landed them by the time I wrote it down. An
+  entry about a gap has to be closed by whoever closes the gap, and a measurement
+  has a date on it.
 
 - [ ] **The customer console.** Nothing on the phone, and still reasonably last:
   it is an operator tool and an operator has a laptop.
