@@ -617,6 +617,41 @@
       "when": 1790807446921,
       "tag": "0087_far_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1790878367313,
+      "tag": "0088_brief_raza",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1790878677391,
+      "tag": "0089_bouncy_thunderbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1790905600139,
+      "tag": "0090_chubby_the_spike",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1790956352799,
+      "tag": "0091_long_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1790960939893,
+      "tag": "0092_confused_silver_fox",
+      "breakpoints": true
     }
   ]
 }

@@ -12,7 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Body, Btn, ErrorNote, Field, Icon, Meta, Row, assetUri, errText } from "./ui";
-import { Block } from "./ProjectBits";
+import { ProjectSection } from "./ProjectBits";
 import { FormGroup, ProjectFormSheet } from "./ProjectFormSheet";
 import { PRE_PROMPTED_QUESTIONS } from "../projectData";
 import type { Notice } from "./Sheet";
@@ -214,7 +214,7 @@ export function PendingApplications({ projectId, applications, questions, onEdit
   // As on the web, the section only appears once someone has applied.
   if (pending.length === 0) return null;
   return (
-    <Block title={`Applications · ${pending.length}`} icon="mail-unread-outline" action="Questions" onAction={onEditQuestions}>
+    <ProjectSection title={`Applications · ${pending.length}`} icon="mail-unread-outline" action="Questions" onAction={onEditQuestions}>
       {pending.map((app) => {
         const name = app.profile?.displayName || app.user?.firstName || "Applicant";
         return (
@@ -252,6 +252,6 @@ export function PendingApplications({ projectId, applications, questions, onEdit
           </View>
         );
       })}
-    </Block>
+    </ProjectSection>
   );
 }

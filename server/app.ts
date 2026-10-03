@@ -27,7 +27,7 @@ import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
-import { migrationState } from "./migration-state";
+import { migrationState, pendingMigrationWarning } from "./migration-state";
 import { isPoolTimeout } from "./db";
 
 /**
@@ -92,6 +92,26 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
   // the month. Nobody else's business either, and on the same embedded rows.
   "balanceCents", "dayPassUntil",
   "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
+  /*
+   * The rest of the wallet, and Apple's identifier.
+   *
+   * These were missed rather than decided. `googleId` is above and `appleId` was
+   * not — Apple sign-in arrived later — so the stable per-app identifier for
+   * anybody who signed in that way rode out on every embedded account row. It is
+   * not a credential, but it is a permanent cross-reference and it is theirs.
+   *
+   * The four entitlement columns are the same category as `balanceCents` and
+   * `dayPassUntil` already here: what somebody has bought, what they have left,
+   * and whether a developer switch is on for them. `payoutTarget` is where their
+   * money goes, and `pushEnabled` is whether their phone buzzes — a preference,
+   * and one that was added to the schema without being added here.
+   *
+   * Every one of these is still sent on *your own* row, which is where the
+   * clients read them; this only covers somebody else's.
+   */
+  "appleId",
+  "devUnlimited", "novaActionsBought", "gamePlaysPaid", "imagePassUntil",
+  "payoutTarget", "pushEnabled",
 ]);
 
 export function stripOthersAccountFields(obj: any, viewer: { id?: string; platformRole?: string } | undefined, depth = 0): any {
@@ -227,11 +247,24 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
          * reading the log or the owner-only deployment page anyway, and both
          * carry the count and the command.
          */
-        console.warn(
-          `[ready] ${migrations.pending} migration(s) not applied to this database ` +
-          `(${migrations.applied} of ${migrations.expected}). Run: npm run db:migrate`,
-        );
-        return { status: 503, body: { ready: false, database: "ok", migrations: "behind", ms: Date.now() - started } };
+        /*
+         * The same sentence the boot warning uses, from the same function, so
+         * the two cannot describe one state two ways — and so an operator
+         * reading `/_ready` is told whether the gap is indexes or columns rather
+         * than being left to guess from a count.
+         */
+        console.warn(pendingMigrationWarning(migrations).replace("[schema]", "[ready]"));
+        return {
+          status: 503,
+          body: {
+            ready: false, database: "ok", migrations: "behind",
+            /* Named here too: a 503 with a count is a question, a 503 with "indexes-only" is an answer. */
+            pending: migrations.pending,
+            pendingKind: migrations.pendingKind ?? null,
+            pendingMigrations: migrations.pendingTags ?? [],
+            ms: Date.now() - started,
+          },
+        };
       }
       return { status: 200, body: { ready: true, database: "ok", migrations: "ok", ms: Date.now() - started } };
     } catch (err) {

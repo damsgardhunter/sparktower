@@ -44,6 +44,30 @@ export default defineConfig({
       "expo-linking": stub("expo-linking"),
       "expo-image-picker": stub("expo-image-picker"),
       "expo-document-picker": stub("expo-document-picker"),
+      /*
+       * Both reached from `src/push.ts`, which calls `setNotificationHandler`
+       * at import time — so a test that imports anything leading there (via
+       * AuthContext, for instance) crashes on the import without these.
+       */
+      "expo-notifications": stub("expo-notifications"),
+      "expo-device": stub("expo-device"),
+      /*
+       * Saving a picture to the phone (src/saveImage.ts). The legacy entry point
+       * is aliased as well as the package, because that is the one the module
+       * imports — `expo-file-system/legacy` is where the simple
+       * download-to-a-path API lives in SDK 54 and later.
+       */
+      /*
+       * The `/legacy` entry first, and that order is load-bearing: Vite matches a
+       * string alias as a *prefix*, so the bare key listed first turns
+       * `expo-file-system/legacy` into `<stub>.ts/legacy` and the module is not
+       * found. `/legacy` is where the download-to-a-path API lives in SDK 54 and
+       * later, which is the one src/saveImage.ts imports.
+       */
+      "expo-file-system/legacy": stub("expo-file-system"),
+      "expo-file-system": stub("expo-file-system"),
+      "expo-media-library": stub("expo-media-library"),
+      "expo-sharing": stub("expo-sharing"),
     },
   },
 });

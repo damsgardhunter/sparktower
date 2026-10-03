@@ -5,13 +5,13 @@
  */
 import {
   Sparkles, Map, ListChecks, FolderOpen, BarChart3, Eye, Flag, Activity, Target,
-  Beaker, Crosshair, HandCoins, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare, Gamepad2, Settings,
+  Beaker, Crosshair, HandCoins, HeartHandshake, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare, Gamepad2, Settings,
   type LucideIcon,
 } from "lucide-react";
 
 export type TabId =
   | "nova" | "roadmap" | "kanban" | "files" | "analytics"
-  | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support"
+  | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support" | "backers"
   | "setup" | "codebase" | "team" | "chat" | "simulations";
 
 /** `surface`: the kill switch that hides the tab (shared/surfaces.ts). The path's own tabs have none. */
@@ -44,6 +44,18 @@ export const MORE_TABS: TabDef[] = [
   { id: "investors", label: "Investors", icon: HandCoins, ownerOnly: true, surface: "investor" },
   { id: "launch", label: "Launch", icon: Rocket, surface: "launch" },
   { id: "support", label: "Support", icon: Headphones, surface: "launch" },
+  /*
+   * Who backed this, and what the team still owes them.
+   *
+   * Not owner-only, unlike Investors beside it. Recording thank-you videos is
+   * exactly the work a team splits up, and the route behind this sends no email
+   * and no postal address for that reason — the owner's own list, with those on
+   * it, stays in Settings behind an owner-only route.
+   *
+   * Behind the `backing` switch, because a project with backing turned off has no
+   * backers and the tab would open on an empty page explaining itself.
+   */
+  { id: "backers", label: "Backers", icon: HeartHandshake, surface: "backing" },
 ];
 
 /**

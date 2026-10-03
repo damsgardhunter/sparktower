@@ -17,39 +17,40 @@ Last reviewed: **30 September 2026.** Production verified live the same day (see
 
 ## Open
 
-### 1. Routes no test names — a working checklist
+### 0. Two advisories carried on purpose, and they expire on 2026-11-15
 
-`summarizeUntestedRoutes` is the source of this list; re-run it rather than
-trusting the numbers below. As of 30 September: **33 of 499 routes named by no
-test, 12 of them writes** (down from 36/17). Three of the first eight looked
-at held a real defect — unpaid AI spend, a published backer, and a model reply
-rewriting a page nobody asked about — which is the argument for continuing.
+`scripts/audit-gate.mjs` is letting two high-severity advisories through, named,
+with the reasoning beside them:
 
-Ranked by what a silent failure would cost:
-
-| Route | Why it matters | State |
+| Advisory | Package | Reached through |
 |---|---|---|
-| `PATCH /api/backings/:id/privacy` | a backer's anonymity | **done** — found a bug |
-| `GET /api/merch-orders/:orderId/print/:face.png` | renders what a backer paid for | **done** |
-| `POST /api/projects/:id/backing/submit-review` | puts a project into the escrow review queue | **done** |
-| `POST /api/projects/:id/backing/badge-preview` | spends money on an image | **done** — found a bug |
-| `GET /api/stripe/connect-onboarding` | the payout path | **done** |
-| `GET /api/stripe/connect-dashboard` | the payout path | **done** |
-| `POST /api/documents/:docId/tighten` | AI write over a document | **done** — found a bug |
-| `GET /api/documents/:docId/pdf` | what a customer downloads | next |
-| `POST /api/profile/evaluate-resume` | AI spend, reads an upload | |
-| `POST /api/projects/:id/{pitch-deck,pitch-critique,pricing-analysis,readiness-score,mock-interview}` | five AI spends in one file | |
-| `POST /api/projects/:id/ai/{detect-gaps,summarize-progress}` | AI spend | |
-| `POST /api/projects/:id/personas/generate`, `roadmap/next-actions`, `kanban/reorder` | AI spend / board order | |
-| `POST /api/games/idea-options` | AI spend | |
-| the remaining reads (`feed/my-projects`, `health-checks`, `task-history`, `investor-personas`, `looking-for-options`, `resume-status`, `fill-quote`, `layout-report`, `nova-briefing`, `rebuild-quote`, `reports{/:year}`, `scenes/:index/image`, `stripe/publishable-key`) | lower cost of failure | |
+| GHSA-86w9-cpqp-85rv | `node-forge` | `expo` → `@expo/cli` → `@expo/code-signing-certificates` |
+| GHSA-vfj7-8cjw-p6xm | `braces` | `expo` → `@expo/cli` → `@expo/metro-file-map` → `micromatch` |
 
-The shape that has worked twice now: assert the properties the route's *own
-comment* claims, then check each assertion against the bug it describes by
-breaking the route and watching the test fail. Both defects so far were found
-that way, and one test passed vacuously until a deliberate control caught it.
+Both have an affected range of *every published version*, so there is nothing to
+upgrade to, and npm's only offered remedy is `expo@44.0.6` — SDK 44, three years
+backwards, which is a resolver artifact rather than a fix. Both are build-time:
+one signs development builds, the other globs this repository's own files while
+bundling. Neither is in the app bundle.
 
-### 2. Deploy verification — the public half is now observed, the private half is not
+**On 2026-11-15 the build fails again** unless somebody renews or removes them.
+That is the point of the date. The gate also fails if either stops matching
+anything, so a stale exception cannot sit there looking load-bearing.
+
+What to check when the date comes: whether `node-forge` has published a fix, and
+whether a later `expo` has dropped `@expo/code-signing-certificates`.
+
+### 0b. One CodeQL alert left, and it is a different shape of claim
+
+Seven of the eight high alerts were `js/tainted-format-string` and are fixed — a
+request-derived id in a log's format string, where a newline can forge a line. The
+eighth is `js/missing-rate-limiting` pointing at `setupAuth` in `server/routes.ts`,
+which is a claim about a route handler rather than a string, and it is not obvious
+from the alert which handler it means. Worth reading properly rather than
+guessing at.
+
+
+### 1. Deploy verification — the public half is now observed, the private half is not
 
 `npm run check:live` was run against production on 30 September and passed
 every check:
@@ -92,7 +93,7 @@ to close it, both needing the owner's own credentials:
 2. Run `npm run check:env` in the Render shell, where the production
    environment actually is.
 
-### 3. Access control is correct but held together by convention
+### 2. Access control is correct but held together by convention
 
 There is no defect here — see *Checked and not a gap* — but twelve different
 access helpers do this job with no shared type and no common middleware:
@@ -107,7 +108,7 @@ is the part that matters. Unifying the helpers would additionally make the
 property *readable* — and would have saved four failed attempts to determine it
 statically. Worth doing, not urgent now that the sweep exists.
 
-### 4. Product and simulation
+### 3. Product and simulation
 
 - A tier priced past its own segment's ceiling still floors at 10% appeal, so
   raising a price past every buyer can still win customers.
@@ -117,11 +118,141 @@ statically. Worth doing, not urgent now that the sweep exists.
 - `valuation = revenue × 1.2 + assets − debt` has no term for customers served.
 - 34 tables are named by no test.
 - `script/` and `scripts/` should be one directory.
-- Branch protection has `strict: false` — a stale branch can merge.
+- Branch protection has `strict: false` — a stale branch can merge. Changing it
+  needs a `gh api -X PUT .../branches/main/protection` call, which this
+  environment refuses as a CI-settings change; the payload is in
+  [docs/ops/branch-protection.md](ops/branch-protection.md) for an owner to run.
 
 ---
 
 ## Closed
+
+- **No write route is named by no test any more** — closed 2026-10-02. The
+  repository's own sweep (`summarizeUntestedRoutes`) reports **0 of 507 writes**
+  untested, down from 12. Four suites, 36 tests:
+
+  | Suite | What it holds |
+  |---|---|
+  | [kanban-reorder.test.ts](../test/integration/kanban-reorder.test.ts) | The one board write that takes a list of ids from the client, including that foreign ids cannot be used to renumber another project's cards |
+  | [investor-artifacts.test.ts](../test/integration/investor-artifacts.test.ts) | The four paid artifacts on the success path, and the clamps each applies to model output |
+  | [project-ai-writes.test.ts](../test/integration/project-ai-writes.test.ts) | Gap detection, progress summary, persona generation, next actions — and that a success *is* billed |
+  | [last-ai-writes.test.ts](../test/integration/last-ai-writes.test.ts) | The mock interview, the résumé read, the game's idea suggestions |
+
+  Two of these are the inverse of what `ai-metering-sweep.test.ts` proves. That
+  sweep drives every AI route with a model that throws, says nothing, or answers
+  prose, and shows nothing is charged — it never sees one succeed. So a route broken
+  on a *good* answer passed it, and nothing anywhere proved that a success is
+  charged at all: a route that forgot to deduct would spend real money on every call
+  and bill nobody, a leak that gets louder with use and that no error reports.
+
+  The other new thing is the clamps. Each artifact route takes a JSON object from
+  the model and writes parts of it down, bounding what it takes — a score to 0–100,
+  a verdict to four known words, a list to eight, a string to five hundred
+  characters. A model is the one input in this product that will hand over
+  `"overall": 5000` without anybody attacking it, and not one of those bounds was
+  tested. All four hold.
+
+  Four of my own assumptions were wrong and are recorded in the tests that corrected
+  them: a new project already has a roadmap, so the "build a roadmap first" branch is
+  not reachable that way; `ai/summarize-progress` asks for markdown and returns it,
+  so prose is a correct answer there and billing it is honest; a mock interview's
+  question is prose by design, so only silence fails it; and the game's ideas come
+  back under `ideas`, each needing a name and a pitch or it is dropped.
+
+  What remains is 12 reads, no writes.
+
+- **The project list resources were never driven** — closed 2026-10-02. Interviews,
+  experiments, legal documents, the deploy checklist, support tickets, launch tasks,
+  analytics events and pricing tiers are the same four routes eight times over, and
+  nothing had ever posted to most of them: a route that 500s on every call would have
+  been found by the first person to use the feature.
+
+  Their *security* turned out to be covered already, and better than I assumed —
+  [request-body-writes.test.ts](../test/integration/request-body-writes.test.ts)
+  loops all eight segments attacking them across projects and tests the field
+  allowlist in depth. So the new suite was trimmed to what it adds: a full round
+  trip per family, who may do it, and the one line worth repeating for all eight
+  (that a patch naming nothing writable is refused rather than reported as success).
+  43 tests, in [project-list-crud.test.ts](../test/integration/project-list-crud.test.ts).
+
+  It carries a `// covers-routes:` declaration, which is the repository's own
+  mechanism for a table-driven test: the paths never appear whole in the file, so
+  without it the coverage sweep counted every one of them as untested while they
+  were being thoroughly tested.
+
+- **The native build could not have worked** — closed 2026-10-02. `expo-doctor` was
+  failing three checks, and one of them mattered: `newArchEnabled` has not been a
+  valid config property since SDK 53 removed it, so the schema check failed on every
+  run — and a check that is always red is a check nobody reads. Ten Expo packages
+  were also behind the version the installed SDK expects.
+
+  Both fixed, and the failure mode they were hiding is now a test:
+  [app-config.test.ts](../mobile/test/app-config.test.ts) evaluates `app.config.js`
+  as a build would and asserts the things that fail *silently* — the EAS project id
+  without which no push token can be issued, `savePhotosPermission` without which
+  saving a picture is refused, the photo-library string, and that no plugin was
+  filtered out for a missing module.
+
+  The one remaining doctor warning is a false positive: it does not understand a
+  dynamic `app.config.js` that spreads the static `app.json`. The resolved config
+  was checked by hand — 11 plugins, both bundle identifiers, the EAS id.
+
+- **A contest's entries were readable by anybody** — found and closed 2026-10-02
+  while building the entrants list. `GET /api/contests/:id/participants` takes no
+  authentication and answered with the rows as the database returns them: each
+  entrant's whole account row, their profile, and their `submissionUrl`,
+  `submissionNote` and `score`. So every entrant's work, and the judges' scores,
+  were public before judging had finished.
+
+  No credential or email was ever in it — the global scrubber in
+  [server/app.ts](../server/app.ts) strips those from every response, which is why
+  — but a contest entry is not an account field, so nothing held it back. The
+  route now answers a shape written out on purpose: who is in, whether they have
+  filed, and your own entry. Judging will want the entries themselves and that
+  wants its own route behind the contest's owner, not a widening of this one.
+
+  Two account columns were also riding out on *every* embedded account row,
+  because `PRIVATE_ACCOUNT_FIELDS` is a list and a new column is public by
+  default: `appleId` (never added — `googleId` beside it was) and `pushEnabled`
+  (added to the schema the day before, by me, and not here). Four entitlement
+  columns were in the same state. All are now listed, and
+  [account-fields-classified.test.ts](../test/integration/account-fields-classified.test.ts)
+  makes every column on `users` account for itself — adding one to the schema
+  fails that test until somebody says which side it is on, which is the only
+  moment the question is cheap.
+
+- **Filing a contest entry on the web** — closed 2026-10-02. The phone got it
+  first; the asymmetry is gone, and both now call the route that had no caller at
+  all. The entrants list is on the phone too.
+
+- **The weekly rhythm's other half on the phone** — closed 2026-10-02. The
+  check-in was there; the quarter's goals, the monthly report and the check-in
+  day were not, so three of eleven rhythm routes had a caller. Now all but the
+  two long setup forms (the recurring jobs' CRUD, and which numbers a project
+  tracks) do. Holding test:
+  [rhythm-and-contest-entry.test.ts](../test/unit/rhythm-and-contest-entry.test.ts).
+
+- **Filing a contest entry** — closed 2026-10-02 on the phone, and it was missing
+  from both clients: `POST /api/contests/:id/submit` had no caller anywhere, and
+  the list route carried only `isParticipant` so nothing could tell a joiner from
+  an entrant. The routes now carry the viewer's own `submission` (null until
+  filed), the URL is parsed rather than merely truthy, and the refusals say which
+  way the contest is shut. **The web still cannot file an entry** — the phone is
+  ahead of it here, which is worth doing something about.
+
+- **Push notifications on the phone** — were absent end to end; built 2026-10-02.
+  A notification used to exist only while the app was open. Now: `push_tokens` and
+  `push_receipts` (migration `0090`), a `users.push_enabled` switch, sending over
+  `fetch` from `server/push.ts`, four routes, one hook at the `notify()` funnel,
+  and the receipt sweep behind the leader lock so an address whose app was deleted
+  is forgotten rather than written to for ever. About a third of the notification
+  kinds push — the ones needing an answer, carrying money, or time-boxed.
+  Holding tests: [push.test.ts](../test/integration/push.test.ts),
+  [push-routes.test.ts](../test/integration/push-routes.test.ts),
+  [push-wiring.test.ts](../test/unit/push-wiring.test.ts) — 63 together, checked
+  by breaking each guarantee on purpose. Reasoning in
+  [mobile-parity.md](mobile-parity.md). Not yet reaching a phone: needs a
+  development build for the new native module and an APNs key in EAS.
 
 | What | Fixed in | Held by |
 |---|---|---|

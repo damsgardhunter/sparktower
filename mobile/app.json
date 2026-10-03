@@ -7,7 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "sparktower",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.sparktower.app",
@@ -136,7 +135,27 @@
         }
       ],
       "expo-apple-authentication",
-      "expo-iap"
+      "expo-iap",
+      [
+        "expo-notifications",
+        {
+          "//": "The notification icon on Android. Android draws it as a silhouette — every non-transparent pixel becomes white — so a full-colour logo arrives as a white square. The mark is a single shape and survives that; anything with detail would not.",
+          "icon": "./assets/sparktower-mark.png",
+          "//2": "The colour behind the icon in the status bar. Brand purple, so a notification is recognisable at a glance before it is read.",
+          "color": "#9745B5",
+          "//3": "No `sounds`: the default is what people expect from an app that tells them somebody replied, and a custom sound is a decision to make deliberately rather than by shipping a file."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "//": "Saving a picture Nova drew to the camera roll. Only the *add* permission: the app never reads somebody's photo library through this — choosing a photo to upload is expo-image-picker, which asks for its own and says so.",
+          "savePhotosPermission": "SparkTower saves the logos and images Nova makes for you to your photos, so you can use them anywhere.",
+          "//2": "`photosPermission` is deliberately false. Asking to *read* the library would be a second dialog for something this does not do, and an unused permission is a question at review with no good answer.",
+          "photosPermission": false,
+          "//3": "And no `isAccessMediaLocationEnabled`: the GPS coordinates inside somebody's photos are not this app's business."
+        }
+      ]
     ],
     "extra": {
       "//": "Production API. Every build profile in eas.json also sets EXPO_PUBLIC_API_URL explicitly, which wins over this; this value is the safe default if it is ever missing. Local development points at localhost through mobile/.env (see .env.example).",
@@ -144,7 +163,8 @@
       "router": {},
       "eas": {
         "projectId": "f6de2c54-48d9-4f99-90f1-4f7ff3fe6f91"
-      }
+      },
+      "//newArch": "The New Architecture is the default from SDK 53 on, and `newArchEnabled` was removed from the config schema — leaving it set made `expo-doctor` fail its schema check on every run, which is the check that tells you a build is going to behave unexpectedly. Removing it changes nothing: it was set to true, which is what happens anyway."
     },
     "owner": "hunterdamsgard"
   }

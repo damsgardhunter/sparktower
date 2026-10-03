@@ -15,6 +15,7 @@ import NotFound from "@/pages/not-found";
 import { Loader2, Trophy, Plus } from "lucide-react";
 import {
   CONTEST_DIFFICULTIES, CONTEST_STATUSES, CONTEST_TITLE_MAX, CONTEST_DESCRIPTION_MAX,
+  CONTEST_SCORERS,
 } from "@shared/contests";
 
 interface ContestRow {
@@ -22,6 +23,7 @@ interface ContestRow {
   difficulty: string; status: string; prize: string | null; badgeId: string | null;
   startDate: string; endDate: string; maxParticipants: number | null;
   promoted: boolean; participantCount: number;
+  scoredBy: string | null;
 }
 interface BadgeRow { id: string; name: string }
 
@@ -41,7 +43,7 @@ const blank = () => {
     id: null as string | null,
     title: "", description: "", category: "Build", difficulty: "intermediate", status: "upcoming",
     prize: "", badgeId: "", startDate: forInput(start.toISOString()), endDate: forInput(end.toISOString()),
-    maxParticipants: "", promoted: false,
+    maxParticipants: "", promoted: false, scoredBy: "",
   };
 };
 
@@ -80,6 +82,8 @@ export default function AdminContests() {
         endDate: form.endDate ? new Date(form.endDate).toISOString() : "",
         maxParticipants: form.maxParticipants === "" ? null : Number(form.maxParticipants),
         promoted: form.promoted,
+        /* "" means a judged contest; the validator reads an empty string as null. */
+        scoredBy: form.scoredBy || null,
       };
       const res = form.id
         ? await apiRequest("PUT", `/api/admin/contests/${form.id}`, body)
@@ -102,7 +106,7 @@ export default function AdminContests() {
     difficulty: c.difficulty, status: c.status, prize: c.prize ?? "", badgeId: c.badgeId ?? "",
     startDate: forInput(c.startDate), endDate: forInput(c.endDate),
     maxParticipants: c.maxParticipants == null ? "" : String(c.maxParticipants),
-    promoted: c.promoted,
+    promoted: c.promoted, scoredBy: c.scoredBy ?? "",
   });
 
   if (authLoading) return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
@@ -164,6 +168,31 @@ export default function AdminContests() {
             <div>
               <Label htmlFor="contest-max">Entrant cap</Label>
               <Input id="contest-max" type="number" min={1} value={form.maxParticipants} onChange={(e) => set({ maxParticipants: e.target.value })} placeholder="No cap" data-testid="contest-admin-max" />
+            </div>
+            <div className="sm:col-span-2">
+              <Label htmlFor="contest-scored-by">How it's decided</Label>
+              <select
+                id="contest-scored-by"
+                className="w-full h-9 rounded-md border bg-background px-2 text-sm"
+                value={form.scoredBy}
+                onChange={(e) => set({ scoredBy: e.target.value })}
+                data-testid="contest-admin-scored-by"
+              >
+                <option value="">A person judges the entries</option>
+                {CONTEST_SCORERS.map((sc) => <option key={sc.id} value={sc.id}>{sc.label}</option>)}
+              </select>
+              {/*
+                * Said here rather than left to be discovered, because choosing a
+                * scorer changes what the contest *is*: there is no entry to file
+                * and nothing to judge, and the entrants' screens stop offering
+                * either. Changing it on a running contest changes how the
+                * standings are worked out, which is why the sentence is the
+                * scorer's own.
+                */}
+              <p className="text-xs text-muted-foreground mt-1">
+                {CONTEST_SCORERS.find((sc) => sc.id === form.scoredBy)?.blurb
+                  ?? "Entrants file a link to what they built, and somebody reads them."}
+              </p>
             </div>
             <div>
               <Label htmlFor="contest-badge">Badge for entrants</Label>

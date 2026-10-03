@@ -6,7 +6,7 @@ import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 import { CURRENCY_CODES } from "./currency";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, pushTokens, pushReceipts, type User, type UpsertUser, type MobileRefreshToken, type McpToken, type PushToken, type PushReceipt } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -478,6 +478,59 @@ export const projectMerchOrders = pgTable("project_merch_orders", {
 });
 
 /**
+ * A reward the creator owes a backer, once it has been done.
+ *
+ * Most of what a tier promises is the platform's job — the name on the wall, the
+ * believer number, the badge, the certificate — and those need no record here
+ * because nothing has to be remembered: they are true the moment the pledge
+ * lands. Two of them are not. `early_access` and `video_thankyou` are marked
+ * `fulfilledBy: "creator"` in shared/backing.ts, which means a person has to go
+ * and do something, and until this table existed nothing anywhere knew whether
+ * they had.
+ *
+ * That was the gap, and it was the expensive kind: the owner's list showed what
+ * each backer was *owed* and never what was *done*, so the only way to run a
+ * campaign was to keep a spreadsheet beside it — and the backer who paid for a
+ * personal video had no way to know whether it was coming.
+ *
+ * A row means done. There is no `status` column, because "owed" is the absence of
+ * a row and inventing a second way to say it is how two sources of truth start.
+ * Deleting the row is the undo, which is why the route offers one: somebody will
+ * tick the wrong person.
+ */
+export const backerRewardFulfilments = pgTable("backer_reward_fulfilments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  backingId: varchar("backing_id").notNull().references(() => projectBackings.id, { onDelete: "cascade" }),
+  /** Denormalised so the project's whole list is one indexed read. */
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** A key from DIGITAL_REWARDS whose `fulfilledBy` is "creator". */
+  rewardKey: text("reward_key").notNull(),
+  /**
+   * The video, when the reward is one: an object-storage path.
+   *
+   * Served through a route rather than made public, because it is addressed to
+   * one person. A link that works for anybody holding it is not a personal
+   * thank-you, it is a file.
+   */
+  assetPath: text("asset_path"),
+  /** What the creator wants the backer to read with it. */
+  note: text("note"),
+  /** Which member did it, so a team can see who covered what. */
+  deliveredBy: varchar("delivered_by").references(() => users.id, { onDelete: "set null" }),
+  deliveredAt: timestamp("delivered_at").defaultNow().notNull(),
+}, (table) => ({
+  /*
+   * One record per promise. Marking the same reward done twice is the same
+   * delivery, not two — and without this a double-tapped button would notify the
+   * backer twice about one video.
+   */
+  oncePerReward: unique("backer_reward_once").on(table.backingId, table.rewardKey),
+  byProject: index("backer_reward_fulfilments_project_idx").on(table.projectId),
+}));
+
+export type BackerRewardFulfilment = typeof backerRewardFulfilments.$inferSelect;
+
+/**
  * A backer's badge for one project — the reward they actually carry around.
  *
  * One row per (backer, project): backing the same project again upgrades the
@@ -591,8 +644,37 @@ export const contests = pgTable("contests", {
   endDate: timestamp("end_date").notNull(),
   maxParticipants: integer("max_participants"),
   promoted: boolean("promoted").default(false).notNull(),
+  /**
+   * What decides this contest, when it isn't a person reading entries.
+   *
+   * Null is the ordinary kind: entrants file a link and somebody judges it.
+   * `ten_years_from_now` means the standings come from the game — each entrant's
+   * best ten-year valuation from a verdict that landed inside the contest's own
+   * dates. Nothing is filed and nothing is judged, so the screens for such a
+   * contest offer a way to play rather than a box to paste a link into.
+   *
+   * The valuation rather than the 0–1000 `overall`, because it is the number the
+   * game puts on its results screen under "nothing competes with it" and the one
+   * a player would call their score. It is a bigint for a reason that matters
+   * here: a few hundred billion overflows a 32-bit integer, so the standings
+   * never round-trip through `contest_participants.score`, which is an integer.
+   *
+   * Standings are computed when read rather than stored. That is what makes "any
+   * game inside the dates" true without a backfill: somebody who plays a good
+   * game on day one and enters on day three still has it counted, and there is no
+   * denormalised best score to go stale or to be wrong after a verdict is
+   * rewritten.
+   */
+  scoredBy: text("scored_by", { enum: ["ten_years_from_now"] }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+/*
+ * The scorers themselves — ids, labels and what each one ranks — live in
+ * shared/contests.ts beside the validation that accepts them, so that adding one
+ * is a single decision with its wording attached. The column's enum above is the
+ * database's copy of those ids.
+ */
 
 export const contestParticipants = pgTable("contest_participants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1430,9 +1512,14 @@ export type PathArtifact = typeof pathArtifacts.$inferSelect;
 /**
  * Something that happened to someone: the hook that brings them back. A post
  * from a builder or project they follow, a comment or reply or reaction on
- * their work, a mention, a follow, a connection. In-app only — SparkTower
- * sends no email or push — so this is what the bell and the "new since you
- * last looked" counts read.
+ * their work, a mention, a follow, a connection. This is what the bell and the
+ * "new since you last looked" counts read.
+ *
+ * Every row is in-app. Some of them are also pushed to a phone — see
+ * PUSHABLE_KINDS in shared/notifications.ts, which is about a third of the kinds
+ * below: the ones that need an answer, carry money, or are time-boxed. The row
+ * here is the record and the push is a courtesy on top of it, so a push that
+ * fails loses nothing.
  *
  * One row per (recipient, actor, kind, target): a second reaction from the
  * same person refreshes the row rather than stacking a duplicate.
@@ -1477,6 +1564,13 @@ export const NOTIFICATION_KINDS = [
   "checkin_due",
   // Money: somebody backed your project, a reviewer decided, a pledge was released or refunded.
   "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  /*
+   * A reward the creator owed has been delivered — the personal video recorded,
+   * the early access opened up. The backer paid for it and has no other way to
+   * find out: nothing else in the product changes visibly when a creator does
+   * the thing they promised.
+   */
+  "reward_delivered",
   // Someone applied to your project; the owner decided on your application.
   "project_application", "application_accepted", "application_rejected",
   // The owner removed you from their project's team.
@@ -3608,6 +3702,12 @@ export const startupGameVerdicts = pgTable("startup_game_verdicts", {
 }, (table) => ({
   /** Every leaderboard is this index, read five ways. */
   byOverall: index("startup_game_verdicts_overall_idx").on(table.overall),
+  /*
+   * A contest scored by this game asks for the verdicts that landed between two
+   * dates. Without this that is a scan of every verdict ever written, on a table
+   * that only grows and is read once per standings page.
+   */
+  byWhen: index("startup_game_verdicts_created_idx").on(table.createdAt),
 }));
 
 export const insertStartupGameSchema = createInsertSchema(startupGames).omit({ id: true, startedAt: true });
@@ -4084,6 +4184,28 @@ export const simVentures = pgTable("sim_ventures", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
+  /**
+   * The rooms a sweep might have to move, and only those.
+   *
+   * `settleLobbies` and `fillWaitingLobbies` run every sixty seconds, for ever,
+   * and both ask the same shape of question: which rooms are still in a lobby
+   * phase, and is one of their clocks up? The index above cannot answer it — it
+   * leads on `season_id`, and these queries do not know a season — so the sweep
+   * was a sequential scan of every venture ever created, once a minute. Measured
+   * on a copy holding 481 of them: 22ms, every minute, growing for ever.
+   *
+   * Partial, which is the point rather than a refinement. A room leaves these
+   * three phases once and never comes back, so the index only ever holds rooms
+   * that are *currently* in a lobby — a few dozen on a busy market — while
+   * `sim_ventures` itself grows without limit. The sweep's cost stops being a
+   * function of how long the product has been running, which is the property
+   * worth having in a job that runs on a timer.
+   *
+   * Ordered by the deadline because that is the range the sweep tests.
+   */
+  byLobbyDeadline: index("sim_ventures_lobby_idx")
+    .on(table.phase, table.phaseEndsAt)
+    .where(sql`${table.phase} in ('filling', 'claiming', 'naming')`),
 }));
 
 /**
@@ -4122,6 +4244,26 @@ export const simSeats = pgTable("sim_seats", {
    */
   oneRolePerVenture: unique("sim_seats_venture_role").on(table.ventureId, table.role),
   bySeat: index("sim_seats_venture_idx").on(table.ventureId),
+  /**
+   * And the other direction: which rooms is this person in?
+   *
+   * `sim_seats_venture_user` above covers the pair, so looking up one person in
+   * one room was always indexed — but a question about a *person* across every
+   * room has `venture_id` unbound, and a composite index cannot answer one that
+   * does not know its leading column. So those scanned the whole table, and they
+   * are not rare: the rooms list that both clients poll, the rejoin check at the
+   * top of `POST /api/sim/join`, the seated check behind an invite code, and the
+   * company and talent screens. Eight call sites, several of them on a timer.
+   *
+   * This table only grows — a seat is a person's place in a season that
+   * happened, so nothing deletes them — which makes it the worst shape of
+   * missing index: fast in development, fine at launch, and linearly slower
+   * every month in a way no single measurement catches. Measured on a copy
+   * holding 2,405 seats, the rooms list went from a sequential scan of all of
+   * them to an index lookup: 3.2ms to 0.1ms, and the 3.2ms was the part that
+   * grows.
+   */
+  byPerson: index("sim_seats_user_idx").on(table.userId),
 }));
 
 /** What each seat decided in a given year — the input to the engine's tick. */

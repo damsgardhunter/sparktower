@@ -9,6 +9,7 @@
 import type { ReactNode } from "react";
 import { Image, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { NovaRing } from "../nova/NovaRing";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { assetUri, type IconName } from "../ui";
@@ -17,16 +18,36 @@ export const BOX_BORDER = colors.border;
 /** The primary at the web's /5, /10, /30 and /40 opacities. */
 export const primaryTint = (alpha: number) => `rgba(151,69,181,${alpha})`;
 
+/**
+ * `ring` paints the Nova gradient outline the web gives its cards. The
+ * technique lives in `nova/NovaRing` so the sixty-seven places the web uses it
+ * do not each grow their own copy; this is the shortcut for a Box.
+ */
 export function Box({
-  children, style, padded = true, testID,
+  children, style, padded = true, testID, ring,
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   /** Off for boxes whose first child is full-bleed (a cover band, a divided list). */
   padded?: boolean;
   testID?: string;
+  /** The Nova gradient outline. `nova` is the lit one, `soft` the quieter one. */
+  ring?: "nova" | "soft";
 }) {
-  return <View style={[s.box, padded && s.padded, style]} testID={testID}>{children}</View>;
+  if (!ring) return <View style={[s.box, padded && s.padded, style]} testID={testID}>{children}</View>;
+
+  return (
+    <NovaRing
+      strength={ring}
+      radius={radius.sm}
+      glow={ring === "nova"}
+      style={[s.ring, style]}
+      innerStyle={padded ? s.padded : undefined}
+      testID={testID}
+    >
+      {children}
+    </NovaRing>
+  );
 }
 
 /** A module's title row, with an optional "See all". */
@@ -119,6 +140,12 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface, marginHorizontal: spacing.sm, borderRadius: radius.sm,
     borderWidth: 1, borderColor: BOX_BORDER, overflow: "hidden",
   },
+  /*
+   * The ring carries the margin and the radius the plain box carries, so a card
+   * does not move or change shape when it gains one. No border: the gradient is
+   * the border.
+   */
+  ring: { marginHorizontal: spacing.sm, borderRadius: radius.sm },
   padded: { padding: spacing.md },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, marginBottom: 4 },
   headerTitle: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },

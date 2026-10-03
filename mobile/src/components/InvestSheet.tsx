@@ -12,7 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Body, Btn, Chip, ErrorNote, Field, Icon, Meta, Row, errText } from "./ui";
-import { Block } from "./ProjectBits";
+import { ProjectSection } from "./ProjectBits";
 import { CheckRow, ChoicePills, FormGroup, ProjectFormSheet } from "./ProjectFormSheet";
 import {
   ACCREDITED_ANSWERS, INVESTMENT_AMOUNTS, INVESTMENT_INSTRUMENTS, INVESTMENT_MESSAGE_MAX, INVESTMENT_STATUS_LABEL,
@@ -63,11 +63,11 @@ export function InvestCard({ projectId, notify }: { projectId: string; notify: (
   if (!data.open) {
     if (!data.isOwner) return null;
     return (
-      <Block title="Investment applications are off" icon="cash-outline">
+      <ProjectSection title="Investment applications are off" icon="cash-outline">
         <Body muted>Open them and anyone who finds this page can apply to invest. You review every application first.</Body>
         <Btn label="Set up applications" variant="outline" small icon="settings-outline" style={{ alignSelf: "flex-start" }}
           onPress={() => router.push(`/manage/${projectId}?tab=investors` as any)} />
-      </Block>
+      </ProjectSection>
     );
   }
 
@@ -78,7 +78,7 @@ export function InvestCard({ projectId, notify }: { projectId: string; notify: (
 
   return (
     <>
-      <Block title="Invest in this project" icon="cash-outline">
+      <ProjectSection title="Invest in this project" icon="cash-outline">
         {ask?.headline ? <Body muted>{ask.headline}</Body> : null}
         {(ask?.amount || ask?.minimum) && (
           <Row gap={spacing.sm}>
@@ -112,7 +112,7 @@ export function InvestCard({ projectId, notify }: { projectId: string; notify: (
           <Btn label="Apply to invest" icon="send-outline" onPress={() => { setError(null); setOpen(true); }} />
         )}
         <Meta style={{ lineHeight: 16 }}>{data.disclaimer}</Meta>
-      </Block>
+      </ProjectSection>
 
       <ProjectFormSheet
         visible={open}

@@ -128,6 +128,19 @@ export const users = pgTable("users", {
    */
   payoutTarget: varchar("payout_target", { enum: ["balance", "bank"] }),
   /**
+   * Whether this person's phones may buzz.
+   *
+   * Defaulted on, because granting the OS permission *is* the opt-in and asking
+   * twice for the same consent is how a dialog gets dismissed. This is the
+   * second switch underneath it: the one that lets somebody keep the app and
+   * the permission while going quiet for a week, without the OS-level choice
+   * that is awkward to reverse and takes every app's notifications with it.
+   *
+   * Off means nothing is sent. It does not mean the device tokens are dropped —
+   * turning it back on should work without reinstalling the app.
+   */
+  pushEnabled: boolean("push_enabled").default(true).notNull(),
+  /**
    * Platform-side authority, distinct from a user's role on any one project.
    *
    * Only "reviewer" and above may approve a backing payout, so this is the
@@ -362,6 +375,78 @@ export const mcpTokens = pgTable(
 );
 
 export type McpToken = typeof mcpTokens.$inferSelect;
+
+/**
+ * Where to send a push: one row per installation, not per person.
+ *
+ * Somebody has a phone and a tablet, or replaces a phone and keeps the old one
+ * in a drawer, so a user has several of these and each is addressed separately.
+ *
+ * `token` is unique and that is load-bearing rather than tidiness. An Expo push
+ * token belongs to an *installation*, so when a second person signs in on the
+ * same phone the same token arrives again — and the upsert moves it to them.
+ * Without that, a handed-over phone would go on buzzing with the previous
+ * account's notifications, which is the same leak the mobile sign-out comment
+ * worries about and the one case sign-out cannot fix on its own: a session that
+ * expired instead of being signed out never got the chance to say goodbye.
+ *
+ * Nothing secret is here. A push token is an address, not a credential: holding
+ * one lets somebody send *to* the device, and only through a project that owns
+ * the app's credentials. It is stored in the clear for that reason, unlike the
+ * refresh tokens above.
+ */
+export const pushTokens = pgTable(
+  "push_tokens",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** Expo's address for this installation: `ExponentPushToken[...]`. */
+    token: varchar("token").notNull().unique(),
+    platform: varchar("platform", { enum: ["ios", "android"] }).notNull(),
+    /** Free-form, for a list somebody can recognise themselves in: "iPhone 15". */
+    device: varchar("device"),
+    /**
+     * Refreshed every time the app registers, which it does on each launch.
+     *
+     * A token Expo has not rejected can still be dead — an app deleted without
+     * the OS telling anybody — so this is how a drawer full of old installations
+     * eventually stops being sent to.
+     */
+    lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("push_tokens_user_idx").on(table.userId)]
+);
+
+export type PushToken = typeof pushTokens.$inferSelect;
+
+/**
+ * A push handed to Expo whose delivery is not known yet.
+ *
+ * Expo answers a send immediately with a ticket, and that answer only means it
+ * accepted the message. Whether Apple or Google actually took it is a *receipt*,
+ * available for about a day at a separate endpoint, and it is the only place
+ * `DeviceNotRegistered` shows up for a token that looked fine on the way out.
+ *
+ * So the tickets are written down and read later. Without this the dead tokens
+ * are never learnt about: nothing fails loudly, the table fills with addresses
+ * belonging to deleted apps, and every notification is sent to a growing pile of
+ * nowhere. This is the step that gets skipped, which is why it is a table and a
+ * job rather than a comment promising to handle it.
+ */
+export const pushReceipts = pgTable(
+  "push_receipts",
+  {
+    /** Expo's ticket id, which is also the receipt's id. */
+    id: varchar("id").primaryKey(),
+    /** The address it was sent to, so a dead one can be deleted by value. */
+    token: varchar("token").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("push_receipts_created_idx").on(table.createdAt)]
+);
+
+export type PushReceipt = typeof pushReceipts.$inferSelect;
 
 export type UpsertUser = typeof users.$inferInsert;
 export type UserRow = typeof users.$inferSelect;

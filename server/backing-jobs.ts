@@ -20,6 +20,7 @@ import {
 } from "./printful";
 import { type MerchConfig } from "@shared/backing";
 import { pledgeRefunded } from "./backing-notices";
+import { reconcileBackerBadge } from "./backer-badges";
 import { openPii } from "./pii";
 
 /** Distinct ids so the two jobs never block each other. */
@@ -328,6 +329,15 @@ export async function runRefundSweep(): Promise<{ refunded: number; converted: n
             return "refunded" as const;
           });
           if (outcome !== "refunded") continue;
+
+          /*
+           * The badge goes back with the money. After the transaction, because
+           * it reads what settled pledges are left and so has to see this one
+           * gone, and never fatal — the refund has already happened at Stripe
+           * and must not be undone by a bookkeeping failure here.
+           */
+          await reconcileBackerBadge(backing.backerId, backing.projectId)
+            .catch((err) => console.error("[badges] refund reconcile failed:", err));
 
           // Nothing physical can have shipped — merch waits on approval and
           // these are unapproved by definition — so cancelling is safe.

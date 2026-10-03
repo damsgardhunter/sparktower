@@ -60,11 +60,25 @@ function nameFor(asset: ImagePicker.ImagePickerAsset, mimeType: string): string 
  * Opens the phone's photos and returns what was chosen, or null if they
  * backed out.
  *
- * `videos` is for the one place that takes both (a project's media). Editing
- * is left off: cropping a screenshot to a square is not what somebody adding
- * one to a post came to do, and the server keeps the original either way.
+ * `videos` is for the one place that takes both (a project's media). Editing is
+ * off by default for the same reason it always was: cropping a screenshot to a
+ * square is not what somebody adding one to a post came to do, and the server
+ * keeps the original either way.
+ *
+ * `crop` turns it on for the two places that do want it — the profile photo and
+ * the cover — because those are shown in a fixed shape and the alternative is
+ * the middle of the picture, chosen for you. See `components/profilePhoto.ts`.
+ *
+ * One platform difference worth knowing rather than discovering: `aspect` is
+ * Android-only. On iOS `allowsEditing` always presents a square crop whatever
+ * ratio is asked for, so a cover is framed square there and the band crops it
+ * vertically afterwards. That is still better than no choice at all — which
+ * region survives is the part that matters — but it is not the same as the web,
+ * where the frame is the shape the picture lands in.
  */
-export async function pickPhoto(opts: { videos?: boolean } = {}): Promise<PickedFile | null> {
+export async function pickPhoto(
+  opts: { videos?: boolean; crop?: { aspect: [number, number] } } = {},
+): Promise<PickedFile | null> {
   /*
    * A build that predates the photo library.
    *
@@ -113,6 +127,11 @@ export async function pickPhoto(opts: { videos?: boolean } = {}): Promise<Picked
        */
       quality: 1,
       exif: false,
+      /*
+       * The native crop UI, when the caller asked for one. Nothing is passed at
+       * all otherwise, so every existing caller behaves exactly as before.
+       */
+      ...(opts.crop ? { allowsEditing: true, aspect: opts.crop.aspect } : {}),
     });
   } catch (err) {
     if (!isMissingNativeModule(err)) throw err;

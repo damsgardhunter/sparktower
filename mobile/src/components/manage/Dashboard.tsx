@@ -12,7 +12,7 @@ import { api } from "../../api/client";
 import { useEntitlementsQuery } from "../../hooks/useEntitlements";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Btn, Card, Cost, Icon, Meta, NovaGradient, Row } from "../ui";
-import { Block, Clamp, useNotify } from "./bits";
+import { SectionBlock, Clamp, useNotify } from "./bits";
 import { PathPanel, usePath } from "./PathPanel";
 import { IntakeView } from "./WorkView";
 import { NovaWelcomeCard } from "./path/NovaGuide";
@@ -129,7 +129,7 @@ function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavig
 
   return (
     <Card style={{ paddingVertical: 0, gap: 0 }}>
-      <Block
+      <SectionBlock
         title="Project setup"
         icon="bulb-outline"
         testID="project-briefing"
@@ -182,7 +182,7 @@ function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavig
             <Text style={{ fontSize: font.xs + 1, fontFamily: fontFamily.semibold, color: colors.primary }}>{showAll ? "Show less" : `+${data.recommendations.length - 3} more`}</Text>
           </Pressable>
         )}
-      </Block>
+      </SectionBlock>
     </Card>
   );
 }

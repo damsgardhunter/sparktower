@@ -22,6 +22,7 @@
  * alongside real scores would be worse than no score at all.
  */
 import { and, eq, sql } from "drizzle-orm";
+import { logId } from "./log-safe";
 import { db } from "./db";
 import { startupGames, startupGameVerdicts } from "@shared/schema";
 import { parseModelJson } from "./ai-json";
@@ -291,7 +292,7 @@ async function runValuation(gameId: string, model: string, retrying = false, ask
       fromModel = true;
     }
   } catch (err) {
-    console.error(`[game] valuation for ${gameId} failed, falling back:`, err);
+    console.error("[game] valuation for %s failed, falling back:", logId(gameId), err);
   }
 
   /*
@@ -321,7 +322,7 @@ async function runValuation(gameId: string, model: string, retrying = false, ask
       await db.update(startupGameVerdicts)
         .set({ attempts: sql`${startupGameVerdicts.attempts} + 1` })
         .where(and(eq(startupGameVerdicts.gameId, gameId), eq(startupGameVerdicts.fromModel, false)))
-        .catch((err) => console.error(`[game] could not count a failed valuation for ${gameId}:`, err));
+        .catch((err) => console.error("[game] could not count a failed valuation for %s:", logId(gameId), err));
       return null;
     }
     /*

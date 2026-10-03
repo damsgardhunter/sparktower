@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { Switch, Text, View } from "react-native";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, radius, spacing } from "../../src/theme";
 import { Empty, Icon, Loading, Screen, errText } from "../../src/components/ui";
-import { PageIntro, Pill, TitledCard } from "../../src/components/MoreKit";
+import { PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { ConfirmSheet, NotFoundScreen, gateView, blockedView, isNotFound, text, useReviewer } from "../../src/components/more/AdminKit";
 
@@ -94,8 +95,8 @@ export default function AdminSurfaces() {
                     <View style={{ flex: 1, gap: 3 }}>
                       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
                         <Text style={text.strong}>{s.label}</Text>
-                        {s.needsPeople != null ? <Pill label={`${s.needsPeople}+`} icon="people" color={colors.textSecondary} /> : null}
-                        {s.enabled !== s.defaultEnabled ? <Pill label="changed" color={colors.info} /> : null}
+                        {s.needsPeople != null ? <Pill label={`${s.needsPeople}+`} icon="people" tone="neutral" /> : null}
+                        {s.enabled !== s.defaultEnabled ? <Pill label="changed" tone="info" /> : null}
                       </View>
                       <Text style={text.small}>{s.note}</Text>
                     </View>

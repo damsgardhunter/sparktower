@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Empty, Icon, Loading, errText, type IconName } from "../../src/components/ui";
-import { Callout, Pill, TitledCard, humanize } from "../../src/components/MoreKit";
+import { Callout, TitledCard, humanize } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { LinkPill, NotFoundScreen, gateView, blockedView, isNotFound, useReviewer } from "../../src/components/more/AdminKit";
 
@@ -151,7 +152,7 @@ export default function AdminSafety() {
                         <Text style={small}>Window before: {l.refusedBefore} · Allowed (24h): {l.allowedLast24h ?? "—"}</Text>
                       </View>
                       <Text style={[body, { fontFamily: fontFamily.bold }]}>{l.refused}</Text>
-                      {l.spike && <Pill label="Spike" color={colors.danger} solid />}
+                      {l.spike && <Pill label="Spike" tone="bad" />}
                     </View>
                   ))}
               </TitledCard>
@@ -165,7 +166,7 @@ export default function AdminSafety() {
                           <Text style={[body, { fontFamily: fontFamily.semibold }]}>{ACTION_WORDS[a.action] ?? humanize(a.action)}{a.targetType === "surface" && a.targetId ? ` · ${a.targetId}` : ""}</Text>
                           <Text style={small}>{a.actorName ?? "Someone"} · {hoursLabel(a.hoursSince)} ago{a.reasonCode ? ` · ${MODERATION_REASONS[a.reasonCode] ?? a.reasonCode}` : ""}</Text>
                         </View>
-                        <Pill label={a.status === "early" ? "Too early" : a.status === "watching" ? `Watching · ${hoursLabel(a.hoursSince)} in` : "Settled"} color={a.status === "settled" ? colors.textSecondary : colors.info} />
+                        <Pill label={a.status === "early" ? "Too early" : a.status === "watching" ? `Watching · ${hoursLabel(a.hoursSince)} in` : "Settled"} tone={a.status === "settled" ? "neutral" : "info"} />
                       </View>
                       {a.headline ? <Text style={body}>{a.headline}</Text> : null}
                       {a.status !== "early" && a.metrics.map((m: any) => (
@@ -182,7 +183,7 @@ export default function AdminSafety() {
               {data.surfacesOff.length > 0 && (
                 <TitledCard icon="toggle" title="Switched off" action={<Btn label="Surfaces" small variant="ghost" onPress={() => go("/admin/surfaces")} />}>
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                    {data.surfacesOff.map((s: any) => <Pill key={s.id} label={s.label} color={colors.textSecondary} />)}
+                    {data.surfacesOff.map((s: any) => <Pill key={s.id} label={s.label} tone="neutral" />)}
                   </View>
                 </TitledCard>
               )}

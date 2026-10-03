@@ -170,6 +170,14 @@ jobs:
   # and above: a vulnerable test runner is a chore, a vulnerable zip parser
   # on an upload endpoint is an incident. Dependabot opens the upgrades;
   # this is what refuses to ship without them.
+  #
+  # `scripts/audit-gate.mjs` rather than `npm audit` directly, for one reason:
+  # an advisory can land that nobody can fix — every published version affected
+  # and no upgrade to move to — and the only ways past a bare `npm audit` are to
+  # lower the threshold for everything or to merge through a red check. Both stop
+  # the gate working and nobody notices. The script keeps the same threshold and
+  # lets a named advisory be carried with a reason and an expiry date, and fails
+  # again when that date passes or when the exception stops matching anything.
   dependencies:
     runs-on: ubuntu-latest
     steps:
@@ -177,11 +185,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
-      - name: Audit production dependencies (server + web)
-        run: npm audit --omit=dev --audit-level=high
-      - name: Audit production dependencies (mobile)
-        working-directory: mobile
-        run: npm audit --omit=dev --audit-level=high
+      # Both workspaces, and no install: `npm audit` reads the lockfile, so the
+      # answer is about what is committed rather than what a runner resolved.
+      - name: Audit production dependencies (server + web, mobile)
+        run: node scripts/audit-gate.mjs
 
   # Static analysis of the code itself — injection, path traversal, unsafe
   # regex — as opposed to the dependencies. Free on a public repository.

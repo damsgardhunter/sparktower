@@ -14,6 +14,7 @@
  * thing to a refresh.
  */
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { logId } from "./log-safe";
 import { db } from "./db";
 import { novaBuildRuns, projects, users } from "@shared/schema";
 import {
@@ -207,7 +208,7 @@ async function whatIsWaiting(projectId: string): Promise<BuildRunStatus["waiting
     return { novaCanWrite, optionsReady, yoursAlone };
   } catch (err) {
     // A card that can't count is not a card that should fail the page.
-    console.error(`[nova-build] couldn't count what's waiting on ${projectId}:`, err);
+    console.error("[nova-build] couldn't count what's waiting on %s:", logId(projectId), err);
     return null;
   }
 }
@@ -272,7 +273,7 @@ export async function runBusinessBuild(projectId: string, userId: string): Promi
      */
     for (const section of ordered) {
       await instantiatePathTree(projectId, section.goal as any, section.subcategory ?? "other", { keepRoadmap: true })
-        .catch((err) => console.error(`[nova-build] couldn't lay out ${section.goal} on ${projectId}:`, err));
+        .catch((err) => console.error("[nova-build] couldn't lay out %s on %s:", logId(section.goal), logId(projectId), err));
     }
 
     await run.stage("reading", null);
@@ -385,7 +386,7 @@ export async function runBusinessBuild(projectId: string, userId: string): Promi
          * `forYou`, which made the summary describe six broken model calls as
          * "six decisions only you can make".
          */
-        console.error(`[nova-build] step ${step.taskId} on ${projectId} failed:`, err);
+        console.error("[nova-build] step %s on %s failed:", logId(step.taskId), logId(projectId), err);
         failed += 1;
       }
       await run.progress(done, forYou, step.title, failed);
@@ -397,7 +398,7 @@ export async function runBusinessBuild(projectId: string, userId: string): Promi
     await tell(userId, projectId, run.id, buildSummary(done, forYou, failed));
 
   } catch (err: any) {
-    console.error(`[nova-build] build for ${projectId} failed:`, err);
+    console.error("[nova-build] build for %s failed:", logId(projectId), err);
     const message = err?.message ? String(err.message).slice(0, 300) : "The build stopped unexpectedly.";
     await run.finish({ error: message });
     /*
@@ -446,5 +447,5 @@ export function startBusinessBuild(projectId: string, userId: string): void {
   // Quiet while it works: see server/build-quiet.ts. Wrapped here rather than
   // inside the run so the flag is cleared even if the run throws its way out.
   void whileBuilding(projectId, () => runBusinessBuild(projectId, userId))
-    .catch((err) => console.error(`[nova-build] couldn't start for ${projectId}:`, err));
+    .catch((err) => console.error("[nova-build] couldn't start for %s:", logId(projectId), err));
 }

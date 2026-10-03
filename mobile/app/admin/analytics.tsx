@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { Stack } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { API_URL, api, getAccessToken } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Icon, Loading, Screen, Segments, type IconName } from "../../src/components/ui";
-import { PageIntro, Pill, TitledCard } from "../../src/components/MoreKit";
+import { PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { Sheet } from "../../src/components/Sheet";
 import { CountRow, NotFoundScreen, formatPercent, text } from "../../src/components/more/AdminKit";
 
@@ -214,7 +215,7 @@ export default function AdminAnalytics() {
         <TitledCard title="Where people got stuck" icon="document-text" tint={colors.danger}>
           {!summary?.failing.length ? <EmptyLine text="Nothing failed in this window." />
             : summary.failing.map((f, i) => (
-              <CountRow key={i} label={f.label} value={f.n} leading={<Pill label={String(f.status ?? "")} color={colors.danger} />} />
+              <CountRow key={i} label={f.label} value={f.n} leading={<Pill label={String(f.status ?? "")} tone="bad" />} />
             ))}
         </TitledCard>
 
@@ -353,7 +354,7 @@ function LiveFeed({ onOpen }: { onOpen: (sessionId: string) => void }) {
                 </Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Text style={text.small}>{ago(e.at)}{e.durationMs != null ? ` · ${e.durationMs}ms` : ""}</Text>
-                  {isFailure(e.status) ? <Pill label={String(e.status)} color={colors.danger} solid /> : null}
+                  {isFailure(e.status) ? <Pill label={String(e.status)} tone="bad" /> : null}
                 </View>
               </View>
             </View>
@@ -385,7 +386,7 @@ function SessionSheet({ id, onClose }: { id: string; onClose: () => void }) {
                 <View style={{ position: "absolute", left: -spacing.md - 5, top: 5, width: 9, height: 9, borderRadius: 5, backgroundColor: colors.primary, opacity: 0.75 }} />
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <Text style={text.body}>{e.label}</Text>
-                  {isFailure(e.status) ? <Pill label={String(e.status)} color={colors.danger} solid /> : null}
+                  {isFailure(e.status) ? <Pill label={String(e.status)} tone="bad" /> : null}
                 </View>
                 <Text style={text.small}>{new Date(e.at).toLocaleTimeString()}{e.durationMs != null ? ` · ${e.durationMs}ms` : ""}</Text>
               </View>

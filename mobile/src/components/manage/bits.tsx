@@ -193,8 +193,24 @@ export function Tick({ done, size = 18 }: { done: boolean; size?: number }) {
  * One block of a section screen (client/src/components/section/block.tsx): a
  * small uppercase label with an icon, an optional control on the right, and
  * its content. Stack them with `divider` on all but the first.
+ *
+ * Named `SectionBlock` rather than `Block`, which is what it was called until
+ * four exported components in this repository answered to that name: this one,
+ * the titled card on a project page (now `ProjectSection` in ProjectBits.tsx),
+ * the web's surface primitive in components/section/block.tsx, and the web's
+ * counted panel in components/nova/block.tsx. Reading a diff that said
+ * `<Block>` told you nothing about which one, and importing the wrong one
+ * compiled.
+ *
+ * A fifth is left alone deliberately: `onboarding/LandingSections.tsx` has a
+ * module-private `Block`, and a private name cannot be imported by mistake —
+ * which is the whole problem the other four had.
+ *
+ * Renamed rather than merged, and the name follows the web file it is the
+ * native side of. Merging would mean deciding that a titled section and a
+ * surface primitive are the same kind of thing, and they are not.
  */
-export function Block({ title, icon, right, children, divider, testID }: {
+export function SectionBlock({ title, icon, right, children, divider, testID }: {
   title: string; icon?: IconName; right?: React.ReactNode; children: React.ReactNode; divider?: boolean; testID?: string;
 }) {
   return (

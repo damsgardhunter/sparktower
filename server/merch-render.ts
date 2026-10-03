@@ -87,8 +87,24 @@ function loadFont(file: string): opentype.Font {
 
 let _bold: opentype.Font | null = null;
 let _regular: opentype.Font | null = null;
-const bold = () => (_bold ??= loadFont("SpaceGrotesk-Bold.ttf"));
-const regular = () => (_regular ??= loadFont("SpaceGrotesk-Regular.ttf"));
+/*
+ * These four are exported for `certificate-render.ts`, and the export is where
+ * this file's hard-won knowledge is shared rather than copied: opentype.js 2.0
+ * serialises NaN coordinates once an x offset grows past a few hundred units,
+ * which was found on a printed garment reading "s" instead of "since March
+ * 2026". A second renderer laying its own text out would find that again, on
+ * something somebody had framed.
+ *
+ * They were nearly moved to a module of their own, and should be one day:
+ * importing this file drags in object storage and therefore the database, so a
+ * renderer that needs nothing but a font file cannot be loaded without
+ * `DATABASE_URL`. The move was attempted and abandoned — brace-matching through
+ * `layout`'s template literals is not something to get wrong in the code path
+ * that produces print files — so the coupling is recorded here instead of being
+ * papered over.
+ */
+export const bold = () => (_bold ??= loadFont("SpaceGrotesk-Bold.ttf"));
+export const regular = () => (_regular ??= loadFont("SpaceGrotesk-Regular.ttf"));
 
 const INK: Record<MerchConfig["colorway"], string> = {
   black: "#fafaf9",
@@ -113,7 +129,7 @@ const GARMENT: Record<MerchConfig["colorway"], string> = {
  * `font.getAdvanceWidth(string)` is avoided for the same reason
  * `font.getPath(string)` is — see `layout` below.
  */
-function measure(font: opentype.Font, glyphs: opentype.Glyph[], size: number): number {
+export function measure(font: opentype.Font, glyphs: opentype.Glyph[], size: number): number {
   const scale = size / font.unitsPerEm;
   let w = 0;
   for (let i = 0; i < glyphs.length; i++) {
@@ -124,6 +140,48 @@ function measure(font: opentype.Font, glyphs: opentype.Glyph[], size: number): n
     }
   }
   return w;
+}
+
+/**
+ * Serialises a glyph path from its own command objects.
+ *
+ * opentype.js 2.0's `Path.toPathData()` emits the literal text "NaN" for some
+ * glyph and size combinations while the command objects it is reading hold
+ * perfectly finite numbers — `Space Grotesk Bold` "e" at size 170 is one, "d" at
+ * 104 is another, and 200 is fine again, so it is neither a threshold nor a
+ * glyph. Printing the commands and the output side by side is what settles it:
+ *
+ *   commands: 35 | any non-finite coord: false
+ *   toPathData(2): NaN   toPathData(0): NaN   toPathData(4): NaN
+ *
+ * The geometry is good and the formatter is not, so the formatter is the thing
+ * to replace. This walks the commands and writes the numbers itself.
+ *
+ * The previous workaround — drawing every glyph at the origin and moving it with
+ * a transform — is kept, because it removes a *second* fault in the same library
+ * (the x accumulator corrupting past a few hundred units). It does not help with
+ * this one: the garment renderer was only ever safe because the sizes it happens
+ * to use are ones that serialise cleanly.
+ */
+function pathData(path: opentype.Path, places = 2): string {
+  const out: string[] = [];
+  const n = (value: number | undefined): string => {
+    if (value === undefined || !Number.isFinite(value)) {
+      throw new Error(`Glyph path carries a non-finite coordinate (${String(value)})`);
+    }
+    return value.toFixed(places);
+  };
+  for (const c of path.commands as any[]) {
+    switch (c.type) {
+      case "M": out.push(`M${n(c.x)} ${n(c.y)}`); break;
+      case "L": out.push(`L${n(c.x)} ${n(c.y)}`); break;
+      case "C": out.push(`C${n(c.x1)} ${n(c.y1)} ${n(c.x2)} ${n(c.y2)} ${n(c.x)} ${n(c.y)}`); break;
+      case "Q": out.push(`Q${n(c.x1)} ${n(c.y1)} ${n(c.x)} ${n(c.y)}`); break;
+      case "Z": out.push("Z"); break;
+      default: throw new Error(`Unknown glyph path command: ${String(c.type)}`);
+    }
+  }
+  return out.join("");
 }
 
 /**
@@ -139,7 +197,7 @@ function measure(font: opentype.Font, glyphs: opentype.Glyph[], size: number): n
  * Per-glyph `glyph.getPath()` is unaffected, so the advance and kerning maths
  * happens here where the values can be checked.
  */
-function layout(
+export function layout(
   text: string,
   opts: { font: opentype.Font; size: number; maxWidth: number; centerX: number; baselineY: number; fill: string },
 ): { svg: string; width: number; height: number } {
@@ -168,7 +226,7 @@ function layout(
   const pieces: string[] = [];
   let x = centerX - width / 2;
   for (let i = 0; i < glyphs.length; i++) {
-    const d = glyphs[i].getPath(0, 0, size).toPathData(2);
+    const d = pathData(glyphs[i].getPath(0, 0, size));
     if (d) {
       if (d.includes("NaN") || d.includes("Infinity")) {
         throw new Error(

@@ -50,4 +50,19 @@ describe("linking to a step's own surface", () => {
     expect(pathHref("p1", { section: "ship_mvp" })).not.toContain("surface");
     expect(pathHref("p1")).not.toContain("surface");
   });
+
+  /*
+   * A delivered reward is on the backer's own profile, not on the project's page.
+   * It pointed at the project first, which was wrong in a way only visible once
+   * both halves existed: `BackerCredits` renders the note and plays the video
+   * under "Believed in", and the project page shows neither.
+   */
+  it("sends a delivered reward to the profile where it actually is", () => {
+    const href = notificationHref({
+      kind: "reward_delivered", actorId: "u1", postId: null, projectId: "p1", targetId: "f1",
+    } as any);
+    expect(href).toBe("/profile?rewards=1");
+    expect(href, "the project page shows no reward").not.toContain("/projects/");
+  });
+
 });

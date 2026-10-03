@@ -24,6 +24,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { DownloadImage } from "@/components/download-image";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { Loader2, Sparkles, Undo2, Wand2 } from "lucide-react";
@@ -156,6 +157,49 @@ export function BrandKitCard({ project }: { project: Project }) {
         <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="text-brand-kit-needs-brief">
           Write a one-liner or a description in your brief first — the logo is drawn from what the business does.
         </p>
+      )}
+
+      {/*
+        * What you have, and how to take it away.
+        *
+        * This card drew the pictures and then never showed them, so the only way
+        * to see what you had paid for was to go and look at the project page. It
+        * shows them now, each with a download — they were paid for, and a logo
+        * that can only be looked at inside the product is not much of a logo.
+        *
+        * Shown whenever the project has them rather than only after a draw: an
+        * uploaded logo is just as much theirs, and a download that appears only
+        * in the seconds after generating is a download nobody finds.
+        */}
+      {(project.logoUrl || project.coverUrl) && !draw.isPending && (
+        <div className="flex flex-wrap items-center gap-4 rounded-md border bg-background/60 p-3" data-testid="brand-kit-files">
+          {project.logoUrl && (
+            <div className="flex items-center gap-2">
+              <img
+                src={`${project.logoUrl}?w=96`}
+                alt={`${project.title} logo`}
+                className="h-12 w-12 rounded-md object-contain bg-muted"
+              />
+              <div className="space-y-1">
+                <p className="text-xs font-medium">Logo</p>
+                <DownloadImage src={project.logoUrl} name={`${project.title} logo`} label="Download" testId="button-download-logo" />
+              </div>
+            </div>
+          )}
+          {project.coverUrl && (
+            <div className="flex items-center gap-2">
+              <img
+                src={`${project.coverUrl}?w=96`}
+                alt={`${project.title} cover`}
+                className="h-12 w-20 rounded-md object-cover bg-muted"
+              />
+              <div className="space-y-1">
+                <p className="text-xs font-medium">Cover</p>
+                <DownloadImage src={project.coverUrl} name={`${project.title} cover`} label="Download" testId="button-download-cover" />
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">

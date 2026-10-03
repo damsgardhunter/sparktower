@@ -19,6 +19,7 @@ import { rateLimit } from "./moderation";
 import { deleteAccount, exportAccount, projectsLeavingWith } from "./account-data";
 import { checkSecondFactor, mfaCodeAccepted, limitMfaAttempts, mfaEnabledFor } from "./mfa";
 import { getUncachableStripeClient } from "./stripeClient";
+import { reconcileBackerBadge } from "./backer-badges";
 
 /** Subscription states Stripe will never bill again. */
 const FINISHED = new Set(["canceled", "incomplete_expired"]);
@@ -121,6 +122,15 @@ async function refundPledgesLeavingWith(userId: string): Promise<number> {
     });
     if (done) {
       refunded += 1;
+      /*
+       * The badge for a pledge that has just been handed back. After the
+       * transaction, because it reads what settled pledges remain and so needs
+       * to see this one gone, and never fatal — a refund that failed because a
+       * badge could not be adjusted would be far worse than a badge left
+       * standing.
+       */
+      await reconcileBackerBadge(pledge.backerId, pledge.projectId)
+        .catch((err) => console.error("[badges] refund reconcile failed:", err));
       // Their project is gone with its creator; say so, rather than letting a refund arrive unexplained.
       void pledgeRefunded({
         projectId: pledge.projectId, backerId: pledge.backerId,

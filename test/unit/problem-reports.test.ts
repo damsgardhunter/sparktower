@@ -76,3 +76,47 @@ describe("statuses", () => {
     }
   });
 });
+
+/**
+ * The stored path, and the link a reviewer clicks.
+ *
+ * `/admin/problems` renders a report's path as `<Link href={r.path}>`, and
+ * `POST /api/problem-reports` deliberately takes no session — the person best
+ * placed to tell you the sign-in screen is broken is the one who cannot get past
+ * it. Those two facts together mean a stranger chooses a string that a reviewer
+ * is later invited to click.
+ *
+ * `startsWith("/")` was the whole test, and it is not enough: a browser reads
+ * `//evil.test` and `/\evil.test` as a host, and both start with a slash. So a
+ * report could put a link to another origin in the reviewer's queue, reading like
+ * one of ours. `safeReturnPath` in shared/credits.ts already had the right rule
+ * for the same reason; this one did not apply it.
+ */
+describe("the path a report is filed against", () => {
+  it("keeps an ordinary path and drops the query and fragment", () => {
+    expect(readProblemPath("/project/123")).toBe("/project/123");
+    expect(readProblemPath("/project/123?tab=brief")).toBe("/project/123");
+    expect(readProblemPath("/project/123#notes")).toBe("/project/123");
+    expect(readProblemPath("  /spaced  ")).toBe("/spaced");
+  });
+
+  it("refuses the forms a browser would read as another host", () => {
+    expect(readProblemPath("//evil.test"), "protocol-relative").toBe("");
+    expect(readProblemPath("//evil.test/looks/like/ours")).toBe("");
+    expect(readProblemPath("/\\evil.test"), "backslash is a slash to a browser").toBe("");
+    expect(readProblemPath("\\\\evil.test")).toBe("");
+    expect(readProblemPath("https://evil.test/x")).toBe("");
+    expect(readProblemPath("javascript:alert(1)")).toBe("");
+  });
+
+  it("refuses a control character, which can hide the rest of the string", () => {
+    expect(readProblemPath("/ok\u0000/no")).toBe("");
+    expect(readProblemPath("/ok\nhttps://evil.test")).toBe("");
+  });
+
+  it("still refuses anything that is not a string at all", () => {
+    for (const junk of [undefined, null, 7, {}, [], true]) {
+      expect(readProblemPath(junk), String(junk)).toBe("");
+    }
+  });
+});

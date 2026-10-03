@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Empty, Icon, Loading, Screen, errText } from "../../src/components/ui";
-import { Callout, PageIntro, Pill, TitledCard } from "../../src/components/MoreKit";
+import { Callout, PageIntro, TitledCard } from "../../src/components/MoreKit";
+import { Pill, type PillTone } from "../../src/components/nova/Pill";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import {
   ConfirmSheet, NotFoundScreen, StatBox, StatGrid, gateView, blockedView, isNotFound, money, text, useReviewer,
@@ -42,8 +43,17 @@ interface Signals {
   releasedCents: number;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  pending: colors.warning, approved: colors.success, rejected: colors.danger,
+/**
+ * A review status is a *state*, so it carries a tone rather than a colour.
+ *
+ * This was `colors.warning / success / danger` picked here, which is the thing
+ * `nova/Pill`'s tones exist to stop: "what does amber mean on this screen" was
+ * being answered locally, and the next screen answered it again. The decoration
+ * pills elsewhere in this app — a tier badge, a plan name, a skill — keep taking
+ * a colour on purpose, because a tier is not a severity.
+ */
+const STATUS_TONE: Record<string, PillTone> = {
+  pending: "warn", approved: "good", rejected: "bad",
 };
 
 /**
@@ -139,7 +149,7 @@ export default function BackingReview() {
                     >
                       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
                         <Text style={[text.strong, { flex: 1 }]}>{row.projectTitle}</Text>
-                        <Pill label={row.reviewStatus} color={STATUS_COLOR[row.reviewStatus] ?? colors.textSecondary} />
+                        <Pill label={row.reviewStatus} tone={STATUS_TONE[row.reviewStatus] ?? "neutral"} />
                         <Icon name="chevron-forward" size={16} color={colors.textTertiary} />
                       </View>
                       {row.heldCents > 0 ? <Text style={text.small}>{money(row.heldCents)} held · {row.heldBackers} backer(s)</Text> : null}
@@ -161,7 +171,7 @@ export default function BackingReview() {
                   title={signals.project.title}
                   action={<Btn label="Open project" icon="open-outline" small variant="outline" onPress={() => router.push(`/project/${signals.project.id}` as any)} />}
                 >
-                  {current ? <Pill label={current.reviewStatus} color={STATUS_COLOR[current.reviewStatus] ?? colors.textSecondary} /> : null}
+                  {current ? <Pill label={current.reviewStatus} tone={STATUS_TONE[current.reviewStatus] ?? "neutral"} /> : null}
                   <StatGrid>
                     <StatBox label="Backers" value={String(signals.backers)} />
                     <StatBox label="Held" value={money(signals.heldCents)} />

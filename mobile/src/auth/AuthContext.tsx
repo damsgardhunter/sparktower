@@ -11,6 +11,7 @@ import {
   loginWithApple as apiLoginWithApple,
 } from "../api/client";
 import { captureAttribution } from "../api/attribution";
+import { forgetPush } from "../push";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -260,6 +261,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    /*
+     * Before the session goes, because telling the server to forget this
+     * device needs an authenticated request — and best-effort, because signing
+     * out must not be blocked by it.
+     *
+     * The case this cannot cover is the other way out: a session that expired
+     * never calls signOut, so its device stays registered. That is handled on
+     * the server instead, where the push token is unique — whoever next signs
+     * in on this phone takes it over, which is the same reasoning as clearing
+     * the query cache below.
+     */
+    await forgetPush();
     await apiLogout();
     forgetEverything();
   }, [forgetEverything]);

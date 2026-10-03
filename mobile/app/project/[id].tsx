@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { Box } from "../../src/components/feed/Box";
+import { Pressable, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { exploreContext, markSeen } from "../../src/explore";
-import { colors, spacing } from "../../src/theme";
+import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Body, Btn, Empty, H1, Icon, Loading, Meta, errText } from "../../src/components/ui";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { ProjectHeader } from "../../src/components/ProjectHeader";
@@ -205,6 +206,22 @@ export default function ProjectDetail() {
         <OverviewTab project={project} members={members} isOwner={isOwner} isMember={isMember}
           onApply={apply} onManage={manage} onTab={setTab} notify={notify} />
         {isOwner && <StoryboardsBlock projectId={id!} onOpen={() => router.push(`/project/storyboards?id=${id}` as any)} />}
+        {/*
+          * The week, for a project on the Run path. Only there, because the
+          * rhythm is that path's loop — a `ship_mvp` project has no weekly
+          * check-in to file, and offering one would be a door onto a screen
+          * with no numbers to track.
+          */}
+        {isMember && project?.goal === "run_company" && (
+          <Box ring="soft" testID="rhythm-link">
+            <Pressable onPress={() => router.push(`/rhythm/${id}` as any)} accessibilityRole="button" testID="open-rhythm">
+              <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>This week</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: font.sm, marginTop: 2 }}>
+                File the week's numbers, and what happened.
+              </Text>
+            </Pressable>
+          </Box>
+        )}
         <TechStackBlock project={project} />
         <LinksBlock project={project} />
         {isOwner && (

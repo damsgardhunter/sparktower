@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { KeyboardAvoidingView, Platform, Text, View } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
 import { UpgradeCard } from "../../src/components/more/UpgradeCard";
-import { Pill } from "../../src/components/MoreKit";
 import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Chip, Cost, ErrorNote, Field, H2, Label,
@@ -155,7 +155,7 @@ export default function MockInterview() {
                     </View>
                     <View style={{ alignItems: "flex-end", gap: 4 }}>
                       {iv.averageScore != null && <Chip label={`${iv.averageScore}/100`} small active />}
-                      <Pill label={iv.status} color={iv.status === "completed" ? colors.success : colors.textSecondary} />
+                      <Pill label={iv.status} tone={iv.status === "completed" ? "good" : "neutral"} />
                     </View>
                   </Row>
                 </Card>

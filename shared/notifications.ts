@@ -125,6 +125,15 @@ export function notificationText(n: NotificationShape): string {
     case "pledge_refunding": return n.projectTitle ? `${n.projectTitle} wasn't approved — your pledge is being refunded` : "Your pledge is being refunded";
     case "pledge_released": return n.projectTitle ? `Your pledge went to ${n.projectTitle}` : "Your pledge went to the project";
     case "pledge_refunded": return "Your pledge was refunded";
+    /*
+     * The excerpt carries which reward and whatever the creator wrote with it, so
+     * the sentence stays about the thing that happened. "A reward you were
+     * promised" rather than naming it, because the kind is one row for two very
+     * different rewards — a video to watch and a door being opened.
+     */
+    case "reward_delivered": return n.projectTitle
+      ? `${n.projectTitle} delivered a reward you were promised`
+      : "A reward you were promised has been delivered";
     case "project_application": return n.projectTitle ? `${who} applied to join ${n.projectTitle}` : `${who} applied to join your project`;
     case "application_accepted": return n.projectTitle ? `You're on the team: ${who} accepted your application to ${n.projectTitle}` : `${who} accepted your application`;
     // Plain, and not dressed up: they asked, and this is the answer.
@@ -155,6 +164,21 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // Accepted: straight into the project they just joined. Declined or removed: its public page, which they can still see.
   if (n.kind === "application_accepted" && n.projectId) return `/projects/${n.projectId}/manage`;
   if ((n.kind === "application_rejected" || n.kind === "project_removed") && n.projectId) return `/projects/${n.projectId}`;
+  /*
+   * Their own profile, which is where the reward actually is.
+   *
+   * This pointed at the project's page, which was wrong in a way only visible
+   * once both halves existed: the delivered reward — the creator's note, and the
+   * video playing in place — is rendered by `BackerCredits` under "Believed in"
+   * on the backer's profile. Sending them to the project left them looking for
+   * something that was somewhere else.
+   *
+   * The query string carries no meaning to the web, which renders the card
+   * regardless; it is there so the phone can tell this apart from the bare
+   * `/profile` that a connection request uses, where "/profile" means "your
+   * invitations".
+   */
+  if (n.kind === "reward_delivered") return "/profile?rewards=1";
   // Straight to the sprint, so the partner sees the state rather than hunting the list.
   if (n.kind === "sprint_left") return n.targetId ? `/sprints/${n.targetId}` : "/sprints";
   /*
@@ -184,3 +208,58 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
 }
+
+/**
+ * Which notifications are worth interrupting somebody for.
+ *
+ * Push is the only thing in SparkTower that reaches a person who is not using
+ * it, so the question each kind has to answer is not "is this interesting" but
+ * "is this worth a buzz in somebody's pocket". Three things are:
+ *
+ *  - **It needs an answer from them.** A connection request, a company wanting
+ *    to talk, an invitation to a season, somebody applying to their project. The
+ *    other side is waiting, and a day of silence costs something.
+ *  - **It is money.** Backed, released, refunded, a decision on a campaign.
+ *  - **It is time-boxed.** A job due, check-in day, a teammate blocked on their
+ *    seat, a build that finished while they were away from the page.
+ *
+ * Everything else is acknowledgement — a reaction, a follow, a post from
+ * somebody they follow, a step marked done — and it belongs in the bell, where
+ * it is waiting when they next look. A product that pushes all of it trains
+ * people to turn push off, and then the twenty-two that mattered do not arrive
+ * either.
+ *
+ * Two deliberate exclusions worth naming, because both look like oversights:
+ *
+ *  - `application_rejected`. They are waiting on an answer, so by the rule above
+ *    it qualifies — but learning you were turned down from a lock screen, with
+ *    no context and nothing to do about it, is a gratuitous way to be told. The
+ *    bell has it when they look. `application_accepted` pushes.
+ *  - `company_powers`. Being *added* to a company changes what somebody can do
+ *    and pushes; having a permission adjusted inside one does not need to reach
+ *    them before they next open the app.
+ */
+export const PUSHABLE_KINDS: readonly NotificationKind[] = [
+  // Somebody spoke to them, by name or under their work.
+  "comment", "reply", "mention",
+  // Waiting on an answer.
+  "connection_request", "recruit_invite", "recruit_answer", "season_invite", "project_application",
+  "application_accepted",
+  // Money.
+  "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  /*
+   * A reward they paid for has been delivered. Nothing else in the product
+   * changes visibly when a creator records a video, so without this the backer
+   * finds out by chance or not at all.
+   */
+  "reward_delivered",
+  // Time-boxed, or somebody is blocked on them.
+  "job_due", "checkin_due", "sim_nudge", "sprint_left", "nova_build_done",
+  // Their standing changed: added to a company, removed from a project, a result.
+  "company_added", "project_removed", "challenge_result",
+];
+
+const PUSHABLE = new Set<string>(PUSHABLE_KINDS);
+
+/** Whether this kind earns a push, as opposed to only a row in the bell. */
+export const isPushableKind = (kind: string): boolean => PUSHABLE.has(kind);

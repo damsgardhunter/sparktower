@@ -18,7 +18,9 @@ import { colors, font, fontFamily, radius, spacing } from "../../../theme";
 import { Btn, Card, Divider, Icon, Meta, Progress, Row, type IconName } from "../../ui";
 import { Overline, Tag, Well, useNotify } from "../bits";
 import { LOOP_TYPE_INFO, mkey, type LoopType } from "../shared";
-import { auditStageLabel, formatElapsed, useAuditStatus } from "../../../sections";
+import { formatElapsed, useAuditStatus } from "../../../sections";
+import { AUDIT_STAGES } from "../../../auditStages";
+import { Working } from "../../Working";
 import { CheckRow, Choice, Input, ListLoading, PlanNote, ShortOfCredits, invalidateCredits, useCredits } from "./kit";
 import { SecurityReport } from "./SecurityReport";
 
@@ -139,16 +141,25 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
           <Meta style={{ fontSize: font.sm, lineHeight: 19 }}>Nova reads your actual code and reconciles it with your plan — what's really built, what's missing, and which tasks are further along than your board says.</Meta>
         </View>
         {remote && (
-          <Row center gap={spacing.sm} style={{ backgroundColor: colors.primarySoft, borderRadius: radius.sm, padding: spacing.sm + 2 }}>
-            <Icon name="scan-outline" size={16} color={colors.primary} />
-            <View style={{ flex: 1, gap: 1 }}>
-              <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary }} testID="audit-running">Nova is reading your code…</Text>
-              <Meta>
-                {auditStageLabel(remote.stage)} · {formatElapsed(remote.elapsedSeconds)}
-                {remote.startedBy?.firstName ? ` · started by ${remote.startedBy.firstName}` : ""}
-              </Meta>
-            </View>
-          </Row>
+          /*
+            * The stage as a bar rather than as a sentence. It was
+            * "{stage} · {elapsed}" in small grey text, which says which of the
+            * three phases is running and not that there are three — so a read
+            * sitting in "reading" for ninety seconds looked identical to one that
+            * had stopped. `Working` is the web's shape (components/nova/working.tsx)
+            * and shares its arithmetic through src/workingView.ts.
+            */
+          <View style={{ backgroundColor: colors.primarySoft, borderRadius: radius.sm, padding: spacing.sm + 2 }} testID="audit-running">
+            <Working
+              stages={AUDIT_STAGES}
+              current={remote.stage}
+              meta={[
+                formatElapsed(remote.elapsedSeconds),
+                remote.startedBy?.firstName ? `started by ${remote.startedBy.firstName}` : null,
+              ].filter(Boolean).join(" · ")}
+              testID="audit-working"
+            />
+          </View>
         )}
         {!remote && status.last?.error && !run.isPending && (
           <Meta style={{ color: colors.danger }}>The last code read didn't finish: {status.last.error}</Meta>

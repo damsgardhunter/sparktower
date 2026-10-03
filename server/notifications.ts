@@ -24,7 +24,8 @@ import {
 } from "@shared/schema";
 import { blockedIdsFor } from "./blocks";
 import { notBlockedSql } from "./block-sql";
-import { notificationHref, notificationText, PATH_FOCUS } from "@shared/notifications";
+import { isPushableKind, notificationHref, notificationText, PATH_FOCUS } from "@shared/notifications";
+import { pushToUsers } from "./push";
 import { goalOfBackboneId, isProjectGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
 
 /** Past this many recipients a single post is a broadcast, and a broadcast is the feed's job. */
@@ -95,8 +96,83 @@ export async function notify(input: {
       target: [notifications.recipientId, notifications.actorId, notifications.kind, notifications.targetId],
       set: { readAt: null, createdAt: now, excerpt },
     });
+
+    /*
+     * And to their phones, for the kinds worth interrupting somebody over.
+     *
+     * Here rather than at each of the forty-odd emitters, for the same reason
+     * the block filter is here: a notification kind added next month is covered
+     * without anybody remembering to cover it, and the recipients have already
+     * had the blocks taken out of them.
+     *
+     * Deliberately not awaited. The row above is the record and the push is a
+     * courtesy on top of it, so Expo having a slow minute must not be something
+     * the caller's request waits for — and `pushFor` swallows its own errors,
+     * so there is no unhandled rejection to leave behind.
+     */
+    if (isPushableKind(input.kind)) void pushFor(recipients, input, excerpt);
   } catch (err) {
     console.error("[notifications] couldn't record (non-fatal):", err);
+  }
+}
+
+/**
+ * The same sentence the bell shows, sent to a phone.
+ *
+ * `notificationText` is shared so that the web bell and the mobile inbox say
+ * the same thing; a push that paraphrased it would be a third wording of the
+ * same event. It needs the actor's name and the project's title, which the bell
+ * gets from joins when it is *read* — so this is the one extra lookup push
+ * costs, two indexed reads by primary key, off the request path.
+ */
+async function pushFor(
+  recipients: string[],
+  input: { actorId: string; kind: NotificationKind; targetId: string; postId?: string | null; projectId?: string | null },
+  excerpt: string | null,
+): Promise<void> {
+  try {
+    /*
+     * Nothing is looked up until `pushToUsers` has found somebody with a phone.
+     * Most notifications go to people who have never registered one, and this
+     * path is not awaited by its caller — so work done here for nothing is work
+     * still running after the request that caused it has gone.
+     */
+    await pushToUsers(recipients, async () => {
+      const [actor] = await db.select({
+        firstName: users.firstName, lastName: users.lastName, email: users.email,
+        displayName: userProfiles.displayName,
+      }).from(users)
+        .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+        .where(eq(users.id, input.actorId));
+
+      const projectTitle = input.projectId
+        ? (await db.select({ title: projects.title }).from(projects).where(eq(projects.id, input.projectId)))[0]?.title ?? null
+        : null;
+
+      const shaped = {
+        kind: input.kind,
+        actorId: input.actorId,
+        actorName: actor?.displayName || [actor?.firstName, actor?.lastName].filter(Boolean).join(" ") || actor?.email || "Someone",
+        postId: input.postId ?? null,
+        projectId: input.projectId ?? null,
+        projectTitle,
+        targetId: input.targetId,
+      };
+
+      return {
+        title: notificationText(shaped),
+        /*
+         * The excerpt is the body when there is one — what was actually said,
+         * which is the difference between "Sam commented on your post" and
+         * knowing whether it needs answering now. The title carries the event,
+         * so a kind with no excerpt simply has no second line.
+         */
+        body: excerpt ?? "",
+        data: { href: notificationHref(shaped), actorId: input.actorId },
+      };
+    });
+  } catch (err) {
+    console.error("[push] couldn't build a notification (non-fatal):", err);
   }
 }
 

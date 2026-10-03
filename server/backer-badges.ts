@@ -42,6 +42,24 @@ export function badgePrompt(opts: { projectTitle: string; metal: string; hex: st
 }
 
 /**
+ * An id, safe to put in a log line.
+ *
+ * These are uuids everywhere they are real, so stripping to word characters and
+ * hyphens loses nothing — and it removes the newline that would otherwise let a
+ * value chosen by whoever made the request write its own entry in the log.
+ *
+ * The line breaks go first and on their own, which is redundant: the allow-list
+ * on the next call already drops them, along with everything else that is not a
+ * word character or a hyphen. It is here because the analyser does not read it
+ * that way. CodeQL's log-injection query recognises a replacement of `\r` and
+ * `\n` as having removed the danger and does not infer the same from a negated
+ * character class, so without this the alert survives a sanitiser that is
+ * strictly stronger than the one it is looking for.
+ */
+const logId = (value: string): string =>
+  String(value).replace(/[\r\n]/g, "").replace(/[^\w-]/g, "").slice(0, 64);
+
+/**
  * Recomputes what someone has earned on a project from their pledges.
  *
  * Counts held and released money only. A refunded pledge shouldn't leave a
@@ -73,21 +91,61 @@ async function earnedForProject(userId: string, projectId: string) {
 }
 
 /**
- * Creates or upgrades the badge row, without generating artwork.
+ * Brings the badge row into line with what somebody has actually paid.
  *
- * Called on every successful pledge so the record exists immediately; the
- * picture is made separately and can fail without losing the entitlement.
+ * Called on every successful pledge, so the record exists immediately — the
+ * picture is made separately and can fail without losing the entitlement — and
+ * on every refund, which is the direction this used to be missing entirely.
+ *
+ * ## A refund takes the badge with it
+ *
+ * Four separate paths move a backing to `refunded`: the backer's own account
+ * closure, the sweep for a campaign that was never approved, a refund issued
+ * from the Stripe dashboard, and a chargeback the platform lost. None of them
+ * touched `backer_badges`, and the old version of this function returned early
+ * the moment there were no settled pledges left — so it could upgrade a badge
+ * and never remove one. The pledge dropped off the backer wall, which filters
+ * to held and released, while the badge stayed pinned to the profile at its
+ * old level. Money went back and the reward for it did not.
+ *
+ * So a badge with nothing left behind it is deleted rather than kept at zero.
+ * That is a judgement rather than a bug fix: the badge says somebody backed
+ * this project, and somebody who was refunded, in the end, did not. A badge
+ * that survives having been paid back is a badge that means nothing, which
+ * costs every honest one its value. A partial refund is not a deletion — the
+ * level is simply recomputed from what is left, so two $20 pledges less one is
+ * silver again rather than gold.
  */
-export async function upsertBackerBadge(userId: string, projectId: string) {
+export async function reconcileBackerBadge(userId: string, projectId: string) {
   const earned = await earnedForProject(userId, projectId);
-  if (!earned) return null;
 
-  const level = badgeLevelForAmount(earned.totalCents);
   const [existing] = await db.select().from(backerBadges)
     .where(and(eq(backerBadges.userId, userId), eq(backerBadges.projectId, projectId)));
 
-  // A creator's founder badge isn't a pledge, and a pledge doesn't turn it into bronze.
+  // A creator's founder badge isn't a pledge, so no pledge — and no refund — is its business.
   if (existing?.level === FOUNDER_LEVEL.key) return existing;
+
+  if (!earned) {
+    /*
+     * Nothing held or released is left. The showcase keeps whatever order it
+     * had: `showcaseOrder` is only ever read sorted, so the gap this leaves
+     * behind orders exactly as it did before, and the next badge earned fills
+     * the freed slot because the pinned *count* is what decides that.
+     */
+    if (existing) {
+      await db.delete(backerBadges).where(eq(backerBadges.id, existing.id));
+      /*
+       * Through `logId`, because both of these arrive from a request. A log line
+       * is read by a person scanning for what happened, and anything that can
+       * carry a newline into it can forge a second line that looks exactly like
+       * one this code wrote.
+       */
+      console.log(`[badges] badge for ${logId(userId)} on project ${logId(projectId)} removed: no settled pledge remains`);
+    }
+    return null;
+  }
+
+  const level = badgeLevelForAmount(earned.totalCents);
 
   if (!existing) {
     const [created] = await db.insert(backerBadges).values({
@@ -294,6 +352,72 @@ export async function ensureCreatorBadges(userId: string): Promise<string[]> {
     if (row) {
       created.push(row.id);
       if (pin) { pinned++; nextOrder++; }
+    }
+  }
+  return created;
+}
+
+/**
+ * Mints the badge for every project someone has actually backed.
+ *
+ * `reconcileBackerBadge` runs from the Stripe webhook, which is the only path a
+ * real pledge takes — so for a long time "every settled backing has a badge"
+ * was true by construction and nothing needed to check it. It is not true of
+ * any backing written another way: the demo and seed scripts insert
+ * `project_backings` rows directly, and those backers appear on the wall with
+ * the level their amount clears and nothing on their profile at all. They
+ * earned a badge, there was no row for it, and the picker had nothing to offer
+ * them.
+ *
+ * The counterpart to `ensureCreatorBadges`, and deliberately the same shape:
+ * safe to call as often as you like, adds only what is missing, pins what it
+ * creates while there is room, and never re-pins something that was unpinned.
+ * Call it after the creator pass so a founder badge takes the slot — a project
+ * you built outranks a project you backed when there are five places and six
+ * badges.
+ *
+ * Private projects get a row but not a pin. The row is theirs either way and
+ * shows on their own profile; the pin is a public slot, and the public endpoint
+ * filters a private project's badge out of a stranger's view anyway, so pinning
+ * one would spend a slot on something most visitors cannot see.
+ */
+export async function ensureBackerBadges(userId: string): Promise<string[]> {
+  const backed = await db.selectDistinct({
+    projectId: projectBackings.projectId,
+    isPrivate: projects.isPrivate,
+  }).from(projectBackings)
+    .innerJoin(projects, eq(projects.id, projectBackings.projectId))
+    .where(and(
+      eq(projectBackings.backerId, userId),
+      inArray(projectBackings.status, ["held", "released"]),
+    ));
+  if (!backed.length) return [];
+
+  const held = await db.select({ projectId: backerBadges.projectId, showcaseOrder: backerBadges.showcaseOrder })
+    .from(backerBadges).where(eq(backerBadges.userId, userId));
+  const missing = backed.filter((b) => !held.some((h) => h.projectId === b.projectId));
+  if (!missing.length) return [];
+
+  let pinned = held.filter((h) => h.showcaseOrder != null).length;
+  let nextOrder = Math.max(-1, ...held.map((h) => h.showcaseOrder ?? -1)) + 1;
+  const created: string[] = [];
+
+  for (const b of missing) {
+    /*
+     * Through the ordinary reconcile rather than an insert of its own, so the
+     * level, the total, the believer number and the founding-believer flag are
+     * all derived the one way they are ever derived. A second copy of that
+     * arithmetic here is how a backfilled badge ends up a level off a minted
+     * one for the same pledges.
+     */
+    const row = await reconcileBackerBadge(userId, b.projectId);
+    if (!row) continue;
+    created.push(row.id);
+    if (!b.isPrivate && pinned < MAX_SHOWCASE_BADGES) {
+      await db.update(backerBadges).set({ showcaseOrder: nextOrder })
+        .where(eq(backerBadges.id, row.id));
+      pinned++;
+      nextOrder++;
     }
   }
   return created;

@@ -11,7 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Avatar, Btn, Icon, Loading, Meta, Row, errText } from "../ui";
-import { Block } from "../ProjectBits";
+import { ProjectSection } from "../ProjectBits";
 import type { Notice } from "../Sheet";
 
 type FeedbackState = "open" | "applied" | "closed";
@@ -77,12 +77,12 @@ export function FeedbackInbox({ projectId, notify }: { projectId: string; notify
     onError: (e) => notify({ text: errText(e, "Couldn't turn that into a task."), tone: "error" }),
   });
 
-  if (isLoading) return <Block><Loading /></Block>;
+  if (isLoading) return <ProjectSection><Loading /></ProjectSection>;
   if (!data) return null;
   const { items, counts } = data;
 
   return (
-    <Block>
+    <ProjectSection>
       <Row center wrap gap={6}>
         <Icon name="chatbox-ellipses-outline" size={17} color={colors.primary} />
         <Text style={{ fontFamily: fontFamily.semibold, fontSize: font.base, color: colors.text }}>Feedback on your updates</Text>
@@ -149,6 +149,6 @@ export function FeedbackInbox({ projectId, notify }: { projectId: string; notify
           ))}
         </View>
       )}
-    </Block>
+    </ProjectSection>
   );
 }

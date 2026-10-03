@@ -25,7 +25,7 @@ import {
   CheckCircle2, Clock, Sparkles, Lock, ExternalLink,
 } from "lucide-react";
 import {
-  DIGITAL_REWARDS, MERCH_PRODUCTS, DEFAULT_MERCH_CONFIG, BELIEVER_TAGLINE,
+  DIGITAL_REWARDS, OFFERABLE_DIGITAL_REWARDS, deliverableRewards, MERCH_PRODUCTS, DEFAULT_MERCH_CONFIG, BELIEVER_TAGLINE,
   PLATFORM_FEE_PERCENT, REFUND_WINDOW_DAYS, merchProduct, formatBelieverNumber,
   type MerchConfig,
 } from "@shared/backing";
@@ -430,7 +430,8 @@ export function BackingSetup({ projectId, projectTitle }: { projectId: string; p
                           <Shirt className="h-2.5 w-2.5" />{merchProduct(key)?.label || key}
                         </Badge>
                       ))}
-                      {(tier.digitalRewards || []).map((key) => (
+                      {/* Filtered, because eight tiers were saved while those two were still on the menu. */}
+                      {deliverableRewards(tier.digitalRewards).map((key) => (
                         <Badge key={key} variant="secondary" className="text-[10px]">
                           {DIGITAL_REWARDS.find((r) => r.key === key)?.label || key}
                         </Badge>
@@ -727,6 +728,7 @@ export function BackingSetup({ projectId, projectTitle }: { projectId: string; p
           or an older server response missing projectLogoUrl — still resolves. */}
       <BadgePreviewCard
         projectId={projectId}
+        projectTitle={projectTitle}
         previews={data.badgePreviews || {}}
         projectLogoUrl={data.projectLogoUrl ?? config.logoUrl ?? null}
       />
@@ -817,7 +819,13 @@ function TierDialog({
           <div className="space-y-2">
             <Label className="text-xs">Digital rewards — free to fulfil</Label>
             <div className="grid gap-1.5">
-              {DIGITAL_REWARDS.map((r) => (
+              {/*
+                * `OFFERABLE_DIGITAL_REWARDS`, not the whole catalogue: a
+                * wallpaper and a profile frame were both selectable here and
+                * neither exists, so a creator could promise what the platform
+                * would never send and take the blame for it.
+                */}
+              {OFFERABLE_DIGITAL_REWARDS.map((r) => (
                 <label key={r.key} className="flex items-start gap-2 text-sm">
                   <Checkbox
                     className="mt-0.5"

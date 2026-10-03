@@ -116,7 +116,31 @@ function StartPath({ item, idSuffix, onNotice }: {
   );
 }
 
-export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void }) {
+/**
+ * Every project's next step, as the card and the screen both read it.
+ *
+ * Exported so `app/path.tsx` can know whether there is anything waiting *before*
+ * it draws a header and an empty state. The card itself returns null when the
+ * list is empty, which is right on a feed — a heading over nothing is worse than
+ * nothing — and wrong for a screen somebody was sent to, which has to say why it
+ * is empty and offer a way out of that.
+ */
+export function useNextSteps() {
+  const query = useQuery({
+    queryKey: NEXT_STEPS_KEY,
+    queryFn: () => api<{ items: NextStepItem[] }>("/api/me/next-steps"),
+  });
+  return { ...query, items: query.data?.items ?? [] };
+}
+
+export function ContinuePathCard({ onNotice, heading = true }: {
+  onNotice?: (n: Notice) => void;
+  /**
+   * The card's own "CONTINUE YOUR PATH" strip. Off when a screen has already
+   * titled itself, so the same words do not appear twice down the page.
+   */
+  heading?: boolean;
+}) {
   const router = useRouter();
   const { data } = useQuery({
     queryKey: NEXT_STEPS_KEY,
@@ -128,11 +152,23 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
   if (!items.length) return null;
 
   return (
-    <Box padded={false} style={{ borderColor: primaryTint(0.3) }} testID="continue-path-card">
-      <View style={s.head}>
-        <Ionicons name="compass-outline" size={14} color={colors.primary} />
-        <Text style={s.headText}>CONTINUE YOUR PATH</Text>
-      </View>
+    /*
+     * The Nova gradient outline, as the web gives this card.
+     *
+     * `client/src/components/continue-path-card.tsx` puts `nova-ring nova-glow`
+     * on the lead step and `nova-ring-soft` on the rest. The phone groups every
+     * step into one box rather than one card each, so the lit ring goes on the
+     * group — the same "this is the thing to look at" the web is making, in the
+     * shape the phone's layout already has. It replaces a flat border tinted to
+     * 30% primary, which was the nearest a plain border could get.
+     */
+    <Box padded={false} ring="nova" testID="continue-path-card">
+      {heading && (
+        <View style={s.head}>
+          <Ionicons name="compass-outline" size={14} color={colors.primary} />
+          <Text style={s.headText}>CONTINUE YOUR PATH</Text>
+        </View>
+      )}
       {items.map((item, idx) => {
         const pct = item.progress.total ? Math.round((item.progress.done / item.progress.total) * 100) : 0;
         const novaActs = item.next?.actor.startsWith("nova");

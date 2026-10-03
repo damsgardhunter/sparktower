@@ -13,11 +13,15 @@ import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
+import * as WebBrowser from "expo-web-browser";
 import { api } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, spacing } from "../theme";
 import { assetUri, Body, Btn, Icon, Meta, Row, type IconName } from "./ui";
 import { Sheet, type Notice } from "./Sheet";
 import { CardTitle, OutlineButton, PCard, Pill } from "./profile/kit";
+import { saveFile, saveImage } from "../saveImage";
+import { openWebSignedIn } from "../networkData";
+import { API_URL } from "../api/client";
 
 // --- Restated from shared/backing.ts --------------------------------------
 
@@ -339,10 +343,31 @@ export function EarnedBadges({ userId, isOwn = false }: { userId: string; isOwn?
   );
 }
 
+/**
+ * One reward a creator has actually delivered, from `GET /api/me/rewards`.
+ *
+ * Restated from client/src/components/backer-credits.tsx's `MyReward`, with
+ * `videoExt` the one field the web has no use for: a browser takes a file's
+ * type from the response, and a camera roll takes it from the name.
+ */
+interface MyReward {
+  projectId: string;
+  projectTitle: string;
+  rewardKey: string;
+  label: string;
+  note: string | null;
+  deliveredAt: string;
+  /** Null when there is nothing to watch — early access has no file. */
+  videoUrl: string | null;
+  videoExt: string | null;
+}
+
 /** "Believed in": what they've backed. The owner also sees hidden pledges and can toggle their name. */
 export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn: boolean; notify: (n: Notice) => void }) {
   const router = useRouter();
   const qc = useQueryClient();
+  /** Which certificate is being fetched, so its own row can say so. */
+  const [fetching, setFetching] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["user-backings", userId],
     queryFn: () => api<any[]>(`/api/users/${userId}/backings`).catch(() => []),
@@ -350,6 +375,17 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
   const { data: mine } = useQuery({
     queryKey: ["me-backings"],
     queryFn: () => api<any[]>("/api/me/backings"),
+    enabled: isOwn,
+  });
+  /*
+   * What came of it. Separate from the pledges below because the two answer
+   * different questions — that is what I paid, this is what I was given — and
+   * because until now a creator could record somebody a personal video and the
+   * backer had nowhere on their phone to watch it.
+   */
+  const { data: rewards } = useQuery({
+    queryKey: ["me-rewards"],
+    queryFn: () => api<MyReward[]>("/api/me/rewards"),
     enabled: isOwn,
   });
   const privacy = useMutation({
@@ -364,7 +400,13 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
   });
 
   const visible = (mine ?? []).filter((b) => b.status === "held" || b.status === "released");
-  if (!data?.length && !visible.length) return null;
+  /*
+   * A delivered reward is reason enough on its own. `visible` deliberately
+   * leaves out a pledge that has converted to equity, and the video somebody
+   * recorded for that pledge is still theirs to watch.
+   */
+  const delivered = isOwn ? rewards ?? [] : [];
+  if (!data?.length && !visible.length && !delivered.length) return null;
 
   const box = { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: spacing.sm + 2, gap: 6 } as const;
   const head = (title: string, number?: number | null) => (
@@ -374,10 +416,112 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
     </Row>
   );
 
+  /*
+   * Never throws. `saveImage` reports rather than rejects, and a certificate
+   * that could not be fetched is a line on the screen, not something that
+   * takes the profile down with it.
+   */
+  const downloadCertificate = async (b: { id: string; projectId: string; projectTitle: string }) => {
+    setFetching(b.id);
+    try {
+      const result = await saveImage({
+        path: `/api/projects/${b.projectId}/backing/certificate`,
+        name: `${b.projectTitle} certificate`,
+      });
+      notify(result.ok
+        ? { text: result.where === "photos" ? "Saved to your photos" : "Certificate ready to share", tone: "success" }
+        : { text: result.reason, tone: "error" });
+    } finally {
+      setFetching(null);
+    }
+  };
+
+  /*
+   * Watching it, in the browser rather than in the app.
+   *
+   * The web plays it in a <video> in place, which is the better way to receive
+   * something made for you, and the phone has no player: nothing here depends
+   * on expo-video, and adding a native module means nobody can watch anything
+   * until a new build goes out. WebBrowser is already a dependency, opens over
+   * the app rather than leaving it, and gives real video controls.
+   *
+   * Through `openWebSignedIn`, because the route needs a session and the
+   * in-app browser does not share the app's token — a bare URL 401s.
+   */
+  const watch = (r: MyReward) =>
+    void openWebSignedIn(`${API_URL}${r.videoUrl}`, (url) => WebBrowser.openBrowserAsync(url)).catch(() => {});
+
+  /** Keeping it. The camera roll is where a video somebody made for you belongs. */
+  const keepCopy = async (r: MyReward) => {
+    const id = `${r.projectId}-${r.rewardKey}`;
+    setFetching(id);
+    try {
+      const result = await saveFile({
+        path: r.videoUrl!,
+        name: `${r.projectTitle} ${r.label}`,
+        kind: "video",
+        extension: r.videoExt ?? undefined,
+      });
+      notify(result.ok
+        ? { text: result.where === "photos" ? "Saved to your photos" : "Ready to share", tone: "success" }
+        : { text: result.reason, tone: "error" });
+    } finally {
+      setFetching(null);
+    }
+  };
+
   return (
     <PCard>
       <CardTitle icon="heart" iconColor={colors.primary}>Believed in</CardTitle>
       <View style={{ gap: spacing.sm }}>
+        {/*
+          * Delivered rewards first, and only on your own profile: a video
+          * somebody recorded for you is the most interesting thing on this
+          * card, and it is nobody else's business.
+          */}
+        {delivered.map((r) => {
+          const id = `${r.projectId}-${r.rewardKey}`;
+          return (
+            <View key={id} style={[box, { borderColor: colors.primary }]} testID={`my-reward-${r.rewardKey}`}>
+              <Pressable onPress={() => router.push(`/project/${r.projectId}`)}>
+                <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.text }}>
+                  <Text style={{ fontFamily: fontFamily.semibold }}>{r.label}</Text>
+                  {" from "}
+                  {r.projectTitle}
+                </Text>
+              </Pressable>
+              {r.note ? (
+                <Text style={{ fontSize: font.xs, fontFamily: fontFamily.regular, color: colors.textSecondary, fontStyle: "italic" }}>
+                  “{r.note}”
+                </Text>
+              ) : null}
+              {r.videoUrl ? (
+                <Row gap={spacing.md} center>
+                  <Pressable hitSlop={6} onPress={() => watch(r)} accessibilityRole="button" testID={`reward-video-${r.rewardKey}`}>
+                    <Row center gap={5}>
+                      <Icon name="play-circle-outline" size={14} color={colors.primary} />
+                      <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary }}>Watch</Text>
+                    </Row>
+                  </Pressable>
+                  <Pressable
+                    disabled={fetching === id}
+                    hitSlop={6}
+                    onPress={() => void keepCopy(r)}
+                    accessibilityRole="button"
+                    testID={`reward-video-download-${r.rewardKey}`}
+                  >
+                    <Row center gap={5}>
+                      <Icon name="download-outline" size={13} color={colors.textSecondary} />
+                      <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>
+                        {fetching === id ? "Saving…" : "Keep a copy"}
+                      </Text>
+                    </Row>
+                  </Pressable>
+                </Row>
+              ) : null}
+            </View>
+          );
+        })}
         {isOwn
           ? visible.map((b) => (
             <View key={b.id} style={box}>
@@ -391,6 +535,28 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
                   <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>{b.isAnonymous ? "Show my name" : "Hide my name"}</Text>
                 </Pressable>
               </Row>
+              {/*
+                * The certificate, which the app has been promising since the
+                * rewards were written and had no way to hand over. The server
+                * draws it on request, so there is nothing to wait for and
+                * nothing stored — and `saveImage` already does the hard part:
+                * it fetches with the access token, puts it in the camera roll
+                * if that is allowed, and offers the share sheet if it is not,
+                * which is where printing lives on a phone.
+                */}
+              <Pressable
+                disabled={fetching === b.id}
+                hitSlop={6}
+                onPress={() => downloadCertificate(b)}
+                accessibilityRole="button"
+              >
+                <Row center gap={5}>
+                  <Icon name="ribbon-outline" size={13} color={colors.primary} />
+                  <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary }}>
+                    {fetching === b.id ? "Getting your certificate…" : "Save your certificate"}
+                  </Text>
+                </Row>
+              </Pressable>
             </View>
           ))
           : data!.map((b) => (

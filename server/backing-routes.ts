@@ -38,13 +38,15 @@ import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
 import { renderMerchFace, type MerchFace } from "./merch-render";
 import {
-  generateBadgeArt, setShowcase, upsertBackerBadge, renderBadgeImage, projectLogoBuffer,
+  generateBadgeArt, setShowcase, reconcileBackerBadge, renderBadgeImage, projectLogoBuffer,
   badgeLogoUrl,
   ensureCreatorBadges,
+  ensureBackerBadges,
 } from "./backer-badges";
 import { requireImages } from "./images";
 import { respondToAiError } from "./ai-json";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
+import { renderCertificate } from "./certificate-render";
 import {
   DEFAULT_MERCH_CONFIG, DEFAULT_TIER_TEMPLATE, DIGITAL_REWARD_KEYS, MERCH_PRODUCT_KEYS,
   MIN_PLEDGE_CENTS, MAX_PLEDGE_CENTS, REFUND_WINDOW_DAYS, DEFAULT_TIP_PERCENT,
@@ -738,26 +740,89 @@ export function registerBackingRoutes(app: Express) {
         .groupBy(projectBackings.tierId);
       const claimedByTier = new Map(claimed.map((c) => [c.tierId, c.n]));
 
+      /*
+       * One entry per backer, not one per pledge.
+       *
+       * This listed rows, so somebody who backed a project twice appeared on
+       * the wall twice — and worse, each of those rows derived its level from
+       * that one pledge's amount, while the badge they actually hold is struck
+       * from the total across all of them. Two $20 pledges is a gold badge and
+       * read as two silver entries. The badge means "how far I went for this
+       * project"; the wall now says the same thing.
+       *
+       * Aggregated rather than deduplicated in JavaScript, because the 200-row
+       * cap is applied in the database: collapsing afterwards would silently
+       * return fewer than 200 believers whenever anybody had backed twice.
+       */
       const wall = await db.select({
-        believerNumber: projectBackings.believerNumber,
-        message: projectBackings.message,
-        isAnonymous: projectBackings.isAnonymous,
-        tierName: projectBackings.tierNameAtBacking,
-        createdAt: projectBackings.createdAt,
+        /* The earliest number they hold. Being early is the thing recorded. */
+        believerNumber: sql<number | null>`min(${projectBackings.believerNumber})`,
+        /*
+         * The most recent pledge that came with a note. `array_remove` drops
+         * the pledges that left none, so a later silent pledge does not blank
+         * out what they said the first time.
+         */
+        message: sql<string | null>`(array_remove(array_agg(${projectBackings.message} order by ${projectBackings.createdAt} desc), null))[1]`,
+        /*
+         * Hidden if *any* pledge asked to be. Somebody who gave anonymously
+         * once and openly once has asked to be hidden, and the wall is not the
+         * place to decide they only half meant it.
+         */
+        isAnonymous: sql<boolean>`bool_or(${projectBackings.isAnonymous})`,
+        /* The rung their largest single pledge bought, which is the one they'd name. */
+        tierName: sql<string | null>`(array_remove(array_agg(${projectBackings.tierNameAtBacking} order by ${projectBackings.amountCents} desc), null))[1]`,
+        /* When they first backed it, not when they last did. */
+        createdAt: sql<Date>`min(${projectBackings.createdAt})`,
         backerFirstName: users.firstName,
         backerImage: users.profileImageUrl,
+        /*
+         * What they pledged, for the badge — and it does not leave the server.
+         * The level is derived below and only the level is sent: bronze through
+         * platinum is a bucket the backer chose to wear, the exact figure is
+         * nobody else's business and this wall has never shown it.
+         */
+        amountCents: sql<number>`sum(${projectBackings.amountCents})::int`,
+        /* The badge actually minted, which outranks the amount when it exists. */
+        badgeLevel: backerBadges.level,
+        badgeStatus: backerBadges.status,
+        /*
+         * And its artwork, so the wall shows the badge itself rather than only
+         * the metal it is made of. Public on purpose — the art is struck from
+         * the project's own logo, so it says nothing about the backer that the
+         * level beside it does not already say, and an anonymous backer's badge
+         * is the same picture as everybody else's at that level.
+         */
+        badgeImage: backerBadges.imageUrl,
       }).from(projectBackings)
         .leftJoin(users, eq(users.id, projectBackings.backerId))
+        .leftJoin(backerBadges, and(
+          eq(backerBadges.userId, projectBackings.backerId),
+          eq(backerBadges.projectId, projectBackings.projectId),
+        ))
         .where(and(
           eq(projectBackings.projectId, projectId),
           inArray(projectBackings.status, ["held", "released"]),
         ))
-        .orderBy(projectBackings.believerNumber)
+        /*
+         * Everything selected that is not aggregated. The badge columns come
+         * from a join that is already one row per (backer, project), so
+         * grouping by them cannot split a backer across two entries.
+         */
+        .groupBy(
+          projectBackings.backerId, users.firstName, users.profileImageUrl,
+          backerBadges.level, backerBadges.status, backerBadges.imageUrl,
+        )
+        .orderBy(sql`min(${projectBackings.believerNumber}) asc nulls last`)
         .limit(200);
 
       const [totals] = await db.select({
         raisedCents: sql<number>`coalesce(sum(amount_cents), 0)::int`,
-        backers: sql<number>`count(*)::int`,
+        /*
+         * People, not pledges. This counted rows, so a project where one
+         * enthusiast backed three times reported three believers — and said so
+         * right next to a wall that now lists them once.
+         */
+        backers: sql<number>`count(distinct backer_id)::int`,
       }).from(projectBackings)
         .where(and(
           eq(projectBackings.projectId, projectId),
@@ -795,6 +860,27 @@ export function registerBackingRoutes(app: Express) {
           message: w.message,
           tierName: w.tierName,
           createdAt: w.createdAt,
+          /*
+           * The badge they earned, beside the name.
+           *
+           * The minted badge's own level where one exists, and otherwise the
+           * level the pledge clears — a badge is drawn asynchronously, so a
+           * backer who paid a minute ago has earned gold and has no row yet, and
+           * showing nothing there would read as having earned nothing.
+           *
+           * Shown for anonymous backers too. Anonymity hides who they are, not
+           * that somebody at that level is on the wall, and the tier name beside
+           * it has always been shown anonymously for the same reason.
+           */
+          badgeLevel: w.badgeLevel ?? badgeLevelForAmount(w.amountCents ?? 0).key,
+          /* Whether the art is drawn yet, so the wall can show a plain ring until it is. */
+          badgeReady: w.badgeStatus === "ready",
+          /*
+           * Only once it is drawn. A `failed` or `pending` badge can still hold
+           * the path of an earlier attempt, and serving that would put the old
+           * metal on the wall beside the new level's name.
+           */
+          badgeImage: w.badgeStatus === "ready" ? w.badgeImage : null,
         })),
         raisedCents: totals?.raisedCents ?? 0,
         backers: totals?.backers ?? 0,
@@ -1294,6 +1380,93 @@ export function registerBackingRoutes(app: Express) {
    * person they paid knows who they are, and the response says which is which
    * so the UI can't muddle them.
    */
+  /**
+   * The backer's certificate, as a PNG they can print.
+   *
+   * Drawn on request rather than stored: it is deterministic from the backing —
+   * same name, same number, same metal, same seeded border every time — so a
+   * file sitting in object storage would be a copy to keep in step with a row,
+   * for no gain. It costs no model call, which is what lets the reward be free.
+   *
+   * Only your own, and only for a pledge that actually settled. A certificate is
+   * a claim about a person; one anybody could mint for anybody is worth nothing,
+   * and one for a pledge still in flight would be a claim that is not yet true.
+   */
+  app.get("/api/projects/:id/backing/certificate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const projectId = req.params.id;
+
+      const [row] = await db.select({
+        amountCents: projectBackings.amountCents,
+        believerNumber: projectBackings.believerNumber,
+        isAnonymous: projectBackings.isAnonymous,
+        createdAt: projectBackings.createdAt,
+        digitalRewards: projectBackerTiers.digitalRewards,
+      }).from(projectBackings)
+        .leftJoin(projectBackerTiers, eq(projectBackerTiers.id, projectBackings.tierId))
+        .where(and(
+          eq(projectBackings.projectId, projectId),
+          eq(projectBackings.backerId, userId),
+          inArray(projectBackings.status, ["held", "released"]),
+        ))
+        .orderBy(projectBackings.believerNumber)
+        .limit(1);
+
+      if (!row) return res.status(404).json({ message: "You haven't backed this project." });
+
+      const [project] = await db.select({ title: projects.title, logoUrl: projects.logoUrl, ownerId: projects.ownerId })
+        .from(projects).where(eq(projects.id, projectId));
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const [owner] = await db.select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users).where(eq(users.id, project.ownerId));
+      const [ownerProfile] = await db.select({ displayName: userProfiles.displayName })
+        .from(userProfiles).where(eq(userProfiles.userId, project.ownerId));
+
+      const [me] = await db.select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users).where(eq(users.id, userId));
+      const [myProfile] = await db.select({ displayName: userProfiles.displayName })
+        .from(userProfiles).where(eq(userProfiles.userId, userId));
+
+      const backerName = myProfile?.displayName?.trim()
+        || [me?.firstName, me?.lastName].filter(Boolean).join(" ").trim()
+        || "A believer";
+      const creatorName = ownerProfile?.displayName?.trim()
+        || [owner?.firstName, owner?.lastName].filter(Boolean).join(" ").trim()
+        || "The founder";
+
+      /* The logo is nice to have; a certificate without one is still a certificate. */
+      const logo = await projectLogoBuffer(project.logoUrl).catch(() => null);
+
+      const png = await renderCertificate({
+        backerName,
+        projectTitle: project.title,
+        believerNumber: row.believerNumber,
+        amountCents: row.amountCents,
+        backedAt: row.createdAt,
+        creatorName,
+        logo,
+        /*
+         * Anonymity is the backer's own choice about the public wall, and this
+         * file is theirs alone — so their own copy carries their name. It is the
+         * one place where honouring the flag would be the wrong reading of it.
+         */
+        anonymous: false,
+      });
+
+      const slug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "project";
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}-certificate.png"`);
+      /* Deterministic from the row, so it may be cached by the person who owns it. */
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.send(png);
+    } catch (error) {
+      console.error("Certificate render error:", error);
+      res.status(500).json({ message: "Couldn't draw that certificate." });
+    }
+  });
+
   app.get("/api/projects/:id/backing/backers", isAuthenticated, async (req: any, res) => {
     try {
       const projectId = req.params.id;
@@ -1367,8 +1540,16 @@ export function registerBackingRoutes(app: Express) {
   /** Every badge someone holds, for their own management screen. */
   app.get("/api/me/badges", isAuthenticated, async (req: any, res) => {
     try {
-      // Projects started before founder badges existed get theirs the first time anyone looks.
+      /*
+       * Projects started before founder badges existed get theirs the first
+       * time anyone looks, and so does any project they backed whose pledge
+       * was not written by the webhook — a seeded or imported backing earns a
+       * badge like any other, and until this ran the picker had nothing to
+       * offer for it. Creator first, so a founder badge takes a pinned slot
+       * ahead of a backer one.
+       */
       await ensureCreatorBadges(req.user.id);
+      await ensureBackerBadges(req.user.id);
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
@@ -1389,8 +1570,19 @@ export function registerBackingRoutes(app: Express) {
     try {
       const userId = String(req.params.userId);
       const self = req.user?.id === userId;
-      // A creator's founder badges appear on their profile from the start, not only after they open the picker.
-      if (self) await ensureCreatorBadges(userId);
+      /*
+       * Badges appear on a profile from the start rather than only after its
+       * owner opens the picker — but only on their own request. This endpoint
+       * is public and unauthenticated, and minting on somebody else's read
+       * would let any passer-by make this route do writes, one per stranger
+       * whose profile they open. A profile whose owner has never signed in
+       * since their badge was earned is filled in by
+       * `script/backfill-backer-badges.ts` instead.
+       */
+      if (self) {
+        await ensureCreatorBadges(userId);
+        await ensureBackerBadges(userId);
+      }
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
@@ -1644,7 +1836,7 @@ export async function recordBacking(session: any): Promise<void> {
    * already been paid for, which is the wrong trade entirely.
    */
   try {
-    await upsertBackerBadge(m.backerId, m.projectId);
+    await reconcileBackerBadge(m.backerId, m.projectId);
   } catch (err) {
     console.error("Badge upsert failed (pledge is unaffected):", err);
   }

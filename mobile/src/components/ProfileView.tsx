@@ -95,7 +95,7 @@ export function ProfileView({ userId: routeId, isOwn: ownRoute, onName, initialT
 
   const photo = useMutation({
     mutationFn: async (field: "avatarUrl" | "coverUrl") => {
-      const path = await pickAndUploadImage();
+      const path = await pickAndUploadImage(field === "avatarUrl" ? "avatar" : "cover");
       if (!path) return null;
       await api("/api/profile", { method: "POST", body: { [field]: path } });
       return field;

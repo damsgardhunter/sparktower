@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { Heart, Crown, Eye, EyeOff } from "lucide-react";
+import { Heart, Crown, Eye, EyeOff, Award, Download } from "lucide-react";
 import { formatBelieverNumber } from "@shared/backing";
 
 interface PublicBacking {
@@ -36,6 +36,18 @@ interface MyBacking {
  * Renders nothing when the person hasn't backed anything, so the profile can
  * include it unconditionally.
  */
+/** One reward a creator has actually delivered, from `GET /api/me/rewards`. */
+interface MyReward {
+  projectId: string;
+  projectTitle: string;
+  rewardKey: string;
+  label: string;
+  note: string | null;
+  deliveredAt: string;
+  /** Null when there is nothing to watch — early access has no file. */
+  videoUrl: string | null;
+}
+
 export function BackerCredits({ userId, isOwnProfile = false }: { userId: string; isOwnProfile?: boolean }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -77,7 +89,24 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
   });
 
   const visible = mine?.filter((b) => b.status === "held" || b.status === "released") ?? [];
-  if (!data?.length && !visible.length) return null;
+  /*
+   * What came of it. Separate from the pledges above because the two answer
+   * different questions — that is what I paid, this is what I was given — and
+   * because until now a creator could record somebody a personal video and the
+   * backer had nowhere at all to watch it.
+   */
+  const { data: rewards } = useQuery<MyReward[]>({
+    queryKey: ["/api/me/rewards"],
+    enabled: isOwnProfile,
+  });
+
+  /*
+   * A delivered reward is reason enough on its own. `visible` deliberately
+   * leaves out a pledge that has converted to equity, and the video somebody
+   * recorded for that pledge is still theirs to watch.
+   */
+  const delivered = isOwnProfile ? rewards ?? [] : [];
+  if (!data?.length && !visible.length && !delivered.length) return null;
 
   return (
     <Card className="border-border/50" data-testid="backer-credits">
@@ -87,6 +116,53 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
+        {/*
+          * Delivered rewards first, and only on your own profile: a video somebody
+          * recorded for you is the most interesting thing on this card, and it is
+          * nobody else's business.
+          */}
+        {delivered.length > 0 && (
+          <div className="space-y-1.5 pb-1" data-testid="my-rewards">
+            {delivered.map((r) => (
+              <div
+                key={`${r.projectId}-${r.rewardKey}`}
+                className="rounded-md border border-primary/30 bg-primary/5 p-2.5 space-y-1"
+                data-testid={`my-reward-${r.rewardKey}`}
+              >
+                <p className="text-sm">
+                  <span className="font-medium">{r.label}</span>
+                  {" from "}
+                  <Link href={`/projects/${r.projectId}`} className="hover:underline">{r.projectTitle}</Link>
+                </p>
+                {r.note && <p className="text-xs text-muted-foreground italic">“{r.note}”</p>}
+                {r.videoUrl && (
+                  <div className="space-y-1">
+                    {/*
+                      * Played here rather than linked away. It was made for this
+                      * person; opening a bare file in a new tab is a worse way to
+                      * receive it than a player in place.
+                      */}
+                    <video
+                      src={r.videoUrl}
+                      controls
+                      preload="metadata"
+                      className="w-full rounded border bg-black"
+                      data-testid={`reward-video-${r.rewardKey}`}
+                    />
+                    <a
+                      href={`${r.videoUrl}?download=1`}
+                      download
+                      className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                      data-testid={`reward-video-download-${r.rewardKey}`}
+                    >
+                      <Download className="h-3 w-3" /> Keep a copy
+                    </a>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {/*
           * The owner's view lists every live pledge with a visibility toggle,
           * because deciding to be anonymous a week later is a normal thing to
@@ -119,14 +195,36 @@ export function BackerCredits({ userId, isOwnProfile = false }: { userId: string
                     : <><Eye className="h-2.5 w-2.5" /> On the wall</>}
                 </Badge>
               </div>
-              <Button
-                variant="ghost" size="sm" className="h-6 text-[11px] px-2"
-                disabled={setPrivacy.isPending}
-                onClick={() => setPrivacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })}
-                data-testid={`toggle-privacy-${b.id}`}
-              >
-                {b.isAnonymous ? "Show my name" : "Hide my name"}
-              </Button>
+              <div className="flex items-center gap-1">
+                {/*
+                  * A plain link, not a fetch: the route answers with a PNG and a
+                  * Content-Disposition, so the browser's own download is both
+                  * simpler and better behaved than pulling the bytes into memory
+                  * to make a blob URL out of them.
+                  *
+                  * Shown on every settled backing rather than only where the tier
+                  * promised one. The certificate costs nothing to draw and says
+                  * something true about any pledge; gating it on a reward the
+                  * creator happened to tick would be withholding a fact.
+                  */}
+                <Button asChild variant="ghost" size="sm" className="h-6 text-[11px] px-2 gap-1">
+                  <a
+                    href={`/api/projects/${b.projectId}/backing/certificate`}
+                    download
+                    data-testid={`download-certificate-${b.id}`}
+                  >
+                    <Award className="h-3 w-3" /> Certificate
+                  </a>
+                </Button>
+                <Button
+                  variant="ghost" size="sm" className="h-6 text-[11px] px-2"
+                  disabled={setPrivacy.isPending}
+                  onClick={() => setPrivacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })}
+                  data-testid={`toggle-privacy-${b.id}`}
+                >
+                  {b.isAnonymous ? "Show my name" : "Hide my name"}
+                </Button>
+              </div>
             </div>
           </div>
         )) : data!.map((b) => (

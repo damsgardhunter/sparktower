@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { DownloadImage } from "@/components/download-image";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -175,12 +176,31 @@ export function StoryboardSlideshow({
             <div className="relative flex-1 flex items-center justify-center px-4 py-3 min-h-0">
               <div className="relative w-full aspect-video max-h-[55vh] rounded-md overflow-hidden bg-muted">
                 {currentScene.imageUrl ? (
-                  <img
-                    src={currentScene.imageUrl}
-                    alt={currentScene.caption}
-                    className={`w-full h-full object-contain transition-opacity duration-200 ${fadeClass}`}
-                    data-testid={`img-scene-${currentIndex}`}
-                  />
+                  <>
+                    <img
+                      src={currentScene.imageUrl}
+                      alt={currentScene.caption}
+                      className={`w-full h-full object-contain transition-opacity duration-200 ${fadeClass}`}
+                      data-testid={`img-scene-${currentIndex}`}
+                    />
+                    {/*
+                      * Save this frame. A storyboard is drawn image by image and
+                      * paid for the same way, so the scene somebody wants is the
+                      * one they are looking at — a single "download the lot"
+                      * would be the wrong shape as well as more to build.
+                      *
+                      * Top-left, because the arrows own the sides and the caption
+                      * the bottom.
+                      */}
+                    <DownloadImage
+                      src={currentScene.imageUrl}
+                      name={`${title} scene ${currentIndex + 1}`}
+                      iconOnly
+                      variant="secondary"
+                      className="absolute left-2 top-2 bg-background/70 backdrop-blur-sm"
+                      testId={`button-download-scene-${currentIndex}`}
+                    />
+                  </>
                 ) : (
                   <div
                     className={`w-full h-full bg-gradient-to-br ${styleInfo.gradient} flex items-center justify-center p-8 transition-opacity duration-200 ${fadeClass}`}

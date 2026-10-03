@@ -17,6 +17,7 @@ import { startRetentionJobs } from "./retention";
 import { startRhythmJobs } from "./company-rhythm-jobs";
 import { startSimulationNudges } from "./simulation-nudges";
 import { startReputationJobs } from "./reputation-jobs";
+import { startPushJobs } from "./push";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
@@ -183,6 +184,9 @@ let appReady = false;
   startSimulationNudges();
   // Builder indexes, on the hour (server/reputation-jobs.ts).
   startReputationJobs();
+  // What became of the pushes sent a quarter of an hour ago, so that a phone
+  // whose app was deleted stops being written to (server/push.ts).
+  startPushJobs();
 
   const app = await createApp({
     httpServer,

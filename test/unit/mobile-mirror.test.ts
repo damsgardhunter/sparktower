@@ -30,6 +30,21 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import * as phone from "../../mobile/src/components/sim/desk";
+import { connectionName as phoneName, searchConnections as phoneSearchConnections } from "../../mobile/src/connectionSearch";
+import { connectionName as webName, searchConnections } from "../../client/src/lib/connection-search";
+import { CROP as phoneCrop } from "../../mobile/src/profileCrop";
+import { CROP_PRESETS } from "../../client/src/lib/image-crop";
+import * as phoneProblem from "../../mobile/src/problemReport";
+import { workingView as phoneWorkingView, WORKING_CURRENT_WIDTH as phoneCurrentWidth, WORKING_MIN_WIDTH as phoneMinWidth, WORKING_UNSTARTED_LABEL as phoneUnstarted } from "../../mobile/src/workingView";
+import { workingView, WORKING_CURRENT_WIDTH, WORKING_MIN_WIDTH, WORKING_UNSTARTED_LABEL } from "../../client/src/lib/working-view";
+import { auditStageLabel as phoneAuditStageLabel, AUDIT_STAGES as phoneAuditStages } from "../../mobile/src/auditStages";
+import { auditStageLabel } from "../../client/src/lib/audit-status";
+import * as phoneBuild from "../../mobile/src/buildStages";
+import { buildThrough, buildProgress, buildStepLine, buildElapsedSeconds, buildStageLabel, STAGE_ORDER } from "../../client/src/lib/build-status";
+import { BUILD_STAGE_COPY, BUILD_STEP_CAP } from "@shared/nova-build";
+import * as phoneRewards from "../../mobile/src/backerRewards";
+import { DIGITAL_REWARDS, OFFERABLE_DIGITAL_REWARDS, deliverableRewards, isRewardAvailable } from "@shared/backing";
+import * as webProblem from "@shared/problem-reports";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
 import { fixedCosts, SALARY, EXECUTIVE } from "@shared/simulation/decisions";
@@ -390,5 +405,362 @@ describe("the numbers the phone copies by hand", () => {
   it("agree with the engine's", () => {
     expect(phone.SEVERANCE).toBe(SEVERANCE);
     for (const pct of [undefined, 80, 100, 115, 130, 150]) expect(phone.payCost(pct)).toBeCloseTo(payEffect(pct as any).cost, 10);
+  });
+});
+
+/**
+ * Finding somebody to message, on both clients.
+ *
+ * Messages has a picker over your connections, and the matching behind it is
+ * written twice: `client/src/lib/connection-search.ts` and
+ * `mobile/src/connectionSearch.ts`. The phone's copy had already drifted before
+ * either was extracted — it matched the name and the headline but not the
+ * username, and left the list in the order the server sent it, which is by when
+ * each connection was made. Neither suite could see it, because each only ever
+ * saw its own half: the web had no picker at all, and the phone's was a filter
+ * written inline in a screen.
+ *
+ * The failure is quiet in the worst way. A search that has stopped looking at
+ * usernames returns nothing for a handle typed from memory, and "no connection
+ * by that name" is indistinguishable from "that person never connected with you".
+ */
+describe("searching your connections", () => {
+  const row = (over: { firstName?: string; lastName?: string; displayName?: string; username?: string; headline?: string }) => ({
+    user: { firstName: over.firstName, lastName: over.lastName },
+    profile: (over.displayName || over.username || over.headline)
+      ? { displayName: over.displayName, username: over.username, headline: over.headline }
+      : undefined,
+  });
+
+  /*
+   * Everybody here has a name. The one place the two sides differ on purpose is
+   * the fallback for somebody who has none: the phone's `personName` refuses to
+   * print an email and says "Builder", the web prints the address before "User".
+   * That is a deliberate rule on the phone, and the email is redacted from
+   * anybody else's account before it leaves the server anyway — so excluding
+   * nameless rows here excludes the known difference and nothing else.
+   */
+  const people = [
+    row({ displayName: "Zara Ferreira", username: "zaraf", headline: "Designer, mostly mobile" }),
+    row({ displayName: "Ada Marchetti", username: "adam", headline: "Backend and data" }),
+    row({ firstName: "Nils", lastName: "Ferreira" }),
+    row({ displayName: "Quinn", username: "qq", headline: "Design systems" }),
+    row({ firstName: "Bo", lastName: "Adams", headline: "Ships on Fridays" }),
+  ];
+
+  it("matches and orders the same rows as the web app", () => {
+    for (const query of [
+      "", "   ", "a", "ada", "ADA MARCH", "ferreira", "zaraf", "qq",
+      "design", "Design Systems", "ships", "bo", "nils",
+      "nobody-by-that-name", "@", "  ferreira  ",
+    ]) {
+      const onWeb = searchConnections(people as any, query).map((c) => webName(c as any));
+      const onPhone = phoneSearchConnections(people, query).map((c) => phoneName(c));
+      expect(onPhone, `query ${JSON.stringify(query)}`).toEqual(onWeb);
+    }
+  });
+
+  /* The two drifts that were actually there, named so a revert fails loudly. */
+  it("matches a username on both, which the phone used not to", () => {
+    expect(phoneSearchConnections(people, "zaraf").map(phoneName)).toEqual(["Zara Ferreira"]);
+    expect(searchConnections(people as any, "zaraf").map((c) => webName(c as any))).toEqual(["Zara Ferreira"]);
+  });
+
+  it("sorts by name on both, not by when the connection was made", () => {
+    const byName = ["Ada Marchetti", "Bo Adams", "Nils Ferreira", "Quinn", "Zara Ferreira"];
+    expect(phoneSearchConnections(people, "").map(phoneName)).toEqual(byName);
+    expect(searchConnections(people as any, "").map((c) => webName(c as any))).toEqual(byName);
+  });
+
+  it("leaves the caller's array alone on both, since the query cache owns it", () => {
+    const original = [...people];
+    phoneSearchConnections(people, "");
+    searchConnections(people as any, "");
+    expect(people).toEqual(original);
+  });
+});
+
+/**
+ * The shape a profile picture is cut to, on both clients.
+ *
+ * Both crop before uploading — the web with its own cropper, the phone by handing
+ * the job to the native crop UI — and both store the result, so the ratio is
+ * baked into the file rather than applied when it is shown. Which means a cover
+ * framed 4:1 on one client and 16:9 on the other would land differently in the
+ * same band, and nothing would fail: both would look deliberate, and only side
+ * by side would either look wrong.
+ *
+ * Not a mirror of logic, then, but of a number that has to be the same number.
+ */
+describe("the shape a profile picture is cut to", () => {
+  it("is the same on the phone as on the web", () => {
+    expect(phoneCrop.avatar[0] / phoneCrop.avatar[1], "a round avatar is square").toBe(CROP_PRESETS.avatar.aspect);
+    expect(phoneCrop.cover[0] / phoneCrop.cover[1], "the cover band is 4:1").toBe(CROP_PRESETS.cover.aspect);
+  });
+
+  /*
+   * And that the web's own frame still matches the band it is framing. The band
+   * is `aspect-[4/1]` in client/src/pages/landing.tsx's sibling, the profile
+   * page; a preset that stopped agreeing with it would put the cropper back to
+   * promising a framing the page does not keep.
+   */
+  it("keeps the web preset square for the avatar and four-to-one for the cover", () => {
+    expect(CROP_PRESETS.avatar.outWidth).toBe(CROP_PRESETS.avatar.outHeight);
+    expect(CROP_PRESETS.cover.outWidth / CROP_PRESETS.cover.outHeight).toBe(4);
+  });
+});
+
+/**
+ * What counts as a problem report, on both clients.
+ *
+ * The server answers 400 with a sentence meant to be shown verbatim, and both
+ * clients check the same rule first so a message too short to be useful does not
+ * cost a round trip to be told so. Which means the rule is written twice, and the
+ * refusal *wording* is written twice with it.
+ *
+ * This caught a real drift while it was being written: the phone's copy had the
+ * ceiling at 2,000 characters against the server's 1,000. The failure that would
+ * have caused is the quiet kind — a long report passes on the phone, the button
+ * enables, the person sends it, and the server rejects it with a message about a
+ * limit the screen had just told them they were inside.
+ */
+describe("what counts as a problem report", () => {
+  it("has the same bounds on the phone as on the server", () => {
+    expect(phoneProblem.PROBLEM_MESSAGE_MIN).toBe(webProblem.PROBLEM_MESSAGE_MIN);
+    expect(phoneProblem.PROBLEM_MESSAGE_MAX).toBe(webProblem.PROBLEM_MESSAGE_MAX);
+  });
+
+  it("accepts and refuses the same messages, with the same words", () => {
+    const max = webProblem.PROBLEM_MESSAGE_MAX;
+    for (const input of [
+      "", "   ", "a", "abc", "abcd", "  abcd  ", "the save button does nothing",
+      "x".repeat(max - 1), "x".repeat(max), "x".repeat(max + 1), "x".repeat(max * 2),
+      undefined, null, 42, {}, [], true,
+    ] as unknown[]) {
+      const onPhone = phoneProblem.readProblemMessage(input);
+      const onServer = webProblem.readProblemMessage(input);
+      expect(onPhone, `input ${JSON.stringify(input)?.slice(0, 40)}`).toEqual(onServer);
+    }
+  });
+
+  /* The path is stored so a report can be reproduced; both sides strip it the same. */
+  it("reduces a path to a path the same way", () => {
+    for (const input of [
+      "/project/123", "/project/123?tab=brief", "/project/123#notes", "/",
+      "relative", "https://evil.test/x", "//evil.test", "", "  /spaced  ",
+      "/" + "x".repeat(400), undefined, null, 7,
+    ] as unknown[]) {
+      expect(phoneProblem.readProblemPath(input), `input ${JSON.stringify(input)?.slice(0, 40)}`)
+        .toBe(webProblem.readProblemPath(input));
+    }
+  });
+});
+
+/**
+ * What a Nova wait draws, on both clients.
+ *
+ * The phone showed the stage as a sentence in small grey text — "reading ·
+ * 1:05" — which says which of three phases is running and not that there are
+ * three. A read sitting in "reading" for ninety seconds therefore looked exactly
+ * like one that had stopped. It now draws the web's segmented bar, which means
+ * both clients answer "which segment is filled" and "what is this wait called",
+ * and a disagreement would show the same run at two different states.
+ *
+ * The waits are the longest thing in the product and the phone's are longer than
+ * the web's, same model call over a worse connection — so this is the mirror most
+ * likely to be looked at while something is going wrong.
+ */
+describe("what a Nova wait draws", () => {
+  const stages = [
+    { id: "fetching", label: "Fetching your code" },
+    { id: "reading", label: "Nova is reading it" },
+    { id: "saving", label: "Saving what it found" },
+  ];
+
+  it("agrees on the bar and the label at every stage", () => {
+    const progresses = [undefined, null, 0, 0.01, 0.5, 1, 2, -1, Number.NaN, Number.POSITIVE_INFINITY];
+    for (const current of [undefined, null, "", "fetching", "reading", "saving", "not-a-stage"]) {
+      for (const saying of [undefined, null, "Uploading the zip"]) {
+        for (const progress of progresses) {
+          const onWeb = workingView(stages, current, saying, progress);
+          const onPhone = phoneWorkingView(stages, current, saying, progress);
+          expect(onPhone, `current=${current} saying=${saying} progress=${progress}`).toEqual(onWeb);
+        }
+      }
+    }
+  });
+
+  /* The three rules that make the bar honest, asserted on both rather than described. */
+  it("draws an unrecognised stage as nothing started, not as the first one finished", () => {
+    for (const view of [workingView(stages, "not-a-stage"), phoneWorkingView(stages, "not-a-stage")]) {
+      expect(view.index).toBe(-1);
+      expect(view.widths).toEqual([0, 0, 0]);
+      expect(view.label).toBe(WORKING_UNSTARTED_LABEL);
+    }
+    expect(phoneUnstarted).toBe(WORKING_UNSTARTED_LABEL);
+  });
+
+  it("fills the finished stages and part-fills the current one", () => {
+    for (const view of [workingView(stages, "saving"), phoneWorkingView(stages, "saving")]) {
+      expect(view.widths).toEqual([100, 100, WORKING_CURRENT_WIDTH]);
+    }
+    expect(phoneCurrentWidth).toBe(WORKING_CURRENT_WIDTH);
+  });
+
+  it("floors a known progress, so a stage that has just begun reads as begun", () => {
+    for (const view of [workingView(stages, "reading", null, 0), phoneWorkingView(stages, "reading", null, 0)]) {
+      expect(view.widths[1]).toBe(WORKING_MIN_WIDTH);
+    }
+    expect(phoneMinWidth).toBe(WORKING_MIN_WIDTH);
+  });
+
+  /* And the words a stage is given, which both clients look up separately. */
+  it("names each stage the same way on both", () => {
+    for (const id of ["fetching", "reading", "saving", "", "unknown", null, undefined]) {
+      expect(phoneAuditStageLabel(id), String(id)).toBe(auditStageLabel(id));
+    }
+  });
+});
+
+/**
+ * A whole-business build in flight, on both clients.
+ *
+ * The phone could *start* this and then showed nothing: the button fired, a toast
+ * said "Nova is building it", and the app was silent for the length of a forty-
+ * step job — no stage, no step count, no completion, and no error if the run died.
+ * From the buyer's side that is indistinguishable from a fourteen-dollar outcome
+ * that silently failed, which makes this the most expensive thing in the product
+ * to get wrong and the one the phone said least about.
+ *
+ * Now both read the same run and have to describe it the same way. Two of these
+ * rules are the kind that look like details and are not:
+ *
+ *   - **Steps left for the builder count as gone through.** `stepsForYou` is a
+ *     decision Nova researched and deliberately left open — work done, not work
+ *     skipped. Excluding it stalls the bar on a run that is still working.
+ *   - **A fraction only during `building`.** The other three stages are seconds
+ *     each and know nothing about their own position, so a number there would be
+ *     invented, and an invented number that looks precise is worse than an
+ *     honest unknown.
+ */
+describe("a whole-business build in flight", () => {
+  const run = (over: Partial<{ stage: string; stepsDone: number; stepsForYou: number; stepsFailed: number; stepsTotal: number; currentTitle: string | null; elapsedSeconds: number; startedAt: string }> = {}) => ({
+    id: "r1", stage: "building", stageLabel: "Working through your path",
+    stepsDone: 10, stepsForYou: 3, stepsFailed: 1, stepsTotal: 28,
+    currentTitle: "Writing your pricing page",
+    startedAt: new Date("2026-10-01T12:00:00Z").toISOString(), elapsedSeconds: 600,
+    ...over,
+  }) as any;
+
+  it("lists the same stages, with the same words", () => {
+    expect(phoneBuild.BUILD_STAGES).toEqual([...STAGE_ORDER]);
+    expect(phoneBuild.BUILD_STAGE_COPY).toEqual(BUILD_STAGE_COPY);
+    expect(phoneBuild.BUILD_STEP_CAP, "how many steps one purchase covers").toBe(BUILD_STEP_CAP);
+    for (const stage of [...STAGE_ORDER, "", "unknown", null, undefined]) {
+      expect(phoneBuild.buildStageLabel(stage as any), String(stage)).toBe(buildStageLabel(stage as any));
+    }
+  });
+
+  it("counts the same steps as gone through", () => {
+    for (const over of [
+      {}, { stepsForYou: 0 }, { stepsFailed: 0 }, { stepsDone: 0, stepsForYou: 0, stepsFailed: 0 },
+      { stepsDone: 28, stepsForYou: 0, stepsFailed: 0 },
+    ]) {
+      expect(phoneBuild.buildThrough(run(over))).toBe(buildThrough(run(over)));
+    }
+    /* Named, because dropping either term is the bug that stalls the bar. */
+    expect(buildThrough(run({ stepsDone: 10, stepsForYou: 3, stepsFailed: 1 }))).toBe(14);
+  });
+
+  it("offers the same fraction, and the same refusal to invent one", () => {
+    for (const stage of [...STAGE_ORDER, "unknown"]) {
+      for (const over of [{ stepsTotal: 28 }, { stepsTotal: 0 }, { stepsDone: 999, stepsTotal: 28 }]) {
+        const r = run({ stage, ...over });
+        expect(phoneBuild.buildProgress(r), `${stage} ${JSON.stringify(over)}`).toBe(buildProgress(r));
+      }
+    }
+    expect(buildProgress(run({ stage: "reading" })), "no fraction outside building").toBeNull();
+    expect(buildProgress(null)).toBeNull();
+    expect(phoneBuild.buildProgress(null)).toBeNull();
+  });
+
+  it("names the same step, clamped to the total", () => {
+    for (const over of [{}, { stepsTotal: 0 }, { stepsDone: 28, stepsForYou: 0, stepsFailed: 0 }]) {
+      expect(phoneBuild.buildStepLine(run(over))).toBe(buildStepLine(run(over)));
+    }
+    expect(buildStepLine(run()), "counted from one").toBe("step 15 of 28");
+    expect(buildStepLine(run({ stepsDone: 28, stepsForYou: 0, stepsFailed: 0 })), "never one past the end").toBe("step 28 of 28");
+  });
+
+  it("agrees on the elapsed time, and never runs it backwards", () => {
+    const started = new Date("2026-10-01T12:00:00Z").toISOString();
+    for (const [elapsedSeconds, now] of [
+      [600, Date.parse(started) + 700_000],
+      [600, Date.parse(started) + 100_000],
+      [0, Date.parse(started)],
+      [600, Number.NaN],
+    ] as const) {
+      const r = run({ elapsedSeconds, startedAt: started });
+      expect(phoneBuild.buildElapsedSeconds(r, now), `${elapsedSeconds} @ ${now}`).toBe(buildElapsedSeconds(r, now));
+    }
+    /* The clock is ahead of the last poll, so the number ticks rather than stepping. */
+    expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 700_000)).toBe(700);
+    /* And a stale poll never drags it back. */
+    expect(buildElapsedSeconds(run({ elapsedSeconds: 600, startedAt: started }), Date.parse(started) + 100_000)).toBe(600);
+  });
+});
+
+/**
+ * Which backer rewards exist, on both clients.
+ *
+ * Two of them did not: a wallpaper and a profile frame, both declared as things
+ * the *platform* generates, with nothing anywhere that does. A creator could
+ * promise either and a backer could pay for a rung advertising it, and the
+ * creator is the one who looks like they broke the promise.
+ *
+ * Withdrawn rather than deleted, because eight tiers already name those keys and
+ * an unknown key renders to a backer as the raw string. So "which of these can
+ * actually be delivered" is now a fact the two clients have to agree on — and the
+ * phone keeps its own hand copy of the catalogue, which is exactly the shape of
+ * drift this file exists for. A phone still offering a wallpaper would be the web
+ * having withdrawn it and the phone not hearing.
+ */
+describe("which backer rewards exist", () => {
+  it("is the same catalogue, key for key and label for label", () => {
+    expect(phoneRewards.DIGITAL_REWARDS.map((r) => r.key)).toEqual(DIGITAL_REWARDS.map((r) => r.key));
+    for (const web of DIGITAL_REWARDS) {
+      const phone = phoneRewards.DIGITAL_REWARDS.find((r) => r.key === web.key);
+      expect(phone, web.key).toBeTruthy();
+      expect(phone!.label, web.key).toBe(web.label);
+      expect(phone!.fulfilledBy, web.key).toBe(web.fulfilledBy);
+    }
+  });
+
+  it("agrees on which ones cannot be delivered", () => {
+    for (const web of DIGITAL_REWARDS) {
+      expect(phoneRewards.isRewardAvailable(web.key), web.key).toBe(isRewardAvailable(web.key));
+    }
+    expect(phoneRewards.OFFERABLE_DIGITAL_REWARDS.map((r) => r.key))
+      .toEqual(OFFERABLE_DIGITAL_REWARDS.map((r) => r.key));
+  });
+
+  /* Named on both sides, so putting either back has to be done twice and on purpose. */
+  it("withholds the wallpaper and the profile frame on both", () => {
+    for (const key of ["wallpaper", "profile_frame"]) {
+      expect(isRewardAvailable(key), `web: ${key}`).toBe(false);
+      expect(phoneRewards.isRewardAvailable(key), `phone: ${key}`).toBe(false);
+    }
+  });
+
+  it("filters a saved tier the same way", () => {
+    for (const saved of [
+      ["backer_wall", "wallpaper", "digital_badge"],
+      ["profile_frame"],
+      ["backer_wall", "believer_number"],
+      [],
+      ["something_new"],
+    ]) {
+      expect(phoneRewards.deliverableRewards(saved), JSON.stringify(saved)).toEqual(deliverableRewards(saved));
+    }
   });
 });

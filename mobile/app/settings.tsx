@@ -9,6 +9,7 @@ import { useEntitlementsQuery } from "../src/hooks/useEntitlements";
 import { colors, font, fontFamily, spacing } from "../src/theme";
 import { Btn, Chip, ErrorNote, Field, Icon, errText, type IconName } from "../src/components/ui";
 import { Group, MenuRow } from "../src/components/MoreKit";
+import { PushSettingsRow } from "../src/components/PushOffer";
 import { NoticeBanner, Sheet, useNotice, type Notice } from "../src/components/Sheet";
 
 /** What someone new usually asks, answered in a line each. */
@@ -111,6 +112,10 @@ export default function Settings() {
               <MenuRow icon="person-circle" title="Your profile" subtitle="How other builders see you" onPress={() => go("/(tabs)/profile")} />
               <MenuRow icon="options" title="Profile details" subtitle="Skills, interests, links and co-founder preferences" tint={colors.info} onPress={() => go("/welcome")} />
               <MenuRow icon="document-text" title="Build my profile from a résumé" tint={colors.info} onPress={() => go("/profile-builder")} />
+            </Group>
+
+            <Group title="Notifications" footer="This switch is your account's, so it holds on every device you sign in on. Your phone's own notification permission is separate, and lives in its settings.">
+              <PushSettingsRow />
             </Group>
 
             <Group title="Security" footer="Signing out everywhere ends every web session and every signed-in phone, including this one. Use it for a lost phone or a shared computer.">

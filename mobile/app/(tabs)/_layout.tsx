@@ -1,8 +1,9 @@
-import { Tabs } from "expo-router";
+import { Tabs, type ErrorBoundaryProps } from "expo-router";
 import { colors } from "../../src/theme";
 import { AppHeader, PlainHeader } from "../../src/components/AppHeader";
 import { PLAIN_HEADER_TITLES, usesPlainHeader } from "../../src/components/header-kind";
 import { NovaTabBar } from "../../src/components/nav/NovaTabBar";
+import { ErrorScreen } from "../../src/components/ErrorBoundary";
 import { TabBarVisibilityProvider } from "../../src/components/tab-bar-visibility";
 
 /**
@@ -102,4 +103,17 @@ export default function TabsLayout() {
       </Tabs>
     </TabBarVisibilityProvider>
   );
+}
+
+/**
+ * A throw inside this segment loses the segment, not the app.
+ *
+ * expo-router's convention: a route or layout file that exports a component
+ * called `ErrorBoundary` gets it wrapped around that segment. Here that means a
+ * tab screen that throws keeps the tab bar, so one tap gets you somewhere that
+ * works — which was the whole difference between a broken screen and a broken
+ * app. The root layout exports one too, as the backstop for a throw in the shell.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return <ErrorScreen error={error} retry={retry} where="tabs" />;
 }

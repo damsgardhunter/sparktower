@@ -37,6 +37,18 @@ export default function More() {
     refetchInterval: 5 * 60_000,
   });
 
+  /*
+   * Just the count, for the badge on "Being scouted". The screen itself reads
+   * the invitations; this is the one number the menu needs.
+   */
+  const { data: scouting } = useQuery({
+    queryKey: ["talent-waiting"],
+    queryFn: async () => {
+      const r = await api<{ invites: { status: string }[] }>("/api/talent/invites");
+      return { waiting: (r.invites ?? []).filter((i) => i.status === "sent").length };
+    },
+  });
+
   // Analytics is the platform owner's alone; the server answers { owner } (and 404s every analytics route otherwise).
   const { data: access } = useQuery({
     queryKey: ["analytics-access"],
@@ -112,6 +124,13 @@ export default function More() {
         )}
 
         <Group title="Build">
+          {/*
+            * The path is the retention loop's home, and the phone had the list
+            * (ContinuePathCard on the feed) with nowhere to be sent to — behind
+            * whatever else was on the feed that day, and hidden entirely when
+            * empty. This is its address.
+            */}
+          <MenuRow icon="compass" title="Your path" subtitle="Every project's next step, on one screen" tint={colors.primary} onPress={() => go("/path")} testID="more-path" />
           {on("sprints") && <MenuRow icon="people" title="Simulations" subtitle="Invent a company in half an hour, or run one for a fortnight" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {/*
             * "Practice sprint" used to sit here, pointing at /sprint/practice.
@@ -135,6 +154,43 @@ export default function More() {
           {on("matches") && <MenuRow icon="people-circle" title="Matches" subtitle="Builders who fit what you're looking for" tint={colors.primary} onPress={() => go("/matches")} testID="more-matches" />}
           {on("leaderboard") && <MenuRow icon="trophy" title="Leaderboard" subtitle="Builder Index and top projects" tint="#CA8A04" onPress={() => go("/(tabs)/leaderboard")} testID="more-leaderboard" />}
           {on("messages") && <MenuRow icon="chatbubbles" title="Messages" subtitle="Your conversations" tint={colors.info} onPress={() => go("/(tabs)/messages")} />}
+          {/*
+            * Behind the `companies` switch, because being scouted is the other
+            * side of a company recruiting and that switch covers `/api/talent`.
+            * Badged when somebody is waiting on an answer: an invitation nobody
+            * sees is the thing this screen exists to prevent.
+            */}
+          {on("companies") && (
+            <MenuRow
+              icon="trophy"
+              title="Challenges"
+              subtitle="Briefs companies posted, with a prize"
+              tint="#CA8A04"
+              onPress={() => go("/challenges")}
+              testID="more-challenges"
+            />
+          )}
+          {on("companies") && (
+            <MenuRow
+              icon="business"
+              title="Companies"
+              subtitle="The companies you act for, and what each can do"
+              tint={colors.primary}
+              onPress={() => go("/companies")}
+              testID="more-companies"
+            />
+          )}
+          {on("companies") && (
+            <MenuRow
+              icon="people"
+              title="Being scouted"
+              subtitle="Whether companies can find you, and who has asked"
+              tint={colors.novaEmerald}
+              badge={scouting?.waiting ? scouting.waiting : null}
+              onPress={() => go("/talent")}
+              testID="more-talent"
+            />
+          )}
         </Group>
 
         {isReviewer && (
@@ -146,13 +202,32 @@ export default function More() {
             <MenuRow icon="cash" title="Backing review" subtitle="Campaigns waiting on a decision and payouts" tint={colors.warning} onPress={() => go("/admin/backing")} />
             <MenuRow icon="toggle" title="Surfaces" subtitle="Kill switches for each feature area" tint={colors.textSecondary} onPress={() => go("/admin/surfaces")} />
             {access?.owner && <MenuRow icon="analytics" title="Analytics" subtitle="Visits, signups and what people do" tint={colors.novaPurple} onPress={() => go("/admin/analytics")} />}
+            {/*
+              * Owner-only, like Analytics and for the same reason: the route
+              * answers 404 to anybody else, so showing the row to a reviewer
+              * would be offering a door that opens onto "not found".
+              */}
+            {access?.owner && <MenuRow icon="wallet" title="Revenue" subtitle="Collected, owed, and what's actually ours" tint={colors.success} onPress={() => go("/admin/revenue")} testID="more-revenue" />}
+            {access?.owner && <MenuRow icon="flash" title="AI spend" subtitle="What the model costs, and against what brake" tint={colors.novaEmerald} onPress={() => go("/admin/ai-spend")} testID="more-ai-spend" />}
+            {/* requireAdmin, not requireOwner — a reviewer may look somebody up. */}
+            <MenuRow icon="search" title="Support console" subtitle="Look somebody up, and what was done to them" tint={colors.info} onPress={() => go("/admin/console")} testID="more-console" />
+            <MenuRow icon="warning" title="Problem reports" subtitle="What people told us is broken" tint={colors.warning} onPress={() => go("/admin/problems")} testID="more-problems" />
+            <MenuRow icon="shield-checkmark" title="Security" subtitle="Who has power, and whether they are protected" tint={colors.danger} onPress={() => go("/admin/security")} testID="more-security" />
           </Group>
         )}
 
         <Group title="Account">
+          <MenuRow icon="cash" title="Earnings" subtitle="What you've earned, and where the next of it goes" tint={colors.success} onPress={() => go("/earnings")} testID="more-earnings" />
           <MenuRow icon="card" title="Plans & credits" subtitle={plan ? `You're on ${plan.name}` : "Compare plans"} onPress={() => go("/pricing")} testID="more-pricing" />
           <MenuRow icon="settings" title="Settings" subtitle="Account, security and sign-in" tint={colors.textSecondary} onPress={() => go("/settings")} testID="more-settings" />
           <MenuRow icon="help-circle" title="Help & about" subtitle="How SparkTower works" tint={colors.textSecondary} onPress={() => go("/settings?section=help")} />
+          {/*
+            * The web puts this in every footer; the phone has no footer, so it
+            * sits here. Not behind a surface flag: a way to say "this is broken"
+            * that can itself be switched off is the one feature you want left on
+            * when something is.
+            */}
+          <MenuRow icon="bug" title="Report a problem" subtitle="Something broken? Tell us" tint={colors.warning} onPress={() => go("/report-problem")} testID="more-report-problem" />
         </Group>
 
         <Group>

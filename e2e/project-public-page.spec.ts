@@ -24,8 +24,13 @@ const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 /** The four tabs that moved to the manage page. */
 const GONE = ["roadmap", "milestones", "team", "roles"];
-/** The five that are left. */
-const KEPT = ["overview", "updates", "media", "discussion", "followers"];
+/**
+ * The five that are left. Media became the backer wall: the people who paid
+ * for a project are more interesting to a visitor than its screenshots, and
+ * the names were the one thing on the pledge panel nobody could reach without
+ * opening the form that asks for money.
+ */
+const KEPT = ["overview", "updates", "backers", "discussion", "followers"];
 
 test("the public page shows five tabs, and a role is what you apply to", async ({ page, browser }) => {
   test.setTimeout(180_000);
@@ -71,6 +76,79 @@ test("the public page shows five tabs, and a role is what you apply to", async (
   // Five tabs, and the project's working material is not among them.
   for (const id of KEPT) await expect(page.getByTestId(`project-tab-${id}`)).toBeVisible();
   for (const id of GONE) await expect(page.getByTestId(`project-tab-${id}`)).toHaveCount(0);
+
+  /*
+   * And all five on one line, at any width.
+   *
+   * The row used to wrap, so on a narrow window "Followers 156" dropped
+   * underneath and the five tabs became a two-line block whose height changed
+   * as the counts arrived. It scales the type down instead. This is the only
+   * place that can be checked — it needs a real browser, because the whole
+   * mechanism is a measurement of laid-out text — and the assertion is
+   * geometric rather than visual: every tab shares a top edge, and none of
+   * them sticks out past the bar.
+   */
+  const bar = page.getByTestId("project-tab-bar");
+  const measure = () => bar.evaluate((el) => {
+    const tabs = [...el.querySelectorAll("[data-testid^='project-tab-']")];
+    return {
+      tops: tabs.map((t) => Math.round(t.getBoundingClientRect().top)),
+      count: tabs.length,
+      /* Rounded: sub-pixel layout differs by a fraction between platforms. */
+      overflow: Math.round(el.scrollWidth - el.clientWidth),
+      fontSize: parseFloat(getComputedStyle(el).fontSize),
+      /* Dropped before the row is allowed to scroll, so worth counting. */
+      iconsShown: [...el.querySelectorAll("svg")].filter((i) => getComputedStyle(i).display !== "none").length,
+    };
+  });
+
+  for (const width of [1280, 820, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+
+    /*
+     * Polled, not measured once.
+     *
+     * The bar fits itself by measuring the row and then writing a font size
+     * onto it, so there is a frame or two between a viewport change and the
+     * answer — and reading inside that gap catches it mid-flight. It did
+     * exactly that on CI: 14px with every icon still showing at 820 wide, and
+     * 10.29px half way down at 320, both while still overflowing. Neither was
+     * the component failing to fit; both were this test asking before it had.
+     */
+    await expect(async () => {
+      const rows = await measure();
+      const where = `${width}px: ${JSON.stringify(rows)}`;
+      expect(rows.count, `five tabs at ${where}`).toBe(KEPT.length);
+      /* The point of the whole thing: never two lines, at any width. */
+      expect(new Set(rows.tops).size, `one line at ${where}`).toBe(1);
+      /* Smaller when it has to be, never smaller than readable, never stretched. */
+      expect(rows.fontSize, `font size at ${where}`).toBeGreaterThanOrEqual(8.9);
+      expect(rows.fontSize, `font size at ${where}`).toBeLessThanOrEqual(14);
+
+      /*
+       * And it fits — unless it has already given up everything it has to
+       * give. Below roughly 360 pixels the five labels and their counts need
+       * more room than the screen has at the smallest readable size, so the
+       * row scrolls sideways instead. That is the last resort and deliberately
+       * the third thing tried, after shrinking the type and after dropping the
+       * icons: a row scrolled half out of view needs the visitor to work out
+       * that it scrolls, which is worse than small type and much worse than no
+       * hearts.
+       *
+       * What this holds is that scrolling only happens once there is nothing
+       * left to give — at the floor, with the icons already gone. It no longer
+       * asserts *which* widths those are: that is a fact about font metrics,
+       * and this suite runs on two platforms whose fonts are not the same
+       * width. Pinning 360 here was a claim about one of them dressed up as a
+       * claim about the component.
+       */
+      if (rows.overflow > 1) {
+        expect(rows.fontSize, `only scrolls once the type is as small as it goes — ${where}`).toBeLessThanOrEqual(9);
+        expect(rows.iconsShown, `and the icons were given up first — ${where}`).toBe(0);
+      }
+    }).toPass({ timeout: 15_000 });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   /*
    * Open roles sit on the overview rather than behind a tab, because they are

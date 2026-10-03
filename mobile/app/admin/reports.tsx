@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { Pill } from "../../src/components/nova/Pill";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Card, Empty, ErrorNote, Loading, Screen, Segments, errText } from "../../src/components/ui";
-import { PageIntro, Pill } from "../../src/components/MoreKit";
+import { PageIntro } from "../../src/components/MoreKit";
 import { NoticeBanner, Sheet, useNotice, type Notice } from "../../src/components/Sheet";
 import {
   ChoiceList, ConfirmSheet, LinkPill, NotFoundScreen, gateView, blockedView, isNotFound, text, useReviewer,
@@ -224,10 +225,10 @@ function ReportCard({ report: r, onDone, show }: { report: Report; onDone: () =>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
         <View style={{ flex: 1, gap: 6 }}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            <Pill label={TARGET_LABEL[r.targetType] ?? r.targetType} color={colors.textSecondary} />
-            <Pill label={reportReasonLabel(r.reason)} solid />
-            {r.targetHiddenMode ? <Pill label={r.targetHiddenMode === "shadow" ? "shadow-hidden" : "removed"} color={colors.info} /> : null}
-            {r.ownerSuspended ? <Pill label="author suspended" icon="person-remove" color={colors.danger} solid /> : null}
+            <Pill label={TARGET_LABEL[r.targetType] ?? r.targetType} tone="neutral" />
+            <Pill label={reportReasonLabel(r.reason)} tone="info" />
+            {r.targetHiddenMode ? <Pill label={r.targetHiddenMode === "shadow" ? "shadow-hidden" : "removed"} tone="info" /> : null}
+            {r.ownerSuspended ? <Pill label="author suspended" icon="person-remove" tone="bad" /> : null}
           </View>
           <Text style={text.small}>
             Reported by {r.reporterName}{r.ownerName ? ` · author ${r.ownerName}` : ""} · {new Date(r.createdAt).toLocaleString()}

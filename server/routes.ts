@@ -23,6 +23,10 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { registerPushRoutes } from "./push-routes";
+import { standingsFor } from "./contest-standings";
+import { downloadName, extensionFor } from "./download-name";
+import { registerBackerFulfilmentRoutes, registerMyRewardRoutes } from "./backer-fulfilment-routes";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -460,6 +464,9 @@ export async function registerRoutes(
   registerProjectDiscussionRoutes(app);
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
+  registerPushRoutes(app);
+  registerBackerFulfilmentRoutes(app);
+  registerMyRewardRoutes(app);
   registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);
@@ -4984,11 +4991,23 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       const scene = ((storyboard.scenes as StoryboardScene[]) || [])[index];
       if (!scene) return res.status(404).json({ message: "Scene not found" });
 
+      /*
+       * A storyboard scene is paid-for artwork like any other, so it downloads
+       * too — and it has to be handled here as well as in the objects route,
+       * because an early scene is held inline as a data URL and never becomes an
+       * object at all.
+       */
+      const wantsDownload = req.query?.download === "1" || req.query?.download === "true";
+      const asName = wantsDownload ? String(req.query?.as ?? `scene-${index + 1}`) : undefined;
+
       if (scene.inlineImage) {
         const match = scene.inlineImage.match(/^data:(image\/[\w+.-]+);base64,(.*)$/);
         if (!match) return res.status(404).json({ message: "Scene has no image" });
         res.setHeader("Content-Type", match[1]);
         res.setHeader("Cache-Control", "private, max-age=86400");
+        if (asName) {
+          res.setHeader("Content-Disposition", `attachment; filename="${downloadName(asName, extensionFor(match[1]))}"`);
+        }
         return res.send(Buffer.from(match[2], "base64"));
       }
 
@@ -4997,7 +5016,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       // downloadObject sets Cache-Control to private for private-ACL objects.
       const objStorage = new ObjectStorageService();
       const file = await objStorage.getObjectEntityFile(scene.imagePath);
-      await objStorage.downloadObject(file, res, 86400, scene.contentType);
+      await objStorage.downloadObject(file, res, 86400, scene.contentType, asName);
     } catch (error) {
       if (error instanceof ObjectNotFoundError) {
         return res.status(404).json({ message: "Scene image not found" });
@@ -6546,28 +6565,71 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     const allContests = await storage.getContests(status ? { status: status as string } : undefined);
     const userId = req.user?.id as string | undefined;
     if (userId) {
+      /*
+       * The viewer's own entry, not just whether they have one.
+       *
+       * `isParticipant` alone is why entering a contest was a dead end on both
+       * clients: the button turned into "Entered" and nothing could say whether
+       * the work had been filed, so nothing offered to file it. `submission` is
+       * null until they do, and only ever their own — a contest's entries are
+       * not public before judging.
+       */
       const enriched = await Promise.all(
-        allContests.map(async (c) => ({
-          ...c,
-          isParticipant: await storage.isContestParticipant(c.id, userId),
-        }))
+        allContests.map(async (c) => {
+          const mine = await storage.contestEntryFor(c.id, userId);
+          return {
+            ...c,
+            isParticipant: !!mine,
+            /*
+             * Null until they have actually filed. The row existing means they
+             * joined — that is `isParticipant` — and a `{ url: null }` object
+             * here reads as "has an entry" to anything checking truthiness, which
+             * is how the phone came to offer "Change entry" to somebody who had
+             * only joined.
+             */
+            submission: mine?.submissionUrl ? { url: mine.submissionUrl, note: mine.submissionNote } : null,
+          };
+        })
       );
       return res.json(enriched);
     }
-    res.json(allContests.map(c => ({ ...c, isParticipant: false })));
+    res.json(allContests.map(c => ({ ...c, isParticipant: false, submission: null })));
   });
 
   app.get("/api/contests/:id", async (req: any, res) => {
     const contest = await storage.getContest(req.params.id);
     if (!contest) return res.status(404).json({ message: "Contest not found" });
     const userId = req.user?.id as string | undefined;
-    const isParticipant = userId ? await storage.isContestParticipant(contest.id, userId) : false;
-    res.json({ ...contest, isParticipant });
+    const mine = userId ? await storage.contestEntryFor(contest.id, userId) : null;
+    res.json({
+      ...contest,
+      isParticipant: !!mine,
+      /* Null until filed — see the list route above for why that matters. */
+      submission: mine?.submissionUrl ? { url: mine.submissionUrl, note: mine.submissionNote } : null,
+    });
   });
 
-  app.get("/api/contests/:id/participants", async (req, res) => {
-    // Paged and capped: the list is readable signed out, and an uncapped one
-    // let a single request pull every entrant plus their account and profile.
+  /**
+   * Who is in a contest. Readable signed out, so what it says is chosen.
+   *
+   * It used to answer with the rows as they come out of the database: each
+   * entrant's whole account row, their whole profile, and — the part that
+   * matters — their `submissionUrl`, their `submissionNote` and their `score`.
+   * The global scrubber in server/app.ts keeps credentials and other people's
+   * account fields out of any response, which is why no email or password hash
+   * was ever in it; but a contest entry is not an account field, so nothing was
+   * keeping it back. Anybody could read every entrant's work, and the judges'
+   * scores, before judging had finished.
+   *
+   * So the shape is written out here instead of inherited. `hasSubmitted` is the
+   * one thing about somebody else's entry that is fair to publish: whether they
+   * have filed, which is the difference between an entrant and a name.
+   *
+   * Judging will need the entries themselves. That wants its own route, behind
+   * the contest's owner — not a widening of this one.
+   */
+  app.get("/api/contests/:id/participants", async (req: any, res) => {
+    // Paged and capped: an uncapped list let a single request pull every entrant.
     const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
     const offset = Number.parseInt(String(req.query.offset ?? ""), 10);
     const participants = await storage.getContestParticipants(
@@ -6575,7 +6637,44 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       Number.isFinite(limit) ? limit : undefined,
       Number.isFinite(offset) ? offset : 0,
     );
-    res.json(participants);
+    const viewerId = req.user?.id as string | undefined;
+    res.json(participants.map((p) => ({
+      userId: p.userId,
+      name: p.profile?.displayName || [p.user.firstName, p.user.lastName].filter(Boolean).join(" ") || "Someone",
+      avatarUrl: p.profile?.avatarUrl || p.user.profileImageUrl || null,
+      joinedAt: p.joinedAt,
+      hasSubmitted: !!p.submissionUrl,
+      /* Your own entry comes back in full; this is the same row the list route gives you. */
+      submission: viewerId && p.userId === viewerId && p.submissionUrl
+        ? { url: p.submissionUrl, note: p.submissionNote }
+        : null,
+    })));
+  });
+
+  /**
+   * Where everybody stands, for a contest the product scores itself.
+   *
+   * 404 for an ordinary contest rather than an empty table: a judged contest has
+   * no standings, and answering with `[]` would read as "nobody is winning".
+   *
+   * Readable signed out, like the entrants list, and for the same reason — it is
+   * a leaderboard, and a leaderboard nobody can see is not much of one. What it
+   * carries is a name, a face, a number and a rank; nothing about an account.
+   */
+  app.get("/api/contests/:id/standings", async (req, res) => {
+    try {
+      const standings = await standingsFor(String(req.params.id));
+      if (!standings) {
+        return res.status(404).json({
+          message: "This contest is judged rather than scored, so it has no standings.",
+          code: "not_scored",
+        });
+      }
+      res.json(standings);
+    } catch (error) {
+      console.error("Contest standings error:", error);
+      res.status(500).json({ message: "Couldn't work out the standings." });
+    }
   });
 
   app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
@@ -6610,15 +6709,65 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
-      const { submissionUrl, submissionNote } = req.body;
-      if (!submissionUrl) return res.status(400).json({ message: "submissionUrl is required" });
+      /*
+       * The link is the entry, so it is checked rather than taken on trust.
+       *
+       * It used to be a truthiness test, which accepted "asdf" and a thousand
+       * characters of pasted text — and the judge is the one who would find out.
+       * Both messages are written for the person typing, not for the field name:
+       * "submissionUrl is required" is a sentence for whoever wrote the route.
+       */
+      const rawUrl = typeof req.body?.submissionUrl === "string" ? req.body.submissionUrl.trim() : "";
+      if (!rawUrl) {
+        return res.status(400).json({ message: "Add a link to what you built.", code: "invalid_input", field: "submissionUrl" });
+      }
+      if (rawUrl.length > 2000) {
+        return res.status(400).json({ message: "That link is too long.", code: "invalid_input", field: "submissionUrl" });
+      }
+      let submissionUrl: string;
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("scheme");
+        submissionUrl = parsed.toString();
+      } catch {
+        return res.status(400).json({
+          message: "That doesn't look like a link. It needs to start with https://",
+          code: "invalid_input", field: "submissionUrl",
+        });
+      }
+      const submissionNote = typeof req.body?.submissionNote === "string"
+        ? req.body.submissionNote.trim().slice(0, 2000) || null
+        : null;
+
       const contest = await storage.getContest(contestId);
       if (!contest) return res.status(404).json({ message: "Contest not found" });
+      /*
+       * Nothing to file in a contest the game scores. The screens do not offer
+       * it, so reaching here means a stale page or somebody poking the route —
+       * and accepting a link would put an entry nobody will ever read against a
+       * standing worked out from their games.
+       */
+      if (contest.scoredBy) {
+        return res.status(400).json({
+          message: "This contest is scored from your games, so there's nothing to file. Play a round and your best result counts.",
+          code: "scored_not_judged",
+        });
+      }
       if (contest.status !== "active") {
-        return res.status(400).json({ message: "Contest is not accepting submissions" });
+        /*
+         * Says which way it is shut. Somebody who entered an upcoming contest
+         * and came back to file is in a different position from somebody who
+         * missed the deadline, and "not accepting submissions" told neither.
+         */
+        return res.status(400).json({
+          message: contest.status === "upcoming"
+            ? "This contest hasn't opened yet. You're entered, and you can file your work once it does."
+            : "This contest has closed for entries.",
+          code: "contest_closed",
+        });
       }
       const isParticipant = await storage.isContestParticipant(contestId, userId);
-      if (!isParticipant) return res.status(400).json({ message: "You must join the contest first" });
+      if (!isParticipant) return res.status(400).json({ message: "Enter the contest first.", code: "not_entered" });
       const updated = await storage.submitToContest(contestId, userId, submissionUrl, submissionNote);
       res.json(updated);
     } catch (error) {

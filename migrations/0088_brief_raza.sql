@@ -1,0 +1,1 @@
+CREATE INDEX "sim_seats_user_idx" ON "sim_seats" USING btree ("user_id");

@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_URL, api } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Body, Btn, ErrorNote, Field, Icon, Meta, Progress, Row, assetUri, errText } from "./ui";
-import { Block, Tag } from "./ProjectBits";
+import { ProjectSection, Tag } from "./ProjectBits";
 import { CheckRow, FormGroup, ProjectFormSheet } from "./ProjectFormSheet";
 import {
   BADGE_LEVELS, BELIEVER_TAGLINE, DIGITAL_REWARD_LABELS, MERCH_LABELS, MIN_PLEDGE_CENTS, TIP_PRESET_PERCENTS,
@@ -41,11 +41,72 @@ interface PublicCampaign {
   tiers: PublicTier[];
   badgePreviews?: Record<string, string>;
   badgeLogoUrl?: string | null;
-  wall: { believerNumber: number | null; name: string; image: string | null; message: string | null; tierName: string | null }[];
+  wall: {
+    believerNumber: number | null;
+    name: string;
+    image: string | null;
+    message: string | null;
+    tierName: string | null;
+    /* The badge minted where one exists, else the level the pledge clears. */
+    badgeLevel?: string | null;
+    badgeReady?: boolean;
+    /* The struck artwork, only once it really exists. */
+    badgeImage?: string | null;
+  }[];
   raisedCents: number;
   backers: number;
   defaultTipPercent: number;
   refundWindowDays: number;
+}
+
+/**
+ * One wall entry's badge: the medal and the name of its metal.
+ *
+ * Named in words, not only struck in colour. A tinted rim is legible only to
+ * somebody who already knows the scale, and the backer whose reward it is is
+ * exactly the person who does not yet.
+ *
+ * Until the artwork is drawn the medal wears the project's own logo inside that
+ * level's rim, which is the same stand-in the tier rows above use.
+ */
+function WallBadge({ entry, logoUrl, projectTitle }: {
+  entry: { badgeLevel?: string | null; badgeReady?: boolean; badgeImage?: string | null };
+  logoUrl: string | null;
+  projectTitle: string;
+}) {
+  const level = BADGE_LEVELS.find((l) => l.key === entry.badgeLevel);
+  if (!level) return null;
+  /*
+   * The path, resolved where it is used rather than here.
+   *
+   * `assetUri` is what turns the server's `/objects/...` into something a phone
+   * can fetch — without it an `<Image>` draws blank space, no error and no
+   * broken-image icon. `test/unit/mobile-restatements.test.ts` enforces that by
+   * reading the source for the call inside `source={{ uri: ... }}`, which it
+   * cannot see through a variable, so hoisting it defeated a guard that exists
+   * for a bug this app shipped everywhere once.
+   */
+  const art = entry.badgeImage ?? logoUrl;
+  return (
+    <Row center gap={3}>
+      <View style={{
+        width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: level.hex,
+        overflow: "hidden", alignItems: "center", justifyContent: "center",
+      }}>
+        {art
+          ? <Image source={{ uri: assetUri(art)! }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+          : <Text style={{ fontSize: 8, fontFamily: fontFamily.semibold, color: level.hex }}>
+              {projectTitle.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+            </Text>}
+      </View>
+      <Text
+        style={{ fontSize: 10, fontFamily: fontFamily.semibold, color: level.hex }}
+        accessibilityLabel={`${level.label} believer badge for ${projectTitle}`}
+      >
+        {level.label}
+      </Text>
+    </Row>
+  );
 }
 
 function TierBadge({ levelKey, previews, logoUrl, size = 44 }: { levelKey?: string; previews: Record<string, string>; logoUrl: string | null; size?: number }) {
@@ -92,13 +153,13 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
   if (isError && !data) {
     if (!isOwner) return null;
     return (
-      <Block title="Let people back this" icon="heart-outline">
+      <ProjectSection title="Let people back this" icon="heart-outline">
         <Body muted>
           Set up tiers and merch and people can put money behind you. Held by SparkTower until the project is reviewed, so backers know it's safe to give.
         </Body>
         <Btn label="Set up backing" variant="outline" small icon="settings-outline" style={{ alignSelf: "flex-start" }}
           onPress={() => router.push(`/manage/${projectId}?tab=setup` as any)} />
-      </Block>
+      </ProjectSection>
     );
   }
   if (!data) return null;
@@ -112,7 +173,7 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
 
   return (
     <>
-      <Block title="Back this project" icon="heart">
+      <ProjectSection title="Back this project" icon="heart">
         {campaign.headline ? <Body muted>{campaign.headline}</Body> : null}
         <View style={{ gap: 6 }}>
           <Row between>
@@ -187,19 +248,29 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
               <Row key={i} gap={spacing.sm} style={{ alignItems: "flex-start" }}>
                 <Avatar name={w.name} uri={w.image} size={28} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: font.sm, color: colors.text, fontFamily: fontFamily.semibold }}>
-                    {w.name}
-                    <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular }}>
-                      {w.believerNumber != null ? ` ${formatBelieverNumber(w.believerNumber)}` : ""}{w.tierName ? ` · ${w.tierName}` : ""}
+                  {/*
+                    * The badge, beside the name, as the web wall shows it. The
+                    * level is the thing a backer paid for and the thing they get
+                    * to wear, and this list left it out entirely — so the one
+                    * place a backer could see the reward they had earned was a
+                    * browser.
+                    */}
+                  <Row center gap={5}>
+                    <Text style={{ fontSize: font.sm, color: colors.text, fontFamily: fontFamily.semibold }}>
+                      {w.name}
                     </Text>
-                  </Text>
+                    <WallBadge entry={w} logoUrl={data.badgeLogoUrl ?? null} projectTitle={projectTitle} />
+                    <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular, fontSize: font.sm }}>
+                      {w.believerNumber != null ? formatBelieverNumber(w.believerNumber) : ""}{w.tierName ? ` · ${w.tierName}` : ""}
+                    </Text>
+                  </Row>
                   {w.message ? <Meta style={{ fontSize: font.sm }}>{w.message}</Meta> : null}
                 </View>
               </Row>
             ))}
           </View>
         )}
-      </Block>
+      </ProjectSection>
 
       <PledgeSheet
         visible={pledgeOpen}

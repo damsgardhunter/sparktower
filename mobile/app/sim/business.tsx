@@ -30,6 +30,10 @@ import { Text, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
+import { Working } from "../../src/components/Working";
+import { useBuildStatus } from "../../src/buildStatus";
+import { BUILD_WORKING_STAGES, buildElapsedSeconds, buildProgress, buildStepLine } from "../../src/buildStages";
+import { formatElapsed } from "../../src/sections";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Body, Btn, Card, Empty, Field, Label, Loading, Meta, Screen, Segments, TabStrip, errText } from "../../src/components/ui";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
@@ -102,10 +106,23 @@ export default function BusinessSimScreen() {
 
   const wallet = useWallet();
   const topUp = useTopUp();
-  const buildAll = useBuildMyBusiness(projectId ?? "");
 
   const projects = useQuery({ queryKey: ["my-projects"], queryFn: () => api<ProjectRow[]>("/api/user/projects") });
   const chosen = projectId ?? projects.data?.[0]?.id ?? null;
+  /*
+   * Bound to `chosen`, not to the route param, and declared after it for that
+   * reason.
+   *
+   * This screen is reachable without a project in the address — it falls back to
+   * the first one and every other query on it uses `chosen`. The build hook alone
+   * took `projectId ?? ""`, so arriving here without a param gave a screen that
+   * worked, a button that charged nothing, and a 404 "Project not found" from the
+   * one action on it that costs $14.99. The same mistake also sent the hook's
+   * cache invalidation to a `decision-sim` key nothing was stored under, so the
+   * price and unlocked state on screen stayed stale after a purchase that did go
+   * through.
+   */
+  const buildAll = useBuildMyBusiness(chosen ?? "");
 
   const sim = useQuery({
     queryKey: ["decision-sim", chosen],
@@ -235,6 +252,17 @@ export default function BusinessSimScreen() {
                     onRetry={() => setNeed(null)}
                   />
                 ) : null}
+
+                {/*
+                  * What the build is doing, now that it says anything at all.
+                  *
+                  * This screen could start a forty-step job and then went quiet:
+                  * a toast, and nothing for the length of the run. Shown above the
+                  * purchase card rather than inside it, because once a build is
+                  * running the card is gone — it only appears while the project is
+                  * unbought — and the progress has to outlive it.
+                  */}
+                <BuildProgress projectId={chosen!} justStarted={buildAll.isSuccess} />
 
                 {/*
                   * The whole project, bought outright.
@@ -648,4 +676,76 @@ function OutlookCard({ outlook, currency }: { outlook: Outlook; currency: string
       </View>
     </Card>
   );
+}
+
+/**
+ * A whole-business build in flight, or the last one's outcome.
+ *
+ * Renders nothing when there has never been a build, so a project nobody has
+ * bought a build for is unchanged. `justStarted` polls fast through the gap
+ * between the button and the run row existing, which is otherwise the one moment
+ * the screen would look like nothing had happened.
+ */
+function BuildProgress({ projectId, justStarted }: { projectId: string; justStarted?: boolean }) {
+  const { running, last } = useBuildStatus(projectId, { expectRunning: justStarted });
+  const now = Date.now();
+
+  if (running) {
+    const elapsed = buildElapsedSeconds(running, now);
+    const step = buildStepLine(running);
+    return (
+      <Card>
+        <View style={{ gap: spacing.sm }} testID="nova-build-running">
+          <Label>Nova is building your business</Label>
+          <Working
+            stages={BUILD_WORKING_STAGES}
+            current={running.stage}
+            progress={buildProgress(running)}
+            meta={[step, formatElapsed(elapsed)].filter(Boolean).join(" · ")}
+            detail={running.currentTitle}
+            testID="nova-build-progress"
+          />
+          {/*
+            * The honest estimate, not an optimistic one. Measured at about
+            * forty-five seconds a step on the web, because the steps run one
+            * after another and each is a model call — and somebody who has just
+            * paid deserves the number the progress line already implies.
+            */}
+          <Meta>
+            {running.stepsTotal > 0
+              ? `About ${Math.max(1, Math.round((running.stepsTotal - (running.stepsDone + running.stepsForYou + running.stepsFailed)) * 45 / 60))} minutes left. You can leave this screen — it keeps going.`
+              : "You can leave this screen — it keeps going."}
+          </Meta>
+        </View>
+      </Card>
+    );
+  }
+
+  if (last?.error) {
+    return (
+      <Card>
+        <View style={{ gap: spacing.xs }} testID="nova-build-failed">
+          <Label>The last build didn't finish</Label>
+          <Meta>{last.error}</Meta>
+        </View>
+      </Card>
+    );
+  }
+
+  if (last?.finishedAt) {
+    return (
+      <Card>
+        <View style={{ gap: spacing.xs }} testID="nova-build-done">
+          <Label>Nova built out your path</Label>
+          <Meta>
+            {last.stepsDone} step{last.stepsDone === 1 ? "" : "s"} done
+            {last.stepsForYou > 0 ? ` · ${last.stepsForYou} left for you to decide` : ""}
+            {last.stepsFailed > 0 ? ` · ${last.stepsFailed} couldn't be finished` : ""}
+          </Meta>
+        </View>
+      </Card>
+    );
+  }
+
+  return null;
 }

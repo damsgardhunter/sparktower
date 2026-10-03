@@ -39,12 +39,9 @@
 import type { ReactNode } from "react";
 import { LiveDot } from "./live-dot";
 import { NOVA_GRADIENT } from "./tokens";
+import { workingView, type WorkingStage } from "@/lib/working-view";
 
-export interface WorkingStage {
-  id: string;
-  /** What the machine is doing here, as a person would say it. Sentence case, no ellipsis — this adds one. */
-  label: string;
-}
+export type { WorkingStage };
 
 export interface WorkingProps {
   /** The stages in the order they happen. Two to five; more than that is a log, not a progress bar. */
@@ -81,8 +78,12 @@ export interface WorkingProps {
 }
 
 export function Working({ stages, current, saying, meta, detail, progress, testId = "working" }: WorkingProps) {
-  const index = current ? stages.findIndex((s) => s.id === current) : -1;
-  const label = saying ?? (index >= 0 ? stages[index].label : "Getting started");
+  /*
+   * Worked out in `@/lib/working-view`, which the phone has its own copy of —
+   * so the two cannot disagree about which segment is filled or what the wait is
+   * called. See `test/unit/mobile-mirror.test.ts`.
+   */
+  const { label, index, widths } = workingView(stages, current, saying, progress);
 
   return (
     <div className="space-y-1.5" data-testid={testId}>
@@ -97,13 +98,7 @@ export function Working({ stages, current, saying, meta, detail, progress, testI
             <div
               className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === index ? "animate-pulse" : ""}`}
               /* Done is full, later is nothing, and now is 60% unless the caller can do better. */
-              style={{
-                width: i < index ? "100%"
-                  : i !== index ? "0%"
-                  : typeof progress === "number" && Number.isFinite(progress)
-                    ? `${Math.min(100, Math.max(8, Math.round(progress * 100)))}%`
-                    : "60%",
-              }}
+              style={{ width: `${widths[i]}%` }}
             />
           </div>
         ))}

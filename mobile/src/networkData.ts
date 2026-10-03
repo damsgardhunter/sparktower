@@ -177,6 +177,12 @@ export function appHref(webHref: string | null | undefined, actorId: string): st
   // The manager keeps the link's section, tab and focus (a path notification lands on that section's next step).
   if ((m = /^\/projects\/([^/?#]+)\/manage(\?[^#]*)?/.exec(href))) return `/manage/${m[1]}${m[2] ?? ""}`;
   if ((m = /^\/projects\/([^/?#]+)/.exec(href))) return `/project/${m[1]}`;
+  /*
+   * A delivered reward is on the person's own profile, under "Believed in" —
+   * before the bare `/profile` rule below, which means something different: for a
+   * connection request, "/profile" is where the invitations are.
+   */
+  if (href.startsWith("/profile?rewards")) return "/(tabs)/profile";
   if (href === "/profile") return "/network/invitations";
   if ((m = /^\/profile\/([^/?#]+)/.exec(href))) return `/user/${m[1]}`;
   // The simulation: the phone has the room, the desk and its side screens.

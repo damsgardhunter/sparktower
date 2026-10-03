@@ -398,6 +398,8 @@ export interface IStorage {
   getContestParticipants(contestId: string, limit?: number, offset?: number): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
   submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant>;
   isContestParticipant(contestId: string, userId: string): Promise<boolean>;
+  /** This person's own entry, when they have one: what they submitted, and when they joined. */
+  contestEntryFor(contestId: string, userId: string): Promise<ContestParticipant | null>;
 
   // Connections
   getConnectionById(connectionId: string): Promise<Connection | undefined>;
@@ -1645,6 +1647,20 @@ export class DatabaseStorage implements IStorage {
   async isContestParticipant(contestId: string, userId: string): Promise<boolean> {
     const [p] = await db.select().from(contestParticipants).where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)));
     return !!p;
+  }
+
+  /**
+   * The row itself, not just whether it exists.
+   *
+   * `isContestParticipant` answers "are they in", which is what joining needed
+   * and all anybody asked for — so nothing on either client could tell somebody
+   * who had entered from somebody who had actually filed their work. The entry
+   * button said "Entered" and that was the end of the road.
+   */
+  async contestEntryFor(contestId: string, userId: string): Promise<ContestParticipant | null> {
+    const [p] = await db.select().from(contestParticipants)
+      .where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)));
+    return p ?? null;
   }
 
   /**
