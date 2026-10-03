@@ -14,7 +14,7 @@ import { SECTIONS, type ProjectGoal, type SectionSummary } from "../../sections"
 
 export type Tab =
   | "dashboard" | "roadmap" | "tasks" | "files" | "analytics"
-  | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support"
+  | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support" | "backers"
   | "setup" | "codebase" | "team" | "chat";
 
 export interface TabDef { value: Tab; label: string; icon: IconName; ownerOnly?: boolean }
@@ -37,6 +37,15 @@ export const MORE_TABS: TabDef[] = [
   { value: "investors", label: "Investors", icon: "cash-outline", ownerOnly: true },
   { value: "launch", label: "Launch", icon: "rocket-outline" },
   { value: "support", label: "Support", icon: "headset-outline" },
+  /*
+   * Who backed this, and what the team still owes them.
+   *
+   * Not owner-only, unlike Investors above it: recording thank-you videos is work
+   * a team splits up, and the route behind it sends no email and no address for
+   * exactly that reason. A thank-you is also recorded on a phone, which makes this
+   * the surface the feature was for rather than the web tab that arrived first.
+   */
+  { value: "backers", label: "Backers", icon: "heart-outline" },
 ];
 /** The project-wide tabs, the same whichever section is open. */
 export const PROJECT_TABS: TabDef[] = [

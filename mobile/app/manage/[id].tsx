@@ -14,6 +14,7 @@ import { Milestones } from "../../src/components/manage/Milestones";
 import { Team } from "../../src/components/manage/Team";
 import { Investors } from "../../src/components/manage/Investors";
 import { Setup } from "../../src/components/manage/Setup";
+import { Backers } from "../../src/components/manage/Backers";
 import { Roadmap } from "../../src/components/manage/Roadmap";
 import { PublicPage } from "../../src/components/manage/PublicPage";
 import { Files } from "../../src/components/manage/Files";
@@ -221,6 +222,7 @@ export default function Manage() {
               {tab === "activity" && <Activity key={sub ?? "feed"} projectId={id!} projectTitle={project.title} initialSection={sub} />}
               {tab === "personas" && <Personas projectId={id!} />}
               {tab === "investors" && isOwner && <Investors projectId={id!} isOwner={isOwner} />}
+              {tab === "backers" && <Backers projectId={id!} />}
               {tab === "chat" && <Chat projectId={id!} />}
               {(["codebase", "research", "strategy", "launch", "analytics", "support"] as const).includes(tab as WebOnlyTab) && (
                 <WebTools key={tab === "analytics" ? section : tab} projectId={id!} tab={tab as WebOnlyTab} goal={section} />
