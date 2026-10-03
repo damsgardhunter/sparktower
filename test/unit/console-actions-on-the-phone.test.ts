@@ -129,3 +129,67 @@ describe("project actions are not pretended at", () => {
     expect(console_).toMatch(/are on the web console, which has the project open beside them/);
   });
 });
+
+describe("undo, which only matters because the actions exist", () => {
+  /*
+   * An action taken by a slipped thumb is only recoverable if the way back is
+   * on the same screen. Telling somebody to find a laptop to undo what a phone
+   * just did is the worst of both.
+   */
+  it("calls the undo route", () => {
+    expect(console_).toMatch(/\/api\/admin\/console\/undo\/\$\{logId\}`, \{ method: "POST"/);
+  });
+
+  it("offers it only on a console action that has not been undone", () => {
+    expect(console_).toMatch(/const isConsole = h\.action\.startsWith\("console:"\)/);
+    expect(console_).toMatch(/const undoable = isConsole && h\.action !== "console:undo" && !wasUndone/);
+  });
+
+  it("works out what was already undone by the server's own rule", () => {
+    /* `GET /console/log` builds its `undone` flag from `console:undo` entries
+     * whose targetId is the reversed entry; this applies the same rule to one
+     * account's history. */
+    const log = routes.slice(routes.indexOf('app.get("/api/admin/console/log"'));
+    expect(log).toMatch(/action === "console:undo"/);
+    expect(console_).toMatch(/h\.action === "console:undo"/);
+    expect(console_).toMatch(/undoneTargets\.has\(h\.id\)/);
+  });
+
+  it("gets targetId from the per-account route, which had to send it", () => {
+    /*
+     * The payload left it out, so the deduction above was impossible and the
+     * first version of this screen read a field that was always undefined.
+     */
+    const perAccount = routes.slice(
+      routes.indexOf('app.get("/api/admin/console/users/:id"'),
+      routes.indexOf('app.post("/api/admin/console/act"'),
+    );
+    expect(perAccount).toMatch(/targetId: h\.targetId,/);
+  });
+
+  it("says what undo restores, rather than only asking", () => {
+    expect(console_).toMatch(/restores what was there before the action, from the log/);
+  });
+
+  it("shows the reason that was given, since the log keeps it", () => {
+    expect(console_).toMatch(/\{h\.reason\} <\/Text>|\{h\.reason\}<\/Text>/);
+  });
+});
+
+describe("the field names are the route's", () => {
+  it("sends `cents`, which is what the credit handler reads", () => {
+    /*
+     * I sent `amountCents` first — a name used elsewhere in this file's
+     * payloads — and every grant would have been refused as not-a-number,
+     * because Number(undefined) is NaN and the guard catches it.
+     */
+    const act = routes.slice(routes.indexOf("async function actOnUser"));
+    expect(act).toMatch(/const cents = Math\.round\(Number\(req\.body\?\.cents\)\)/);
+    expect(console_).toMatch(/\{ cents \}/);
+    expect(console_).not.toMatch(/amountCents: cents/);
+  });
+
+  it("sends `days` for a pass", () => {
+    expect(console_).toMatch(/\{ days: dayCount \}/);
+  });
+});

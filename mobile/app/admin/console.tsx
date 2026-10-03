@@ -80,6 +80,8 @@ interface ActionsView {
 interface HistoryRow {
   id: string; action: string; actorId: string; reason: string | null;
   details: unknown; createdAt: string; previousState: unknown; resultingState: unknown;
+  /** For a `console:undo` entry, the id of the entry it reversed. */
+  targetId?: string | null;
 }
 
 const TITLE = "Support console";
@@ -92,6 +94,27 @@ export default function AdminConsole() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [acting, setActing] = useState<ActionDef | null>(null);
   const { notice, show, clear } = useNotice();
+
+  /*
+   * Putting one back.
+   *
+   * This exists because the actions do. An action taken by a slipped thumb is
+   * only recoverable if the way back is on the same screen — telling somebody
+   * to find a laptop to undo what a phone just did is the worst of both.
+   *
+   * The log keeps the state from before, so this restores what was actually
+   * there rather than what anybody assumes was there. The server refuses an
+   * action that is not reversible and one already undone.
+   */
+  const undo = useMutation({
+    mutationFn: (logId: string) => api(`/api/admin/console/undo/${logId}`, { method: "POST", body: {} }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["console-user", openId] });
+      void qc.invalidateQueries({ queryKey: ["console-actions"] });
+      show({ text: "Put back, and the undo is in the log too.", tone: "success" });
+    },
+    onError: (e) => show({ text: errText(e, "Couldn't put that back."), tone: "error" }),
+  });
 
   const search = useQuery<SearchResult>({
     queryKey: ["console-search", searched],
@@ -214,14 +237,61 @@ export default function AdminConsole() {
             <TitledCard icon="time" title="What has been done to this account">
               {!person.data.history?.length ? (
                 <Text style={text.meta}>Nothing. No operator has touched this account.</Text>
-              ) : (person.data.history as HistoryRow[]).slice(0, 15).map((h) => (
-                <CountRow
-                  key={h.id}
-                  label={h.action.replace(/_/g, " ")}
-                  value={new Date(h.createdAt).toLocaleDateString()}
-                  note={h.reason ? undefined : "no reason given"}
-                />
-              ))}
+              ) : (() => {
+                /*
+                 * Which entries have already been put back.
+                 *
+                 * `GET /api/admin/console/log` computes this and this route does
+                 * not, so it is worked out here by the server's own rule: an
+                 * undo is a `console:undo` entry whose `targetId` is the id of
+                 * the entry it reversed, and the undo is logged against the same
+                 * account, so both are in this list.
+                 *
+                 * The one limit is the window — the route returns the last forty
+                 * entries, so an undo older than that is not seen and its action
+                 * would be offered again. The server refuses it, saying it is
+                 * already undone, which is the right place for the final answer.
+                 */
+                const history = person.data.history as HistoryRow[];
+                const undoneTargets = new Set(
+                  history.filter((h) => h.action === "console:undo").map((h) => h.targetId ?? ""),
+                );
+                return history.slice(0, 15).map((h) => {
+                /*
+                 * Only a console action can be put back, and only once. The
+                 * server decides both — this just avoids offering a button that
+                 * would be refused.
+                 */
+                const isConsole = h.action.startsWith("console:");
+                const wasUndone = undoneTargets.has(h.id);
+                const undoable = isConsole && h.action !== "console:undo" && !wasUndone;
+                return (
+                  <View key={h.id} testID={`history-${h.id}`}>
+                    <CountRow
+                      label={h.action.replace(/^console:/, "").replace(/_/g, " ")}
+                      value={new Date(h.createdAt).toLocaleDateString()}
+                      note={h.reason ? undefined : "no reason given"}
+                      leading={wasUndone ? <Pill label="undone" tone="neutral" /> : undefined}
+                    />
+                    {h.reason ? <Text style={text.small}>{h.reason}</Text> : null}
+                    {undoable ? (
+                      <Btn
+                        small
+                        variant="ghost"
+                        label="Put it back"
+                        loading={undo.isPending}
+                        testID={`undo-${h.id}`}
+                        onPress={() => Alert.alert(
+                          `Undo "${h.action.replace(/^console:/, "").replace(/_/g, " ")}"?`,
+                          "This restores what was there before the action, from the log — not what anybody remembers was there.",
+                          [{ text: "Leave it", style: "cancel" }, { text: "Put it back", onPress: () => undo.mutate(h.id) }],
+                        )}
+                      />
+                    ) : null}
+                  </View>
+                );
+                });
+              })()}
             </TitledCard>
 
             {/*
@@ -345,7 +415,14 @@ function ActSheet({
         action: action.id,
         userId,
         reason: reason.trim(),
-        ...(needsMoney ? { amountCents: cents } : {}),
+        /*
+         * `cents`, which is what the handler reads. I sent `amountCents` first
+         * — a name that appears elsewhere in this file's own payloads — and the
+         * server would have refused every grant as "not a number", because
+         * `Number(undefined)` is NaN and the guard catches it. The route is the
+         * authority on its own field names.
+         */
+        ...(needsMoney ? { cents } : {}),
         ...(needsDays ? { days: dayCount } : {}),
       },
     }),
