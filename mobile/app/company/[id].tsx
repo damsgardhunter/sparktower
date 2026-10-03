@@ -1,12 +1,18 @@
+import { useState } from "react";
 import { Text, View } from "react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
-import { colors, font, spacing } from "../../src/theme";
-import { Avatar, Loading, Screen } from "../../src/components/ui";
+import { colors, spacing } from "../../src/theme";
+import { Loading, Screen, TabStrip } from "../../src/components/ui";
 import { Callout, PageIntro, TitledCard } from "../../src/components/MoreKit";
 import { Pill } from "../../src/components/nova/Pill";
+import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components/more/AdminKit";
+import { hasPower } from "../../src/companies";
+import { companyKey, type CompanyView } from "../../src/components/company/kit";
+import { TeamTab } from "../../src/components/company/TeamTab";
+import { AdminTab } from "../../src/components/company/AdminTab";
 
 /**
  * One company — the phone's half of the web's company page.
@@ -18,34 +24,33 @@ import { CountRow, NotFoundScreen, isNotFound, text } from "../../src/components
  * answer rather than deriving its own, because two implementations of a
  * permission rule is one implementation and one bug.
  *
- * What is here: who is in it, what it is, and whether it is verified. What is
- * not: anything that changes it. Members, seasons and challenges are forms with
- * consequences and they are on the web.
+ * It used to be a single read-only screen that said members, seasons and
+ * challenges "are forms with consequences and they are on the web". Some of
+ * them are here now, under the tabs the web uses, because a form with
+ * consequences is still a form somebody needs when they are not at a desk —
+ * and because every one of these controls mirrors a rule the server enforces
+ * again regardless of what the phone allowed.
+ *
+ * Training seasons are still elsewhere: that surface is being built under
+ * `app/sim/` and the Team tab points at it rather than guessing its shape.
  */
 
-interface Member {
-  userId: string; role: string; permissions: unknown; joinedAt: string;
-  firstName: string | null; lastName: string | null;
-  displayName: string | null; avatarUrl: string | null;
-}
-interface Company {
-  id: string; name: string; slug: string;
-  website: string | null; industry: string | null; size: string | null;
-  description: string | null; projectId: string | null;
-  verifiedDomain: string | null; verifiedAt: string | null; verifiedMethod: string | null;
-}
-interface Detail {
-  company: Company;
-  role: string;
-  members: Member[];
-  me: { userId: string; role: string; permissions: unknown; powers: Record<string, boolean> };
-}
+type Tab = "about" | "team" | "admin";
+
+const TABS: { value: Tab; label: string }[] = [
+  { value: "about", label: "About" },
+  { value: "team", label: "Team" },
+  { value: "admin", label: "Admin" },
+];
 
 export default function CompanyDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const q = useQuery<Detail>({
-    queryKey: ["company", id],
-    queryFn: () => api<Detail>(`/api/companies/${id}`),
+  const [tab, setTab] = useState<Tab>("about");
+  const { notice, show, clear } = useNotice();
+
+  const q = useQuery<CompanyView>({
+    queryKey: companyKey(id!),
+    queryFn: () => api<CompanyView>(`/api/companies/${id}`),
     enabled: !!id,
     retry: false,
   });
@@ -60,21 +65,44 @@ export default function CompanyDetail() {
     );
   }
 
-  const { company: c, members, me } = q.data;
-  const nameOf = (m: Member) => m.displayName || [m.firstName, m.lastName].filter(Boolean).join(" ") || "Member";
+  const { company: c, me } = q.data;
+
+  return (
+    <>
+      <Screen>
+        <Stack.Screen options={{ title: c.name }} />
+        <PageIntro
+          icon="business"
+          title={c.name}
+          body={c.description ?? c.industry ?? undefined}
+          right={<Pill label={me.role} tone={me.role === "owner" ? "good" : "neutral"} />}
+        />
+
+        {/*
+          * Every tab is shown to everybody, Admin included. It explains itself
+          * to whoever cannot use it and names the leaders to ask; hiding it
+          * would answer "where do I change this" with silence.
+          */}
+        <TabStrip options={TABS} value={tab} onChange={setTab} />
+
+        {tab === "about" ? <About view={q.data} /> : null}
+        {tab === "team" ? <TeamTab companyId={id!} notify={show} /> : null}
+        {tab === "admin" ? <AdminTab companyId={id!} notify={show} /> : null}
+
+        <View style={{ height: spacing.xl }} />
+      </Screen>
+      <NoticeBanner notice={notice} onDismiss={clear} />
+    </>
+  );
+}
+
+function About({ view }: { view: CompanyView }) {
+  const { company: c, me } = view;
   /* The server's answer, not the phone's. */
   const can = Object.entries(me.powers ?? {}).filter(([, v]) => v).map(([k]) => k);
 
   return (
-    <Screen>
-      <Stack.Screen options={{ title: c.name }} />
-      <PageIntro
-        icon="business"
-        title={c.name}
-        body={c.description ?? c.industry ?? undefined}
-        right={<Pill label={me.role} tone={me.role === "owner" ? "good" : "neutral"} />}
-      />
-
+    <View style={{ gap: spacing.md }}>
       {/*
         * Verification first when it is missing, because it is the answer to
         * "why can't this company post a challenge" and nothing else on the
@@ -87,20 +115,11 @@ export default function CompanyDetail() {
           icon="alert-circle"
           tone="warn"
           title="Domain not verified"
-          body="Until a domain is verified this company cannot post challenges or recruit. Verifying it is on the web — it needs a DNS record or a file on the site."
+          body={hasPower(me, "manage_team")
+            ? "Until a domain is verified this company cannot post challenges or recruit. Verifying it is on the web — it needs a DNS record or a file on the site."
+            : "Until a domain is verified this company cannot post challenges or recruit. An owner or admin can verify it on the web."}
         />
       )}
-
-      <TitledCard icon="people" title={`Members · ${members.length}`}>
-        {members.map((m) => (
-          <View key={m.userId} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6 }}>
-            <Avatar name={nameOf(m)} uri={m.avatarUrl} size={32} />
-            <Text style={{ color: colors.text, fontSize: font.sm, flex: 1 }} numberOfLines={1}>{nameOf(m)}</Text>
-            <Pill label={m.role} tone={m.role === "owner" ? "good" : "neutral"} />
-          </View>
-        ))}
-        <Text style={text.small}>Owners first, then by when they joined. Adding and removing members is on the web.</Text>
-      </TitledCard>
 
       <TitledCard icon="information-circle" title="Details">
         {c.industry ? <CountRow label="Industry" value={c.industry} /> : null}
@@ -119,8 +138,6 @@ export default function CompanyDetail() {
           </View>
         </TitledCard>
       ) : null}
-
-      <View style={{ height: spacing.xl }} />
-    </Screen>
+    </View>
   );
 }
