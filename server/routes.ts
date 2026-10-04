@@ -153,6 +153,7 @@ import { notifyWatchersOfNewProject } from "./scouting-alerts";
 import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 import { connectFailure } from "./stripe-connect-errors";
 import { addStandingNote } from "@shared/standing-notes";
+import { requireOnboarded } from "./require-onboarded";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -6677,7 +6678,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
+  app.post("/api/contests/:id/join", isAuthenticated, requireOnboarded("enter a contest"), rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -6705,7 +6706,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/contests/:id/submit", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
+  app.post("/api/contests/:id/submit", isAuthenticated, requireOnboarded("file a contest entry"), rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -6777,7 +6778,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // Connections
-  app.post("/api/connections/request", isAuthenticated, rateLimit("connect"), async (req: any, res) => {
+  app.post("/api/connections/request", isAuthenticated, requireOnboarded("connect with somebody"), rateLimit("connect"), async (req: any, res) => {
     try {
       const requesterId = (req.user as any).id;
       const { userId: receiverId } = req.body;
@@ -6997,7 +6998,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/messages/:userId", isAuthenticated, rateLimit("message"), async (req: any, res) => {
+  app.post("/api/messages/:userId", isAuthenticated, requireOnboarded("send a message"), rateLimit("message"), async (req: any, res) => {
     try {
       const senderId = (req.user as any).id;
       const receiverId = req.params.userId;

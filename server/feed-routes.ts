@@ -39,6 +39,7 @@ import {
   FEED_POST_TYPES, FEED_REACTIONS,
   type FeedMention, type FeedPostType,
 } from "@shared/schema";
+import { requireOnboarded } from "./require-onboarded";
 
 /**
  * The display name for a user, built one way everywhere.
@@ -359,7 +360,7 @@ export function registerFeedRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
+  app.post("/api/feed", isAuthenticated, requireOnboarded("post"), rateLimit("feedPost"), async (req: any, res) => {
     try {
       await publishPost(req, res);
     } catch (error) {
@@ -464,7 +465,7 @@ export function registerFeedRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed/:id/comments", isAuthenticated, rateLimit("comment"), async (req: any, res) => {
+  app.post("/api/feed/:id/comments", isAuthenticated, requireOnboarded("comment"), rateLimit("comment"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { content, mentions, parentCommentId } = req.body as {
@@ -794,7 +795,7 @@ export function registerProjectDiscussionRoutes(app: Express) {
     }
   });
 
-  app.post("/api/projects/:id/comments", isAuthenticated, rateLimit("comment"), async (req: any, res) => {
+  app.post("/api/projects/:id/comments", isAuthenticated, requireOnboarded("comment"), rateLimit("comment"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       if (!(await canView(req.params.id, userId))) {

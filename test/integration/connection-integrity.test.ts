@@ -24,6 +24,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { connections } from "@shared/schema";
 import { and, eq, or, sql } from "drizzle-orm";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -39,6 +40,8 @@ async function person(app: any, first: string) {
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await verifyEmail(app, email, `198.51.141.${10 + (n % 200)}`);
   await agent.post("/api/profile/complete-onboarding").send({ displayName: `${first} R${n}` });
+  /* Connecting needs a finished profile now; the form only sets the flag. */
+  await finishOnboarding(res.body.id, { displayName: `${first} R${n}` });
   return { agent, id: res.body.id as string, email, first };
 }
 
