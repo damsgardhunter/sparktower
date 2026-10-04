@@ -57,6 +57,7 @@ import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
 import { PaymentDialog, TopUpReturn, PurchaseConfirmProvider } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
+import { OnboardingBanner } from "@/components/onboarding-banner";
 import { isPathDisabled } from "@shared/surfaces";
 import PostDetail from "@/pages/post-detail";
 import AdminSurfaces from "@/pages/admin-surfaces";
@@ -194,17 +195,21 @@ function Router() {
    * way. Safe because the loading branch above has already settled the query.
    */
   /*
-   * Three paths are exempt, all for the same reason: they are the ones a
-   * person follows out of a hole, and onboarding is not the way out of any of
-   * them. Someone who signed up, never finished, and now can't remember their
-   * password would otherwise click the link in their inbox and be shown a
-   * "tell us about yourself" form instead of the reset — with no way to reach
-   * it at all, since every other address redirects here too.
+   * No redirect any more.
+   *
+   * Anyone who had not finished onboarding was sent to the form from every
+   * address. That made the first thing a new account saw a page of questions
+   * about themselves, before they had seen anything the product does — and the
+   * people who left at that page never saw any of it.
+   *
+   * They land in the app instead and are reminded, by `OnboardingBanner` below.
+   * What a half-finished account cannot do is anything that puts it in front of
+   * somebody else, and that is refused by the server
+   * (`server/require-onboarded.ts`) rather than by a redirect here. The redirect
+   * was never the rule: until that middleware existed, nothing on the server
+   * asked whether a profile was finished at all, and anyone calling the API
+   * directly was simply never checked.
    */
-  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password", "/privacy", "/terms", "/security"];
-  if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
-    return <Redirect to="/onboarding" />;
-  }
 
   /*
    * A route whose surface is off resolves to NotFound rather than rendering.
@@ -275,6 +280,8 @@ function Router() {
         <PaymentDialog />
         <TopUpReturn />
         {/* Room for the logo hanging below the bar, so it never covers the top of a page — inside each page's own background. */}
+        {/* Follows them around until it is done, and says what is left rather than that something is. */}
+        <OnboardingBanner profile={profile} />
         <main className="flex-1 overflow-y-auto [&>*]:pt-6">
           {/*
             * Around the routed page, so a screen that throws loses that screen

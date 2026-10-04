@@ -33,6 +33,22 @@ const STEPS = [
   "Review"
 ];
 
+/**
+ * Which steps carry something the product actually needs.
+ *
+ * `shared/onboarding.ts` is the authority: a name, at least one skill, and the
+ * three questions about how somebody works. Those live on steps 0, 1 and 4.
+ * Everything else here — interests, past experience, a résumé, links — is worth
+ * having and nothing waits on it, so each of those can be stepped past on its
+ * own rather than only by abandoning the whole form.
+ *
+ * The distinction is shown rather than enforced: an optional step says so and
+ * offers to skip, a required one says what it is for. A form that refuses to
+ * end is a form people abandon, and a form that will not say which parts matter
+ * makes every part feel equally skippable.
+ */
+const REQUIRED_STEPS = new Set([0, 1, 4]);
+
 const COMMON_SKILLS = [
   "React", "TypeScript", "Node.js", "Python", "Go", "Rust", "Next.js", "Tailwind CSS",
   "PostgreSQL", "MongoDB", "AWS", "Docker", "Kubernetes", "GraphQL", "Figma"
@@ -227,7 +243,17 @@ export default function Onboarding() {
               <span>Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
               <span>{Math.round(progress)}%</span>
             </div>
-            <div className="mt-3 text-center">
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+              {/*
+                * Which kind of step this is, said plainly. Without it every step
+                * reads as equally mandatory, which is what made the whole form
+                * feel like a wall.
+                */}
+              <span className={REQUIRED_STEPS.has(step) ? "text-foreground" : "text-muted-foreground"} data-testid="step-requirement">
+                {REQUIRED_STEPS.has(step)
+                  ? "Needed to post, comment and connect"
+                  : "Optional — you can skip this"}
+              </span>
               <Button
                 type="button"
                 variant="link"
@@ -945,9 +971,29 @@ export default function Onboarding() {
                     )}
                   </Button>
                 ) : (
-                  <Button key="next" type="button" onClick={next} data-testid="button-next">
-                    Next Step
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {/*
+                      * Skipping one step, rather than the rest of them. Stepping
+                      * past Interests should not cost somebody the co-founder
+                      * questions two steps later, which is the only choice the
+                      * form used to offer.
+                      */}
+                    {!REQUIRED_STEPS.has(step) && (
+                      <Button
+                        key="skip-step"
+                        type="button"
+                        variant="ghost"
+                        onClick={() => setStep((s) => Math.min(s + 1, STEPS.length - 1))}
+                        disabled={isSubmitting}
+                        data-testid="button-skip-step"
+                      >
+                        Skip
+                      </Button>
+                    )}
+                    <Button key="next" type="button" onClick={next} data-testid="button-next">
+                      Next Step
+                    </Button>
+                  </div>
                 )}
               </CardFooter>
             </Card>
