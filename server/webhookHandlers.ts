@@ -96,6 +96,7 @@ export class WebhookHandlers {
     try {
       await WebhookHandlers.handleSubscriptionEvent(event);
       await WebhookHandlers.handleCheckoutCompleted(event);
+      await WebhookHandlers.handleSavedCardTopUp(event);
       await WebhookHandlers.handleRefund(event);
       await WebhookHandlers.handleDispute(event);
       await WebhookHandlers.handlePaymentFailure(event);
@@ -186,6 +187,46 @@ export class WebhookHandlers {
       await db.update(users).set(stamp).where(eq(users.id, user.id));
       console.log(`Subscription ${type.split('.').pop()} for user ${user.id}: tier=${settled.tier}${settled.paying > 1 ? ` (${settled.paying} paid subscriptions — reported)` : ''}`);
     }
+  }
+
+  /**
+   * A top-up paid with a card already on file.
+   *
+   * These never produce a checkout session, so `handleCheckoutCompleted` above
+   * never sees them: the server confirms a PaymentIntent directly
+   * (server/payment-methods.ts) and `payment_intent.succeeded` is the only
+   * event that says the money arrived.
+   *
+   * Credited here rather than from the API response that created the intent,
+   * for the reason the hosted flow is already built on: the response says what
+   * Stripe thought at that instant, and a card can settle or fail afterwards.
+   * An intent confirmed in the same request usually succeeds immediately and
+   * this event arrives moments later — the balance moves then, once, keyed on
+   * the intent's id.
+   *
+   * Only intents this product created are touched. `metadata.type === 'topup'`
+   * is the test, so a PaymentIntent made by anything else — a subscription
+   * invoice, a Connect charge, something added later — cannot credit a wallet
+   * by having the right shape.
+   */
+  static async handleSavedCardTopUp(event: any): Promise<void> {
+    if (event?.type !== "payment_intent.succeeded") return;
+    const intent = event?.data?.object;
+    if (!intent || intent.metadata?.type !== "topup") return;
+
+    const userId: string | undefined = intent.metadata?.userId;
+    if (!userId) return;
+    /*
+     * `amount_received`, not `amount`: a partial capture is rare on a card but
+     * crediting what was asked for rather than what arrived is how a balance
+     * ends up larger than the money behind it.
+     */
+    const paid = Number(intent.amount_received ?? intent.metadata?.amountCents);
+    if (!Number.isFinite(paid) || paid <= 0) return;
+
+    const { creditTopUp } = await import("./wallet");
+    const { credited, balanceCents } = await creditTopUp(userId, Math.round(paid), String(intent.id));
+    console.log(`[stripe] saved-card top-up ${intent.id} for user ${userId}: ${credited ? `+${paid}c, balance ${balanceCents}c` : "already credited"}`);
   }
 
   /** A Stripe event's own clock: `created` is seconds since the epoch. */
