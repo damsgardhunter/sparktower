@@ -82,6 +82,18 @@ export default defineConfig({
       OPENAI_API_KEY: "sk-test-not-a-real-key-tests-never-call-openai",
       // The name the codebase actually reads; OPENAI_API_KEY is only the SDK's fallback.
       AI_INTEGRATIONS_OPENAI_API_KEY: "sk-test-not-a-real-key-tests-never-call-openai",
+      /*
+       * Kling, pinned empty for the same reason as the key above and one
+       * worse: this one bills per generation. `test/setup/env` loads the
+       * developer's own .env, so an inherited KLINGAI_API_KEY would mean a
+       * test that reaches `klingSubmit` spends real units off a real trial
+       * package — silently, on somebody's laptop, in a suite nobody watches.
+       * Empty, the client refuses before it reaches the network.
+       */
+      KLINGAI_API_KEY: "",
+      KLING_API_KEY: "",
+      KLING_ACCESS_KEY: "",
+      KLING_SECRET_KEY: "",
       PLATFORM_REVIEWER_EMAILS: "reviewer@test.local",
       PLATFORM_OWNER_EMAIL: "owner@test.local",
       /*

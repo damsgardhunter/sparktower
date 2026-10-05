@@ -135,6 +135,64 @@ export function charsPerLine(frameWidth: number, fontSize: number): number {
   return Math.floor(frameWidth / (fontSize * 0.52));
 }
 
+/**
+ * The largest and smallest a line is ever set at, as a share of the short edge.
+ *
+ * The ceiling is the size a hook wants to be. The floor is the size below
+ * which type on a phone stops being a headline and starts being a caption —
+ * shrinking past it to fit a long line produces something nobody reads
+ * anyway, so at that point the line is trimmed instead.
+ */
+export const TYPE_SIZE = { max: 0.075, min: 0.042 } as const;
+
+/**
+ * A line, and the size to set it at, guaranteed to fit the width it is given.
+ *
+ * This exists because `lineLimit` is a *reading-speed* limit and was being
+ * used as if it were a width one. They are not the same number and at some
+ * lengths they are nowhere near: a three-second proof beat is allowed
+ * forty-five characters to read comfortably, and forty-five characters set at
+ * the hook's size on a vertical frame is about twice the width of the safe
+ * box. The first advert this pipeline rendered end to end had "Made by people
+ * who use it" clipped at both edges — the M and the final word were off the
+ * frame — and nothing in the chain had checked.
+ *
+ * So: shrink the type until the line fits, down to the floor, and only then
+ * trim. Shrinking first because the whole line surviving smaller is better
+ * than most of it surviving large, and trimming at all is a last resort —
+ * `lineLimit` in the script writer is what is supposed to prevent it, and a
+ * trim here means a script was written against a different frame.
+ */
+export function fitLine(
+  text: string,
+  box: { width: number },
+  shortEdge: number,
+  max: number = TYPE_SIZE.max,
+): { text: string; sizeRatio: number } {
+  const clean = text.trim();
+  if (!clean) return { text: "", sizeRatio: max };
+
+  /*
+   * Worked out in whole pixels, because that is what `charsPerLine` measures
+   * and what ffmpeg is eventually given. Going via a ratio and rounding back
+   * cost a character every time: the ratio that exactly fits rounds *up* to
+   * the nearest pixel, which fits one fewer character than it was chosen for,
+   * and a line that should have been set a hair smaller got trimmed instead.
+   */
+  const biggest = Math.floor(shortEdge * max);
+  /* Ceiling, not floor: flooring lands a fraction *below* the stated minimum. */
+  const smallest = Math.ceil(shortEdge * TYPE_SIZE.min);
+  const fontSize = Math.max(smallest, Math.min(biggest, Math.floor(box.width / (clean.length * 0.52))));
+  const sizeRatio = fontSize / shortEdge;
+
+  const fits = charsPerLine(box.width, fontSize);
+  if (clean.length <= fits) return { text: clean, sizeRatio };
+  /* Still too long at the smallest size worth setting. Cut on a word. */
+  const cut = clean.slice(0, Math.max(1, fits - 1));
+  const onWord = cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut;
+  return { text: `${onWord.trimEnd()}…`, sizeRatio };
+}
+
 /** The longest line this copy may be, given the frame and the size it will be set at. */
 export function lineBudget(frame: { width: number }, sizeRatio: number, shortEdge: number): number {
   return charsPerLine(frame.width, Math.round(shortEdge * sizeRatio));

@@ -181,18 +181,22 @@ export const ENV_RULES: EnvRule[] = [
   },
   {
     name: "KLING_SECRET_KEY",
+    /*
+     * An API key satisfies this rule, because an account that has one does not
+     * have a secret key at all — the two generations of Kling's API want
+     * different credentials. Without these alternatives the rule reported
+     * "KLING_SECRET_KEY not set" on every correctly configured deployment that
+     * uses an API key, which is the commonest case and this product's own.
+     * A report that is wrong on the ordinary setup is a report people learn to
+     * scroll past, which costs more than the one line it saved.
+     *
+     * What it still catches is the state below: an access key with no secret
+     * beside it, which looks configured and cannot sign a single request.
+     */
+    alternatives: ["KLINGAI_API_KEY", "KLING_API_KEY"],
     severity: "degraded",
     productionOnly: true,
     breaks: "generated advertisements, if the account uses access/secret credentials rather than an API key",
-    validate: (_value, _ctx) =>
-      /*
-       * Only a complaint about the pair, never about this value's content. A
-       * secret with no access key beside it signs nothing, and the reverse is
-       * the same mistake read from the other end.
-       */
-      process.env.KLING_ACCESS_KEY?.trim()
-        ? null
-        : "set without KLING_ACCESS_KEY — a secret key signs nothing on its own",
   },
 ];
 
@@ -220,6 +224,41 @@ function crossChecks(env: Record<string, string | undefined>, production: boolea
   const siteVar = ["PUBLIC_URL", "SERVER_BASE_URL", "RENDER_EXTERNAL_URL"].find((n) => env[n]?.trim());
   const siteHost = hostOf(env[siteVar ?? ""]);
   const authHost = hostOf(env.AUTH_HOST);
+
+  /*
+   * Half a credential pair.
+   *
+   * This lived on the KLING_SECRET_KEY rule as a `validate`, which was the
+   * wrong shape twice over. A rule's validate is handed one value and judges
+   * it alone, so it reached for `process.env.KLING_ACCESS_KEY` — a pure
+   * checker with a hidden global dependency, which meant `checkEnvironment`
+   * gave different answers for the same argument depending on the process it
+   * ran in. And because it fired whenever anything satisfied the rule, a
+   * deployment with an ordinary API key was told its secret key was missing.
+   *
+   * It is a question about two variables, so it belongs here with the other
+   * one. An access key with no secret beside it looks configured and cannot
+   * sign a single request; a secret with no access key is the same mistake
+   * read from the other end.
+   */
+  const access = env.KLING_ACCESS_KEY?.trim();
+  const secret = env.KLING_SECRET_KEY?.trim();
+  if (access && !secret) {
+    out.push({
+      name: "KLING_SECRET_KEY",
+      severity: "degraded",
+      state: "missing",
+      detail: "KLING_ACCESS_KEY is set without it. An access key signs nothing on its own, so generated advertisements are off — on a server that looks configured for them.",
+    });
+  }
+  if (secret && !access) {
+    out.push({
+      name: "KLING_ACCESS_KEY",
+      severity: "degraded",
+      state: "missing",
+      detail: "KLING_SECRET_KEY is set without it. A secret key signs nothing on its own, so generated advertisements are off.",
+    });
+  }
 
   if (siteHost && authHost && siteHost !== authHost) {
     out.push({

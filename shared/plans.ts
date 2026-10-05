@@ -74,7 +74,10 @@ export type PricedOutcomeId =
   | "challenge"
   | "marketing"
   | "brand"
-  | "imagePass";
+  | "imagePass"
+  | "advert6"
+  | "advert15"
+  | "advert30";
 
 /**
  * What each outcome costs, in cents. Whole dollars on purpose: the point of
@@ -151,6 +154,21 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   marketing: 600,
   brand: 100,
   imagePass: 500,
+  /*
+   * Adverts, at AD_PRICE.centsPerSecond of finished cut. Three ids rather
+   * than one variable-priced "advert", because server/entitlements.ts charges
+   * `OUTCOME_PRICE_CENTS[outcome]` for whatever outcome it is handed: a
+   * single id carrying the shortest price would mean the day somebody wires a
+   * thirty-second render through the ordinary metering path, it is charged
+   * $1.20. A closed set of three durations is a price list, and a price list
+   * is the thing this file is for.
+   *
+   * test/unit/ad-pricing.test.ts holds these to the per-second rate, so the
+   * rate and the list cannot drift apart.
+   */
+  advert6: 120,
+  advert15: 300,
+  advert30: 600,
 };
 
 /**
@@ -519,6 +537,18 @@ export function outcomeCopy(
 
 /** What the pricing page and the top-up dialog list, in the order they read best. */
 export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string }> = {
+  advert6: {
+    name: "A six-second advert",
+    blurb: "A cut for the top of a feed: hook, product, what to do. Your colours, your logo and your words, composited in — the video model never draws them.",
+  },
+  advert15: {
+    name: "A fifteen-second advert",
+    blurb: "The length most ad platforms are built around. Room for the problem and a line of proof as well as the hook and the ask.",
+  },
+  advert30: {
+    name: "A thirty-second advert",
+    blurb: "A full story with time to breathe, and the cheapest per second of the three — generating a short cut costs nearly as much as a long one, because clips have a five-second floor.",
+  },
   actionPack: {
     name: "More Nova actions",
     blurb: `${ACTIONS_PER_PACK} more small Nova actions, spent one at a time. What you buy when the month's free allowance has run out — they never expire, so nothing is wasted by buying them on a quiet week.`,
@@ -609,6 +639,12 @@ export const PRICING_ROWS: PricingRow[] = [
   { label: OUTCOME_COPY.brand.name, price: formatMoney(OUTCOME_PRICE_CENTS.brand), detail: OUTCOME_COPY.brand.blurb },
   { label: "Your first images", price: "Free", detail: "The first set of AI images for a project — and the first for each badge — costs nothing. Badges themselves are always free to earn and to keep." },
   { label: OUTCOME_COPY.imagePass.name, price: formatMoney(OUTCOME_PRICE_CENTS.imagePass), detail: OUTCOME_COPY.imagePass.blurb },
+  /*
+   * One row for three outcomes, priced per second, the way the seat row is
+   * priced per seat. Listing all three would be the same sentence three times
+   * with a different number in it.
+   */
+  { label: "An AI advertisement", price: `${formatMoney(OUTCOME_PRICE_CENTS.advert6)}–${formatMoney(OUTCOME_PRICE_CENTS.advert30)}`, detail: "Six, fifteen or thirty seconds, at 20¢ a second of finished cut. Written, generated and composited with your brand kit — and refunded in full if it doesn't finish." },
   { label: OUTCOME_COPY.business.name, price: formatMoney(OUTCOME_PRICE_CENTS.business), detail: OUTCOME_COPY.business.blurb },
   { label: OUTCOME_COPY.seasonSeat.name, price: `${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)}/seat`, detail: OUTCOME_COPY.seasonSeat.blurb },
 ];

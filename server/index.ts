@@ -8,6 +8,7 @@ import { syncPlatformRoles } from "./platform-roles";
 import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
+import { startAdRenderJobs } from "./ad-render-routes";
 import { startSimulationJobs } from "./simulation-tick";
 import { startStartupGameJobs } from "./startup-game";
 import { startAnalyticsJobs } from "./analytics";
@@ -169,6 +170,7 @@ let appReady = false;
   // Merch fulfillment and the refund window. Both take an advisory lock, so
   // running several server processes is safe.
   startBackingJobs();
+  startAdRenderJobs();
   startSimulationJobs();
   startStartupGameJobs();
   startAnalyticsJobs();

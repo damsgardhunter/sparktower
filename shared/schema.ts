@@ -3248,6 +3248,83 @@ export const projectBrandKits = pgTable("project_brand_kits", {
   onePerProject: unique("project_brand_kit_once").on(table.projectId),
 }));
 
+/**
+ * One advert being made, from the moment it is paid for to the file at the end.
+ *
+ * A render is minutes of work across a provider we do not control, so it
+ * cannot be a request that returns a video. It is a row that moves through
+ * `AD_RENDER_STATUSES` and is polled, and everything needed to carry on after
+ * a restart is on it — the plan, the script, the provider's job ids, what each
+ * plate came back as.
+ *
+ * ## Why the charge is recorded twice
+ *
+ * `chargedCents` is what the person paid, from the price list. `providerCents`
+ * is what the generation actually cost us, totted up from the plates as they
+ * come back. They are both here because the margin on this feature was a
+ * guess — `AD_COST.attemptsPerFinished` says as much in its own comment — and
+ * a guess that nobody can check against real rows stays a guess. With both on
+ * the row, the real margin is a query.
+ *
+ * ## Why a failed render keeps its row
+ *
+ * The refund is a ledger entry pointing at something, and "the render that
+ * failed" has to still exist to be pointed at. It also carries `failure`,
+ * which is the only place the reason a person's advert did not arrive is
+ * written down in words they could be shown.
+ */
+export const adRenders = pgTable("ad_renders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** Who asked for it and whose wallet paid. Kept if they leave the project. */
+  requestedBy: varchar("requested_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+
+  /* ── What was asked for ── */
+  /** 6, 15 or 30. The length sold, not the length generated. */
+  durationSeconds: integer("duration_seconds").notNull(),
+  /** One of AD_FORMATS: vertical, square, wide. */
+  format: text("format").notNull(),
+  /** One of the ids in shared/ad-styles.ts. */
+  style: text("style").notNull(),
+  /** The business's own words, as typed. The subject of the whole thing. */
+  brief: text("brief").notNull(),
+
+  /* ── What was decided ── */
+  /** The AdScript as written and accepted. Null until the writer has run. */
+  script: jsonb("script"),
+  /** The plates, their shots, and the prompt each one was given. */
+  plan: jsonb("plan"),
+  /** The brand kit as resolved at the moment of the render, so a later edit cannot change what was drawn. */
+  brand: jsonb("brand"),
+
+  /* ── Where it got to ── */
+  status: text("status").notNull().default("queued"),
+  /** Per-plate provider job ids and the file each returned. */
+  plates: jsonb("plates"),
+  /** The finished cut, as an object-storage path. */
+  outputPath: text("output_path"),
+  /** Why it failed, in words a person could be shown. */
+  failure: text("failure"),
+
+  /* ── Money ── */
+  /** Taken up front, from OUTCOME_PRICE_CENTS. */
+  chargedCents: integer("charged_cents").notNull(),
+  /** Put back in full when a render does not finish. Zero otherwise. */
+  refundedCents: integer("refunded_cents").default(0).notNull(),
+  /** What the generation really cost us, summed as plates come back. */
+  providerCents: integer("provider_cents").default(0).notNull(),
+
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The project's adverts, newest first, which is every list this feature has. */
+  byProject: index("ad_renders_project_idx").on(table.projectId, table.createdAt),
+  /* The poller's query: everything not yet finished. */
+  byStatus: index("ad_renders_status_idx").on(table.status),
+}));
+
 // ─── Companies ───────────────────────────────────────────────────────────────
 
 /**

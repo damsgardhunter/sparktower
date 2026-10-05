@@ -30,6 +30,9 @@ const HEALTHY = {
   STRIPE_SECRET_KEY: "sk_live_something",
   AI_INTEGRATIONS_OPENAI_API_KEY: "sk-something",
   MOBILE_TOKEN_SECRET: "y".repeat(48),
+  /* The video model behind generated adverts. An API key, which is one of the
+   * two credential shapes Kling accounts come in and satisfies both rules. */
+  KLINGAI_API_KEY: "kling-something",
 };
 
 const blockingNames = (env: Record<string, string | undefined>) => checkEnvironment(env).blocking.map((f) => f.name);
@@ -91,15 +94,40 @@ describe("a production environment", () => {
   });
 });
 
+describe("the two shapes a Kling account comes in", () => {
+  /*
+   * The rule used to report a missing secret key on every deployment that
+   * uses an API key — which is most of them, and this product's own — because
+   * the secret half was its own unconditional rule.
+   */
+  it("is satisfied by an API key alone", () => {
+    const report = checkEnvironment({ ...HEALTHY, KLINGAI_API_KEY: "kling-something" });
+    expect(report.degraded.map((f) => f.name)).not.toContain("KLING_SECRET_KEY");
+    expect(report.degraded.map((f) => f.name)).not.toContain("KLINGAI_API_KEY");
+  });
+
+  it("is satisfied by an access key and its secret", () => {
+    const report = checkEnvironment({ ...HEALTHY, KLINGAI_API_KEY: "", KLING_ACCESS_KEY: "ak", KLING_SECRET_KEY: "sk" });
+    expect(report.degraded.map((f) => f.name)).toEqual([]);
+  });
+
+  it("still catches an access key with no secret beside it, which signs nothing", () => {
+    const report = checkEnvironment({ ...HEALTHY, KLINGAI_API_KEY: "", KLING_ACCESS_KEY: "ak" });
+    expect(report.degraded.map((f) => f.name)).toContain("KLING_SECRET_KEY");
+    /* The access key on its own satisfies the first rule — it is the pair that is broken. */
+    expect(report.degraded.map((f) => f.name)).not.toContain("KLINGAI_API_KEY");
+  });
+});
+
 describe("features that aren't configured", () => {
   it("are reported, and never stop the server", () => {
     // Everything optional missing at once: email, uploads, payments, Nova.
-    const stripped = { ...HEALTHY, RESEND_API_KEY: "", EMAIL_FROM: "", PRIVATE_OBJECT_DIR: "", STRIPE_SECRET_KEY: "", AI_INTEGRATIONS_OPENAI_API_KEY: "", MOBILE_TOKEN_SECRET: "" };
+    const stripped = { ...HEALTHY, RESEND_API_KEY: "", EMAIL_FROM: "", PRIVATE_OBJECT_DIR: "", STRIPE_SECRET_KEY: "", AI_INTEGRATIONS_OPENAI_API_KEY: "", MOBILE_TOKEN_SECRET: "", KLINGAI_API_KEY: "" };
     const report = checkEnvironment(stripped);
 
     expect(report.blocking).toEqual([]);
     expect(report.degraded.map((f) => f.name).sort()).toEqual(
-      ["AI_INTEGRATIONS_OPENAI_API_KEY", "EMAIL_FROM", "MOBILE_TOKEN_SECRET", "PRIVATE_OBJECT_DIR", "RESEND_API_KEY", "STRIPE_SECRET_KEY"],
+      ["AI_INTEGRATIONS_OPENAI_API_KEY", "EMAIL_FROM", "KLINGAI_API_KEY", "KLING_SECRET_KEY", "MOBILE_TOKEN_SECRET", "PRIVATE_OBJECT_DIR", "RESEND_API_KEY", "STRIPE_SECRET_KEY"],
     );
     // Each says what a person would notice, not what the variable is called.
     for (const f of report.degraded) expect(f.detail, f.name).toBeTruthy();

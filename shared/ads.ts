@@ -60,12 +60,40 @@ export const isAdDuration = (v: unknown): v is AdDuration =>
  * at thirty, dwelling on it is how a viewer leaves before the product appears.
  */
 export const AD_BEATS = [
-  { id: "hook", label: "Hook", purpose: "Stop the scroll. Two seconds, and it has to work with the sound off.", shareOf6: 0.5, shareOf30: 0.12 },
-  { id: "problem", label: "Problem", purpose: "The thing the viewer recognises in themselves.", shareOf6: 0.0, shareOf30: 0.2 },
-  { id: "product", label: "Product", purpose: "The real thing, shown accurately. Their photograph, never a generated likeness of it.", shareOf6: 0.33, shareOf30: 0.36 },
-  { id: "proof", label: "Proof", purpose: "A number, a review, a demonstration. Something checkable.", shareOf6: 0.0, shareOf30: 0.2 },
-  { id: "cta", label: "Call to action", purpose: "One action, rendered as text rather than spoken over.", shareOf6: 0.17, shareOf30: 0.12 },
+  /*
+   * `maxSeconds` is on the hook and the call to action because neither of them
+   * is a proportional thing. The hook's own purpose says two seconds; it is a
+   * punch, and a punch held for six is a establishing shot that forgot it was
+   * a hook. Interpolating its share alone produced exactly that — a fifteen
+   * second advert came out as a six-second hook, a one-second problem, and a
+   * one-second proof, and the one-second beats were given fifteen characters
+   * of on-screen line by `lineLimit`, which is where "The old way tak"
+   * came from. Length should buy more *story*, not a longer stare.
+   *
+   * `minSeconds` is the other half of the same fix: a beat that cannot afford
+   * its minimum is dropped rather than kept at a second. A flash nobody reads
+   * is worse than a beat that was never in the cut, and its seconds are worth
+   * more given to a beat that has room to use them.
+   */
+  { id: "hook", label: "Hook", purpose: "Stop the scroll. Two seconds, and it has to work with the sound off.", share: { 6: 0.5, 15: 0.2, 30: 0.1 }, minSeconds: 2, maxSeconds: 3 },
+  { id: "problem", label: "Problem", purpose: "The thing the viewer recognises in themselves.", share: { 6: 0, 15: 0.2, 30: 0.2 }, minSeconds: 3 },
+  { id: "product", label: "Product", purpose: "The real thing, shown accurately. Their photograph, never a generated likeness of it.", share: { 6: 0.33, 15: 0.27, 30: 0.37 }, minSeconds: 2 },
+  { id: "proof", label: "Proof", purpose: "A number, a review, a demonstration. Something checkable.", share: { 6: 0, 15: 0.2, 30: 0.2 }, minSeconds: 2 },
+  /*
+   * The ask gets a floor of one second rather than two, which is the only
+   * place it matters: a six-second cut. Two would be right if the ask had to
+   * be read like a sentence, but it is four words over a frame the viewer has
+   * been looking at for five seconds, and buying that second costs it from
+   * the hook — which is the beat with the least to spare and the most to do.
+   */
+  { id: "cta", label: "Call to action", purpose: "One action, rendered as text rather than spoken over.", share: { 6: 0.17, 15: 0.13, 30: 0.13 }, minSeconds: 1, maxSeconds: 4 },
 ] as const;
+
+/** The beat that soaks up whatever rounding leaves over. */
+const DRIFT_BEAT: AdBeatId = "product";
+
+/** The three beats that are the advert. Everything else is droppable. */
+const ALWAYS = new Set<AdBeatId>(["hook", "product", "cta"]);
 export type AdBeatId = (typeof AD_BEATS)[number]["id"];
 
 /**
@@ -76,8 +104,21 @@ export type AdBeatId = (typeof AD_BEATS)[number]["id"];
  * problem and proof — their share is zero, and a beat with no share is not in
  * the cut — and the seconds are shared between what remains.
  *
- * Interpolated between the two authored shapes rather than authored three
- * times, so changing a beat changes every length consistently.
+ * ## Why all three lengths are authored
+ *
+ * They used to be two, with the middle interpolated, on the reasonable-sounding
+ * argument that changing a beat should change every length consistently. The
+ * middle was the one nobody looked at, and it was wrong: problem and proof
+ * ramp from a share of zero, so at fifteen seconds they came out at about a
+ * second each while the hook — interpolating down from half of six seconds —
+ * came out at five, and the rounding drift went to the longest beat, which was
+ * the hook, making it six. A fifteen-second advert was a six-second stare, a
+ * one-second problem and a one-second proof, and `lineLimit` gave those two
+ * beats fifteen characters of on-screen line between them.
+ *
+ * `AD_DURATIONS` is a closed set of three, and each one is a separately priced
+ * outcome. Something that is sold as three products is worth authoring three
+ * times, and an interpolated middle is a shape nobody chose.
  */
 export function beatPlan(
   duration: AdDuration,
@@ -88,24 +129,78 @@ export function beatPlan(
    */
   styleWeights?: Partial<Record<AdBeatId, number>>,
 ): { id: AdBeatId; seconds: number }[] {
-  const span = 30 - 6;
-  const t = (duration - 6) / span;
   const weights = AD_BEATS.map((b) => ({
-    id: b.id,
-    w: (b.shareOf6 + (b.shareOf30 - b.shareOf6) * t) * (styleWeights?.[b.id] ?? 1),
+    id: b.id as AdBeatId,
+    w: b.share[duration] * (styleWeights?.[b.id] ?? 1),
   }))
     .filter((b) => b.w > 0.001);
-  const total = weights.reduce((sum, b) => sum + b.w, 0);
+  const limits = new Map(AD_BEATS.map((b) => [b.id as AdBeatId, b]));
+
   /*
-   * Rounded to whole seconds and the remainder given to the longest beat, so
-   * the parts always add to the whole. A cut whose beats sum to 29 seconds is
-   * a second of black at the end.
+   * Beats that cannot afford their minimum are dropped, cheapest first, and
+   * the share they were holding goes back into the pool for the rest. Done as
+   * a loop because dropping one raises everybody else's share, which can lift
+   * a second beat over its own minimum — a single pass would drop both.
    */
-  const seconds = weights.map((b) => ({ id: b.id, seconds: Math.max(1, Math.round((b.w / total) * duration)) }));
-  const drift = duration - seconds.reduce((sum, b) => sum + b.seconds, 0);
-  if (drift !== 0) {
-    const longest = seconds.reduce((a, b) => (b.seconds > a.seconds ? b : a));
-    longest.seconds += drift;
+  let kept = weights.slice();
+  for (;;) {
+    const total = kept.reduce((sum, b) => sum + b.w, 0);
+    const short = kept
+      .map((b) => ({ b, want: limits.get(b.id)!.minSeconds, got: (b.w / total) * duration }))
+      .filter((x) => x.got < x.want && !ALWAYS.has(x.b.id))
+      .sort((a, b) => a.got - b.got);
+    /*
+     * Only problem and proof are ever dropped, which is what the short cut was
+     * always meant to drop. The other three are the advert: no hook is not an
+     * advert, no ask is a film, and no product beat is six seconds that never
+     * show the thing being sold.
+     *
+     * Protecting the product beat is not a nicety. At six seconds its share
+     * works out at 1.98 seconds against a two-second minimum, so a rule that
+     * only protected the hook and the ask dropped it over two hundredths of a
+     * second — and a six-second advert came out as a three-second hook
+     * followed by three seconds of call to action.
+     */
+    if (!short.length || kept.length <= 2) break;
+    kept = kept.filter((b) => b !== short[0].b);
+  }
+
+  const total = kept.reduce((sum, b) => sum + b.w, 0);
+  /*
+   * Each beat gets its share, held to its own floor and ceiling. The ceiling
+   * is what stops a long advert from simply staring at the hook for longer.
+   */
+  const seconds = kept.map((b) => {
+    const limit = limits.get(b.id)!;
+    const want = Math.round((b.w / total) * duration);
+    const ceiling = (limit as { maxSeconds?: number }).maxSeconds ?? duration;
+    return { id: b.id, seconds: Math.min(ceiling, Math.max(limit.minSeconds, want)) };
+  });
+
+  /*
+   * The remainder, so the parts always add to the whole — a cut whose beats
+   * sum to twenty-nine seconds is a second of black at the end.
+   *
+   * It goes to the product beat rather than to the longest, which is the
+   * other half of the six-second-hook bug: the hook was the longest beat, so
+   * every rounding error made it longer still. The product beat is the one
+   * that can always use more time and the one a viewer came to see; where a
+   * style has dropped it, the longest remaining beat under its ceiling takes
+   * it instead.
+   */
+  let drift = duration - seconds.reduce((sum, b) => sum + b.seconds, 0);
+  while (drift !== 0) {
+    const room = (b: { id: AdBeatId; seconds: number }) => {
+      const ceiling = (limits.get(b.id) as { maxSeconds?: number }).maxSeconds ?? duration;
+      return drift > 0 ? ceiling - b.seconds : b.seconds - limits.get(b.id)!.minSeconds;
+    };
+    const candidates = seconds.filter((b) => room(b) > 0);
+    if (!candidates.length) break;
+    const target = candidates.find((b) => b.id === DRIFT_BEAT)
+      ?? candidates.reduce((a, b) => (b.seconds > a.seconds ? b : a));
+    const step = drift > 0 ? Math.min(drift, room(target)) : -Math.min(-drift, room(target));
+    target.seconds += step;
+    drift -= step;
   }
   return seconds;
 }
@@ -143,6 +238,48 @@ export function expectedCostCents(duration: AdDuration, formats: number = 1): nu
    */
   return Math.round(generated + AD_COST.renderOverheadCents * formats);
 }
+
+/**
+ * What a finished advert costs the person who asked for it, per second.
+ *
+ * Priced on the seconds of *finished cut*, not the seconds generated, because
+ * the finished cut is the thing somebody bought and the only number they can
+ * check. The two are a long way apart: clips have a five-second floor, so a
+ * six-second advert needs fifteen seconds generated across three plates and a
+ * thirty-second one needs forty. That is why the margin is thin at six
+ * seconds and good at thirty, and why the thirty-second price is the best
+ * value of the three rather than the worst.
+ *
+ * It only holds at one generation per plate. At `AD_COST.attemptsPerFinished`
+ * — three — every length is underwater: a thirty-second advert would cost 632
+ * cents to make and sell for 600. So a render generates each plate once, and
+ * trying again is a new render at the full price. A re-roll included in the
+ * price is a re-roll somebody presses until they like it, paid for by us.
+ */
+export const AD_PRICE = {
+  /** Cents per second of finished advert. */
+  centsPerSecond: 20,
+} as const;
+
+/** The priced outcome for a length, so the charge comes off the price list. */
+export const adOutcome = (duration: AdDuration): "advert6" | "advert15" | "advert30" =>
+  (`advert${duration}` as "advert6" | "advert15" | "advert30");
+
+/** What this length is charged, in cents. */
+export const adPriceCents = (duration: AdDuration): number => duration * AD_PRICE.centsPerSecond;
+
+/**
+ * What a render is expected to cost us, worked out from the plan rather than
+ * guessed at from the duration.
+ *
+ * `expectedCostCents` above answers a different question — what a finished ad
+ * costs on average including re-rolls — and is the number to quote when
+ * deciding a price. This one is for a specific render whose plates are already
+ * planned, so it can be compared against what was charged and the real margin
+ * read off the ledger instead of estimated.
+ */
+export const plateCostCents = (plateSeconds: number[]): number =>
+  Math.round(plateSeconds.reduce((n, s) => n + s, 0) * AD_COST.centsPerSecond + AD_COST.renderOverheadCents);
 
 /** Statuses a render goes through. `failed` is terminal; a caller may retry into a new render. */
 export const AD_RENDER_STATUSES = ["queued", "generating", "composing", "ready", "failed"] as const;

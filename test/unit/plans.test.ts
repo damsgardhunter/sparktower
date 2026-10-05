@@ -239,6 +239,17 @@ describe("the price list", () => {
       // A day of pictures. Its own price rather than a small action, because
       // an image is the most expensive thing here per press.
       imagePass: 500,
+      // Adverts, at twenty cents a second of finished cut — the rate, not the
+      // list, is the thing that was decided, and test/unit/ad-pricing.test.ts
+      // holds the three to it. The thirty-second cut is the best value of the
+      // three because clips have a five-second floor: six seconds of advert
+      // still needs fifteen seconds generated across three plates, so the
+      // short one is the thin one. At one generation per plate every length
+      // clears its cost; at three attempts none of them do, which is why a
+      // re-roll is a new render rather than something included.
+      advert6: 120,
+      advert15: 300,
+      advert30: 600,
     });
     /*
      * Whole dollars, on purpose — with two exceptions, on purpose.
@@ -251,8 +262,18 @@ describe("the price list", () => {
      * because it is a deterrent rather than revenue. Everything else stays
      * whole. Pinned as a named set rather than loosened to "anything goes",
      * so the next price added has to argue for itself the way these two did.
+     *
+     * `advert6` is the third, and it argues differently from the other two:
+     * the two of them chose a price, and this one is a *rate* — twenty cents
+     * a second — applied to a length somebody picked. Six times twenty is
+     * $1.20 and there is no rounding that keeps both the rate and the whole
+     * dollar. Rounding down to $1 would sell a six-second advert for less
+     * than the 105 cents of video it takes to generate; rounding up to $2
+     * would make the shortest cut dearer per second than the rate it is
+     * advertised at. The other two lengths land on whole dollars by
+     * arithmetic rather than by choice.
      */
-    const NOT_WHOLE = new Set<PricedOutcomeId>(["business", "challenge"]);
+    const NOT_WHOLE = new Set<PricedOutcomeId>(["business", "challenge", "advert6"]);
     for (const [id, cents] of Object.entries(OUTCOME_PRICE_CENTS)) {
       if (NOT_WHOLE.has(id as PricedOutcomeId)) continue;
       expect(cents % 100, `${id} should be a whole number of dollars`).toBe(0);

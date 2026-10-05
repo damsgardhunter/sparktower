@@ -255,8 +255,19 @@ export function composeShot(shot: ComposeShot): string[] {
 
   const args = [
     "-y",
+    /*
+     * Seek on the input (fast — ffmpeg skips to the plate's keyframe and
+     * decodes forward), but take the duration on the *output*, after the
+     * filters have run.
+     *
+     * `-t` in front of `-i` is an input option: it limits how much is read
+     * from the demuxer, before `fps=24` has normalised anything, and what
+     * comes out the other side is a few frames short. Across the seven shots
+     * of a fifteen-second advert that lost a quarter of a second — a file of
+     * 14.75 seconds sold as fifteen. Small, and exactly the kind of thing
+     * nobody would ever look for.
+     */
     "-ss", String(shot.startSeconds),
-    "-t", String(shot.seconds),
     "-i", shot.input,
   ];
 
@@ -360,6 +371,8 @@ export function composeShot(shot: ComposeShot): string[] {
   }
 
   args.push(
+    /* The exact length of this shot, trimmed after the filters rather than before. */
+    "-t", String(shot.seconds),
     /* No audio from the plate: the model's audio is not the advert's audio. */
     "-an",
     "-c:v", "libx264",
@@ -429,6 +442,16 @@ export function composeConcat(listFile: string, output: string): string[] {
     output,
   ];
 }
+
+/**
+ * Run ffmpeg with arguments somebody else built.
+ *
+ * Exported so `server/ad-render.ts` can run `composeConcat` and generate a
+ * stand-in plate without a second copy of the spawn-and-read-stderr dance.
+ * Takes the arguments rather than a command: this process has no business
+ * running anything but ffmpeg on behalf of a render.
+ */
+export const runFfmpeg = (args: string[]): Promise<void> => run("ffmpeg", args);
 
 function run(bin: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
