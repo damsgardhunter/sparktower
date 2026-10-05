@@ -3187,6 +3187,67 @@ export const startupGameSubmissions = pgTable("startup_game_submissions", {
   once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
 }));
 
+// ─── Advertisements ──────────────────────────────────────────────────────────
+
+/**
+ * How a business looks and sounds, saved once and applied to every advert.
+ *
+ * The reason this is a table rather than fields on `projects`: an advert needs
+ * a dozen details that nothing else in the product cares about, and a business
+ * fills them in once. Keeping them apart means the brand kit can be absent
+ * without every project row carrying twelve nulls, and "has this business set
+ * up its branding" is one existence check.
+ *
+ * Everything here is applied **in code** at render time — the colours, the
+ * logo, the words. None of it is described to the video model, because a model
+ * asked to put a logo in a frame draws something that looks like a logo. See
+ * the rule at the top of shared/ads.ts.
+ */
+export const projectBrandKits = pgTable("project_brand_kits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** One kit per project. The unique constraint below is what makes it one. */
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+
+  /* ── How it looks ── */
+  /** `#RRGGBB`. Used for text, bars and the progress sweep. */
+  primaryColor: text("primary_color"),
+  /** The colour text sits on, and what a caption box is filled with. */
+  backgroundColor: text("background_color"),
+  /** Accent for one thing per frame — a price, an arrow, an underline. */
+  accentColor: text("accent_color"),
+  /**
+   * An object-storage path to the logo, ideally with transparency.
+   *
+   * Composited at render time at a known size and position. A logo the model
+   * generated is not a logo; this is the only logo that ever appears.
+   */
+  logoPath: text("logo_path"),
+  /** One of the bundled families, or null for the default. */
+  fontFamily: text("font_family"),
+
+  /* ── How it sounds ── */
+  /** What the business is called, as it should be written on screen. */
+  displayName: text("display_name"),
+  /** The one line that can go under the name. */
+  tagline: text("tagline"),
+  /** "warm", "plain", "bold" — picked from a list, not typed. */
+  voice: text("voice"),
+  /** Words and claims this business will not make. Read into the script prompt. */
+  avoidWords: text("avoid_words").array(),
+
+  /* ── What every ad must end with ── */
+  /** "Order at example.com", "Link in bio". Rendered, never spoken by a model. */
+  callToAction: text("call_to_action"),
+  /** Where the call to action points, for the caption and the description. */
+  websiteUrl: text("website_url"),
+
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* One kit per project: a second kit is an edit, not another brand. */
+  onePerProject: unique("project_brand_kit_once").on(table.projectId),
+}));
+
 // ─── Companies ───────────────────────────────────────────────────────────────
 
 /**

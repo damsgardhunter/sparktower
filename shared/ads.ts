@@ -79,10 +79,21 @@ export type AdBeatId = (typeof AD_BEATS)[number]["id"];
  * Interpolated between the two authored shapes rather than authored three
  * times, so changing a beat changes every length consistently.
  */
-export function beatPlan(duration: AdDuration): { id: AdBeatId; seconds: number }[] {
+export function beatPlan(
+  duration: AdDuration,
+  /**
+   * A style's emphasis, multiplied against the base shares. A weight of 0
+   * removes the beat — "Arriving" has no problem beat, because nobody opening
+   * a parcel needs telling they had a problem.
+   */
+  styleWeights?: Partial<Record<AdBeatId, number>>,
+): { id: AdBeatId; seconds: number }[] {
   const span = 30 - 6;
   const t = (duration - 6) / span;
-  const weights = AD_BEATS.map((b) => ({ id: b.id, w: b.shareOf6 + (b.shareOf30 - b.shareOf6) * t }))
+  const weights = AD_BEATS.map((b) => ({
+    id: b.id,
+    w: (b.shareOf6 + (b.shareOf30 - b.shareOf6) * t) * (styleWeights?.[b.id] ?? 1),
+  }))
     .filter((b) => b.w > 0.001);
   const total = weights.reduce((sum, b) => sum + b.w, 0);
   /*
