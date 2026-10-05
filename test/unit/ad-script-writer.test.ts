@@ -26,9 +26,9 @@ const REQUEST: ScriptRequest = {
 /** An answer the rules accept, so a test only has to describe what it changes. */
 const good = (over: Partial<Record<string, unknown>> = {}) => JSON.stringify({
   lines: [
-    { beat: "hook", onScreen: "Roasted this week" },
-    { beat: "product", onScreen: "Ember Roast" },
-    { beat: "cta", onScreen: "Order now" },
+    { beat: "hook", onScreen: "Roasted this week", scene: "Steam rising off a cup on a wooden counter, early light from one window." },
+    { beat: "product", onScreen: "Ember Roast", scene: "A clean wooden worktop by a window, empty, lit evenly from the side." },
+    { beat: "cta", onScreen: "Order now", scene: "An open doorway onto a bright street, shot from inside, shallow focus." },
   ],
   callToAction: "Order at ember.test",
   ...over,
@@ -57,9 +57,9 @@ describe("writing an advert script", () => {
   it("asks again when a line does not fit, and names what was wrong", async () => {
     const tooLong = JSON.stringify({
       lines: [
-        { beat: "hook", onScreen: "Coffee roasted in small batches every single week" },
-        { beat: "product", onScreen: "Ember Roast" },
-        { beat: "cta", onScreen: "Order now" },
+        { beat: "hook", onScreen: "Coffee roasted in small batches every single week", scene: "Steam rising off a cup on a counter." },
+        { beat: "product", onScreen: "Ember Roast", scene: "A clean worktop by a window." },
+        { beat: "cta", onScreen: "Order now", scene: "An open doorway onto a bright street." },
       ],
       callToAction: "Order at ember.test",
     });
@@ -77,8 +77,8 @@ describe("writing an advert script", () => {
   it("hands back every problem at once rather than one per round", async () => {
     const bad = JSON.stringify({
       lines: [
-        { beat: "hook", onScreen: "Clinically proven coffee, roasted every single week of the year" },
-        { beat: "cta", onScreen: "Order now" },
+        { beat: "hook", onScreen: "Clinically proven coffee, roasted every single week of the year", scene: "Steam rising off a cup." },
+        { beat: "cta", onScreen: "Order now", scene: "An open doorway onto a street." },
       ],
       callToAction: "Order at ember.test",
     });
@@ -115,7 +115,7 @@ describe("writing an advert script", () => {
      * what happened is an answer with two unusable lines in it.
      */
     const mixed = JSON.stringify({
-      lines: [{ beat: "hook", onScreen: "Roasted this week" }, "product line here", null, { beat: "cta" }],
+      lines: [{ beat: "hook", onScreen: "Roasted this week", scene: "Steam off a cup." }, "product line here", null, { beat: "cta" }],
       callToAction: "Order at ember.test",
     });
     const err = await writeAdScript(REQUEST, { ask: scripted(mixed), attempts: 1 }).catch((e) => e);
@@ -127,6 +127,56 @@ describe("writing an advert script", () => {
     const ask = scripted("Here's a lovely script for your coffee advert!");
     const err = await writeAdScript(REQUEST, { ask, attempts: 1 }).catch((e) => e);
     expect(err.code).toBe("model_unreadable");
+  });
+});
+
+describe("the scene each beat is shot in", () => {
+  it("is required, because without it every plate falls back to the style's generic direction", async () => {
+    const noScene = JSON.stringify({
+      lines: [
+        { beat: "hook", onScreen: "Roasted this week" },
+        { beat: "product", onScreen: "Ember Roast" },
+        { beat: "cta", onScreen: "Order now" },
+      ],
+      callToAction: "Order at ember.test",
+    });
+    const ask = scripted(noScene, good());
+    const out = await writeAdScript(REQUEST, { ask });
+    expect(out.attempts).toBe(2);
+    expect(ask.asked[1]).toContain("has no scene");
+  });
+
+  it("is refused when it asks for something that gets composited over the top", async () => {
+    /*
+     * A generated logo is drawn underneath the real one, and a generated word
+     * is drawn underneath the typeset one. Asking for either in the scene is
+     * the surest way to get both.
+     */
+    const overlay = JSON.stringify({
+      lines: [
+        { beat: "hook", onScreen: "Roasted this week", scene: "A shop front with the logo above the door and a price list in the window." },
+        { beat: "product", onScreen: "Ember Roast", scene: "A clean worktop by a window." },
+        { beat: "cta", onScreen: "Order now", scene: "An open doorway onto a street." },
+      ],
+      callToAction: "Order at ember.test",
+    });
+    const ask = scripted(overlay, good());
+    await writeAdScript(REQUEST, { ask });
+    expect(ask.asked[1]).toContain("added afterwards from the business's own files");
+  });
+
+  it("does not trip over a word that merely contains a forbidden one", async () => {
+    /* "building" contains "ui"; "design" contains "sign". Neither is an overlay. */
+    const fine = JSON.stringify({
+      lines: [
+        { beat: "hook", onScreen: "Roasted this week", scene: "A brick building seen from across a quiet street at dawn." },
+        { beat: "product", onScreen: "Ember Roast", scene: "A designer's worktop, tools laid out, lit from the side." },
+        { beat: "cta", onScreen: "Order now", scene: "An open doorway onto a bright street." },
+      ],
+      callToAction: "Order at ember.test",
+    });
+    const out = await writeAdScript(REQUEST, { ask: scripted(fine) });
+    expect(out.attempts, "a false positive here costs a paid retry every time").toBe(1);
   });
 });
 

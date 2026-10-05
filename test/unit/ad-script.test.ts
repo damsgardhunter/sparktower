@@ -19,7 +19,7 @@ import { CLAIM_PHRASES, checkScript, describeProblem, lineLimit, scriptPrompt, t
 
 const beats = beatPlan(30, adStyle("problem_solution")!.beatWeights);
 const script = (over: Partial<AdScript> = {}): AdScript => ({
-  lines: beats.map((b) => ({ beat: b.id, onScreen: "Short line" })),
+  lines: beats.map((b) => ({ beat: b.id, onScreen: "Short line", scene: "A quiet workbench by a window, lit from the side." })),
   callToAction: "Order at acme.test",
   ...over,
 });
@@ -145,7 +145,9 @@ describe("the instructions the model gets", () => {
   it("puts the business's own words first, as the subject", () => {
     /* A model given the rules before the brief writes to the rules. */
     const p = prompt();
-    expect(p.indexOf("hot sauce made by my mum")).toBeLessThan(p.indexOf("Rules:"));
+    const firstRule = p.indexOf("Rules for the");
+    expect(firstRule, "the prompt has no rules section any more").toBeGreaterThan(-1);
+    expect(p.indexOf("hot sauce made by my mum")).toBeLessThan(firstRule);
   });
 
   it("states the space each beat has, so it writes to it rather than being cropped", () => {
@@ -183,6 +185,7 @@ describe("the instructions the model gets", () => {
   it("asks for an answer it can parse", () => {
     expect(prompt()).toMatch(/Answer as JSON/);
     expect(prompt()).toContain('"onScreen"');
+    expect(prompt(), "the scene is half of what a beat is").toContain('"scene"');
   });
 });
 

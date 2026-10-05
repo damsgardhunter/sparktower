@@ -83,6 +83,18 @@ export interface PlatePromptInput {
   brandMoment: boolean;
   /** What the business is called, when it affects the setting rather than the lettering. */
   businessName?: string | null;
+  /**
+   * The scenes the script wrote for the beats on this plate.
+   *
+   * This is what makes one advert look different from another. Without it
+   * every plate is prompted from the style's own direction, which is one
+   * sentence shared by every advert of that style ever made — "the situation
+   * the problem happens in, ordinary light, ordinary room" — so a coffee
+   * roaster and a piece of software are handed identical instructions and get
+   * identical footage. The style says what *kind* of shot this is; the scene
+   * says what is in it.
+   */
+  scenes?: string[];
 }
 
 /**
@@ -95,6 +107,7 @@ export interface PlatePromptInput {
  */
 export function platePrompt(input: PlatePromptInput): string {
   const { brief, style, plate } = input;
+  const scenes = (input.scenes ?? []).map((s) => s.trim()).filter(Boolean);
 
   return [
     /*
@@ -105,7 +118,18 @@ export function platePrompt(input: PlatePromptInput): string {
     `A live-action advertising shot for this business: ${brief.replace(/\s+/g, " ").trim()}`,
     input.businessName ? `The business is called ${input.businessName}.` : "",
     ``,
-    `Setting: ${style.plate}`,
+    /*
+     * The written scene leads, because it is the specific one, and the style's
+     * direction follows as the manner it is shot in. A plate covering two
+     * beats gets both scenes: they are moments of one continuous move, so the
+     * model is told to find a frame that holds both rather than to cut.
+     */
+    scenes.length
+      ? `Scene: ${scenes.length > 1
+          ? `one continuous shot that passes through both of these — ${scenes.join(" Then: ")}`
+          : scenes[0]}`
+      : "",
+    scenes.length ? `Shot in this manner: ${style.plate}` : `Setting: ${style.plate}`,
     ``,
     /* The camera move is the plate's identity: it is what makes the windows cut together. */
     `Camera: ${plate.camera}, one continuous move, no cuts.`,

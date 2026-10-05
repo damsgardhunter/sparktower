@@ -340,11 +340,25 @@ export function composeShot(shot: ComposeShot): string[] {
     /*
      * One corner, every shot, never moving — a logo that moves is a logo
      * somebody watches instead of the advert.
+     *
+     * Fitted into a box rather than scaled to a width. `scale=W:-1` bounds one
+     * dimension and lets the other go where it likes, which gives every logo
+     * the same *width* and wildly different presence: a wide wordmark comes
+     * out the right size and a tall mark comes out as a sliver, because the
+     * thing that is 150 pixels across is 400 pixels tall and the eye reads the
+     * area. The first live render had a logo nobody could pick out against a
+     * bookshelf for exactly this reason.
+     *
+     * So both edges are bounded and `decrease` keeps the aspect ratio: a tall
+     * mark and a wide one end up with comparable weight in the corner, which
+     * is what "the same size" means to somebody looking at it.
      */
-    const logoWidth = Math.round(shortEdge * 0.14);
+    const logoBox = { w: Math.round(shortEdge * 0.2), h: Math.round(shortEdge * 0.2) };
     overlays.push({
       file: shot.logoFile,
-      build: (label, i) => [`[${i}:v]scale=${logoWidth}:-1[${label}]`],
+      build: (label, i) => [
+        `[${i}:v]scale=${logoBox.w}:${logoBox.h}:force_original_aspect_ratio=decrease[${label}]`,
+      ],
     });
   }
 

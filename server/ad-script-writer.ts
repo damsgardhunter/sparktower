@@ -191,6 +191,7 @@ function readScript(raw: string): AdScript {
         beat: l.beat as AdBeatId,
         onScreen: l.onScreen.trim(),
         voiceover: typeof l.voiceover === "string" ? l.voiceover.trim() : undefined,
+        scene: typeof l.scene === "string" ? l.scene.trim() : undefined,
       })),
     callToAction: typeof parsed?.callToAction === "string" ? parsed.callToAction.trim() : "",
   };
@@ -224,10 +225,23 @@ export function stubScript(input: ScriptRequest): AdScript {
     cta: "Take a look",
   };
 
+  /*
+   * A scene per beat, so a stubbed script passes the same checks a real one
+   * does. Deliberately dull and deliberately concrete — the point is to prove
+   * the shape, not to direct a film.
+   */
+  const scene: Record<AdBeatId, string> = {
+    hook: "A hand reaching for a cold mug on a desk by a window, early morning light.",
+    problem: "A kitchen table at night, papers spread across it, one lamp on.",
+    product: "A clean wooden worktop by a window, empty, lit evenly from the side.",
+    proof: "Two people side by side at a workbench, seen from behind, mid-conversation.",
+    cta: "An open doorway onto a bright street, shot from inside, shallow focus.",
+  };
+
   return {
     lines: input.beats.map((b) => {
       const want = say[b.id] ?? "A few words";
-      return { beat: b.id, onScreen: safeLine(want, b, input), voiceover: "" };
+      return { beat: b.id, onScreen: safeLine(want, b, input), voiceover: "", scene: scene[b.id] };
     }),
     callToAction: input.callToAction?.trim() || "See the site",
   };

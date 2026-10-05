@@ -32,6 +32,22 @@ export interface ScriptLine {
   onScreen: string;
   /** What is said, if there is a voice track. May be empty; many ads have none. */
   voiceover?: string;
+  /**
+   * What is actually in shot for this beat: one concrete scene.
+   *
+   * The thing that was missing, and the reason the first adverts looked
+   * generic. Every plate was prompted with the *style's* scene direction —
+   * "the situation the problem happens in, ordinary light, ordinary room" —
+   * which is the same sentence for every beat of every advert for every
+   * business. A video model handed that draws a room. A coffee roaster and a
+   * software product got the same room.
+   *
+   * The model writing the words is the one that has just read what the
+   * business does, so it is the one that can say that the problem beat is a
+   * person refreshing a spreadsheet at a kitchen table at night. That is a
+   * shot. "Ordinary room" is not.
+   */
+  scene?: string;
 }
 
 export interface AdScript {
@@ -66,7 +82,9 @@ export type ScriptProblem =
   | { kind: "banned_word"; beat: AdBeatId; word: string }
   | { kind: "missing_beat"; beat: AdBeatId }
   | { kind: "unsupported_claim"; beat: AdBeatId; phrase: string }
-  | { kind: "cta_changed"; expected: string; was: string };
+  | { kind: "cta_changed"; expected: string; was: string }
+  | { kind: "missing_scene"; beat: AdBeatId }
+  | { kind: "scene_describes_overlay"; beat: AdBeatId; word: string };
 
 /**
  * Phrases that turn a sentence into a claim somebody has to be able to
@@ -77,6 +95,21 @@ export type ScriptProblem =
  * refused unless the business supplied them, in which case they are the
  * business's own words and their own responsibility.
  */
+/**
+ * Things a scene must not ask the camera to show.
+ *
+ * All four are composited afterwards from the business's own files, and a
+ * generated version of any of them is drawn *underneath* the real one — two
+ * logos, two prices, a misspelt version of a word that is also set correctly
+ * in type over the top. The negative prompt tells the model not to draw them;
+ * this stops the scene direction asking for them in the first place, which no
+ * negative prompt reliably survives.
+ */
+export const SCENE_FORBIDDEN = [
+  "logo", "text", "lettering", "sign", "signage", "caption", "subtitle",
+  "price", "label", "packaging", "watermark", "screen showing", "ui", "interface",
+];
+
 export const CLAIM_PHRASES = [
   "clinically proven", "doctor recommended", "FDA approved", "guaranteed",
   "best in the world", "number one", "#1", "cures", "treats", "prevents",
@@ -107,6 +140,22 @@ export function checkScript(
     const limit = lineLimit(beat.id, beat.seconds);
     if (line.onScreen.length > limit) {
       problems.push({ kind: "too_long", beat: beat.id, limit, was: line.onScreen.length });
+    }
+
+    /*
+     * A beat with no scene is a plate prompted from the style's generic
+     * direction, which is the failure this field exists to stop.
+     */
+    const scene = line.scene?.trim() ?? "";
+    if (!scene) {
+      problems.push({ kind: "missing_scene", beat: beat.id });
+    } else {
+      for (const word of SCENE_FORBIDDEN) {
+        /* Word boundaries: "ui" must not match "building", "sign" must not match "design". */
+        if (new RegExp(`\\b${word}\\b`, "i").test(scene)) {
+          problems.push({ kind: "scene_describes_overlay", beat: beat.id, word });
+        }
+      }
     }
 
     const haystack = `${line.onScreen} ${line.voiceover ?? ""}`.toLowerCase();
@@ -146,6 +195,8 @@ export function describeProblem(p: ScriptProblem): string {
     case "missing_beat": return `There is no line for the ${p.beat} beat.`;
     case "unsupported_claim": return `The ${p.beat} line says "${p.phrase}", which is a claim the business has not supported. Remove it.`;
     case "cta_changed": return `The call to action must be exactly "${p.expected}" and was "${p.was}".`;
+    case "missing_scene": return `The ${p.beat} beat has no scene. Describe what is in shot, in one sentence.`;
+    case "scene_describes_overlay": return `The ${p.beat} scene asks for "${p.word}" to be in shot. That is added afterwards from the business's own files — describe only what the camera sees.`;
   }
 }
 
@@ -184,7 +235,20 @@ export function scriptPrompt(input: {
     ``,
     `Voice: ${input.voice.label}. ${input.voice.how}`,
     ``,
-    `Rules:`,
+    `For each beat, write two things: the line that appears on screen, and the scene the camera is looking at while it does.`,
+    ``,
+    `Rules for the scene:`,
+    `- One sentence, concrete, and specific to this business. Name what is in shot: where it is, who is there, what they are doing, what the light is like.`,
+    `- It must be a real place a camera could be put. "An ordinary room" and "a modern workspace" are not scenes; "a kitchen table at night, laptop open, cold coffee beside it" is.`,
+    /*
+     * The four things composited afterwards. Said as "they are added later"
+     * rather than "do not mention them", because a model told not to mention
+     * a logo writes a scene that is conspicuously about not having a logo.
+     */
+    `- Never put words, lettering, signs, labels, prices, screens or logos in the scene. Those are added afterwards from the business's own files, over the top of this footage.`,
+    `- No faces looking at the camera, and no recognisable person: a generated face is a real person's likeness being used to sell something.`,
+    ``,
+    `Rules for the line:`,
     `- The on-screen line for each beat must fit its character limit. It is set large over moving footage, so it is a few words, not a sentence.`,
     `- Write only what the business told you. Do not invent a customer, a review, a number, a price or a result.`,
     input.supportedClaims?.length
@@ -196,6 +260,6 @@ export function scriptPrompt(input: {
       : `- There is no call to action supplied, so end on what the viewer should do in four words or fewer.`,
     `- ${input.style.avoid}`,
     ``,
-    `Answer as JSON: { "lines": [ { "beat": "...", "onScreen": "...", "voiceover": "..." } ], "callToAction": "..." }`,
+    `Answer as JSON: { "lines": [ { "beat": "...", "onScreen": "...", "scene": "...", "voiceover": "..." } ], "callToAction": "..." }`,
   ].filter(Boolean).join("\n");
 }

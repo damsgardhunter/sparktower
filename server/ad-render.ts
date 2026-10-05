@@ -42,7 +42,7 @@ import { spend, refund } from "./wallet";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { klingSubmit, klingStatus, klingConfigured, type KlingSubmit, type KlingTask } from "./kling-client";
 import { aiStubbed } from "./ai-stub";
-import { composeConcat, renderShot, runFfmpeg, ffmpegAvailable } from "./ad-compositor";
+import { composeConcat, renderShot, runFfmpeg, ffmpegAvailable, escapeDrawText } from "./ad-compositor";
 import { writeAdScript, ScriptUnusableError } from "./ad-script-writer";
 import { brandKitFor } from "./ad-brand-routes";
 import {
@@ -325,6 +325,10 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
       plate,
       brandMoment: plate.windows.some((w) => plan.shots[w.shotIndex]?.brandMoment),
       businessName: brand?.displayName ?? null,
+      /* What the script asked to see, for the beats this plate covers. */
+      scenes: plate.beats
+        .map((id) => written.script.lines.find((l) => l.beat === id)?.scene)
+        .filter((s): s is string => !!s?.trim()),
     }),
     taskId: null,
     videoUrl: null,
@@ -503,10 +507,7 @@ async function fetchPlate(plate: PlateRecord, work: string): Promise<string> {
   if (!plate.videoUrl) throw new Error(`Plate ${plate.index} has no video`);
 
   if (plate.videoUrl.startsWith("stub://")) {
-    await runFfmpeg([
-      "-y", "-f", "lavfi", "-i", `testsrc2=size=1280x720:rate=24:duration=${plate.seconds}`,
-      "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast", file,
-    ]);
+    await runFfmpeg(stubPlateArgs(plate, file));
     return file;
   }
 
@@ -514,6 +515,42 @@ async function fetchPlate(plate: PlateRecord, work: string): Promise<string> {
   if (!res.ok) throw new Error(`Couldn't download clip ${plate.index} (${res.status})`);
   await fs.writeFile(file, Buffer.from(await res.arrayBuffer()));
   return file;
+}
+
+/**
+ * The stand-in plate: calm, dark, and labelled as what it is.
+ *
+ * It used to be `testsrc2`, ffmpeg's colour-bar pattern, on the reasoning that
+ * an obviously synthetic plate could never be mistaken for real footage. That
+ * was exactly backwards. Somebody watched a finished advert built on it and
+ * described it as "a yellow and blue screen with blocks moving across it —
+ * felt like I was being hypnotised", which is a fair description of a test
+ * card and tells you nothing about whether the advert is any good. An
+ * unmistakably synthetic plate is not the same as a plate that says so.
+ *
+ * So it is a slow dark gradient with the words on it. Dark and slow because
+ * the lettering, the logo and the brand bar are the things being reviewed and
+ * they should be the only things moving; labelled because the file leaves this
+ * machine and the label is the only thing that travels with it. The camera
+ * direction is burned in as well, since it is what the real plate would have
+ * been and this is the cheapest place to read it back.
+ */
+function stubPlateArgs(plate: PlateRecord, file: string): string[] {
+  const label = escapeDrawText(`STUB PLATE — no video model`);
+  const camera = escapeDrawText(`${plate.seconds}s · ${plate.camera}`);
+  const text = (s: string, y: number, size: number, colour: string) =>
+    `drawtext=text='${s}':fontcolor=${colour}:fontsize=${size}:x=40:y=${y}:box=1:boxcolor=0x000000@0.45:boxborderw=14`;
+
+  return [
+    "-y",
+    "-f", "lavfi",
+    /* Slow enough that nothing on this plate competes with what is composited over it. */
+    "-i", `gradients=s=1280x720:c0=0x1a2028:c1=0x2e3a46:x0=0:y0=0:x1=1280:y1=720:speed=0.012:d=${plate.seconds}:r=24`,
+    "-vf", [text(label, 40, 26, "0x8899aa"), text(camera, 92, 20, "0x66788a")].join(","),
+    "-t", String(plate.seconds),
+    "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+    file,
+  ];
 }
 
 /** The logo, out of object storage and onto disk, where ffmpeg can read it. */

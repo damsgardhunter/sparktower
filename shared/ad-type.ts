@@ -82,37 +82,89 @@ export const TYPE_STYLE_IDS = TYPE_STYLES.map((t) => t.id) as TypeStyleId[];
 /**
  * The treatment for a brand, in a style.
  *
- * `accent` is used for the halo when it is far enough from the fill to read as
- * a deliberate second colour. When it is not — a brand whose accent is nearly
- * its primary — the halo falls back to the contrast colour, because two
- * near-identical outlines is a blurry edge rather than a design.
+ * ## Which colour does which job
+ *
+ * The brand's colour is the **ring**, not the letters. This was the wrong way
+ * round and it is the single thing that made the first rendered adverts look
+ * amateur: `fill` was the brand's primary, so a business whose colour is a
+ * muddy gold got muddy gold letter bodies set over footage nobody could
+ * predict, and the one part of the frame that has to be readable was given
+ * the one colour chosen for something else entirely.
+ *
+ * Actual sticker lettering — the thing people mean when they say bubble
+ * letters — is a high-contrast fill inside a thick coloured outline. The fill
+ * is white or near-black because it has to survive being laid over a bright
+ * window in one shot and a dark table in the next; the brand is unmistakable
+ * because it is the ring around every letter, which is a larger area than the
+ * letters themselves.
+ *
+ * So: halo takes the brand colour, fill takes whatever contrasts with it most,
+ * and the thin outline between them exists to stop the two bleeding together.
+ *
+ * ## Why none of it is chosen from the footage
+ *
+ * It cannot be. The plate is generated after this is decided, and it changes
+ * from shot to shot — a treatment picked for a bright kitchen is wrong three
+ * seconds later in the same advert. The dark shadow underneath is what makes
+ * it work on light footage and the halo is what makes it work on dark, which
+ * is why both are always drawn rather than selected between.
  */
 export function typeTreatment(
   brand: { primaryColor: string; backgroundColor: string; accentColor?: string | null },
   style: TypeStyleId = "bubble",
 ): TypeTreatment {
-  const fill = brand.primaryColor;
-  const outline = againstColor(fill);
-  const accent = brand.accentColor ?? null;
   /*
-   * Three is the ratio at which two colours are distinguishable at a glance
-   * on a small screen — well below the 4.5 wanted for body text, which is the
-   * right bar for a decorative edge rather than something being read.
+   * The ring is the primary, because the primary is the brand. The accent is
+   * a fallback and nothing more.
+   *
+   * The first version of this rule preferred whichever of the two contrasted
+   * harder with white, which sounds reasonable and is wrong every time: the
+   * darker colour always wins that comparison, so a business whose primary is
+   * a gold and whose accent is a near-black got a near-black ring — a
+   * perfectly readable piece of lettering with no brand in it at all, which is
+   * the thing this whole treatment exists to put there.
+   *
+   * The accent is used only when the primary cannot hold a fill against it:
+   * a mid-grey has no strong contrast colour in either direction, and a ring
+   * nobody can read letters inside is not a ring.
    */
-  const accentReads = !!accent && contrastRatio(accent, fill) >= 3 && contrastRatio(accent, outline) >= 1.6;
+  const primary = brand.primaryColor;
+  const accent = brand.accentColor ?? null;
+  const holds = (ring: string) => contrastRatio(againstColor(ring), ring) >= 4.5;
+  const halo = holds(primary) || !accent || !holds(accent) ? primary : accent;
+
+  /* Whatever reads hardest against the ring. */
+  const fill = againstColor(halo);
+  /*
+   * A thin line between fill and ring. Normally the fill's own contrast
+   * colour — which is the ring's family — so where those two would blur into
+   * each other it takes the fill's colour instead and reads as a gap.
+   */
+  const between = againstColor(fill);
+  /*
+   * Where that line would be the ring's own colour it is not a separator, it
+   * is a thicker ring — so there is no line at all, and the ring does the
+   * separating on its own. An earlier version set it to the fill's colour
+   * instead, which is worse than nothing: an outline the same colour as the
+   * letters is not an outline, and it is the one thing this must never be.
+   */
+  const separates = contrastRatio(between, halo) >= 1.6;
+  const outline = between;
 
   if (style === "plain") {
-    return { fill, outline, outlineRatio: 0, halo: outline, haloRatio: 0, shadow: "#000000", shadowRatio: 0.03 };
+    return { fill, outline, outlineRatio: 0, halo, haloRatio: 0, shadow: "#000000", shadowRatio: 0.03 };
   }
   if (style === "outline") {
-    return { fill, outline, outlineRatio: 0.06, halo: outline, haloRatio: 0, shadow: "#000000", shadowRatio: 0.02 };
+    /* One ring, in the brand's colour, and no second outline. */
+    return { fill, outline: halo, outlineRatio: 0.07, halo, haloRatio: 0, shadow: "#000000", shadowRatio: 0.02 };
   }
   return {
     fill,
     outline,
-    outlineRatio: 0.08,
-    halo: accentReads ? accent! : againstColor(outline),
-    haloRatio: 0.14,
+    outlineRatio: separates ? 0.05 : 0,
+    halo,
+    /* Thicker than it was: the ring is the brand, so it has to be seen as one. */
+    haloRatio: 0.16,
     shadow: "#000000",
     shadowRatio: 0.035,
   };
