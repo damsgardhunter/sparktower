@@ -119,7 +119,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
-import { isValidSubcategory, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
+import { isValidSubcategory, subcategoryMismatch, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
@@ -3247,7 +3247,7 @@ ${projectContext}`;
       const goal = normaliseGoal(req.body?.goal);
       const subcategory = String(req.body?.subcategory ?? "");
       if (!goal) return res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" });
-      if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch", field: "subcategory" });
+      if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: subcategoryMismatch(goal, subcategory), code: "subcategory_mismatch", field: "subcategory" });
       const result = await startTrack(req.params.id, goal, subcategory);
       void recordActivity({
         name: "track.started", userId: (req.user as any).id, visitorId: req.visitorId ?? "unknown", sessionId: req.sessionId ?? "unknown",
@@ -3909,7 +3909,7 @@ ${projectContext}`;
       const goal = String(req.body?.goal ?? "");
       const subcategory = String(req.body?.subcategory ?? "other");
       if (!PROJECT_GOALS.some((g) => g.id === goal)) return res.status(400).json({ message: "Pick one of the three paths.", code: "invalid_input", field: "goal" });
-      if (!isValidSubcategory(goal as any, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch" });
+      if (!isValidSubcategory(goal as any, subcategory)) return res.status(400).json({ message: subcategoryMismatch(String(goal), subcategory), code: "subcategory_mismatch" });
       if (goal === project.goal && subcategory === project.subcategory) return res.status(400).json({ message: "The project is already on that path.", code: "same_path" });
       const result = await switchPath(req.params.id, goal as any, subcategory);
       void recordActivity({

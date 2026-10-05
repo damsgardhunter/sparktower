@@ -180,6 +180,27 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
 
 export const subcategoriesFor = (goal: ProjectGoal) => PROJECT_SUBCATEGORIES[goal];
 
+/**
+ * Why a (goal, subcategory) pair was refused, naming what this build accepts.
+ *
+ * The refusal used to be `"channel" is not a kind of "systemize_business"
+ * project.` — true, and no help at all to somebody who had just picked it off
+ * a list. The list they picked from comes from the client bundle, which Vite
+ * hot-reloads; the validation runs in the server process, which `npm run dev`
+ * does not restart on a file change. So the first time a new subcategory is
+ * added, the picker offers it and the server rejects it, and the message gives
+ * no clue that the two are running different code.
+ *
+ * Naming the accepted ids makes that one glance: a list missing the thing you
+ * just chose means a stale process, and a list containing something close
+ * means a typo. Cheap, and it is the only sentence anybody reads.
+ */
+export function subcategoryMismatch(goal: string, sub: string): string {
+  const known = (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal];
+  if (!known) return `"${goal}" isn't one of the paths.`;
+  return `"${sub}" isn't a kind of "${goal}" project. This build accepts: ${known.map((s) => s.id).join(", ")}.`;
+}
+
 export const isValidSubcategory = (goal: string | null | undefined, sub: string | null | undefined): boolean =>
   !!goal && !!sub && (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal]?.some((s) => s.id === sub) === true;
 
