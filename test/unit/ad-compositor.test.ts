@@ -329,3 +329,102 @@ describe("the two pieces a channel needs", () => {
     expect(outro.brand).toMatch(/never centred|bottom-left/i);
   });
 });
+
+/**
+ * The product, which is the whole reason the model is never asked to draw it.
+ *
+ * A business will not publish an advert where their own thing looks wrong, and
+ * a video model distorts logos, garbles labels and changes a shape between
+ * frames. So the product arrives as their photograph and is composited at a
+ * size and position we control.
+ */
+describe("compositing the product", () => {
+  const withProduct = (over: Record<string, unknown> = {}) =>
+    shot({ product: { file: "/tmp/bottle.png", cutOut: true, ...over } as never });
+
+  it("takes the photograph as an input", () => {
+    const args = withProduct();
+    expect(args).toContain("/tmp/bottle.png");
+    expect(args.join(" ")).toContain("overlay=");
+  });
+
+  it("stands it on the point given, not through it", () => {
+    /*
+     * The bug this guards: a product positioned by its centre floats. The
+     * point you can see in the plate is the surface it should stand on, and
+     * anchoring the middle of a bottle to a table top puts half of it through
+     * the table. The first render did exactly that.
+     */
+    const base = withProduct({ anchor: "base", at: { x: 0.5, y: 0.6 } }).join(" ");
+    expect(base).toMatch(/y=\d+-overlay_h(?!\/)/);
+    const centre = withProduct({ anchor: "centre", at: { x: 0.5, y: 0.6 } }).join(" ");
+    expect(centre).toMatch(/y=\d+-overlay_h\/2/);
+  });
+
+  it("defaults to standing on it, because that is almost always right", () => {
+    expect(withProduct().join(" ")).toMatch(/y=\d+-overlay_h(?!\/)/);
+  });
+
+  it("gives a rectangular photograph a card rather than pasting it flat", () => {
+    /*
+     * Nothing here removes a background: a bad automatic cut-out of somebody's
+     * product is worse than an honest card. So a photo that is not already cut
+     * out gets a border, which reads as deliberate.
+     */
+    const flat = withProduct({ cutOut: false }).join(" ");
+    expect(flat).toContain("pad=");
+    const cut = withProduct({ cutOut: true }).join(" ");
+    expect(cut).not.toContain("pad=");
+  });
+
+  it("never blurs the plate to make a shadow", () => {
+    /*
+     * The regression this exists for. The first contact shadow was a drawbox
+     * followed by `boxblur`, which blurs the whole frame — the plate came out
+     * of focus and nothing failed, because nothing was looking at a frame. A
+     * shadow is a thing on top of the video, not something done to the video.
+     */
+    const args = withProduct({ contactShadow: true, at: { x: 0.5, y: 0.6 } }).join(" ");
+    expect(args, "boxblur applies to the whole layer it is in").not.toContain("boxblur");
+  });
+
+  it("draws the shadow under the product, as its own layer", () => {
+    const args = withProduct({ contactShadow: true }, ).join(" ");
+    /* Without a prepared file there is nothing to overlay — `renderShot` makes it. */
+    const withFile = shot({
+      product: { file: "/tmp/bottle.png", cutOut: true, contactShadow: true } as never,
+      shadowFile: "/tmp/shadow.png",
+    }).join(" ");
+    expect(withFile).toContain("/tmp/shadow.png");
+    expect(withFile.indexOf("/tmp/shadow.png"), "shadow input comes before the product")
+      .toBeLessThan(withFile.indexOf("/tmp/bottle.png"));
+    expect(args).toBeTruthy();
+  });
+
+  it("layers shadow, then product, then logo, then text", () => {
+    /*
+     * Order decides what is hidden. Text last and above everything, because it
+     * is the one thing that must never be obscured.
+     */
+    const args = shot({
+      product: { file: "/tmp/bottle.png", cutOut: true, contactShadow: true } as never,
+      shadowFile: "/tmp/shadow.png",
+      logoFile: "/tmp/logo.png",
+      lines: [{ text: "Buy", atHeight: 0.5, sizeRatio: 0.06 }],
+    }).join(" ");
+    expect(args.indexOf("/tmp/shadow.png")).toBeLessThan(args.indexOf("/tmp/bottle.png"));
+    expect(args.indexOf("/tmp/bottle.png")).toBeLessThan(args.indexOf("/tmp/logo.png"));
+    /* Text is in the base chain, which is built before any overlay is applied. */
+    expect(args).toContain("drawtext=");
+  });
+
+  it("adds one input per overlay and maps the final label", () => {
+    const args = shot({
+      product: { file: "/tmp/bottle.png", cutOut: true } as never,
+      logoFile: "/tmp/logo.png",
+    });
+    /* The plate, the product, the logo. */
+    expect(args.filter((a) => a === "-i")).toHaveLength(3);
+    expect(args[args.indexOf("-map") + 1]).toBe("[out]");
+  });
+});

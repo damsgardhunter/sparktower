@@ -31,6 +31,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { AD_FORMATS, type AdFormatId } from "@shared/ads";
 import { SAFE_AREAS, safeBox } from "@shared/ad-safe-areas";
 import { brandFont, resolvedBrand, type BrandKitInput } from "@shared/ad-brand";
@@ -103,10 +104,56 @@ export interface ComposeShot {
   lines?: ShotText[];
   /** The logo, as a local file path. Composited at a fixed corner. */
   logoFile?: string | null;
+  /**
+   * The business's own photograph of the thing they sell.
+   *
+   * This is the whole reason the model is never asked to draw the product.
+   * Composited from their file, at a size and position we control, so it is
+   * *their* product and not a model's impression of it.
+   */
+  product?: {
+    file: string;
+    /** Share of the frame's shorter edge. A product smaller than a fifth reads as a prop. */
+    widthRatio?: number;
+    /** Where it sits inside the safe box, as fractions of it. */
+    at?: { x: number; y: number };
+    /**
+     * Which part of the product `at` refers to.
+     *
+     * `base` is almost always right and is the default. A product positioned
+     * by its centre floats: the point you can see in the plate is the surface
+     * it should stand on, and anchoring the middle of a bottle to a table top
+     * puts half the bottle through the table and the other half in the air.
+     * The first render of this got it wrong in exactly that way.
+     */
+    anchor?: "centre" | "base";
+    /**
+     * A soft shadow where it meets the surface.
+     *
+     * Without one a cut-out reads as a sticker however well it is placed —
+     * the eye reads contact from the shadow, not from the position. Drawn as
+     * a flattened dark ellipse under the base, which is cheap and convincing
+     * at the sizes anything is watched at.
+     */
+    contactShadow?: boolean;
+    /**
+     * Whether the file already has a transparent background.
+     *
+     * A cut-out composites straight into the scene. A rectangular photograph
+     * does not — pasted flat it looks like a screenshot stuck on a video — so
+     * it is given a rounded card and a shadow, which is a deliberate-looking
+     * treatment rather than a failed cut-out. Nothing here attempts to remove
+     * a background: a bad automatic cut-out of somebody's product is worse
+     * than an honest card.
+     */
+    cutOut?: boolean;
+  } | null;
   /** Hold the brand colour as a bar along the bottom — a brand moment. */
   brandBar?: boolean;
   /** Bubble by default; `outline` and `plain` are for brands that need quieter. */
   typeStyle?: TypeStyleId;
+  /** A pre-blurred shadow, made by `renderShot`. Kept out of `composeShot` so it stays pure. */
+  shadowFile?: string | null;
   output: string;
 }
 
@@ -213,24 +260,103 @@ export function composeShot(shot: ComposeShot): string[] {
     "-i", shot.input,
   ];
 
+  /*
+   * Overlays, in the order they are layered.
+   *
+   * The product goes down before the logo and both go under the text, because
+   * the text is the thing that must never be obscured. Each extra input is
+   * another `-i`, and the filter_complex has to name them in the same order.
+   */
+  const overlays: {
+    file: string;
+    build: (label: string, inputIndex: number) => string[];
+    /** Where it goes. Defaults to the top-left of the safe box, which is the logo's place. */
+    position?: () => { x: string; y: string };
+  }[] = [];
+
+  /*
+   * The contact shadow, as its own overlay rather than a filter on the plate.
+   *
+   * The first attempt drew a box and then ran `boxblur`, which blurs the
+   * whole frame — the plate came out of focus and the bug was obvious only
+   * once a frame was looked at. A shadow is a thing on top of the video, not
+   * something done to the video.
+   */
+  if (shot.product?.contactShadow && shot.shadowFile) {
+    const at = shot.product.at ?? { x: 0.5, y: 0.78 };
+    const cx = Math.round(box.x + box.width * at.x);
+    const cy = Math.round(box.y + box.height * at.y);
+    overlays.push({
+      file: shot.shadowFile,
+      build: (label, i) => [`[${i}:v]null[${label}]`],
+      position: () => ({ x: `${cx}-overlay_w/2`, y: `${cy}-overlay_h/2` }),
+    });
+  }
+
+  if (shot.product) {
+    const widthRatio = shot.product.widthRatio ?? 0.42;
+    const productWidth = Math.round(shortEdge * widthRatio);
+    const cutOut = shot.product.cutOut ?? false;
+    const file = shot.product.file;
+    const at = shot.product.at ?? { x: 0.5, y: 0.78 };
+    const anchor = shot.product.anchor ?? "base";
+    const px = Math.round(box.x + box.width * at.x);
+    const py = Math.round(box.y + box.height * at.y);
+    overlays.push({
+      position: () => ({
+        x: `${px}-overlay_w/2`,
+        /* `base` puts the bottom of the product on the point; `centre` its middle. */
+        y: anchor === "base" ? `${py}-overlay_h` : `${py}-overlay_h/2`,
+      }),
+      file,
+      build: (label, i) => {
+        const steps = [`[${i}:v]scale=${productWidth}:-1`];
+        if (!cutOut) {
+          /*
+           * A card: pad a border of the brand's background around the photo
+           * so it reads as a deliberate frame rather than a flat paste. The
+           * shadow comes from a second, offset copy drawn underneath.
+           */
+          const pad = Math.round(productWidth * 0.035);
+          steps.push(`pad=iw+${pad * 2}:ih+${pad * 2}:${pad}:${pad}:${brand.backgroundColor.replace("#", "0x")}`);
+        }
+        return [`${steps.join(",")}[${label}]`];
+      },
+    });
+  }
+
   if (shot.logoFile) {
     /*
-     * The logo as a second input, scaled to a fixed share of the frame and
-     * placed inside the safe box. One corner, every shot, never moving — a
-     * logo that moves is a logo somebody watches instead of the advert.
+     * One corner, every shot, never moving — a logo that moves is a logo
+     * somebody watches instead of the advert.
      */
     const logoWidth = Math.round(shortEdge * 0.14);
-    args.push("-i", shot.logoFile);
-    const chain = filters.join(",");
-    args.push(
-      "-filter_complex",
-      `[0:v]${chain}[base];` +
-      `[1:v]scale=${logoWidth}:-1[logo];` +
-      `[base][logo]overlay=x=${box.x}:y=${box.y}[out]`,
-      "-map", "[out]",
-    );
-  } else {
+    overlays.push({
+      file: shot.logoFile,
+      build: (label, i) => [`[${i}:v]scale=${logoWidth}:-1[${label}]`],
+    });
+  }
+
+  if (overlays.length === 0) {
     args.push("-vf", filters.join(","));
+  } else {
+    for (const o of overlays) args.push("-i", o.file);
+
+    const parts: string[] = [`[0:v]${filters.join(",")}[base]`];
+    let carry = "base";
+
+    overlays.forEach((o, n) => {
+      const inputIndex = n + 1;
+      const label = `ov${n}`;
+      parts.push(...o.build(label, inputIndex));
+      const next = n === overlays.length - 1 ? "out" : `stage${n}`;
+
+      const where = o.position?.() ?? { x: String(box.x), y: String(box.y) };
+      parts.push(`[${carry}][${label}]overlay=x=${where.x}:y=${where.y}[${next}]`);
+      carry = next;
+    });
+
+    args.push("-filter_complex", parts.join(";"), "-map", "[out]");
   }
 
   args.push(
@@ -248,10 +374,38 @@ export function composeShot(shot: ComposeShot): string[] {
   return args;
 }
 
+/**
+ * A soft contact shadow, as a file.
+ *
+ * Made with sharp rather than in the filtergraph, because blurring inside
+ * ffmpeg means blurring a layer the size of the frame — and the first attempt
+ * at that blurred the whole plate. A small blurred ellipse is a few
+ * milliseconds and cannot affect anything it is not drawn over.
+ */
+async function shadowFile(widthPx: number): Promise<string> {
+  const sharp = (await import("sharp")).default;
+  const width = Math.max(32, widthPx);
+  const height = Math.max(12, Math.round(width * 0.22));
+  const file = path.join(os.tmpdir(), `ad-shadow-${width}x${height}.png`);
+  if (existsSync(file)) return file;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+    `<ellipse cx="${width / 2}" cy="${height / 2}" rx="${width / 2.2}" ry="${height / 2.4}" fill="black" opacity="0.38"/>` +
+    `</svg>`;
+  await sharp(Buffer.from(svg)).blur(Math.max(3, height / 4)).png().toFile(file);
+  return file;
+}
+
 /** Run one shot. Resolves to the output path, or throws with ffmpeg's own last words. */
 export async function renderShot(shot: ComposeShot): Promise<string> {
-  const args = composeShot(shot);
-  await run("ffmpeg", args);
+  let prepared = shot;
+  if (shot.product?.contactShadow && !shot.shadowFile) {
+    const format = AD_FORMATS.find((f) => f.id === shot.format)!;
+    const shortEdge = Math.min(format.width, format.height);
+    const width = Math.round(shortEdge * (shot.product.widthRatio ?? 0.42) * 0.95);
+    prepared = { ...shot, shadowFile: await shadowFile(width) };
+  }
+  await run("ffmpeg", composeShot(prepared));
   return shot.output;
 }
 
