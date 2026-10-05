@@ -127,6 +127,34 @@ export function isPoolTimeout(err: unknown): boolean {
   }
   return false;
 }
+/**
+ * A query that failed because the database is behind this build.
+ *
+ * Postgres answers `42703` for an unknown column and `42P01` for an unknown
+ * table, and both mean the same thing here: the code was built against a
+ * schema this database has not been migrated to.
+ *
+ * Worth telling apart from every other query failure because the fix is one
+ * command and the symptom is the opposite of obvious. Drizzle wraps the cause
+ * in a `Failed query: select …` carrying the whole column list, so what
+ * somebody actually sees is a screen of SQL with `column "x" does not exist`
+ * somewhere in the middle — and the boot log already said so, forty lines
+ * earlier, in one line that has since scrolled away.
+ *
+ * Walked down the `cause` chain for the reason `isPoolTimeout` above gives:
+ * nothing hands these over bare.
+ */
+export function isSchemaBehind(err: unknown): { column: string | null } | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (code === "42703" || code === "42P01") {
+      const named = /(?:column|relation) "([^"]+)" does not exist/i.exec(e.message);
+      return { column: named?.[1] ?? null };
+    }
+  }
+  return null;
+}
+
 pool.on("connect", (client) => {
   client.query("SET TIME ZONE 'UTC'").catch((err) => console.error("[db] couldn't set the session to UTC:", err));
 });
