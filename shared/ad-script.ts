@@ -187,6 +187,20 @@ export function checkScript(
   return problems;
 }
 
+/**
+ * The moments of a beat's scene, as many as were asked for.
+ *
+ * Pads by repeating the last moment rather than leaving a plate with no scene:
+ * a model that wrote two moments where three were wanted has still written
+ * something usable, and failing the whole advert over the third would be
+ * throwing away a good script for a formatting miss.
+ */
+export function sceneMoments(scene: string | undefined, wanted: number): string[] {
+  const parts = (scene ?? "").split("|").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return Array.from({ length: wanted }, () => "");
+  return Array.from({ length: wanted }, (_, i) => parts[Math.min(i, parts.length - 1)]);
+}
+
 /** One sentence per problem, for handing back to the model on a retry. */
 export function describeProblem(p: ScriptProblem): string {
   switch (p.kind) {
@@ -210,8 +224,26 @@ export function describeProblem(p: ScriptProblem): string {
  */
 export function scriptPrompt(input: {
   brief: string;
-  style: { label: string; bestFor: string; avoid: string };
-  beats: { id: AdBeatId; seconds: number }[];
+  style: {
+    label: string; bestFor: string; avoid: string;
+    /**
+     * Where the brand's mark lives in the world, when it lives in one.
+     *
+     * Set only for styles that draw their own keyframes. It changes what a
+     * scene *is*: without it a scene is a place the camera happens to be, and
+     * with it the places are all one place and the mark is part of it. The
+     * beats stop being five separate shots and become five moments of a walk.
+     */
+    logoRole?: string | null;
+  };
+  /**
+   * `moments` is how many separate clips this beat is cut from, when that is
+   * more than one. A nineteen-second product beat is three generations, and
+   * one scene for all three is the same room three times — which is a long
+   * way from "each floor is somebody building something different". Known
+   * here because the plates are planned before the script is written.
+   */
+  beats: { id: AdBeatId; seconds: number; moments?: number }[];
   voice: { label: string; how: string };
   businessName?: string | null;
   callToAction?: string | null;
@@ -219,8 +251,14 @@ export function scriptPrompt(input: {
   supportedClaims?: string[];
 }): string {
   const beatLines = input.beats
-    .map((b) => `  - ${b.id}: ${b.seconds}s on screen, at most ${lineLimit(b.id, b.seconds)} characters`)
+    .map((b) => {
+      const moments = Math.max(1, b.moments ?? 1);
+      return `  - ${b.id}: ${b.seconds}s on screen, at most ${lineLimit(b.id, b.seconds)} characters`
+        + (moments > 1 ? `, cut from ${moments} separate shots — so its scene needs ${moments} moments` : "");
+    })
     .join("\n");
+
+  const splitBeats = input.beats.filter((b) => (b.moments ?? 1) > 1);
 
   return [
     `The business, in their own words:`,
@@ -228,7 +266,7 @@ export function scriptPrompt(input: {
     ``,
     input.businessName ? `They are called ${input.businessName}.` : ``,
     ``,
-    `Write a ${input.style.label.toLowerCase()} advert. ${input.style.bestFor}`,
+    `Write an advert in this shape — ${input.style.label}. ${input.style.bestFor}`,
     ``,
     `The beats, in order, with the space each one has:`,
     beatLines,
@@ -238,7 +276,13 @@ export function scriptPrompt(input: {
     `For each beat, write two things: the line that appears on screen, and the scene the camera is looking at while it does.`,
     ``,
     `Rules for the scene:`,
+    input.style.logoRole
+      ? `- These scenes are moments of ONE journey through ONE place, in order, and the company's mark is part of that place: ${input.style.logoRole} Each scene carries on from the last — further in, further up, further out — and the place stays recognisably the same throughout. Say where this moment is in the journey.`
+      : ``,
     `- One sentence, concrete, and specific to this business. Name what is in shot: where it is, who is there, what they are doing, what the light is like.`,
+    splitBeats.length
+      ? `- Where a beat says it is cut from several shots, write that many moments in its scene, separated by " | ", in the order they play. Each moment is a different shot of its own — a different floor, a different angle, a different distance — not the same shot described twice.`
+      : ``,
     `- It must be a real place a camera could be put. "An ordinary room" and "a modern workspace" are not scenes; "a kitchen table at night, laptop open, cold coffee beside it" is.`,
     /*
      * The four things composited afterwards. Said as "they are added later"

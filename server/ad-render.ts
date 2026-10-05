@@ -40,7 +40,7 @@ import { db } from "./db";
 import { adRenders, projects } from "@shared/schema";
 import { spend, refund } from "./wallet";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
-import { klingSubmit, klingStatus, klingConfigured, type KlingSubmit, type KlingTask } from "./kling-client";
+import { klingSubmit, klingStatus, klingConfigured, isRateLimited, isTransient, type KlingSubmit, type KlingTask } from "./kling-client";
 import { aiStubbed } from "./ai-stub";
 import { composeConcat, renderShot, runFfmpeg, ffmpegAvailable, escapeDrawText } from "./ad-compositor";
 import { writeAdScript, ScriptUnusableError } from "./ad-script-writer";
@@ -50,9 +50,11 @@ import {
   type AdDuration, type AdFormatId,
 } from "@shared/ads";
 import { adStyle, availableStyles } from "@shared/ad-styles";
+import { drawKeyframe } from "./ad-keyframe";
 import { planShots, planPlates, type Plate, type Shot } from "@shared/ad-shots";
 import { platePrompt, plateNegativePrompt } from "@shared/ad-plate-prompt";
 import { resolvedBrand, brandVoice, type BrandKitInput } from "@shared/ad-brand";
+import { sceneMoments } from "@shared/ad-script";
 import { fitLine } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 
@@ -156,6 +158,20 @@ interface PlateRecord {
   error: string | null;
   /** True when the clip was made locally because no key was configured. */
   stubbed?: boolean;
+  /** The scene the script wrote for this plate, kept so the keyframe can be redrawn. */
+  scene?: string;
+  /**
+   * The drawn first frame, base64, for image-to-video.
+   *
+   * Deliberately not written to the row — a megabyte of base64 per plate in a
+   * jsonb column is a row nobody can read and a query nobody should run. It is
+   * carried in memory for the submit and the stored copy is `keyframePath`.
+   */
+  image?: string;
+  /** Where the drawn frame was stored, so a bad advert can be explained. */
+  keyframePath?: string;
+  /** How many times this plate has been sent. Caps the retry on a busy queue. */
+  tries?: number;
 }
 
 export type RenderRow = typeof adRenders.$inferSelect;
@@ -289,10 +305,16 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
   const beats = beatPlan(row.durationSeconds as AdDuration);
 
+  /* How many clips each beat is cut from, so the script can write one moment per clip. */
+  const momentsPerBeat = new Map<string, number>();
+  for (const plate of plan.plates) {
+    for (const id of plate.beats) momentsPerBeat.set(id, (momentsPerBeat.get(id) ?? 0) + 1);
+  }
+
   const written = await writeAdScript({
     brief: row.brief,
-    style: { label: style.label, bestFor: style.bestFor, avoid: style.avoid },
-    beats,
+    style: { label: style.label, bestFor: style.bestFor, avoid: style.avoid, logoRole: style.keyframes ? style.logoRole ?? null : null },
+    beats: beats.map((b) => ({ ...b, moments: momentsPerBeat.get(b.id) ?? 1 })),
     voice: brandVoice(resolved.voice) ?? { label: "Plain", how: "Says what the thing is." },
     businessName: brand?.displayName ?? null,
     callToAction: brand?.callToAction ?? null,
@@ -330,6 +352,22 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         .map((id) => written.script.lines.find((l) => l.beat === id)?.scene)
         .filter((s): s is string => !!s?.trim()),
     }),
+    /*
+     * This plate's own moment. A beat cut from three clips wrote three
+     * moments; this takes the one that belongs to this clip rather than
+     * repeating the whole beat's scene three times, which would have drawn the
+     * same room three times over.
+     */
+    scene: plate.beats
+      .map((id) => {
+        const wanted = momentsPerBeat.get(id) ?? 1;
+        const moments = sceneMoments(written.script.lines.find((l) => l.beat === id)?.scene, wanted);
+        /* Which of this beat's plates this is, counted in play order. */
+        const nth = plan.plates.filter((q, qi) => qi < index && q.beats.includes(id)).length;
+        return moments[Math.min(nth, moments.length - 1)];
+      })
+      .filter((s) => !!s?.trim())
+      .join(" Then: "),
     taskId: null,
     videoUrl: null,
     status: "pending",
@@ -337,72 +375,224 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
   }));
 
   const format = adFormat(row.format)!;
-  const submitted: PlateRecord[] = [];
+
   /*
-   * In batches of MAX_CONCURRENT_PLATES. A sixth concurrent request is
-   * refused by the provider rather than queued, and a refusal here fails an
-   * advert that has already been charged for.
+   * The keyframes, drawn in order, each from the one before.
+   *
+   * Chained to the previous *keyframe* rather than to the previous finished
+   * clip. Chaining to the clip would be marginally better — the next shot
+   * would start exactly where the last one ended — and it would serialise the
+   * whole render behind the video model's queue, turning five parallel
+   * generations into five sequential ones and a four-minute advert into
+   * twenty. Keyframes are seconds each, so this keeps the place consistent at
+   * a cost measured in seconds rather than minutes.
    */
-  for (let i = 0; i < plates.length; i += MAX_CONCURRENT_PLATES) {
-    const batch = plates.slice(i, i + MAX_CONCURRENT_PLATES);
-    const results = await Promise.all(batch.map(async (p) => {
-      const submit: KlingSubmit = {
-        prompt: p.prompt,
-        negativePrompt: plateNegativePrompt(),
-        durationSeconds: p.seconds,
-        aspectRatio: format.ratio,
-      };
-      try {
-        const task = await klingSubmit(submit);
-        return { ...p, taskId: task.taskId, status: task.status, videoUrl: task.videoUrl, stubbed: aiStubbed() };
-      } catch (error) {
-        return { ...p, status: "failed" as const, error: (error as Error)?.message ?? "Submit failed" };
-      }
-    }));
-    submitted.push(...results);
+  if (style.keyframes) {
+    let previous: Buffer | null = null;
+    for (const p of plates) {
+      const frame = await drawKeyframe({
+        scene: p.scene || row.brief,
+        brief: row.brief,
+        format: row.format as AdFormatId,
+        logoPath: brand?.logoPath ?? null,
+        logoRole: style.logoRole ?? null,
+        previousFrame: previous,
+        ownerId: row.requestedBy,
+      });
+      p.image = frame.base64;
+      p.keyframePath = frame.path;
+      previous = Buffer.from(frame.base64, "base64");
+    }
+    /* Stored before a single clip is paid for, so a bad drawing is visible without a render. */
+    await set(row.id, { plates: plates as any });
   }
 
-  const broken = submitted.find((p) => p.status === "failed");
-  if (broken) {
-    const [fresh] = await db.select().from(adRenders).where(eq(adRenders.id, row.id));
-    return failRender(fresh, `The video model refused a clip: ${broken.error ?? "no reason given"}`);
-  }
+  /*
+   * Only as many as may be in flight at once; the rest stay pending and are
+   * sent by `pollPlates` as slots free up.
+   *
+   * Submitting all nine and hoping is what the first two attempts at this
+   * advert did. The provider accepted them, then failed two of them with
+   * "parallel task over resource pack limit" — *after* five others had
+   * generated, so five clips of real spend were thrown away because of a
+   * queue depth this server chose. The account's limit is not knowable from
+   * here and changes with the plan, so the only safe shape is to keep a small
+   * number in flight and feed the rest in behind them.
+   */
+  const started = await submitUpTo(row, plates, format, style);
+  if ("failure" in started) return started.failure;
 
   return set(row.id, {
     status: "generating",
-    plates: submitted as any,
-    /* What has been committed to the provider, whether or not it comes back. */
-    providerCents: plateCostCents(submitted.map((p) => p.seconds)),
+    /* Without the base64: see PlateRecord.image. The path is what is kept. */
+    plates: started.plates.map(({ image, ...rest }) => rest) as any,
+    /* Only what has actually been committed to the provider. */
+    providerCents: plateCostCents(started.plates.filter((p) => p.taskId).map((p) => p.seconds)),
   });
 }
 
-/** Ask about every unfinished plate; move on when all of them are in. */
+/**
+ * How many clips of one advert may be with the provider at the same time.
+ *
+ * One for a keyframed style, a few otherwise. Deliberately small: the cost of
+ * guessing low is a slower advert, and the cost of guessing high is a failed
+ * one with the clips that did generate thrown away.
+ */
+const inFlightLimit = (style: { keyframes?: boolean }): number =>
+  style.keyframes ? 1 : MAX_CONCURRENT_PLATES;
+
+/** How many times one plate may be re-sent after the queue turned it away. */
+const MAX_PLATE_TRIES = 4;
+
+/**
+ * Sends pending plates until the in-flight limit is reached.
+ *
+ * Returns the plates as they now stand, or the failed render when a plate was
+ * refused for a reason that is not the queue being full. Everything accepted
+ * before that point is in the returned list either way — a clip that is
+ * generating has been paid for whether or not the advert survives.
+ */
+async function submitUpTo(
+  row: RenderRow,
+  plates: PlateRecord[],
+  format: { ratio: string },
+  style: { keyframes?: boolean },
+): Promise<{ plates: PlateRecord[] } | { failure: RenderRow }> {
+  const limit = inFlightLimit(style);
+  const out = plates.slice();
+
+  for (let i = 0; i < out.length; i++) {
+    const inFlight = out.filter((p) => p.taskId && p.status !== "succeeded" && p.status !== "failed").length;
+    if (inFlight >= limit) break;
+    const p = out[i];
+    if (p.status !== "pending") continue;
+
+    const submit: KlingSubmit = {
+      prompt: p.prompt,
+      negativePrompt: plateNegativePrompt(),
+      durationSeconds: p.seconds,
+      aspectRatio: format.ratio,
+      /* With a keyframe this is image-to-video, and the logo is already in the frame. */
+      ...(p.image ? { image: p.image } : {}),
+    };
+
+    try {
+      const task = await submitWaitingOutLimits(submit);
+      out[i] = { ...p, taskId: task.taskId, status: task.status, videoUrl: task.videoUrl, stubbed: aiStubbed(), tries: (p.tries ?? 0) + 1 };
+    } catch (error) {
+      if (isRateLimited(error) || isTransient(error)) {
+        /* Still refused after all the waiting. Leave it pending; the sweep tries again. */
+        out[i] = { ...p, tries: (p.tries ?? 0) + 1 };
+        break;
+      }
+      await set(row.id, { plates: out.map(({ image, ...rest }) => rest) as any });
+      const [fresh] = await db.select().from(adRenders).where(eq(adRenders.id, row.id));
+      return { failure: await failRender(fresh, `The video model refused a clip: ${(error as Error)?.message ?? "no reason given"}`) };
+    }
+  }
+  return { plates: out };
+}
+
+/**
+ * How long to wait out a concurrency limit, and how many times.
+ *
+ * Generous, because the thing being waited for is another clip of this same
+ * advert finishing, which takes a minute or two — and because the alternative
+ * is failing something somebody paid for over a queue being briefly full.
+ */
+const LIMIT_BACKOFF_MS = [20_000, 45_000, 90_000, 150_000];
+
+/**
+ * Submit, and wait out the account's own concurrency limit rather than failing on it.
+ *
+ * Only for rate limits. A refused prompt is thrown straight through: trying a
+ * refusal four more times is four more refusals and four more minutes of
+ * somebody watching a progress bar.
+ */
+async function submitWaitingOutLimits(submit: KlingSubmit): Promise<KlingTask> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await klingSubmit(submit);
+    } catch (error) {
+      const worthWaiting = isRateLimited(error) || isTransient(error);
+      if (!worthWaiting || attempt >= LIMIT_BACKOFF_MS.length) throw error;
+      console.log(`[ad-render] ${isRateLimited(error) ? "video model at its limit" : "network trouble reaching the video model"}, waiting ${LIMIT_BACKOFF_MS[attempt] / 1000}s`);
+      await new Promise((r) => setTimeout(r, LIMIT_BACKOFF_MS[attempt]));
+    }
+  }
+}
+
+/**
+ * Ask about every clip in flight, send the next ones, and move on when all are in.
+ *
+ * The retry on a full queue lives here as well as in the submit, because the
+ * provider reports the same condition two different ways: sometimes the
+ * request is refused, and sometimes it is accepted and the *task* then fails
+ * with "parallel task over resource pack limit". The second one cost an advert
+ * five generated clips — they were fine, and the render was failed around
+ * them. A clip turned away by a queue never generated and never cost anything,
+ * so it goes back to pending and is sent again.
+ */
 async function pollPlates(row: RenderRow): Promise<RenderRow> {
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
   const format = adFormat(row.format)!;
+  const style = adStyle(row.style)!;
 
-  const updated = await Promise.all(plates.map(async (p) => {
-    if (p.status === "succeeded" || p.status === "failed" || !p.taskId) return p;
+  const polled: PlateRecord[] = await Promise.all(plates.map(async (p) => {
+    if (p.status === "succeeded" || p.status === "pending" || !p.taskId) return p;
     try {
       const task = await klingStatus(p.taskId, {
         prompt: p.prompt, durationSeconds: p.seconds, aspectRatio: format.ratio,
+        ...(p.keyframePath ? { image: "stored" } : {}),
       });
+      if (task.status === "failed" && isRateLimited({ message: task.error ?? "" } as Error)) {
+        /* The queue was full, not the clip bad. Nothing generated, nothing charged. */
+        return { ...p, taskId: null, status: "pending" as const, videoUrl: null, error: null };
+      }
       return { ...p, status: task.status, videoUrl: task.videoUrl, error: task.error };
-    } catch (error) {
+    } catch {
       /* A failed poll is not a failed clip: the next sweep asks again. */
       return p;
     }
   }));
 
-  await set(row.id, { plates: updated as any });
+  const exhausted = polled.find((p) => p.status === "pending" && (p.tries ?? 0) >= MAX_PLATE_TRIES);
+  if (exhausted) {
+    await set(row.id, { plates: polled.map(({ image, ...rest }) => rest) as any });
+    const [fresh] = await db.select().from(adRenders).where(eq(adRenders.id, row.id));
+    return failRender(fresh, `The video model stayed busy: a clip was turned away ${MAX_PLATE_TRIES} times running. Nothing was generated for it, and the advert is refunded in full.`);
+  }
 
-  const failed = updated.find((p) => p.status === "failed");
+  const failed = polled.find((p) => p.status === "failed");
   if (failed) {
+    await set(row.id, { plates: polled.map(({ image, ...rest }) => rest) as any });
     const [fresh] = await db.select().from(adRenders).where(eq(adRenders.id, row.id));
     return failRender(fresh, `A clip came back unusable: ${failed.error ?? "no reason given"}`);
   }
-  if (updated.some((p) => p.status !== "succeeded")) {
-    /* Still in somebody else's queue. The row says so and nothing is wasted. */
+
+  /*
+   * A keyframe is read back from storage before a plate can be re-sent: the
+   * base64 is deliberately not kept on the row, and a retry that lost it would
+   * silently fall back to text-to-video and produce the one shot in the advert
+   * with none of the brand in it.
+   */
+  for (const p of polled) {
+    if (p.status === "pending" && p.keyframePath && !p.image) {
+      const { buffer } = await new ObjectStorageService().readObjectBuffer(p.keyframePath, 25 * 1024 * 1024);
+      p.image = buffer.toString("base64");
+    }
+  }
+
+  const sent = await submitUpTo(row, polled, format, style);
+  if ("failure" in sent) return sent.failure;
+
+  await set(row.id, {
+    plates: sent.plates.map(({ image, ...rest }) => rest) as any,
+    providerCents: plateCostCents(sent.plates.filter((p) => p.taskId).map((p) => p.seconds)),
+  });
+
+  if (sent.plates.some((p) => p.status !== "succeeded")) {
+    /* Still in somebody else's queue, or waiting for a slot. The row says so. */
     return (await db.select().from(adRenders).where(eq(adRenders.id, row.id)))[0];
   }
   return set(row.id, { status: "composing" });
@@ -419,6 +609,7 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
   if (!(await ffmpegAvailable())) throw new Error("ffmpeg is not installed on this server");
 
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
+  const style = adStyle(row.style)!;
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
   const script = row.script as { lines: { beat: string; onScreen: string }[]; callToAction: string } | null;
   const brand = (row.brand as any)?.kit as BrandKitInput | null;
@@ -448,7 +639,17 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
           format: row.format as AdFormatId,
           brand: resolved,
           lines: line?.onScreen ? [{ ...fitted(line.onScreen, row.format as AdFormatId), atHeight: 0.78, bold: true }] : [],
-          logoFile,
+          /*
+           * No corner logo when the logo is already the scene.
+           *
+           * A keyframed style draws the mark into the world — for SparkTower
+           * it is the building the whole advert is about — and stamping a
+           * second small copy in the corner is the same logo twice in one
+           * frame, one of them a sticker. It reads as a watermark over an
+           * advert that did not need one, which is the exact complaint this
+           * style was built to answer.
+           */
+          logoFile: style.keyframes ? null : logoFile,
           brandBar: shot.brandMoment,
           output,
         });

@@ -153,8 +153,21 @@ export interface KlingSubmit {
   negativePrompt?: string;
   durationSeconds: number;
   aspectRatio: string;
-  /** A still to animate — the business's own photograph, for an image-to-video render. */
-  imageUrl?: string;
+  /**
+   * A still to animate, as raw base64 — no data: prefix, no URL.
+   *
+   * Base64 rather than a URL on purpose. Kling accepts either, and a URL means
+   * this server publishing a keyframe somewhere Kling's machines can reach
+   * before it can ask for a clip — which does not exist in development at all,
+   * and in production is an advert's unfinished artwork on a public address
+   * for as long as the render takes. The bytes go in the request.
+   *
+   * This is the field that turns a plate into a place. With it the clip starts
+   * from a frame we drew — one that already has the business's own logo built
+   * into the scene — so the building in shot three is the building from shot
+   * one, which text-to-video cannot do at any price.
+   */
+  image?: string;
   model?: string;
   /** "std" or "pro". Standard unless something needs the dearer one. */
   mode?: "std" | "pro";
@@ -183,7 +196,7 @@ const ROUTES: Record<KlingRoutes, {
   readTask: (json: any) => KlingTask;
 }> = {
   v1: {
-    submitPath: (s) => (s.imageUrl ? "/v1/videos/image2video" : "/v1/videos/text2video"),
+    submitPath: (s) => (s.image ? "/v1/videos/image2video" : "/v1/videos/text2video"),
     submitBody: (s) => ({
       model_name: s.model ?? defaultModel(),
       prompt: s.prompt,
@@ -193,9 +206,9 @@ const ROUTES: Record<KlingRoutes, {
       aspect_ratio: s.aspectRatio,
       /* "std" rather than "pro": a background plate does not need the dearer mode. */
       mode: s.mode ?? "std",
-      ...(s.imageUrl ? { image: s.imageUrl } : {}),
+      ...(s.image ? { image: s.image } : {}),
     }),
-    statusPath: (taskId, s) => `${s.imageUrl ? "/v1/videos/image2video" : "/v1/videos/text2video"}/${taskId}`,
+    statusPath: (taskId, s) => `${s.image ? "/v1/videos/image2video" : "/v1/videos/text2video"}/${taskId}`,
     readTask: (json) => {
       const d = json?.data ?? json;
       return {
@@ -208,13 +221,13 @@ const ROUTES: Record<KlingRoutes, {
     },
   },
   perModel: {
-    submitPath: (s) => `${s.imageUrl ? "/image-to-video" : "/text-to-video"}/${s.model ?? "kling-v2-master"}`,
+    submitPath: (s) => `${s.image ? "/image-to-video" : "/text-to-video"}/${s.model ?? "kling-v2-master"}`,
     submitBody: (s) => ({
       prompt: s.prompt,
       negativePrompt: s.negativePrompt,
       duration: s.durationSeconds,
       aspectRatio: s.aspectRatio,
-      ...(s.imageUrl ? { image: s.imageUrl } : {}),
+      ...(s.image ? { image: s.image } : {}),
     }),
     statusPath: (taskId) => `/tasks/${taskId}`,
     readTask: (json) => {
@@ -268,10 +281,51 @@ async function call(config: KlingConfig, method: "GET" | "POST", path: string, b
      * both are things the caller can act on — "video generation failed" is not.
      */
     const detail = json?.message ?? json?.error ?? text.slice(0, 300);
-    throw new Error(`Kling ${res.status} on ${path}: ${detail || "no message"}`);
+    const error = new Error(`Kling ${res.status} on ${path}: ${detail || "no message"}`) as KlingHttpError;
+    error.status = res.status;
+    throw error;
   }
   return json;
 }
+
+export interface KlingHttpError extends Error { status?: number }
+
+/**
+ * Whether this failure is "not now" rather than "not ever".
+ *
+ * The distinction matters because the two need opposite handling and one of
+ * them costs somebody their advert. A refused prompt is final: trying again
+ * produces the same refusal. A concurrency limit is a queue being full, and
+ * the only correct response is to wait — the account's own limit is not a
+ * property of the advert and should never be the reason one fails.
+ *
+ * This exists because a thirty-second advert died on
+ * "429: parallel task over resource pack limit" after nine keyframes had been
+ * drawn and paid for. Nothing was wrong with it. The server had simply asked
+ * for five clips at once on a trial pack that would not take five.
+ */
+/**
+ * Whether this failure is the network rather than the request.
+ *
+ * `fetch failed` is what undici raises for a connection that did not complete,
+ * and it arrives with no status and no message worth showing anyone. Treated
+ * as a refusal it fails an advert that nothing is wrong with — which is how
+ * one died with three of its nine clips already generated and paid for. It is
+ * retried on exactly the same footing as a full queue, because from here the
+ * two are the same thing: ask again shortly.
+ */
+export const isTransient = (error: unknown): boolean => {
+  const e = error as KlingHttpError;
+  if (e?.status && e.status >= 500) return true;
+  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|aborted/i.test(String(e?.message ?? ""));
+};
+
+export const isRateLimited = (error: unknown): boolean => {
+  const e = error as KlingHttpError;
+  if (e?.status === 429) return true;
+  /* Some gateways answer 400 with the limit in the message rather than 429. */
+  return /rate limit|too many|concurren|parallel task|resource pack limit/i.test(String(e?.message ?? ""));
+};
 
 /** Start a render. Returns the task to poll, having charged nothing yet. */
 export async function klingSubmit(input: KlingSubmit): Promise<KlingTask> {

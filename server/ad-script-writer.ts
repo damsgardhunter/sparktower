@@ -57,7 +57,7 @@ export const SCRIPT_ATTEMPTS = 3;
 
 export interface ScriptRequest {
   brief: string;
-  style: { label: string; bestFor: string; avoid: string };
+  style: { label: string; bestFor: string; avoid: string; logoRole?: string | null };
   beats: { id: AdBeatId; seconds: number }[];
   voice: { label: string; how: string };
   businessName?: string | null;

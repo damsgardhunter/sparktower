@@ -48,9 +48,54 @@ export interface AdStyle {
   avoid: string;
   /** The one sentence a business reads when choosing. */
   blurb: string;
+  /**
+   * Draw the first frame of each clip before animating it, from the business's
+   * own logo and the frame the last shot ended on.
+   *
+   * Costs an image generation per clip and buys the two things text-to-video
+   * cannot do at any price: the logo as an object that is really in the scene,
+   * and the same place persisting from one shot to the next. Off by default
+   * because most adverts do not need either — a plate of hands making coffee
+   * is a plate of hands making coffee — and on for the styles whose whole
+   * point is a world the brand lives in.
+   */
+  keyframes?: boolean;
+  /**
+   * Where the logo belongs in that world, for the image model.
+   *
+   * Only read when `keyframes` is on. It is the sentence that turns a mark
+   * into a place: "the building itself, its silhouette against the sky".
+   */
+  logoRole?: string;
 }
 
 export const AD_STYLES: AdStyle[] = [
+  {
+    /*
+     * The style that exists because of a specific piece of feedback: "it still
+     * feels and only looks like an overlay over some random actions, and i
+     * would like to get the objects like logo and wording to work with the
+     * advertisement." Every other style here generates footage and composites
+     * the brand on top. This one draws the brand into the world first and
+     * animates that, which is why it is the only one with `keyframes` on.
+     *
+     * It is the right shape for a business whose idea is bigger than its
+     * product — a platform, a community, a mission — where what is being sold
+     * is somewhere to belong rather than a thing to buy. Those adverts are a
+     * journey through a place, and a place has to persist from shot to shot or
+     * it is five postcards.
+     */
+    id: "brand_world",
+    label: "Your logo as a place",
+    bestFor: "A business whose idea is bigger than any one product — a platform, a community, a mission — where the advert is a journey through a world rather than a look at a thing.",
+    /* Weighted to the middle: the journey is the advert, and the journey is the product beat. */
+    beatWeights: { hook: 1, problem: 0.4, product: 2.2, proof: 1.4, cta: 1 },
+    plate: "One continuous camera move through a single place, with the scale of it doing the work — wide establishing light, deep space, something happening at every distance from the lens.",
+    avoid: "Letting the world become the point. Every floor of it has to be somebody doing something a viewer recognises, or it is architecture with nobody in it.",
+    blurb: "The brand as somewhere you walk into, shot as one journey.",
+    keyframes: true,
+    logoRole: "the structure itself — the building, the landmark, the silhouette on the skyline that the scene is built around, at architectural scale and made of real materials.",
+  },
   {
     id: "problem_solution",
     label: "Problem and solution",
