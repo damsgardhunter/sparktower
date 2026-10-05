@@ -214,8 +214,35 @@ describe("the ffmpeg arguments", () => {
     const args = shot({ lines: [{ text: "Order now", atHeight: 0.5, sizeRatio: 0.06 }] }).join(" ");
     expect(args).toMatch(/fontfile='[^']*SpaceGrotesk/);
     expect(args).toContain(ffColor(BRAND.primaryColor));
-    /* A box behind the words, or the one pale frame is the one somebody screenshots. */
-    expect(args).toContain("box=1");
+  });
+
+  it("builds bubble lettering as three passes, widest first", () => {
+    /*
+     * ffmpeg draws one outline per `drawtext`, so lettering that sits on the
+     * video is the same string painted three times: halo, outline, fill. Each
+     * covers the middle of the last, which is what leaves an even band of
+     * each colour — and it is why the halo must be the wider of the two.
+     *
+     * This replaced a box behind the text, which worked by hiding the footage
+     * and looked like a subtitle. An earlier version of this test asserted
+     * `box=1` and stayed green until the design changed under it.
+     */
+    const args = shot({ lines: [{ text: "Order now", atHeight: 0.5, sizeRatio: 0.06 }] }).join(" ");
+    const borders = [...args.matchAll(/borderw=(\d+)/g)].map((m) => Number(m[1]));
+    expect(borders.length, "a halo and an outline").toBe(2);
+    expect(borders[0], "the halo is drawn first and wider").toBeGreaterThan(borders[1]);
+    expect((args.match(/drawtext=/g) ?? []).length, "three passes of the same line").toBe(3);
+  });
+
+  it("puts the shadow on one layer only", () => {
+    /* Drawn under all three it is three shadows, which muddies rather than lifts. */
+    const args = shot({ lines: [{ text: "Hi", atHeight: 0.5, sizeRatio: 0.06 }] }).join(" ");
+    expect((args.match(/shadowcolor=/g) ?? []).length).toBe(1);
+  });
+
+  it("drops to a single outline when the brand wants quieter", () => {
+    const args = shot({ typeStyle: "outline", lines: [{ text: "Hi", atHeight: 0.5, sizeRatio: 0.06 }] }).join(" ");
+    expect([...args.matchAll(/borderw=/g)].length).toBe(1);
   });
 
   it("drops the plate's audio", () => {

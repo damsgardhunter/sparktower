@@ -34,6 +34,7 @@ import path from "node:path";
 import { AD_FORMATS, type AdFormatId } from "@shared/ads";
 import { SAFE_AREAS, safeBox } from "@shared/ad-safe-areas";
 import { brandFont, resolvedBrand, type BrandKitInput } from "@shared/ad-brand";
+import { typeTreatment, type TypeStyleId } from "@shared/ad-type";
 
 /** Where the bundled fonts live, in dev and in the built bundle. */
 function fontPath(file: string): string {
@@ -104,6 +105,8 @@ export interface ComposeShot {
   logoFile?: string | null;
   /** Hold the brand colour as a bar along the bottom — a brand moment. */
   brandBar?: boolean;
+  /** Bubble by default; `outline` and `plain` are for brands that need quieter. */
+  typeStyle?: TypeStyleId;
   output: string;
 }
 
@@ -152,30 +155,55 @@ export function composeShot(shot: ComposeShot): string[] {
     );
   }
 
+  const type = typeTreatment(
+    { primaryColor: brand.primaryColor, backgroundColor: brand.backgroundColor, accentColor: brand.accentColor },
+    shot.typeStyle ?? "bubble",
+  );
+
   for (const line of shot.lines ?? []) {
     const size = Math.round(shortEdge * line.sizeRatio);
     const font = fontPath(line.bold === false ? brandFont(brand.font.id).regular : brand.font.file);
     const y = Math.round(box.y + box.height * line.atHeight);
-    filters.push(
+    /* Centred in the safe box, not the frame — the two differ by the platform's furniture. */
+    const x = `${box.x}+(${box.width}-text_w)/2`;
+
+    /**
+     * One `drawtext` per layer, widest first.
+     *
+     * ffmpeg draws a single outline per call, so bubble lettering is three
+     * passes of the same string: the halo, then the outline, then the fill on
+     * top. Painted in that order because each one covers the middle of the
+     * last, which is what leaves an even band of each colour — and it is why
+     * the halo has to be the *wider* of the two, not merely a second colour.
+     *
+     * The alternative, one call with a thick border, gives a single-colour
+     * edge that reads as outlined text rather than as lettering sitting on
+     * the video.
+     */
+    const layer = (color: string, borderWidth: number, shadow: boolean) =>
       [
         `drawtext=fontfile='${font}'`,
         `text='${escapeDrawText(line.text)}'`,
-        `fontcolor=${ffColor(brand.primaryColor)}`,
+        `fontcolor=${ffColor(color)}`,
         `fontsize=${size}`,
-        /* Centred in the safe box, not the frame — the two differ by the platform's furniture. */
-        `x=${box.x}+(${box.width}-text_w)/2`,
+        `x=${x}`,
         `y=${y}`,
-        /*
-         * A box behind the words, in the brand's background colour at four
-         * fifths. Text straight onto footage is legible until the one frame
-         * where the plate goes pale, and that frame is the one somebody
-         * screenshots.
-         */
-        `box=1`,
-        `boxcolor=${ffColor(brand.backgroundColor, 0.8)}`,
-        `boxborderw=${Math.round(size * 0.35)}`,
-      ].join(":"),
-    );
+        ...(borderWidth > 0 ? [`borderw=${borderWidth}`, `bordercolor=${ffColor(color)}`] : []),
+        ...(shadow && type.shadowRatio > 0
+          ? [
+              `shadowx=${Math.max(1, Math.round(size * type.shadowRatio))}`,
+              `shadowy=${Math.max(1, Math.round(size * type.shadowRatio))}`,
+              `shadowcolor=${ffColor(type.shadow, 0.45)}`,
+            ]
+          : []),
+      ].join(":");
+
+    /* The shadow goes on the widest layer only, or it is drawn three times and muddies. */
+    if (type.haloRatio > 0) filters.push(layer(type.halo, Math.round(size * type.haloRatio), true));
+    if (type.outlineRatio > 0) {
+      filters.push(layer(type.outline, Math.round(size * type.outlineRatio), type.haloRatio === 0));
+    }
+    filters.push(layer(type.fill, 0, type.haloRatio === 0 && type.outlineRatio === 0));
   }
 
   const args = [
