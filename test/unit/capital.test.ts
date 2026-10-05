@@ -88,7 +88,79 @@ describe("route fit", () => {
   });
 
   it("reads as lines Nova builds from, with the exact score", () => {
-    expect(renderCapitalProfile(capitalProfile(strong))).toMatch(/^Fundability score: 88\/100 \(Strong\), from 5 of 5 steps answered\./);
+    expect(renderCapitalProfile(capitalProfile(strong))).toContain("Fundability score: 88/100 (Strong), from 5 of 5 steps answered.");
+  });
+});
+
+/*
+ * The lines somebody drew, said out loud.
+ *
+ * They were always in here — as a cap on a route-fit score, with "You said no
+ * debt" as the footnote on a 15, among four other numbers. A model reading
+ * that sees a weak option, not a forbidden one, which is how a plan comes back
+ * recommending an SBA loan, a 0% card buffer and a microloan to somebody who
+ * said they would not borrow. A founder who gets that stops trusting the tool,
+ * and nothing else in the plan survives it.
+ */
+describe("the lines in the sand", () => {
+  const noDebt = { ...strong, target: { ...strong.target, debt_ok: ["no"], equity: ["25_49"], ownership: ["75_plus"] } };
+  const noEquity = { ...strong, target: { ...strong.target, debt_ok: ["guarantee"], equity: ["none"], ownership: ["100"] } };
+
+  it("records refusing debt as a constraint, not only as a low score", () => {
+    const p = capitalProfile(noDebt);
+    expect(p.constraints.debtOk).toBe(false);
+    expect(p.constraints.equityOk).toBe(true);
+  });
+
+  it("records keeping all of it, from either question", () => {
+    expect(capitalProfile(noEquity).constraints.equityOk).toBe(false);
+    expect(capitalProfile({ ...strong, target: { ...strong.target, equity: ["10_25"], ownership: ["100"] } }).constraints.equityOk).toBe(false);
+  });
+
+  /* Unanswered is not consent, and must not read as one. */
+  it("leaves an unanswered line null rather than calling it a yes", () => {
+    const p = capitalProfile({ ...strong, target: { amount: ["500k_1m"], uses: ["acquisition"], timeline: ["6_12"] } });
+    expect(p.constraints.debtOk).toBeNull();
+    expect(p.constraints.equityOk).toBeNull();
+  });
+
+  /*
+   * The whole point: what Nova is handed. Named instruments, because "avoid
+   * debt" and "do not propose an SBA loan" are not the same instruction to
+   * something generating a week of a plan.
+   */
+  it("tells Nova not to propose borrowing, in the imperative, at the top", () => {
+    const text = renderCapitalProfile(capitalProfile(noDebt));
+    expect(text.startsWith("HARD CONSTRAINTS")).toBe(true);
+    expect(text).toContain("will NOT take on debt");
+    for (const named of ["SBA", "lines of credit", "credit card", "401(k) loan", "seller note"]) {
+      expect(text, `${named} should be named, not implied`).toContain(named);
+    }
+    expect(text, "a buffer is the form it sneaks back in as").toContain("not as a buffer");
+  });
+
+  it("tells Nova not to propose giving up a share", () => {
+    const text = renderCapitalProfile(capitalProfile(noEquity));
+    expect(text.startsWith("HARD CONSTRAINTS")).toBe(true);
+    expect(text).toContain("will NOT give up any of the business");
+    for (const named of ["investors", "SAFEs", "convertible notes", "profit share"]) {
+      expect(text, `${named} should be named`).toContain(named);
+    }
+  });
+
+  it("says nothing about constraints when none were drawn", () => {
+    const open = { ...strong, target: { ...strong.target, debt_ok: ["guarantee"], equity: ["25_49"], ownership: ["75_plus"] } };
+    const text = renderCapitalProfile(capitalProfile(open));
+    expect(text).not.toContain("HARD CONSTRAINTS");
+    expect(text.startsWith("Fundability score:")).toBe(true);
+  });
+
+  /* Both at once is the self-funded case, and the one that was reported. */
+  it("states both when somebody wants neither", () => {
+    const neither = { ...strong, target: { ...strong.target, debt_ok: ["no"], equity: ["none"], ownership: ["100"] } };
+    const text = renderCapitalProfile(capitalProfile(neither));
+    expect(text).toContain("will NOT take on debt");
+    expect(text).toContain("will NOT give up any of the business");
   });
 });
 

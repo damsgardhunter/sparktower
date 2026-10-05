@@ -68,12 +68,31 @@ export interface ResolvedPhase extends Omit<BackbonePhase, "milestones"> {
  * funding routes' debt, seller, investor, hybrid, self-funded, now inside Systemize): a route's phases
  * appear once it's chosen, and only that route's.
  */
-export function resolveTree(goal: ProjectGoal, subcategory: string, route?: string | null): ResolvedPhase[] {
+/**
+ * What somebody has ruled out, which is not the same as which route they took.
+ *
+ * Null is unanswered and leaves everything in. Somebody who has not drawn a
+ * line has not refused, and a plan that quietly hides options from them is
+ * guessing on their behalf.
+ */
+export interface PathConstraints {
+  /** False when they said they would not take on debt. */
+  debtOk?: boolean | null;
+}
+
+export function resolveTree(
+  goal: ProjectGoal,
+  subcategory: string,
+  route?: string | null,
+  constraints?: PathConstraints,
+): ResolvedPhase[] {
   const tree = treeFor(goal);
   return tree.phases.filter((phase) => !phase.route || phase.route === route).map((phase) => ({
     ...phase,
     milestones: phase.milestones
       .filter((m) => !m.skipFor?.includes(subcategory))
+      /* A step that only makes sense to a borrower, for somebody who said they would not borrow. */
+      .filter((m) => !(m.needsDebtAppetite && constraints?.debtOk === false))
       .map((m) => resolveMilestone(m, phase.id, subcategory)),
   }));
 }
@@ -85,7 +104,8 @@ function resolveMilestone(m: BackboneMilestone, phaseId: string, subcategory: st
     phaseId,
     title: v?.title ?? m.title,
     description: v?.description ?? m.description,
-    actor: m.actor,
+    /* A variant can change who acts: Nova builds a web app and cannot make a hot sauce. */
+    actor: v?.actor ?? m.actor,
     estimateMinutes: v?.estimateMinutes ?? m.estimateMinutes,
     tier: m.tier,
     sharedId: m.sharedId,

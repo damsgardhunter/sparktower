@@ -326,7 +326,7 @@ const SELF: BackbonePhase[] = [
         description: "How much of each month's profit goes back in, how much you pay yourself, and the reserve you never touch — as rules you can follow without deciding every month." },
       { id: "FUND.F3.2", title: "Growth milestones", actor: "nova-builds", estimateMinutes: 30, tier: "artifact", work: "plan",
         description: "The revenue, profit and time-in-business marks where the business can fund its next step itself, and where a loan or partner would speed it up — so you know when to look again." },
-      { id: "FUND.F3.3", title: "Retirement money, carefully", actor: "nova-builds", estimateMinutes: 30, tier: "artifact", work: "plan",
+      { id: "FUND.F3.3", title: "Retirement money, carefully", actor: "nova-builds", estimateMinutes: 30, tier: "artifact", work: "plan", needsDebtAppetite: true,
         description: "If you're thinking of using retirement savings — a rollover into the business (ROBS), a 401(k) loan, an early withdrawal — how each works, what it costs, the risks, and what to confirm with a tax professional before you touch it." },
     ],
   },

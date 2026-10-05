@@ -15,12 +15,12 @@ import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks, pathSyncState } from "@shared/schema";
+import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks, pathSyncState, projectPricingTiers } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
   authoredTextFor, renderPlanAnswer, validateIntake, renderIntake, allMilestoneIds, LOOP_TYPES, LOOP_TYPE_INFO, LOOP_ORDER, isLoopType, loopTypeTag, loopTypeOf, loopTypeRefusal, loopCoverage, byLoopOrder, loopAuditStale,
-  type LoopType, type LoopCompetitiveAudit, type LoopClosureRead,
+  type LoopType, type LoopCompetitiveAudit, type LoopClosureRead, type PathConstraints,
 } from "@shared/phase-trees";
 import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { describeOp } from "@shared/audit-catchup";
@@ -173,7 +173,7 @@ export async function listTracks(projectId: string) {
   for (const g of PROJECT_GOALS) {
     const state = await trackState(projectId, g.id);
     if (!state) { out.push({ goal: g.id, label: g.label, short: g.short, started: false as const, primary: false }); continue; }
-    const phases = resolveTree(g.id, state.subcategory, state.capitalRoute);
+    const phases = resolveTree(g.id, state.subcategory, state.capitalRoute, await pathConstraintsFor(projectId));
     const main = mainLineMilestones(phases);
     /*
      * Children are kept, not filtered out: `milestoneDoneReader` needs them to
@@ -414,7 +414,12 @@ async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcatego
   const live = all.filter((t) => !isArchivedPath(t.tags) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)));
   if (!live.length) return { added: [] as string[], archived: [] as string[], restored: [] as string[] };
 
-  const phases = resolveTree(goal, subcategory, route);
+  /*
+   * The lines they drew, not only the route they took. This function both adds
+   * and archives, so a step that stops applying leaves the path of somebody who
+   * already has it rather than only being withheld from the next person.
+   */
+  const phases = resolveTree(goal, subcategory, route, await pathConstraintsFor(projectId));
   const current = new Set(phases.flatMap((p) => p.milestones.map((m) => m.id)));
   const authored = allMilestoneIds(goal);
   const routeOf = new Map(treeFor(goal).phases.flatMap((p) => p.milestones.map((m) => [m.id, p.route ?? null] as const)));
@@ -540,6 +545,19 @@ export async function capitalAnswersFor(projectId: string): Promise<CapitalAnswe
   const openingWork = opening ? await latestWork(opening.id) : null;
   if (openingWork?.payload.kind !== "intake") return out;
   return mergeCapitalAnswers(capitalAnswersFromMoneyPosition(openingWork.payload.answers), out);
+}
+
+/**
+ * What this project's owner has ruled out, for the tree to read.
+ *
+ * Separate from the route. A route is what they chose; a constraint is what
+ * they refused, and a step can be right for the route and wrong for the person
+ * — the self-funded roadmap's retirement-money step is a debt plan to somebody
+ * who answered "no debt" two weeks earlier.
+ */
+export async function pathConstraintsFor(projectId: string): Promise<PathConstraints> {
+  const profile = await capitalProfileFor(projectId).catch(() => null);
+  return { debtOk: profile?.constraints.debtOk ?? null };
 }
 
 export async function capitalProfileFor(projectId: string) {
@@ -1466,6 +1484,35 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
     if (state) for (const m of resolveTree(g.id, state.subcategory, state.capitalRoute).flatMap((p) => p.milestones)) backbone.set(m.id, m);
   }
   const out: Artifact[] = [];
+
+  /*
+   * How the business charges, first, because nothing used to say.
+   *
+   * This collects what the builder has *answered* — milestones, the capital
+   * profile, their posts and decisions — and never the project's own brief. So
+   * every artifact that needed a price invented one, independently, and the
+   * plan ended up with $9/$29/$79 in the MVP document, a single $29 tier in the
+   * pricing review and $29/$59/$99 somewhere else. None of them was wrong about
+   * anything it could see; there was nothing to be right about.
+   *
+   * It goes in first and says it is settled, because a model that reads "here
+   * is the business model" halfway down a list of twenty artifacts treats it as
+   * one more opinion.
+   */
+  const [brief] = await db.select({
+    businessModel: projects.businessModel,
+    oneLiner: projects.oneLiner,
+  }).from(projects).where(eq(projects.id, projectId));
+  const tiers = await db.select().from(projectPricingTiers).where(eq(projectPricingTiers.projectId, projectId)).catch(() => []);
+  if (brief?.businessModel?.trim() || tiers.length) {
+    const lines = ["How this business charges — settled, not a suggestion. Use these and do not invent others:"];
+    if (brief?.businessModel?.trim()) lines.push(brief.businessModel.trim().slice(0, 1200));
+    if (tiers.length) {
+      lines.push(`Priced today: ${tiers.map((t) => `${t.name} $${t.price ?? 0}${t.billingPeriod ? ` per ${t.billingPeriod}` : ""}`).join(", ")}.`);
+    }
+    out.push({ label: "business-model", kind: "milestone", text: lines.join("\n") });
+  }
+
   for (const t of await pathTasks(projectId)) {
     const id = backboneIdOf(t.tags);
     const authored = id ? authoredTextFor(backbone.get(id), t.description) : "";
@@ -1499,7 +1546,24 @@ export async function createInjections(projectId: string, phaseId: string, propo
   if (!phase) throw Object.assign(new Error("That phase isn't on this path."), { code: "not_on_path", status: 400 });
   const tasks = await pathTasks(projectId, project.goal);
   const existing = tasks.filter((t) => injectedPhaseOf(t.tags) === phaseId).length;
-  const { admitted, dropped } = admitInjections(proposals, artifacts, existing);
+  /*
+   * Everything already injected on this project, so one standing note cannot
+   * become the plan.
+   *
+   * The per-phase cap was the only limit, and it is the wrong axis: a real
+   * artifact — a note saying "drop the weekly check-ins, make the web path
+   * first" — grounded a task in every phase, and one reminder ended up as the
+   * content of six milestones. Each admission was legal under a rule that could
+   * only see one phase. This hands the rule the whole board.
+   */
+  const already = tasks
+    .filter((t) => injectedPhaseOf(t.tags))
+    .map((t) => ({
+      title: t.title ?? "",
+      artifact: tagValue(t.tags, "artifact:") ?? "",
+      phaseId: injectedPhaseOf(t.tags),
+    }));
+  const { admitted, dropped } = admitInjections(proposals, artifacts, existing, already, phaseId);
   const anchor = tasks.find((t) => backboneIdOf(t.tags) === phase.milestones[phase.milestones.length - 1]?.id);
   const created = [];
   for (const a of admitted) {

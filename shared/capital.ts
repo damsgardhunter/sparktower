@@ -388,6 +388,25 @@ export interface CapitalProfile {
   answered: number;
   /** Plain facts derived from the answers, for Nova and the page. */
   facts: { cashMid: number | null; amountMid: number | null; cashToAmount: number | null; debtToIncome: number | null };
+  /**
+   * The lines the person drew, as rules rather than preferences.
+   *
+   * These were asked, stored, and used to cap the route-fit scores — and then
+   * never said out loud. What Nova received was a list of routes with numbers
+   * beside them, where "You said no debt" appeared as the footnote on a score
+   * of 15, among four other scores. A model reading that sees a weak option,
+   * not a forbidden one, which is exactly how a plan comes back recommending
+   * an SBA loan to somebody who said they would not borrow.
+   *
+   * Null means unanswered, which is not the same as "no objection" and is not
+   * treated as one.
+   */
+  constraints: {
+    /** False when they said they would not take on debt. */
+    debtOk: boolean | null;
+    /** False when they want to keep all of the business. */
+    equityOk: boolean | null;
+  };
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
@@ -536,12 +555,38 @@ export function capitalProfile(a: CapitalAnswers): CapitalProfile {
     routeFit: [debtFit, sellerFit, investorFit, hybridFit, selfFit].sort((x, y) => y.score - x.score),
     answered,
     facts: { cashMid, amountMid, cashToAmount, debtToIncome: debtToIncome != null && Number.isFinite(debtToIncome) ? Math.round(debtToIncome * 100) / 100 : null },
+    constraints: {
+      debtOk: debtOk == null ? null : debtOk !== "no",
+      /* Either answer can rule equity out: the appetite question, or wanting to keep 100%. */
+      equityOk: equity == null && ownership == null ? null : !(equity === "none" || ownership === "100"),
+    },
   };
 }
 
 /** The profile as lines Nova builds from. */
+/**
+ * The profile as Nova reads it.
+ *
+ * The constraints come first and are phrased as rules, because they were the
+ * part that got ignored. They were always in here — as a cap on a route-fit
+ * score, with "You said no debt" as the footnote on a 15 — and a model reading
+ * a list of five numbers sees a weak option rather than a forbidden one. A
+ * founder who says "no debt" and is handed a loan plan stops trusting the tool,
+ * and nothing else in the plan survives that.
+ *
+ * Said once, plainly, at the top, in the imperative: do not propose this.
+ */
 export function renderCapitalProfile(p: CapitalProfile): string {
+  const rules: string[] = [];
+  if (p.constraints.debtOk === false) {
+    rules.push("They will NOT take on debt. Do not propose loans, SBA programmes, lines of credit, credit cards, a 401(k) loan, seller notes, or any other borrowing — not as a buffer, not as a bridge, not as a fallback.");
+  }
+  if (p.constraints.equityOk === false) {
+    rules.push("They will NOT give up any of the business. Do not propose investors, SAFEs, convertible notes, revenue or profit share, or partners who take a stake.");
+  }
+
   return [
+    ...(rules.length ? ["HARD CONSTRAINTS — these rule options out, not down:", ...rules.map((r) => `- ${r}`), ""] : []),
     `Fundability score: ${p.score}/100 (${p.band.label}), from ${p.answered} of 5 steps answered.`,
     ...p.parts.map((x) => `- ${x.label}: ${x.score}/${x.max}. ${x.why}${x.raise ? ` Raises it: ${x.raise}` : ""}`),
     `Route fit: ${p.routeFit.map((r) => `${r.label} ${r.score} (${r.why})`).join("; ")}.`,
