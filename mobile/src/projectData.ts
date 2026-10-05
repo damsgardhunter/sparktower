@@ -39,6 +39,10 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "restaurant", label: "Restaurant" },
     { id: "service", label: "Service business" },
     { id: "retail", label: "Retail" },
+    /* Not premises with staff, and the path adapts — see shared/goals.ts. */
+    { id: "channel", label: "Creator or channel" },
+    { id: "home", label: "Home business" },
+    { id: "online", label: "Online or web business" },
     { id: "other", label: "Other" },
   ],
   run_company: [

@@ -158,7 +158,88 @@ const SHIP_CHANNEL: NovaPromptPack = {
     "Steps end with: the channel exists and one video is public; you have published on your chosen cadence more than once; you know your average view duration; somebody came back for a second video.",
 };
 
-const PACKS: NovaPromptPack[] = [SHIP_WEBSITE, SHIP_PHYSICAL, SHIP_FOOD, SHIP_CHANNEL];
+/**
+ * A creator business that needs to run without its owner.
+ *
+ * The questions are about dependency rather than growth: what only they can
+ * do, and what they are afraid to hand over. The second one is the real
+ * blocker and nobody volunteers it unasked.
+ */
+const SYS_CHANNEL: NovaPromptPack = {
+  key: "systemize_business:channel",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "cadence", ask: "What do you publish, how often, and are you currently keeping to it?", why: "Slipping the schedule is the clearest sign the owner is carrying it, and it is the first thing systemizing should fix." },
+    { id: "onlyme", ask: "Of ideas, scripting, filming, editing, thumbnails and the inbox — which genuinely need you?", why: "Most creators name all six and mean two. The plan starts with whichever of them is costing the most hours." },
+    { id: "scared", ask: "What would you not hand to an editor, even a good one?", why: "That is the real constraint, and naming it turns it into a brand standard somebody else can follow rather than a feeling only you have." },
+    { id: "money", ask: "How does it earn now — sponsors, ad share, affiliate, your own product?", why: "It decides which paperwork is worth automating first, and sponsors are usually where the owner's hours quietly go." },
+  ],
+  guidance:
+    "Plan to make the next month publish on schedule without the owner touching every step. " +
+    "The hours live in the paperwork around the craft, not the craft — so automate the upload checklist and the sponsor reply, and do not plan to automate the editing. " +
+    "Write the brand standard as specifics (pacing, what gets cut, how a thumbnail is decided), because \"make it feel like mine\" is the instruction that keeps an editor dependent. " +
+    "The absence test for a channel is one episode publishing unaided — not a quiet week with a full queue, and say so if their queue is what is holding it up.",
+  shape:
+    "Steps end with: you know which steps genuinely need you; the delivery standard is written down; somebody else has published one unaided; the schedule held while you were not watching.",
+};
+
+/**
+ * A business run from the kitchen table.
+ *
+ * The one pack where the honest answer is often "stop doing some of this". A
+ * home business's time log usually includes things that are not the business,
+ * and its profit usually hides an unpaid wage.
+ */
+const SYS_HOME: NovaPromptPack = {
+  key: "systemize_business:home",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "what", ask: "What do you make or do, and how do orders reach you?", why: "Most home businesses take orders four ways and have written down none of them, which is where the first hour of relief is." },
+    { id: "hours", ask: "Roughly how many hours a week does it take, and how many did you want it to take?", why: "The gap is the whole brief. A home business that shows a profit and eats every evening is the case this path exists for." },
+    { id: "help", ask: "Is there anybody who could take an hour of it — paid, or family?", why: "Delegation here is usually a few hours of somebody's week rather than a hire, and planning for a job nobody is going to post wastes the month." },
+    { id: "space", ask: "What about it is tangled up with the house — space, storage, the kitchen, the car?", why: "Those constraints are real and shape every SOP. A plan that ignores where the boxes live is a plan for a warehouse." },
+  ],
+  guidance:
+    "Plan for a few hours of somebody else's week, not a hire, unless they said otherwise. " +
+    "Keep every tool to something they already pay for: a business like this does not need a new subscription to stop writing the same message forty times. " +
+    "Cost their own hours at a real rate in the pricing step and show the arithmetic — this is where most home businesses find they have been paying to work, and it is worth finding out deliberately. " +
+    "Write down where things are kept, not just what to do: half the knowledge in a home business is which cupboard the packaging is in. " +
+    "Say plainly when the right answer is to stop offering something rather than to systemize it.",
+  shape:
+    "Steps end with: every way an order arrives is written down; one task has left your hands; you know the real hourly cost; three days passed with orders still going out.",
+};
+
+/**
+ * A web business whose founder is the only one who can deploy.
+ *
+ * Access is the subject here more than process. The tasks are usually small;
+ * what makes them only-me is that nobody else has the password.
+ */
+const SYS_ONLINE: NovaPromptPack = {
+  key: "systemize_business:online",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "shape", ask: "What does it sell, and who is it already working for?", why: "This path is for something that works. What it sells decides which of the numbers below is the one to watch." },
+    { id: "deploy", ask: "Who other than you could ship a fix today?", why: "If the answer is nobody, that is the first thing on the plan — every other handoff is undone by a bug only one person can fix." },
+    { id: "support", ask: "How many support messages and refunds come in a week, and who answers them?", why: "It is the commonest only-me task in a web business and the easiest to hand over once it is written down." },
+    { id: "keys", ask: "What is there that only you have access to?", why: "A five-minute task nobody else *can* do is on the only-me list, and access is usually the whole reason it is there." },
+  ],
+  guidance:
+    "Treat access as part of every handoff: a role definition without the logins beside it leaves the owner in the loop. " +
+    "Put somebody other than the owner in a position to ship a fix, early — nothing else on the path survives a bug only one person can resolve. " +
+    "Automate the thing done most rather than the thing most interesting to automate; those are rarely the same and the second is how a week disappears. " +
+    "Count deploys that needed the owner as a metric, because it is the only one of the numbers that measures what this path is for.",
+  shape:
+    "Steps end with: somebody else can ship a fix; support is answered by somebody else from a written process; you know how many deploys needed you; three days passed without one.",
+};
+
+const PACKS: NovaPromptPack[] = [
+  SHIP_WEBSITE, SHIP_PHYSICAL, SHIP_FOOD, SHIP_CHANNEL,
+  SYS_CHANNEL, SYS_HOME, SYS_ONLINE,
+];
 
 /** A goal's fallback, used until that goal and subcategory has a pack of its own. */
 function stubFor(goal: ProjectGoal, subcategory: string): NovaPromptPack {

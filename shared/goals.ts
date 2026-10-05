@@ -144,10 +144,28 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "channel", label: "YouTube channel" },
     { id: "other", label: "Other" },
   ],
+  /*
+   * Three of these are not premises with staff, which is what the list
+   * assumed. "Make it run without you" is just as true of a channel whose
+   * owner is the only person who can edit, a kitchen-table business where
+   * every order goes through one phone, and a web business that nobody but
+   * its founder can deploy — and the backbone already fits them: time
+   * capture, SOPs, metrics, a handoff, an absence test. What did not fit was
+   * a list offering Restaurant, Service business and Retail.
+   *
+   * `channel` is the same id as the one on `ship_mvp`, deliberately, the way
+   * `restaurant` is shared with `run_company`: somebody who shipped a channel
+   * and now wants it to run without them is the same person, and a second id
+   * for it would make the pair read as two different things. Validity is
+   * always the (goal, subcategory) pair, and the variants live in each tree.
+   */
   systemize_business: [
     { id: "restaurant", label: "Restaurant" },
     { id: "service", label: "Service business" },
     { id: "retail", label: "Retail" },
+    { id: "channel", label: "Creator or channel" },
+    { id: "home", label: "Home business" },
+    { id: "online", label: "Online or web business" },
     { id: "other", label: "Other" },
   ],
   run_company: [
