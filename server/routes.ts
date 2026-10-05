@@ -53,6 +53,7 @@ import { recordExploreAction } from "./explore-actions";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { registerProjectVisualRoutes } from "./project-visuals";
 import { registerBrandKitRoutes } from "./brand-kit";
+import { registerAdBrandRoutes } from "./ad-brand-routes";
 import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
@@ -527,6 +528,7 @@ export async function registerRoutes(
   registerBackingRoutes(app);
   registerProjectVisualRoutes(app);
   registerBrandKitRoutes(app);
+  registerAdBrandRoutes(app);
   registerPostImageRoutes(app);
 
   // User Profile

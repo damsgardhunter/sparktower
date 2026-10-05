@@ -12,6 +12,7 @@
  * draws something that resembles a logo, which is worse than no logo at all
  * because it is a company's mark, wrong, in their own advertisement.
  */
+import { contrastRatio } from "./ad-type";
 
 /** The voices an advert can be written in. A list, because "describe your tone" produces a paragraph nobody can act on. */
 export const BRAND_VOICES = [
@@ -162,6 +163,61 @@ export function validateBrandKit(raw: Record<string, unknown>): BrandKitValidati
   }
 
   return { ok: true, value };
+}
+
+export interface BrandWarning {
+  field: string;
+  message: string;
+}
+
+/**
+ * What will look wrong, without refusing the save.
+ *
+ * Deliberately not part of `validateBrandKit`. These are the business's own
+ * colours and they are entitled to them; a save refused over a contrast ratio
+ * is a form that will not let somebody enter their actual brand. But drawn
+ * without a word said, a bar in a colour three shades from its background is
+ * read as the renderer having failed.
+ *
+ * Narrow on purpose. It says nothing about on-screen text, because text is not
+ * drawn flat — `typeTreatment` gives it an outline and a halo chosen from this
+ * same contrast ratio, so a warning about unreadable lettering would be a
+ * warning about something already handled. What has no such rescue is the flat
+ * shapes: the progress sweep, a bar, an underline, the accent on a card. Those
+ * are the colour against the background and nothing else.
+ */
+export function brandWarnings(kit: BrandKitInput | null | undefined): BrandWarning[] {
+  if (!kit) return [];
+  const out: BrandWarning[] = [];
+  const background = kit.backgroundColor;
+  if (!background) return out;
+
+  /*
+   * Three to one. Large flat areas are judged by the large-text threshold
+   * rather than 4.5, which is a rule about body copy at reading size and would
+   * flag perfectly legible brand colours.
+   */
+  const FLAT_FLOOR = 3;
+  for (const field of ["primaryColor", "accentColor"] as const) {
+    const colour = kit[field];
+    if (!colour) continue;
+    if (contrastRatio(colour, background) < FLAT_FLOOR) {
+      out.push({
+        field,
+        message: `${colour} is too close to ${background} to show up against it. A bar or an underline in it will look like nothing was drawn.`,
+      });
+    }
+  }
+
+  /* An accent that matches the primary is not an accent; it is the primary twice. */
+  if (kit.accentColor && kit.primaryColor && kit.accentColor.toUpperCase() === kit.primaryColor.toUpperCase()) {
+    out.push({
+      field: "accentColor",
+      message: "The accent is the same colour as the primary, so nothing on screen will stand out from anything else.",
+    });
+  }
+
+  return out;
 }
 
 /** The kit with every gap filled, which is what a renderer wants. */
