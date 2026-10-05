@@ -162,6 +162,38 @@ export const ENV_RULES: EnvRule[] = [
     productionOnly: true,
     breaks: "Nova: the guide, plan generation, match reasons and every other AI feature",
   },
+  {
+    /*
+     * Either an API key on its own, or an access/secret pair — the two
+     * generations of Kling's API want different credentials, and an account
+     * has one or the other. `alternatives` is the right shape for that: any
+     * one of these present means the feature is configured.
+     *
+     * The secret half is checked separately below, because an access key
+     * without its secret is the one state that looks configured and cannot
+     * sign a single request.
+     */
+    name: "KLINGAI_API_KEY",
+    alternatives: ["KLING_API_KEY", "KLING_ACCESS_KEY"],
+    severity: "degraded",
+    productionOnly: true,
+    breaks: "generated advertisements — the video model behind them",
+  },
+  {
+    name: "KLING_SECRET_KEY",
+    severity: "degraded",
+    productionOnly: true,
+    breaks: "generated advertisements, if the account uses access/secret credentials rather than an API key",
+    validate: (_value, _ctx) =>
+      /*
+       * Only a complaint about the pair, never about this value's content. A
+       * secret with no access key beside it signs nothing, and the reverse is
+       * the same mistake read from the other end.
+       */
+      process.env.KLING_ACCESS_KEY?.trim()
+        ? null
+        : "set without KLING_ACCESS_KEY — a secret key signs nothing on its own",
+  },
 ];
 
 /**
