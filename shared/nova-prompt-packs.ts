@@ -23,8 +23,18 @@ export interface NovaPromptPack {
   /** `${goal}:${subcategory}`, or `${goal}:*` for a goal's fallback. */
   key: string;
   version: typeof NOVA_PACK_VERSION;
-  /** "live" once its questions and guidance are written and evaluated; "stub" until then. */
-  status: "live" | "stub";
+  /**
+   * "live" once its questions and guidance are written *and evaluated*;
+   * "written" when somebody has written them and no eval has been run yet;
+   * "stub" when there is no pack and the generic questions are standing in.
+   *
+   * The middle one was added with the three non-software ship packs below.
+   * They are real questions rather than the generic set, so calling them
+   * "stub" understates them — and "live" is a claim about an eval that has not
+   * happened, which is the kind of label that gets believed later. `LIVE_PACKS`
+   * still means evaluated, so the eval harness is unaffected.
+   */
+  status: "live" | "written" | "stub";
   /** What Nova asks before planning. Three or four — a form nobody finishes teaches nothing. */
   questions: { id: string; ask: string; why: string }[];
   /** What a good first plan looks like for this kind of project, in Nova's own instructions. */
@@ -67,7 +77,88 @@ const SHIP_WEBSITE: NovaPromptPack = {
     "Steps end with: the page is live at a URL a stranger can open; the single action works end to end; you can tell how many people took it.",
 };
 
-const PACKS: NovaPromptPack[] = [SHIP_WEBSITE];
+/**
+ * A physical product.
+ *
+ * The questions are the ones a first-time maker has not been asked: what one
+ * costs to make, and what somebody is buying instead today. Both are answerable
+ * in a sentence and both change the whole plan.
+ */
+const SHIP_PHYSICAL: NovaPromptPack = {
+  key: "ship_mvp:physical",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "thing", ask: "What is it, and what do people use instead right now?", why: "A physical product always replaces something — even if the something is doing without. The plan has to beat that, not beat nothing." },
+    { id: "make", ask: "Could you make one yourself this month, or does somebody else have to make it?", why: "Making it yourself means a prototype in days; a manufacturer means minimum orders and lead times, and the plan is a different shape." },
+    { id: "cost", ask: "Roughly what do the materials for one cost — and if you don't know, say so?", why: "Unit cost decides the price and whether the business works. Not knowing is normal and makes finding out the first step rather than an assumption." },
+    { id: "hands", ask: "Who are three people who would buy one, by name?", why: "Three real names is the difference between a product and an idea, and they become week four's first testers." },
+  ],
+  guidance:
+    "Plan to get one real object made this month, not a product line. Order the steps so something exists in their hands before anything is optimised: " +
+    "the rough prototype first, then the unit cost, then one made properly, then a way for a stranger to buy it. " +
+    "Never write a step that assumes Nova can make, print, sew or assemble anything — Nova drafts the plan, the materials list and the words; the making is theirs. " +
+    "Name lead times and minimum orders explicitly wherever a step depends on somebody else making it, because those are what slip.",
+  shape:
+    "Steps end with: one exists and you have held it; you know what one costs to make; a stranger could place an order; three people have used it.",
+};
+
+/**
+ * Food or drink.
+ *
+ * The one pack where a legal question comes before a product question. Where
+ * it is made decides what may be sold and to whom, and getting that wrong is
+ * not a setback — it is the end of the business.
+ */
+const SHIP_FOOD: NovaPromptPack = {
+  key: "ship_mvp:food",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "dish", ask: "What is it, and when would somebody eat it?", why: "The occasion prices the product. The same jar is a weekday staple or a gift, and those are different businesses." },
+    { id: "kitchen", ask: "Where would you make it — your own kitchen, a hired commercial one, or somebody else's factory?", why: "This decides what you may legally sell and to whom, before it decides anything practical. It is the first real constraint." },
+    { id: "where", ask: "Where would the first ones be sold — a market, a shop, online, to friends?", why: "Each route has a different cut, a different label requirement and a different first step." },
+    { id: "scale", ask: "How many could you make in one go without it ruining your week?", why: "Batch size is the honest limit on a food business, and planning past it is how people burn out in month two." },
+  ],
+  guidance:
+    "Plan to sell one, for money, to somebody who is not a friend, this month. " +
+    "Put the rules first: say plainly what the person's kitchen choice allows them to sell and what it does not, and if the answer depends on where they live, make finding out a step rather than guessing. " +
+    "Cost it per serving including packaging and waste before any step about pricing — food margins are thinner than people expect and the arithmetic is the plan's most useful output. " +
+    "Allergens and a label belong in the first month, not in a later 'compliance' phase. " +
+    "Never write a step that assumes Nova can cook, package or deliver anything.",
+  shape:
+    "Steps end with: you have made it twice the same way; you know the cost of one serving; a label exists that could legally go on it; somebody who is not a friend has paid for one.",
+};
+
+/**
+ * A YouTube channel.
+ *
+ * The hardest one to plan honestly, because the obvious plan — buy a camera,
+ * film ten videos, grow — is the one that fails. What matters in month one is
+ * whether they can hold a cadence and whether anybody watches to the end.
+ */
+const SHIP_CHANNEL: NovaPromptPack = {
+  key: "ship_mvp:channel",
+  version: NOVA_PACK_VERSION,
+  status: "written",
+  questions: [
+    { id: "who", ask: "Who is this for, and what do they get out of one video?", why: "A channel without an answer to this makes videos for nobody. It is also the sentence that goes on the channel page." },
+    { id: "hours", ask: "Realistically, how many hours a week can you give this?", why: "Cadence is the whole product in month one, and a cadence set above someone's real hours is the thing that ends channels." },
+    { id: "kit", ask: "What would you film and edit on, using only what you already own?", why: "A channel waiting on equipment does not start. Nearly always the honest answer is a phone, and that is enough." },
+    { id: "earn", ask: "If this worked, how would it eventually make money — sponsors, affiliate, your own product, ads?", why: "It changes what gets filmed from the first episode, even though it pays nothing for months." },
+  ],
+  guidance:
+    "Plan the first month as a cadence, not a launch. The first video should be published publicly in week one, deliberately before it is good — the first one never is, and having it behind them is worth more than having it right. " +
+    "Order the steps so publishing happens repeatedly: set up and one test video, then titles, then the cadence itself, one milestone per episode. " +
+    "Treat titles and thumbnails as part of the product rather than promotion, because they decide whether anything gets watched. " +
+    "Measure average view duration and returning viewers, and say plainly that subscriber count and total views are the numbers that feel like progress and are not. " +
+    "Never write a step that assumes Nova can film, edit, record audio or appear on camera. Nova writes titles, scripts, descriptions and plans; the filming is theirs. " +
+    "Do not plan around ad revenue: name what each earning route actually requires before it pays anything.",
+  shape:
+    "Steps end with: the channel exists and one video is public; you have published on your chosen cadence more than once; you know your average view duration; somebody came back for a second video.",
+};
+
+const PACKS: NovaPromptPack[] = [SHIP_WEBSITE, SHIP_PHYSICAL, SHIP_FOOD, SHIP_CHANNEL];
 
 /** A goal's fallback, used until that goal and subcategory has a pack of its own. */
 function stubFor(goal: ProjectGoal, subcategory: string): NovaPromptPack {

@@ -31,10 +31,17 @@ describe("Nova prompt packs", () => {
         expect(pack.key, `${goal.id}:${sub.id}`).toBe(`${goal.id}:${sub.id}`);
         expect(pack.questions.length, `${goal.id}:${sub.id}`).toBeGreaterThanOrEqual(3);
         expect(pack.guidance.length).toBeGreaterThan(40);
-        expect(["live", "stub"]).toContain(pack.status);
+        expect(["live", "written", "stub"]).toContain(pack.status);
       }
     }
-    // Exactly the packs claimed as evaluated in docs/nova-evals-v1.md.
+    /*
+     * Exactly the packs claimed as evaluated in docs/nova-evals-v1.md.
+     *
+     * The three non-software ship packs are "written" rather than "live" on
+     * purpose: they have real questions and no eval has been run on them, and
+     * "live" is a claim about an eval. This assertion is what keeps the
+     * distinction honest — a new pack cannot quietly call itself evaluated.
+     */
     expect(LIVE_PACKS.map((p) => p.key)).toEqual(["ship_mvp:website"]);
   });
 

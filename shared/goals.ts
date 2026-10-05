@@ -120,11 +120,28 @@ export function sectionOfTask(tags: string[] | null | undefined, primary: Projec
  * checked as a (goal, subcategory) pair, never by id alone.
  */
 export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; label: string }[]> = {
+  /*
+   * Five of these are software and three are not, which is the point.
+   *
+   * The path was written for software and the list said so: app, SaaS, game,
+   * website. Somebody making a hot sauce, a hardware product or a YouTube
+   * channel has a first version to get in front of real people exactly like
+   * everybody else — the four-week spine fits them — and the only thing in
+   * their way was a list of options that did not include them, and then a
+   * roadmap talking about repos and deploys.
+   *
+   * `physical`, `food` and `channel` have variants on every milestone where
+   * the software framing is wrong, and `skipFor` on the handful that do not
+   * apply at all. See shared/phase-trees/ship.ts.
+   */
   ship_mvp: [
     { id: "app", label: "App" },
     { id: "saas", label: "SaaS" },
     { id: "game", label: "Game" },
     { id: "website", label: "Website" },
+    { id: "physical", label: "Physical product" },
+    { id: "food", label: "Food or drink" },
+    { id: "channel", label: "YouTube channel" },
     { id: "other", label: "Other" },
   ],
   systemize_business: [
