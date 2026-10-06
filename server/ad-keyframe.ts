@@ -70,6 +70,19 @@ export interface KeyframeRequest {
   /** The world, restated here too — the drawing is where it matters most. */
   world?: string | null;
   /**
+   * How it is shot — and this is the field that decides the framing.
+   *
+   * It did not reach here, and that is why three attempts at a selfie vlog
+   * came back as a camera watching somebody hold a phone. The format said
+   * "THIS FOOTAGE IS THE PHONE... not cinematic, no shallow depth of field",
+   * that went into the *video* prompt, and the video prompt animates a still
+   * that was already drawn. Meanwhile this file hardcoded "full-frame camera,
+   * fast prime lens, shallow depth of field" — the exact look the format
+   * refuses. Instructing the animator harder was never going to move a camera
+   * that had already been placed.
+   */
+  look?: string | null;
+  /**
    * Who the film follows, restated on every frame they are in.
    *
    * The same argument as the world and a shorter leash: a place drawn
@@ -92,7 +105,7 @@ export interface KeyframeRequest {
  */
 export function keyframePrompt(input: {
   scene: string; brief: string; logoRole?: string | null; world?: string | null;
-  character?: string | null;
+  character?: string | null; look?: string | null;
   hasLogo: boolean; hasPrevious: boolean;
 }): string {
   const refs: string[] = [];
@@ -163,7 +176,15 @@ export function keyframePrompt(input: {
      */
     `Few objects, and large ones. No scattered small items — no loose screws, cables, offcuts, papers or clutter. Every object is clearly separated from the others, resting solidly on a surface, in contact with it.`,
     ``,
-    `Photographic and real: full-frame camera, fast prime lens, natural light, shallow depth of field, true-to-life colour. Not an illustration, not a 3D render, not stylised.`,
+    /*
+     * The format's own direction when it has one, and the cinematic default
+     * only when it does not. A format that says it is phone footage gets phone
+     * footage; one that says nothing gets the look an advert wants.
+     */
+    input.look?.trim()
+      ? `HOW THIS FRAME IS SHOT, which decides the whole composition: ${input.look.replace(/\s+/g, " ").trim()}`
+      : `Photographic and real: full-frame camera, fast prime lens, natural light, shallow depth of field, true-to-life colour. Not an illustration, not a 3D render, not stylised.`,
+    `Photographic and real, never an illustration and never a 3D render.`,
     ``,
     `For context, the business this is for: ${input.brief.replace(/\s+/g, " ").trim().slice(0, 400)}`,
   ].filter((l) => l !== "").join("\n");
@@ -191,6 +212,7 @@ export async function drawKeyframe(input: KeyframeRequest): Promise<{ base64: st
     logoRole: input.logoRole,
     world: input.world,
     character: input.character,
+    look: input.look,
     hasLogo: !!logo,
     hasPrevious: !!input.previousFrame,
   });

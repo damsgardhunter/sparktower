@@ -489,6 +489,8 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         logoRole: shoot.logoRole,
         world: written.script.world ?? null,
         character: written.script.character ?? null,
+        /* The framing lives here, not in the animation prompt. */
+        look: shoot.plate,
         previousFrame: previous,
         ownerId: row.requestedBy,
       });

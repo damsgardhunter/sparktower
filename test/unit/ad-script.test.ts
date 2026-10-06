@@ -197,3 +197,26 @@ describe("the claim list", () => {
     expect(CLAIM_PHRASES.length).toBeGreaterThan(8);
   });
 });
+
+describe("a correction the model can actually act on", () => {
+  it("gives a target with room in it rather than the limit it just missed", () => {
+    /*
+     * Told "must be 32 or fewer" against a 33-character line, a model shaves
+     * one word ending and comes back at 33 again: it aims at the edge and
+     * misses by the same margin every time. Three attempts went that way and
+     * an advert failed without a single clip being generated.
+     */
+    const said = describeProblem({ kind: "too_long", beat: "complain", limit: 32, was: 33 });
+    expect(said, "it still only names the limit").toMatch(/about 28 characters/);
+    expect(said).toMatch(/aim well under the limit rather than at it/);
+    /* And it still says what was actually wrong. */
+    expect(said).toContain("33 characters");
+    expect(said).toContain("32 or fewer");
+  });
+
+  it("keeps the target usable on a very short beat", () => {
+    /* A tenth under a twelve-character limit is not a line anybody can write. */
+    const said = describeProblem({ kind: "too_long", beat: "hook", limit: 12, was: 20 });
+    expect(said).toMatch(/about (8|9|10) characters/);
+  });
+});

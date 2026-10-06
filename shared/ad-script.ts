@@ -361,7 +361,20 @@ export function sceneMoments(scene: string | undefined, wanted: number): string[
 /** One sentence per problem, for handing back to the model on a retry. */
 export function describeProblem(p: ScriptProblem): string {
   switch (p.kind) {
-    case "too_long": return `The ${p.beat} line is ${p.was} characters and must be ${p.limit} or fewer.`;
+    case "too_long": {
+      /*
+       * A target with room in it, not the limit.
+       *
+       * Told "must be 32 or fewer" against a 33-character line, a model shaves
+       * one word ending and comes back at 33 again — it is aiming at the edge
+       * and missing by the same margin every time. Three attempts went that
+       * way and the advert failed without a clip being generated. Asking for
+       * about a tenth under gives it somewhere to land, and a line a few
+       * characters shorter than the maximum is not a worse line.
+       */
+      const target = Math.max(8, Math.floor(p.limit * 0.9));
+      return `The ${p.beat} line is ${p.was} characters and must be ${p.limit} or fewer. Rewrite it to about ${target} characters — aim well under the limit rather than at it, or you will land on it again.`;
+    }
     case "banned_word": return `The ${p.beat} line uses "${p.word}", which this business does not say.`;
     case "missing_beat": return `There is no line for the ${p.beat} beat.`;
     case "unsupported_claim": return `The ${p.beat} line says "${p.phrase}", which is a claim the business has not supported. Remove it.`;
