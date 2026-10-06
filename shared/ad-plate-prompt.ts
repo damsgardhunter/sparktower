@@ -274,6 +274,12 @@ export function platePrompt(input: PlatePromptInput): string {
       `Everything in the frame is solid and stays itself: objects keep the same shape, size and position on the surfaces they rest on, hands and arms go around things rather than through them, and nothing appears, vanishes or changes into something else. Only the things named above move.`,
       ``,
       `Hold the photograph's own place, materials, palette and light exactly — this is a continuation of it, not a new scene. Do not cut away, do not change location, do not add or remove the structures already in it.`,
+      /*
+       * Said as a closed set, which is stronger than any list of things not to
+       * do. "Stuff keeps appearing out of nowhere" is the model filling time by
+       * inventing, and the fix is telling it the frame is already complete.
+       */
+      `The things in the first frame are ALL the things there are. Nothing new enters the frame, nothing is added to the surfaces, and no object appears that is not already visible in the photograph — the only change over these seconds is that what is already there moves.`,
       input.world?.trim() ? `For reference, the world: ${fitWorld(input.world, 420)}` : "",
       ``,
       `Live action, photographic, true-to-life colour. Not an illustration, not a render.`,

@@ -59,9 +59,9 @@ import { planShots, planPlates, type Plate, type Shot } from "@shared/ad-shots";
 import { platePrompt, plateNegativePrompt } from "@shared/ad-plate-prompt";
 import { resolvedBrand, brandVoice, type BrandKitInput } from "@shared/ad-brand";
 import { sceneMoments } from "@shared/ad-script";
-import { lineLimit } from "@shared/ad-script";
+import { captionLimit } from "@shared/ad-script";
 import { placeLine, DEFAULT_HEIGHT } from "./ad-placement";
-import { fitLine } from "@shared/ad-type";
+import { fitLine, fitParagraph } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 
 /**
@@ -383,7 +383,8 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         businessName: brand?.displayName ?? null,
         callToAction: brand?.callToAction ?? null,
         avoidWords: brand?.avoidWords ?? [],
-        limitFor: lineLimit,
+        /* Dialogue, not a headline — see captionLimit. */
+        limitFor: (_beat, seconds) => captionLimit(seconds),
       })
       : undefined,
     needsCharacter: !!story?.character,
@@ -797,14 +798,23 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
          * Only when there is a line: reading a frame costs a subprocess, and a
          * shot with no words has nothing to place.
          */
-        const typeset = line?.onScreen ? fitted(line.onScreen, row.format as AdFormatId) : null;
+        /*
+         * Dialogue wraps onto two lines; a headline shrinks onto one. Which
+         * one this is depends on the format, and getting it wrong is what made
+         * the captions read as fragments.
+         */
+        const typeset = line?.onScreen
+          ? (story
+            ? wrapped(line.onScreen, row.format as AdFormatId)
+            : { lines: [fitted(line.onScreen, row.format as AdFormatId).text], sizeRatio: fitted(line.onScreen, row.format as AdFormatId).sizeRatio })
+          : null;
         const atHeight = typeset
           ? await placeLine(
             plateFiles[plateIndex],
             /* A moment into the shot, not its first frame: the camera is moving. */
             window.startSeconds + Math.min(1, seconds / 2),
             row.format as AdFormatId,
-            Math.round(Math.min(format.width, format.height) * typeset.sizeRatio),
+            Math.round(Math.min(format.width, format.height) * typeset.sizeRatio * (typeset.lines.length || 1)),
           )
           : DEFAULT_HEIGHT;
         await renderShot({
@@ -819,7 +829,18 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
            * film that keeps stopping.
            */
           holdFirstFrame: story && pieces.length === 0 ? OPENING_FREEZE_SECONDS : 0,
-          lines: typeset ? [{ ...typeset, atHeight, bold: true }] : [],
+          /*
+           * One entry per line, stacked downward from the chosen height. The
+           * compositor draws each `lines` entry on its own, so wrapping is a
+           * matter of handing it more of them rather than teaching drawtext
+           * about line breaks.
+           */
+          lines: (typeset?.lines ?? []).map((text, i) => ({
+            text,
+            sizeRatio: typeset!.sizeRatio,
+            atHeight: atHeight + i * (typeset!.sizeRatio * 1.25),
+            bold: true,
+          })),
           /* A story format's captions carry no brand colour — see StoryFormat.captions. */
           typeStyle: story?.captions ?? "bubble",
           /*
@@ -877,6 +898,13 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
  * clipped at both edges, so the fitting happens here, where the frame is
  * finally known.
  */
+/** Dialogue, wrapped onto as many lines as it needs inside the safe box. */
+function wrapped(text: string, formatId: AdFormatId): { lines: string[]; sizeRatio: number } {
+  const format = adFormat(formatId)!;
+  const box = safeBox(format, SAFE_AREAS[formatId]);
+  return fitParagraph(text, box, Math.min(format.width, format.height));
+}
+
 function fitted(text: string, formatId: AdFormatId): { text: string; sizeRatio: number } {
   const format = adFormat(formatId)!;
   const box = safeBox(format, SAFE_AREAS[formatId]);

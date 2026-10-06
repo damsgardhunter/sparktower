@@ -115,6 +115,27 @@ export function lineLimit(beat: string, seconds: number): number {
   return Math.max(12, Math.min(bySize[beat] ?? 32, Math.round(seconds * 15)));
 }
 
+/**
+ * How many characters a caption may use, as against a headline.
+ *
+ * `lineLimit` answers a different question: how much copy fits on one line set
+ * large over footage, which comes out at about thirty characters and is right
+ * for an advert. Applied to dialogue it produced "Yo—forklift vlogging in
+ * vents." — a sentence crushed until the grammar fell out, which reads exactly
+ * as badly as it sounds.
+ *
+ * This is reading speed at caption size over two lines: about seventeen
+ * characters a second, which is what somebody comfortably reads while also
+ * watching the picture, capped at what two lines actually hold. A four-second
+ * beat gets about sixty-eight characters, which is a sentence.
+ */
+export function captionLimit(seconds: number): number {
+  const CHARS_PER_SECOND = 17;
+  /* Two lines at caption size on the narrowest frame this sells. */
+  const TWO_LINES = 70;
+  return Math.max(24, Math.min(TWO_LINES, Math.round(seconds * CHARS_PER_SECOND)));
+}
+
 export type ScriptProblem =
   | { kind: "too_long"; beat: string; limit: number; was: number }
   | { kind: "banned_word"; beat: string; word: string }

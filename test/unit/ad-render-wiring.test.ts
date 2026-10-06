@@ -29,7 +29,14 @@ describe("the renderer uses what was built for it", () => {
      * the shot is the computed one.
      */
     expect(render, "the line is pinned to a constant height again").not.toMatch(/atHeight:\s*0\.\d+\s*,\s*bold/);
-    expect(render).toMatch(/atHeight,/);
+    /*
+     * The measured height reaches the shot. Written as "atHeight is used as a
+     * value" rather than matching one exact spelling, because the shape around
+     * it changes — it was `{ ...typeset, atHeight }` when captions were one
+     * line and `atHeight + i * …` once they could wrap onto two, and the
+     * second rewrite broke this test rather than the wiring.
+     */
+    expect(render, "the measured height is computed and then not used").toMatch(/atHeight(,|\s*\+)/);
   });
 
   it("passes the format's caption treatment to the compositor", () => {

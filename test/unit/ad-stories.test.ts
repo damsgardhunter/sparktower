@@ -270,6 +270,15 @@ describe("what the formats were actually asked for", () => {
     expect(prompt, "nothing requires the lines to add up").toMatch(/THE STORY\./);
     expect(prompt).toMatch(/somebody who knows nothing about this business and will not rewind/);
     expect(prompt).toMatch(/the first line establishes who the character is/);
+    /*
+     * And that the lines are dialogue rather than headlines. Thirty characters
+     * of headline budget applied to a character speaking produced "Yo—forklift
+     * vlogging in vents.", which is what a sentence looks like with the
+     * grammar squeezed out of it.
+     */
+    expect(prompt, "nothing asks for a proper sentence").toMatch(/proper sentence with ordinary grammar/);
+    expect(prompt).toMatch(/It is dialogue: write it the way the character would actually say it out loud/);
+    expect(prompt, "and the four lines have to work as one speech").toMatch(/Read the four lines in order as one speech/);
   });
 
   it("holds the opening frame still for long enough to register and not long enough to look broken", () => {

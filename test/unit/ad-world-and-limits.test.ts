@@ -261,6 +261,17 @@ describe("the artifacts somebody actually watched", () => {
     expect(p).toMatch(/around things rather than through them/i);
   });
 
+  it("tells the model the frame is already complete, so nothing new arrives", () => {
+    /*
+     * "stuff keeps appearing out of nowhere during the imaging" — a model
+     * filling seconds by inventing. A closed set is stronger than any list of
+     * things not to add, because the list is never finished.
+     */
+    const p = motion();
+    expect(p, "nothing says the frame is a closed set").toMatch(/ALL the things there are/);
+    expect(p).toMatch(/no object appears that is not already visible/i);
+  });
+
   it("restrains a travelling or fast camera, and leaves a gentle one alone", () => {
     /*
      * Animating a still means inventing what the still does not show, and the

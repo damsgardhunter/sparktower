@@ -365,7 +365,7 @@ export function storyPrompt(input: {
     .map((b) => {
       const def = format.beats.find((x) => x.id === b.id)!;
       const moments = Math.max(1, b.moments ?? 1);
-      return `  - ${b.id} (${def.label}): ${b.seconds}s, on-screen line at most ${input.limitFor(b.id, b.seconds)} characters`
+      return `  - ${b.id} (${def.label}): ${b.seconds}s, what the character says at most ${input.limitFor(b.id, b.seconds)} characters`
         + (moments > 1 ? `, cut from ${moments} shots — its scene needs ${moments} moments` : "")
         + `\n      ${def.purpose}`;
     })
@@ -416,8 +416,17 @@ export function storyPrompt(input: {
     `THE TURN. The film sets up an expectation and then flips it. The last beat is the flip — the thing the viewer did not see coming — and it is what gets the film shared. A last line that summarises the product is not a turn.`,
     ``,
     `Rules for the lines:`,
-    `- Each on-screen line fits its character limit. It is set large over moving footage: a few words, not a sentence.`,
+    /*
+     * Sentences, not fragments. The budget used to be thirty characters —
+     * a headline's budget, applied to dialogue — and what came back was
+     * "Yo—forklift vlogging in vents." and "Oh no. I have momentum now.":
+     * telegraphese with the grammar squeezed out, which somebody watching
+     * described as sounding like a two-year-old talking.
+     */
+    `- Each line is what the character SAYS, written as a proper sentence with ordinary grammar — subject, verb, punctuation. Not a headline, not a caption fragment, not telegraphese. It is dialogue: write it the way the character would actually say it out loud.`,
+    `- Stay inside the character limit for the beat, and use the room. A line well under it is fine; a line that drops words to fit is not.`,
     `- The lines are the character talking, in its own voice, not a narrator describing it.`,
+    `- Read the four lines in order as one speech. If they do not sound like one person saying one connected thing, rewrite them.`,
     `- Write only what the business told you. Never invent a customer, a quote, a number, a price or a result.`,
     input.avoidWords?.length ? `- Never use these words: ${input.avoidWords.join(", ")}.` : ``,
     /*

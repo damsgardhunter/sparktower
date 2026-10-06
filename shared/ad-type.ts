@@ -212,7 +212,19 @@ export function charsPerLine(frameWidth: number, fontSize: number): number {
  * shrinking past it to fit a long line produces something nobody reads
  * anyway, so at that point the line is trimmed instead.
  */
-export const TYPE_SIZE = { max: 0.075, min: 0.042 } as const;
+export const TYPE_SIZE = {
+  max: 0.075,
+  /**
+   * The size a caption is set at, as against a headline.
+   *
+   * Smaller, because a caption is somebody talking and a headline is somebody
+   * announcing. It is also what makes a sentence possible: at the headline
+   * size a vertical frame holds about twenty characters a line, which is not
+   * enough for a clause, let alone two.
+   */
+  caption: 0.055,
+  min: 0.042,
+} as const;
 
 /**
  * A line, and the size to set it at, guaranteed to fit the width it is given.
@@ -260,6 +272,81 @@ export function fitLine(
   const cut = clean.slice(0, Math.max(1, fits - 1));
   const onWord = cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut;
   return { text: `${onWord.trimEnd()}…`, sizeRatio };
+}
+
+/**
+ * A caption wrapped onto as many lines as it needs, and the size to set it at.
+ *
+ * `fitLine` is for a headline: one line, set large, shrunk until it fits. That
+ * is right for an advert and wrong for somebody talking, and using it for
+ * dialogue is what produced captions like "Yo—forklift vlogging in vents." —
+ * a sentence crushed into thirty characters reads like a toddler wrote it,
+ * because there is no room for grammar.
+ *
+ * A caption is smaller type on more lines. It wraps on words, and only shrinks
+ * when the wrapping has run out of lines — which is the opposite order from a
+ * headline, where the size goes first.
+ */
+export function fitParagraph(
+  text: string,
+  box: { width: number },
+  shortEdge: number,
+  maxLines = 2,
+  max: number = TYPE_SIZE.caption,
+): { lines: string[]; sizeRatio: number } {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return { lines: [], sizeRatio: max };
+
+  for (let px = Math.floor(shortEdge * max); px >= Math.ceil(shortEdge * TYPE_SIZE.min); px -= 2) {
+    const perLine = charsPerLine(box.width, px);
+    const lines: string[] = [];
+    let current = "";
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length <= perLine) { current = candidate; continue; }
+      if (current) lines.push(current);
+      current = word;
+    }
+    if (current) lines.push(current);
+    /* A single word longer than the line cannot be helped by wrapping. */
+    if (lines.length <= maxLines && lines.every((l) => l.length <= perLine)) {
+      return { lines, sizeRatio: px / shortEdge };
+    }
+  }
+
+  /* Still too long at the smallest size worth setting: cut on a word. */
+  const px = Math.ceil(shortEdge * TYPE_SIZE.min);
+  const perLine = charsPerLine(box.width, px);
+  const kept: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > perLine) {
+      if (current) kept.push(current);
+      current = word;
+      if (kept.length === maxLines) break;
+    } else current = candidate;
+  }
+  if (kept.length < maxLines && current) kept.push(current);
+  /*
+   * Cut on a word, not a character. Slicing to the character count leaves the
+   * last word chopped in half, which is the thing an ellipsis is supposed to
+   * avoid — and it is the same mistake `fitLine` made before it.
+   */
+  const last = kept.length - 1;
+  if (last >= 0) {
+    const room = Math.max(1, perLine - 1);
+    const line = kept[last];
+    if (line.length > room) {
+      const cut = line.slice(0, room);
+      const onWord = cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut;
+      kept[last] = `${onWord.trimEnd()}…`;
+    } else {
+      const onWord = line.includes(" ") ? line.slice(0, line.lastIndexOf(" ")) : line;
+      kept[last] = `${onWord.trimEnd()}…`;
+    }
+  }
+  return { lines: kept, sizeRatio: px / shortEdge };
 }
 
 /** The longest line this copy may be, given the frame and the size it will be set at. */
