@@ -60,6 +60,7 @@ import { platePrompt, plateNegativePrompt } from "@shared/ad-plate-prompt";
 import { resolvedBrand, brandVoice, type BrandKitInput } from "@shared/ad-brand";
 import { sceneMoments } from "@shared/ad-script";
 import { lineLimit } from "@shared/ad-script";
+import { placeLine, DEFAULT_HEIGHT } from "./ad-placement";
 import { fitLine } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 
@@ -715,6 +716,7 @@ async function pollPlates(row: RenderRow): Promise<RenderRow> {
 async function composeFinal(row: RenderRow): Promise<RenderRow> {
   if (!(await ffmpegAvailable())) throw new Error("ffmpeg is not installed on this server");
 
+  const story = storyFormat(row.style);
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
   const style = shootingOf(row.style);
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
@@ -787,13 +789,31 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
         const line = script?.lines.find((l) => l.beat === shot.beat);
         const output = path.join(work, `shot-${String(pieces.length).padStart(2, "0")}.mp4`);
         const seconds = plans[pieces.length].seconds;
+
+        /*
+         * Where this line sits, measured from the clip rather than assumed.
+         * Only when there is a line: reading a frame costs a subprocess, and a
+         * shot with no words has nothing to place.
+         */
+        const typeset = line?.onScreen ? fitted(line.onScreen, row.format as AdFormatId) : null;
+        const atHeight = typeset
+          ? await placeLine(
+            plateFiles[plateIndex],
+            /* A moment into the shot, not its first frame: the camera is moving. */
+            window.startSeconds + Math.min(1, seconds / 2),
+            row.format as AdFormatId,
+            Math.round(Math.min(format.width, format.height) * typeset.sizeRatio),
+          )
+          : DEFAULT_HEIGHT;
         await renderShot({
           input: plateFiles[plateIndex],
           startSeconds: window.startSeconds,
           seconds,
           format: row.format as AdFormatId,
           brand: resolved,
-          lines: line?.onScreen ? [{ ...fitted(line.onScreen, row.format as AdFormatId), atHeight: 0.78, bold: true }] : [],
+          lines: typeset ? [{ ...typeset, atHeight, bold: true }] : [],
+          /* A story format's captions carry no brand colour — see StoryFormat.captions. */
+          typeStyle: story?.captions ?? "bubble",
           /*
            * No corner logo when the logo is already the scene.
            *
