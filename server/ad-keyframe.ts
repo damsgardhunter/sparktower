@@ -67,6 +67,16 @@ export interface KeyframeRequest {
   logoPath?: string | null;
   /** How the logo appears in the world, when the style puts it there. */
   logoRole?: string | null;
+  /** The world, restated here too — the drawing is where it matters most. */
+  world?: string | null;
+  /**
+   * Who the film follows, restated on every frame they are in.
+   *
+   * The same argument as the world and a shorter leash: a place drawn
+   * slightly differently twice is a continuity wobble, and a person drawn
+   * differently twice is two people, which ends the film.
+   */
+  character?: string | null;
   /** The previous clip's last frame, as a PNG buffer, for continuity. */
   previousFrame?: Buffer | null;
   ownerId: string;
@@ -81,7 +91,8 @@ export interface KeyframeRequest {
  * nothing, it paints something in the same colours.
  */
 export function keyframePrompt(input: {
-  scene: string; brief: string; logoRole?: string | null;
+  scene: string; brief: string; logoRole?: string | null; world?: string | null;
+  character?: string | null;
   hasLogo: boolean; hasPrevious: boolean;
 }): string {
   const refs: string[] = [];
@@ -96,6 +107,13 @@ export function keyframePrompt(input: {
   return [
     ...refs,
     refs.length ? "" : "",
+    input.world?.trim()
+      ? `The world this frame is in, identical in every frame of this advert: ${input.world.replace(/\s+/g, " ").trim()}`
+      : "",
+    input.world?.trim() ? `` : "",
+    input.character?.trim()
+      ? `The person in this film, the same one in every frame they appear in: ${input.character.replace(/\s+/g, " ").trim()}`
+      : "",
     `Draw a single photographic frame: ${input.scene.replace(/\s+/g, " ").trim()}`,
     ``,
     input.hasLogo && input.logoRole
@@ -139,6 +157,8 @@ export async function drawKeyframe(input: KeyframeRequest): Promise<{ base64: st
     scene: input.scene,
     brief: input.brief,
     logoRole: input.logoRole,
+    world: input.world,
+    character: input.character,
     hasLogo: !!logo,
     hasPrevious: !!input.previousFrame,
   });

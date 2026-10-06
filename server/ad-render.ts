@@ -50,11 +50,16 @@ import {
   type AdDuration, type AdFormatId,
 } from "@shared/ads";
 import { adStyle, availableStyles } from "@shared/ad-styles";
+import {
+  storyFormat, storyPlan, storyPrompt, planStoryShots, planStoryPlates, productBeat,
+  storyFitsIn, storyMinSeconds,
+} from "@shared/ad-stories";
 import { drawKeyframe } from "./ad-keyframe";
 import { planShots, planPlates, type Plate, type Shot } from "@shared/ad-shots";
 import { platePrompt, plateNegativePrompt } from "@shared/ad-plate-prompt";
 import { resolvedBrand, brandVoice, type BrandKitInput } from "@shared/ad-brand";
 import { sceneMoments } from "@shared/ad-script";
+import { lineLimit } from "@shared/ad-script";
 import { fitLine } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 
@@ -91,6 +96,22 @@ export function checkRequest(raw: RenderRequest, has: Parameters<typeof availabl
   }
   if (!adFormat(raw.format)) {
     return { field: "format", message: `Pick a shape: ${AD_FORMATS.map((f) => f.id).join(", ")}.` };
+  }
+  /*
+   * A story format or a commercial style. They occupy the same field because
+   * they answer the same question for somebody ordering — what shape is this
+   * film — and keeping them apart in the request would mean every caller
+   * knowing which list a name came from.
+   */
+  const story = storyFormat(raw.style);
+  if (story) {
+    if (!storyFitsIn(story, raw.duration)) {
+      return {
+        field: "duration",
+        message: `A ${story.label.toLowerCase()} needs at least ${storyMinSeconds(story)} seconds — its beats cannot do their job in ${raw.duration}.`,
+      };
+    }
+    return null;
   }
   const style = adStyle(raw.style);
   if (!style) return { field: "style", message: "That isn't one of the advert styles." };
@@ -141,6 +162,21 @@ export function quoteRender(duration: AdDuration, styleId?: string | null): Rend
    * choosing — so it asks without one and gets the base shape, which is the
    * right answer to "what does thirty seconds cost".
    */
+  const story = storyFormat(styleId);
+  if (story) {
+    /* A story format brings its own beats, its own rhythm and no brand moments. */
+    const plan = storyPlan(story, duration);
+    const shots = planStoryShots(story, plan);
+    const plates = planStoryPlates(shots);
+    return {
+      durationSeconds: duration,
+      priceCents: adPriceCents(duration),
+      outcome: adOutcome(duration),
+      shots, plates,
+      generatedSeconds: plates.reduce((n, p) => n + p.seconds, 0),
+      expectedProviderCents: plateCostCents(plates.map((p) => p.seconds)),
+    };
+  }
   const beats = beatPlan(duration, styleId ? adStyle(styleId)?.beatWeights : undefined);
   /* planShots marks the brand moments itself, and inserts the sweep before the product beat. */
   const shots = planShots(beats);
@@ -309,12 +345,15 @@ export async function advanceRender(renderId: string): Promise<RenderRow> {
 
 /** Write the script, then submit every plate. */
 async function beginGenerating(row: RenderRow): Promise<RenderRow> {
-  const style = adStyle(row.style)!;
+  const story = storyFormat(row.style);
+  const style = story ? null : adStyle(row.style)!;
   const brand = (row.brand as any)?.kit as BrandKitInput | null;
   const resolved = (row.brand as any)?.resolved ?? resolvedBrand(brand);
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
   /* The same plan the row was priced and planned against. */
-  const beats = beatPlan(row.durationSeconds as AdDuration, style.beatWeights);
+  const beats = story
+    ? storyPlan(story, row.durationSeconds)
+    : beatPlan(row.durationSeconds as AdDuration, style!.beatWeights);
 
   /* How many clips each beat is cut from, so the script can write one moment per clip. */
   const momentsPerBeat = new Map<string, number>();
@@ -322,10 +361,35 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
     for (const id of plate.beats) momentsPerBeat.set(id, (momentsPerBeat.get(id) ?? 0) + 1);
   }
 
+  const withMoments = beats.map((b) => ({ ...b, moments: momentsPerBeat.get(b.id) ?? 1 }));
+
   const written = await writeAdScript({
     brief: row.brief,
-    style: { label: style.label, bestFor: style.bestFor, avoid: style.avoid, logoRole: style.keyframes ? style.logoRole ?? null : null },
-    beats: beats.map((b) => ({ ...b, moments: momentsPerBeat.get(b.id) ?? 1 })),
+    style: story
+      ? { label: story.label, bestFor: story.bestFor, avoid: "", logoRole: null }
+      : { label: style!.label, bestFor: style!.bestFor, avoid: style!.avoid, logoRole: style!.keyframes ? style!.logoRole ?? null : null },
+    /*
+     * A story format writes its own instructions. They want opposite things
+     * from the commercial prompt — a face first and the product as a payoff,
+     * against the product early and the brand throughout — so it is a
+     * different prompt rather than a flag on the same one.
+     */
+    promptText: story
+      ? storyPrompt({
+        format: story,
+        plan: withMoments,
+        brief: row.brief,
+        businessName: brand?.displayName ?? null,
+        callToAction: brand?.callToAction ?? null,
+        avoidWords: brand?.avoidWords ?? [],
+        limitFor: lineLimit,
+      })
+      : undefined,
+    needsCharacter: !!story?.character,
+    productNotBefore: story
+      ? { beat: productBeat(story, beats)!, words: productWords(brand?.displayName ?? null, row.brief) }
+      : null,
+    beats: withMoments,
     voice: brandVoice(resolved.voice) ?? { label: "Plain", how: "Says what the thing is." },
     businessName: brand?.displayName ?? null,
     callToAction: brand?.callToAction ?? null,
@@ -348,19 +412,31 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
     console.log(`[ad-render] ${row.id} script took ${written.attempts} attempts, ${written.repaired.length} repaired`);
   }
 
+  /*
+   * The two shapes, read through one description.
+   *
+   * A story format and a commercial style both answer "how is this shot" and
+   * "does it draw its own first frames", and everything downstream only wants
+   * those answers. Resolving it here keeps the branch in one place instead of
+   * at every use.
+   */
+  const shoot = story
+    ? { label: story.label, plate: story.look, avoid: "", keyframes: story.keyframes, logoRole: null as string | null }
+    : { label: style!.label, plate: style!.plate, avoid: style!.avoid, keyframes: !!style!.keyframes, logoRole: style!.logoRole ?? null };
+
   const plates: PlateRecord[] = plan.plates.map((plate, index) => ({
     index,
     seconds: plate.seconds,
     camera: plate.camera,
     prompt: platePrompt({
       brief: row.brief,
-      style,
+      style: shoot,
       plate,
       brandMoment: plate.windows.some((w) => plan.shots[w.shotIndex]?.brandMoment),
       businessName: brand?.displayName ?? null,
       world: written.script.world ?? null,
       /* A drawn first frame changes the prompt from a description into a move. */
-      fromKeyframe: !!style.keyframes,
+      fromKeyframe: shoot.keyframes,
       /* What the script asked to see, for the beats this plate covers. */
       scenes: plate.beats
         .map((id) => written.script.lines.find((l) => l.beat === id)?.scene)
@@ -401,7 +477,7 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
    * twenty. Keyframes are seconds each, so this keeps the place consistent at
    * a cost measured in seconds rather than minutes.
    */
-  if (style.keyframes) {
+  if (shoot.keyframes) {
     let previous: Buffer | null = null;
     for (const p of plates) {
       const frame = await drawKeyframe({
@@ -409,8 +485,9 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         brief: row.brief,
         format: row.format as AdFormatId,
         logoPath: brand?.logoPath ?? null,
-        logoRole: style.logoRole ?? null,
+        logoRole: shoot.logoRole,
         world: written.script.world ?? null,
+        character: written.script.character ?? null,
         previousFrame: previous,
         ownerId: row.requestedBy,
       });
@@ -434,7 +511,7 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
    * here and changes with the plan, so the only safe shape is to keep a small
    * number in flight and feed the rest in behind them.
    */
-  const started = await submitUpTo(row, plates, format, style);
+  const started = await submitUpTo(row, plates, format, shoot);
   if ("failure" in started) return started.failure;
 
   return set(row.id, {
@@ -515,6 +592,21 @@ async function submitUpTo(
  * advert finishing, which takes a minute or two — and because the alternative
  * is failing something somebody paid for over a queue being briefly full.
  */
+/**
+ * How a render is shot, whichever list its name came from.
+ *
+ * `adStyle` returns null for a story format and `storyFormat` returns null for
+ * a commercial style, and three places downstream wanted one answer: does this
+ * draw its own first frames. Reading only one of the two lists meant a story
+ * format failed at the last step — after every clip had been generated and
+ * paid for — on "cannot read properties of null".
+ */
+function shootingOf(styleOrFormat: string): { keyframes: boolean } {
+  const story = storyFormat(styleOrFormat);
+  if (story) return { keyframes: story.keyframes };
+  return { keyframes: !!adStyle(styleOrFormat)?.keyframes };
+}
+
 const LIMIT_BACKOFF_MS = [20_000, 45_000, 90_000, 150_000];
 
 /**
@@ -551,7 +643,7 @@ async function submitWaitingOutLimits(submit: KlingSubmit): Promise<KlingTask> {
 async function pollPlates(row: RenderRow): Promise<RenderRow> {
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
   const format = adFormat(row.format)!;
-  const style = adStyle(row.style)!;
+  const style = shootingOf(row.style);
 
   const polled: PlateRecord[] = await Promise.all(plates.map(async (p) => {
     if (p.status === "succeeded" || p.status === "pending" || !p.taskId) return p;
@@ -624,7 +716,7 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
   if (!(await ffmpegAvailable())) throw new Error("ffmpeg is not installed on this server");
 
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
-  const style = adStyle(row.style)!;
+  const style = shootingOf(row.style);
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
   const format = adFormat(row.format)!;
   const script = row.script as { lines: { beat: string; onScreen: string }[]; callToAction: string } | null;
@@ -841,6 +933,32 @@ async function fetchLogo(logoPath: string, work: string): Promise<string | null>
     console.warn(`[ad-render] couldn't read logo ${logoPath}:`, (error as Error)?.message);
     return null;
   }
+}
+
+/**
+ * The words that would mean the product is on screen.
+ *
+ * There is no way to see a product in a sentence, so this is the business's
+ * own name for it: the display name, and the nouns the brief uses most. Crude,
+ * and the alternative is no check at all — "show the product late" is advice,
+ * and a word that must not appear before a named beat is a rule.
+ */
+export function productWords(displayName: string | null, brief: string): string[] {
+  const words = new Set<string>();
+  if (displayName?.trim()) words.add(displayName.trim().split(/\s+/)[0]);
+  /*
+   * The brief's own distinctive nouns, longest first — long words are the
+   * specific ones, and short ones match half the dictionary.
+   */
+  const counts = new Map<string, number>();
+  for (const raw of brief.toLowerCase().match(/[a-z][a-z-]{5,}/g) ?? []) {
+    counts.set(raw, (counts.get(raw) ?? 0) + 1);
+  }
+  const common = new Set(["people", "someone", "something", "business", "builders", "together", "really"]);
+  for (const [word] of [...counts.entries()].filter(([w]) => !common.has(w)).sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+    words.add(word);
+  }
+  return [...words];
 }
 
 /** Every render not yet finished, for the sweep. */

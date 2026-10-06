@@ -84,13 +84,33 @@ describe("the bubble treatment", () => {
   });
 
   it("offers a quieter option and a plain one, and says when plain is wrong", () => {
-    expect(TYPE_STYLES.map((t) => t.id)).toEqual(["bubble", "outline", "plain"]);
+    expect(TYPE_STYLES.map((t) => t.id)).toEqual(["bubble", "outline", "native", "plain"]);
     const plain = typeTreatment({ primaryColor: "#1B9AAA", backgroundColor: "#FFF" }, "plain");
     expect(plain.outlineRatio).toBe(0);
     expect(plain.haloRatio).toBe(0);
     /* Plain needs a predictable plate, so the catalogue says so rather than
      * leaving somebody to find out on a pale shot. */
     expect(TYPE_STYLES.find((t) => t.id === "plain")!.why).toMatch(/reliably dark or reliably light/i);
+  });
+
+  it("keeps the brand out of a native caption entirely", () => {
+    /*
+     * The one treatment that must not carry the company's colour. Every other
+     * one here puts the brand in the lettering, which is right for an advert
+     * and is the detail that gives away a film pretending not to be one: real
+     * captions are white with a hard dark edge, because that is what a phone
+     * burns in. The brand reaches those films through the product and the
+     * words instead.
+     */
+    for (const primaryColor of ["#1B9AAA", "#C09030", "#E01B24", "#101820"]) {
+      const t = typeTreatment({ primaryColor, backgroundColor: "#FFFFFF", accentColor: "#FF00FF" }, "native");
+      for (const part of [t.fill, t.outline, t.halo, t.shadow]) {
+        expect(part.toUpperCase(), `${primaryColor} leaked into a native caption`).toMatch(/^#(FFFFFF|000000)$/);
+      }
+      /* And it is still readable over anything: white letters, hard black edge. */
+      expect(t.fill.toUpperCase()).toBe("#FFFFFF");
+      expect(t.outlineRatio).toBeGreaterThan(0);
+    }
   });
 
   it("keeps a shadow under every style, including plain", () => {

@@ -58,12 +58,23 @@ export const SCRIPT_ATTEMPTS = 3;
 export interface ScriptRequest {
   brief: string;
   style: { label: string; bestFor: string; avoid: string; logoRole?: string | null };
-  beats: { id: AdBeatId; seconds: number }[];
+  beats: { id: string; seconds: number; moments?: number }[];
   voice: { label: string; how: string };
   businessName?: string | null;
   callToAction?: string | null;
   avoidWords?: string[];
   supportedClaims?: string[];
+  /**
+   * Instructions written by somebody else, used instead of `scriptPrompt`.
+   *
+   * The story formats build their own, because what they ask for is close to
+   * the opposite of an advert. Everything around it — the retry, the checks,
+   * the call-to-action repair — is the same work either way, so this is a
+   * prompt swap rather than a second writer.
+   */
+  promptText?: string;
+  needsCharacter?: boolean;
+  productNotBefore?: { beat: string; words: string[] } | null;
 }
 
 export interface WrittenScript {
@@ -140,7 +151,7 @@ export async function writeAdScript(
 ): Promise<WrittenScript> {
   const ask = opts.ask ?? (aiStubbed() ? stubAsk(input) : askOpenAi);
   const limit = Math.max(1, opts.attempts ?? SCRIPT_ATTEMPTS);
-  const base = scriptPrompt(input);
+  const base = input.promptText ?? scriptPrompt(input);
   const rejected: ScriptProblem[][] = [];
   let last: ScriptProblem[] = [];
 
@@ -150,7 +161,10 @@ export async function writeAdScript(
     const script = readScript(raw);
 
     const { repaired } = repairCta(script, input.callToAction);
-    const problems = checkScript(script, input.beats, { ...input, needsWorld: !!input.style.logoRole });
+    const problems = checkScript(script, input.beats, {
+      ...input,
+      needsWorld: !!input.style.logoRole || !!input.promptText,
+    });
 
     if (problems.length === 0) return { script, attempts: attempt, repaired, rejected };
 
@@ -216,6 +230,7 @@ function readScript(raw: string): AdScript {
       })),
     callToAction: typeof parsed?.callToAction === "string" ? parsed.callToAction.trim() : "",
     world: typeof parsed?.world === "string" ? parsed.world.trim() : undefined,
+    character: typeof parsed?.character === "string" ? parsed.character.trim() : undefined,
   };
 }
 
@@ -239,7 +254,7 @@ function readScript(raw: string): AdScript {
  */
 export function stubScript(input: ScriptRequest): AdScript {
   const name = input.businessName?.trim();
-  const say: Record<AdBeatId, string> = {
+  const say: Record<string, string> = {
     hook: name ? `This is ${name}` : "Here is the idea",
     problem: "The old way takes too long",
     product: name ? `${name}` : "The new way",
@@ -252,7 +267,7 @@ export function stubScript(input: ScriptRequest): AdScript {
    * does. Deliberately dull and deliberately concrete — the point is to prove
    * the shape, not to direct a film.
    */
-  const scene: Record<AdBeatId, string> = {
+  const scene: Record<string, string> = {
     hook: "A hand reaching for a cold mug on a desk by a window, early morning light.",
     problem: "A kitchen table at night, papers spread across it, one lamp on.",
     product: "A clean wooden worktop by a window, empty, lit evenly from the side.",
@@ -263,11 +278,15 @@ export function stubScript(input: ScriptRequest): AdScript {
   return {
     lines: input.beats.map((b) => {
       const want = say[b.id] ?? "A few words";
-      return { beat: b.id, onScreen: safeLine(want, b, input), voiceover: "", scene: scene[b.id] };
+      /* A story beat the stub does not know gets the generic pair, which still passes every check. */
+      return { beat: b.id, onScreen: safeLine(want, b, input), voiceover: "", scene: scene[b.id] ?? scene.product };
     }),
     callToAction: input.callToAction?.trim() || "See the site",
     /* Long enough to satisfy the same check a real answer has to. */
-    world: input.style.logoRole
+    character: input.needsCharacter
+      ? "A woman in her thirties, short dark hair pushed back, navy work shirt with the sleeves rolled, a pencil behind one ear and a scuffed notebook in her left hand. Moves quickly and talks with her hands."
+      : undefined,
+    world: input.style.logoRole || input.promptText
       ? "A single brick-and-timber workshop building on a quiet street, four storeys, its ground floor open to the pavement through tall steel-framed doors. Walls of pale yellow brick, floors of worn oak, steel stair rails rubbed bright at the handholds. Late afternoon light comes in low from the west through the tall windows and lands in long bars across the floor; the air is warm and a little dusty where it catches. The palette is brick, oak, brass and the deep green of painted steel. Benches, tools and half-finished work are everywhere, and there are always people in it."
       : undefined,
   };
@@ -280,7 +299,7 @@ export function stubScript(input: ScriptRequest): AdScript {
  * certain of that: `avoidWords` is whatever the business typed, and any
  * English placeholder could contain one of them.
  */
-function safeLine(want: string, beat: { id: AdBeatId; seconds: number }, input: ScriptRequest): string {
+function safeLine(want: string, beat: { id: string; seconds: number }, input: ScriptRequest): string {
   const limit = lineLimit(beat.id, beat.seconds);
   const trimmed = want.slice(0, limit);
   const haystack = trimmed.toLowerCase();

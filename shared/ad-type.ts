@@ -72,6 +72,10 @@ export const TYPE_STYLES = [
     why: "One outline, no halo. Quieter — for a brand whose whole look is restrained, where sticker lettering would be wrong.",
   },
   {
+    id: "native", label: "Native caption",
+    why: "White, with a hard black edge and no brand colour in it at all — the way a caption looks on a phone. For the story formats, where a branded sticker is the thing that gives the film away as an advert.",
+  },
+  {
     id: "plain", label: "Plain",
     why: "Fill and a shadow only. Needs a plate that is reliably dark or reliably light, so it is offered and not the default.",
   },
@@ -151,6 +155,19 @@ export function typeTreatment(
   const separates = contrastRatio(between, halo) >= 1.6;
   const outline = between;
 
+  if (style === "native") {
+    /*
+     * The brand deliberately absent.
+     *
+     * Every other treatment here puts the company's colour in the lettering,
+     * which is right for an advert and wrong for a film pretending not to be
+     * one. A caption in a brand palette is the detail that gives it away: real
+     * captions are white with a hard dark edge, because that is what survives
+     * being burned in by a phone. The brand is in the film through the product
+     * and the words, not through the colour of the subtitles.
+     */
+    return { fill: "#FFFFFF", outline: "#000000", outlineRatio: 0.075, halo: "#000000", haloRatio: 0, shadow: "#000000", shadowRatio: 0.02 };
+  }
   if (style === "plain") {
     return { fill, outline, outlineRatio: 0, halo, haloRatio: 0, shadow: "#000000", shadowRatio: 0.03 };
   }

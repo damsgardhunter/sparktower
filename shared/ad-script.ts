@@ -27,7 +27,8 @@
 import type { AdBeatId } from "./ads";
 
 export interface ScriptLine {
-  beat: AdBeatId;
+  /** The beat this line belongs to. A commercial beat id, or a story format's own. */
+  beat: string;
   /** What appears on screen. Short — it is set large over footage. */
   onScreen: string;
   /** What is said, if there is a voice track. May be empty; many ads have none. */
@@ -71,6 +72,19 @@ export interface AdScript {
    * not change.
    */
   world?: string;
+  /**
+   * Who the film follows, described once.
+   *
+   * The same job as `world` and for the same reason: each clip is generated
+   * alone, so a character mentioned only in passing is a different person in
+   * every shot. Described here in full — age, build, hair, clothes, what they
+   * are holding — and sent with every keyframe, which is what makes shot four
+   * the same person as shot one.
+   *
+   * Only the formats that have a character ask for one. A before-and-after has
+   * no face in it at all.
+   */
+  character?: string;
 }
 
 /**
@@ -82,8 +96,15 @@ export interface AdScript {
  * speed is the floor: roughly fifteen characters a second is comfortable, and
  * anything beyond that is a line nobody finishes.
  */
-export function lineLimit(beat: AdBeatId, seconds: number): number {
-  const bySize: Record<AdBeatId, number> = {
+export function lineLimit(beat: string, seconds: number): number {
+  /*
+   * Takes a string rather than the commercial beat ids, because the story
+   * formats in `shared/ad-stories.ts` name their own beats — "greet",
+   * "breaking", "punchline" — and they are read in exactly the same way: by
+   * somebody with a few seconds and a phone. A beat this does not recognise
+   * gets the middle size, which is the right answer for an unknown.
+   */
+  const bySize: Record<string, number> = {
     hook: 28,
     problem: 40,
     product: 24,
@@ -95,17 +116,20 @@ export function lineLimit(beat: AdBeatId, seconds: number): number {
 }
 
 export type ScriptProblem =
-  | { kind: "too_long"; beat: AdBeatId; limit: number; was: number }
-  | { kind: "banned_word"; beat: AdBeatId; word: string }
-  | { kind: "missing_beat"; beat: AdBeatId }
-  | { kind: "unsupported_claim"; beat: AdBeatId; phrase: string }
+  | { kind: "too_long"; beat: string; limit: number; was: number }
+  | { kind: "banned_word"; beat: string; word: string }
+  | { kind: "missing_beat"; beat: string }
+  | { kind: "unsupported_claim"; beat: string; phrase: string }
   | { kind: "cta_changed"; expected: string; was: string }
-  | { kind: "missing_scene"; beat: AdBeatId }
+  | { kind: "missing_scene"; beat: string }
   | { kind: "missing_world" }
   | { kind: "thin_world"; was: number; want: number }
   | { kind: "world_directs"; phrase: string }
-  | { kind: "vague_scene"; beat: AdBeatId; word: string }
-  | { kind: "scene_describes_overlay"; beat: AdBeatId; word: string };
+  | { kind: "missing_character" }
+  | { kind: "thin_character"; was: number; want: number }
+  | { kind: "product_too_early"; beat: string; notBefore: string }
+  | { kind: "vague_scene"; beat: string; word: string }
+  | { kind: "scene_describes_overlay"; beat: string; word: string };
 
 /**
  * Phrases that turn a sentence into a claim somebody has to be able to
@@ -135,6 +159,15 @@ export type ScriptProblem =
  * differently in every clip.
  */
 export const WORLD_MIN_CHARS = 300;
+
+/**
+ * How much the character has to say before they can be drawn twice.
+ *
+ * Shorter than the world, because a person is a smaller thing to specify than
+ * a place — but long enough to rule out "a young woman", which is a
+ * description that produces a different young woman in every shot.
+ */
+export const CHARACTER_MIN_CHARS = 120;
 
 /**
  * Phrases that turn the world from a description into a shot list.
@@ -190,11 +223,20 @@ export const CLAIM_PHRASES = [
  */
 export function checkScript(
   script: AdScript,
-  beats: { id: AdBeatId; seconds: number }[],
+  beats: { id: string; seconds: number }[],
   context: {
     avoidWords?: string[]; callToAction?: string | null; supportedClaims?: string[];
     /** Styles that draw their own keyframes must establish the world first. */
     needsWorld?: boolean;
+    /** Formats that follow somebody must describe them before any scene does. */
+    needsCharacter?: boolean;
+    /**
+     * The beat before which the product may not appear, and the words that
+     * would mean it has. Checked because "show the product late" is advice and
+     * a beat boundary is a rule — and it is the one rule that separates a film
+     * somebody watches from an advert they scroll past.
+     */
+    productNotBefore?: { beat: string; words: string[] } | null;
   },
 ): ScriptProblem[] {
   const problems: ScriptProblem[] = [];
@@ -215,7 +257,19 @@ export function checkScript(
   }
   const supported = (context.supportedClaims ?? []).map((s) => s.toLowerCase());
 
-  for (const beat of beats) {
+  if (context.needsCharacter) {
+    const who = script.character?.trim() ?? "";
+    if (!who) problems.push({ kind: "missing_character" });
+    else if (who.length < CHARACTER_MIN_CHARS) {
+      problems.push({ kind: "thin_character", was: who.length, want: CHARACTER_MIN_CHARS });
+    }
+  }
+
+  const earlyUntil = context.productNotBefore
+    ? beats.findIndex((b) => b.id === context.productNotBefore!.beat)
+    : -1;
+
+  for (const [index, beat] of beats.entries()) {
     const line = script.lines.find((l) => l.beat === beat.id);
     if (!line) {
       problems.push({ kind: "missing_beat", beat: beat.id });
@@ -234,6 +288,20 @@ export function checkScript(
     if (!scene) {
       problems.push({ kind: "missing_scene", beat: beat.id });
     } else {
+      /*
+       * The product, arriving before it was earned. Word-matched against the
+       * business's own words for it, which is the only handle there is — a
+       * scene that says "she picks up the tracker" when the tracker is the
+       * product is the product on screen, whatever beat it is in.
+       */
+      if (earlyUntil > 0 && index < earlyUntil) {
+        for (const word of context.productNotBefore!.words) {
+          if (word.length > 2 && new RegExp(`\\b${word}`, "i").test(scene)) {
+            problems.push({ kind: "product_too_early", beat: beat.id, notBefore: context.productNotBefore!.beat });
+            break;
+          }
+        }
+      }
       for (const word of VAGUE_WORDS) {
         if (new RegExp(`\\b${word.replace(/[-\s]/g, "[-\\s]")}\\b`, "i").test(scene)) {
           problems.push({ kind: "vague_scene", beat: beat.id, word });
@@ -300,6 +368,9 @@ export function describeProblem(p: ScriptProblem): string {
     case "cta_changed": return `The call to action must be exactly "${p.expected}" and was "${p.was}".`;
     case "missing_scene": return `The ${p.beat} beat has no scene. Describe what is in shot, in one sentence.`;
     case "missing_world": return `There is no "world" field. Describe the place every shot happens in — materials, scale, light, colour, time of day, what is always in it — before writing any scene.`;
+    case "missing_character": return `There is no "character" field. Describe the one person this film follows — age, build, hair, clothes, what they are holding, how they carry themselves — before writing any scene.`;
+    case "thin_character": return `The "character" is ${p.was} characters and needs at least ${p.want}. "A young woman" is a different young woman in every shot; name what they are wearing and what they are holding.`;
+    case "product_too_early": return `The ${p.beat} scene shows the product, which must not appear before the "${p.notBefore}" beat. The beats before it are the story that earns it — take it out of this one entirely, including on screens, shelves and in hands.`;
     case "world_directs": return `The "world" says "${p.phrase}", which directs the camera instead of describing the place. It is sent with every frame, so an instruction in it is obeyed on every frame, literally — one that asked for the building to stay in shot produced a scale model of it standing in a room. Describe only what the place is made of, how big it is and how it is lit.`;
     case "thin_world": return `The "world" is ${p.was} characters and needs at least ${p.want}. Name the materials, the scale, the light, the colour and the time of day; anything left out is something the camera will invent differently in every shot.`;
     case "vague_scene": return `The ${p.beat} scene says "${p.word}", which describes nothing and leaves the frame to chance. Name the actual thing: what it is made of, what colour, what size.`;
@@ -336,7 +407,7 @@ export function scriptPrompt(input: {
    * way from "each floor is somebody building something different". Known
    * here because the plates are planned before the script is written.
    */
-  beats: { id: AdBeatId; seconds: number; moments?: number }[];
+  beats: { id: string; seconds: number; moments?: number }[];
   voice: { label: string; how: string };
   businessName?: string | null;
   callToAction?: string | null;

@@ -31,7 +31,6 @@
  */
 import type { AdBeatId } from "./ads";
 import type { Plate } from "./ad-shots";
-import type { AdStyle } from "./ad-styles";
 
 /**
  * Everything the model must not draw, in one string.
@@ -61,7 +60,7 @@ export const plateNegativePrompt = (): string => PLATE_NEGATIVE.join(", ");
  * operator does and "do not put anything in the lower third" is a thing a
  * model argues with.
  */
-function roomFor(beats: AdBeatId[], brandMoment: boolean): string {
+function roomFor(beats: string[], brandMoment: boolean): string {
   const needs: string[] = [];
   /* The on-screen line sits in the lower third on every format. */
   needs.push("the lower third of the frame kept simple and uncluttered, so a line of type can sit over it");
@@ -77,7 +76,12 @@ function roomFor(beats: AdBeatId[], brandMoment: boolean): string {
 export interface PlatePromptInput {
   /** The business's own words. The subject of the whole advert. */
   brief: string;
-  style: AdStyle;
+  /**
+   * Only the parts of the shape this needs: what it is called, how it is shot,
+   * and what to avoid. Taking the whole `AdStyle` meant a story format could
+   * not be passed here at all, and the two have nothing else in common.
+   */
+  style: { label: string; plate: string; avoid: string };
   plate: Plate;
   /** Whether any shot cut from this plate is a brand moment. */
   brandMoment: boolean;

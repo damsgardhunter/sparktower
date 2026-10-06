@@ -67,8 +67,8 @@ export type PlateSeconds = (typeof PLATE_SECONDS)[number];
 export interface Shot {
   kind: ShotKindId;
   seconds: number;
-  /** Which beat of the script this shot belongs to. */
-  beat: AdBeatId;
+  /** Which beat of the script this shot belongs to. A commercial beat, or a story format's own. */
+  beat: string;
   /** What the camera does, chosen from the kind's list. */
   camera: string;
   /**
@@ -89,7 +89,7 @@ export interface Shot {
 export interface Plate {
   seconds: PlateSeconds;
   camera: string;
-  beats: AdBeatId[];
+  beats: string[];
   windows: { shotIndex: number; startSeconds: number; seconds: number }[];
 }
 
