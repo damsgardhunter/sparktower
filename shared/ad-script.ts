@@ -252,6 +252,13 @@ export function checkScript(
     /** Formats that follow somebody must describe them before any scene does. */
     needsCharacter?: boolean;
     /**
+     * How long a line may be, when it is not a headline.
+     *
+     * Must be the same function the prompt quoted. Defaults to `lineLimit`,
+     * which is right for an advert.
+     */
+    limitFor?: (beat: string, seconds: number) => number;
+    /**
      * The beat before which the product may not appear, and the words that
      * would mean it has. Checked because "show the product late" is advice and
      * a beat boundary is a rule — and it is the one rule that separates a film
@@ -296,7 +303,18 @@ export function checkScript(
       problems.push({ kind: "missing_beat", beat: beat.id });
       continue;
     }
-    const limit = lineLimit(beat.id, beat.seconds);
+    /*
+     * The same budget the writer was quoted, not a second opinion.
+     *
+     * This read `lineLimit` while the story prompt quoted `captionLimit`, so
+     * the model was asked for sixty-eight characters and refused at
+     * thirty-three. It wrote a sentence, was told it was too long, shrank, and
+     * every line in every story landed at about thirty characters — which is
+     * precisely the fragmentary dialogue the caption budget was meant to fix.
+     * A check that disagrees with the instructions is worse than either on its
+     * own: it silently enforces the one nobody was told about.
+     */
+    const limit = (context.limitFor ?? lineLimit)(beat.id, beat.seconds);
     if (line.onScreen.length > limit) {
       problems.push({ kind: "too_long", beat: beat.id, limit, was: line.onScreen.length });
     }

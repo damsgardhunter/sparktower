@@ -74,6 +74,8 @@ export interface ScriptRequest {
    */
   promptText?: string;
   needsCharacter?: boolean;
+  /** The budget the prompt quoted, so the check cannot disagree with it. */
+  limitFor?: (beat: string, seconds: number) => number;
   productNotBefore?: { beat: string; words: string[] } | null;
 }
 

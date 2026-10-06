@@ -345,6 +345,9 @@ export async function advanceRender(renderId: string): Promise<RenderRow> {
 }
 
 /** Write the script, then submit every plate. */
+/** Dialogue's budget: one function, quoted to the writer and enforced by the checker. */
+const storyLimit = (_beat: string, seconds: number) => captionLimit(seconds);
+
 async function beginGenerating(row: RenderRow): Promise<RenderRow> {
   const story = storyFormat(row.style);
   const style = story ? null : adStyle(row.style)!;
@@ -383,11 +386,16 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         businessName: brand?.displayName ?? null,
         callToAction: brand?.callToAction ?? null,
         avoidWords: brand?.avoidWords ?? [],
-        /* Dialogue, not a headline — see captionLimit. */
-        limitFor: (_beat, seconds) => captionLimit(seconds),
+        limitFor: storyLimit,
       })
       : undefined,
     needsCharacter: !!story?.character,
+    /*
+     * The same budget the prompt quoted. Passing one and checking the other is
+     * how every story line came out at thirty characters while the prompt
+     * asked for sixty-eight.
+     */
+    limitFor: story ? storyLimit : undefined,
     productNotBefore: story
       ? { beat: productBeat(story, beats)!, words: productWords(brand?.displayName ?? null, row.brief) }
       : null,

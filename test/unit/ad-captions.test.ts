@@ -9,7 +9,7 @@
  * watching described as sounding like a two-year-old talking.
  */
 import { describe, it, expect } from "vitest";
-import { captionLimit, lineLimit } from "@shared/ad-script";
+import { captionLimit, lineLimit, checkScript } from "@shared/ad-script";
 import { fitParagraph, charsPerLine, TYPE_SIZE } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 import { AD_FORMATS } from "@shared/ads";
@@ -104,5 +104,48 @@ describe("setting a line of dialogue", () => {
   it("says nothing when given nothing", () => {
     const { box, shortEdge } = frames.find((f) => f.id === "vertical")!;
     expect(fitParagraph("   ", box, shortEdge).lines).toEqual([]);
+  });
+});
+
+describe("the budget the writer is quoted is the budget it is held to", () => {
+  const beats = [{ id: "complain", seconds: 4 }];
+  const sentence = "I keep starting things and then quietly abandoning them.";
+
+  it("accepts a sentence when the caption budget is in force", () => {
+    /*
+     * The bug this is for: the story prompt quoted `captionLimit` (68 at four
+     * seconds) and `checkScript` enforced `lineLimit` (32). The model wrote a
+     * sentence, was told it was too long, shrank, and every line in every
+     * story came out at about thirty characters — exactly the fragmentary
+     * dialogue the caption budget existed to fix. A check that disagrees with
+     * the instructions silently enforces the one nobody was told about.
+     */
+    expect(sentence.length).toBeGreaterThan(lineLimit("complain", 4));
+    expect(sentence.length).toBeLessThanOrEqual(captionLimit(4));
+
+    const problems = checkScript(
+      { lines: [{ beat: "complain", onScreen: sentence, scene: "A vending machine shrugs under a work lamp." }], callToAction: "" },
+      beats,
+      { limitFor: (_b, s) => captionLimit(s) },
+    );
+    expect(problems.map((p) => p.kind), "the checker is still using the headline budget").not.toContain("too_long");
+  });
+
+  it("still refuses a sentence that is too long even for a caption", () => {
+    const problems = checkScript(
+      { lines: [{ beat: "complain", onScreen: "x".repeat(200), scene: "A vending machine shrugs under a work lamp." }], callToAction: "" },
+      beats,
+      { limitFor: (_b, s) => captionLimit(s) },
+    );
+    expect(problems.map((p) => p.kind)).toContain("too_long");
+  });
+
+  it("holds an advert to the headline budget, which is where it belongs", () => {
+    const problems = checkScript(
+      { lines: [{ beat: "hook", onScreen: sentence, scene: "Steam off a cup on a counter." }], callToAction: "" },
+      [{ id: "hook", seconds: 4 }],
+      {},
+    );
+    expect(problems.map((p) => p.kind), "an advert headline is still a headline").toContain("too_long");
   });
 });
