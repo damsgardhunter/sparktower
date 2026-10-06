@@ -60,7 +60,12 @@ describe("the renderer uses what was built for it", () => {
 
   it("sends the character and the world into every drawn frame", () => {
     /* Each generation is alone: anything not restated is re-invented. */
-    for (const field of ["world:", "character:"]) {
+    /*
+     * The set belongs on this list for the same reason as the other two, and
+     * it is the one a viewer notices first: a bench redrawn every shot is what
+     * somebody described as "the desk station keeps changing throughout".
+     */
+    for (const field of ["world:", "character:", "set:"]) {
       expect(render, `${field} never reaches drawKeyframe`).toContain(field);
     }
     expect(render).toContain("drawKeyframe({");

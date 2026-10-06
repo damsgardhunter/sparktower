@@ -29,6 +29,7 @@
  * the middle and the biggest. Here it is the last third.
  */
 import { SHOT_KINDS, planPlates, type Shot, type ShotKindId, type Plate } from "./ad-shots";
+import { SET_MIN_CHARS } from "./ad-script";
 
 export interface StoryBeat {
   id: string;
@@ -68,6 +69,20 @@ export interface StoryFormat {
   look: string;
   /** Where in the runtime the product may first appear, as a fraction. */
   productAt: number;
+  /**
+   * The comic register this format runs on.
+   *
+   * Structure alone does not make anything funny. "Set up an expectation and
+   * flip it" describes where the joke goes and says nothing about what a joke
+   * is, which is why early scripts came back with the shape of comedy and the
+   * tone of a motivational poster — "I didn't quit, I just handed it to
+   * tomorrow" is a line somebody would put on a wall, not one anybody repeats.
+   *
+   * Each format wants a different register and the writer has to be told
+   * which: deadpan is not the same joke as panic, and a nature documentary
+   * played straight is not the same joke as a character complaining.
+   */
+  tone: string;
   /** Whether the first frame of each clip is drawn, for character consistency. */
   keyframes: boolean;
   /**
@@ -122,6 +137,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     character: "Invent a FICTIONAL, funny character who could not plausibly be making a vlog — an object, a vehicle, an animal, a creature, a machine — and give it a job, a grievance and a voice. Think Bigfoot filming a vlog, a stormtrooper on his break, a cat with a desk job, a delivery van complaining about its owner. It must be something the viewer did not expect to see holding a camera, and it must be connected to this business's world: whatever this business's customer struggles with, this character is the comic version of that struggle. Never a realistic person giving a testimonial.",
     look: "THIS FOOTAGE IS THE PHONE. It is the front-facing camera of the phone the character is holding at arm's length: their face fills the upper half of the frame, they are looking straight into the lens and talking to it, and the room is behind them. Not a camera watching somebody hold a phone — the phone's own view. Handheld and slightly unsteady, lit by whatever is actually there, no colour grade and no shallow depth of field.",
     productAt: 0.55,
+    tone: "Deadpan, and entirely self-aware. The character knows how ridiculous its situation is and reports it flatly, like somebody describing a bad week. The funniest line is usually an unflattering admission about itself.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -140,6 +156,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     character: "The viewer is the character, so describe whose eyes these are: their situation, their hands, what is in front of them. Never show their face — a point of view with a face in it is not a point of view. The first on-screen line begins \"POV: \" and names who the viewer is, which is the whole premise and must be said in the first two seconds.",
     look: "First person, camera at eye height, hands entering frame from below. Phone footage: a little shaky, available light, no grade. The viewer should feel they are holding the camera, not watching one.",
     productAt: 0.6,
+    tone: "Wry and self-deprecating, in the second person. The comedy is recognition — the viewer has done this exact thing — so it is specific and slightly pathetic rather than clever. Never triumphant.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -157,6 +174,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     character: "A subject for the borrowed format to observe — treated with total seriousness, which is where the comedy is.",
     look: "Shot in the borrowed format's own style exactly, and played straight: if it is a nature documentary it is long lenses and patient framing, if it is a news report it is a locked-off two-shot and hard light. The joke only lands if nothing winks at the camera.",
     productAt: 0.62,
+    tone: "Utterly straight, which is the joke. The borrowed format is performed with complete sincerity and the comedy comes entirely from the gap between its gravity and the mundane thing it is describing. Nothing winks.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -172,6 +190,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     bestFor: "Anything whose result is visible. If the change cannot be seen in a photograph, this is the wrong format.",
     look: "The same camera position in both halves, so the cut carries the change. Ordinary light, ordinary room, nothing styled — a staged 'before' kills it.",
     productAt: 0.65,
+    tone: "Dry and unspoken. The before is played without comment and the after needs no line at all; the humour is in how little is said about a large change.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -188,6 +207,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "Macro, slow, tactile. Hard raking light, shallow focus, the surface of the thing filling the frame. This one may be beautiful: it is the format where polish is the point.",
     /* The exception that proves the rule: an ASMR film has nothing else to show. */
     productAt: 0,
+    tone: "No jokes. This one is satisfying rather than funny, and a gag in it breaks the spell.",
     keyframes: true,
     /* The exception: an ASMR film is already polished, so the brand may show. */
     captions: "bubble",
@@ -205,6 +225,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     character: "The founder, described as they would appear in their own footage — hands, workshop, the back of a head. Never a generated face: this is a real person, and the right version of this film uses their own camera.",
     look: "Observational b-roll: hands working, a room early in the morning, the thing being made. Natural light, documentary distance, nobody performing for the lens.",
     productAt: 0.6,
+    tone: "Honest and understated, with one moment of unexpected self-awareness. It is not a comedy, but a founder who can laugh at one thing about themselves is the one people believe.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -222,6 +243,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     character: "One character specific enough to be recognised again in a different situation — a job, a way of speaking, one visual detail that repeats. They are the asset, not this episode.",
     look: "Consistent across episodes: the same camera, the same framing habits, the same light. A series is recognisable before the character speaks.",
     productAt: 0.55,
+    tone: "Exasperated. The character is competent and the world is not cooperating, and the sting at the end is them realising it is about to happen again.",
     keyframes: true,
     captions: "native",
     beats: [
@@ -387,6 +409,14 @@ export function storyPrompt(input: {
       ? `Describe them once, in the "character" field, specifically enough to be drawn the same way four times: age, build, hair, clothes, what they are holding, how they carry themselves. Every scene then refers to that same person. A description that could be two different people produces two different people.`
       : ``,
     ``,
+    /*
+     * The set, named separately from the world and for a different reason.
+     * The world keeps the palette and the light consistent; the set keeps the
+     * furniture consistent, and the furniture is what a viewer is looking at
+     * for the whole film.
+     */
+    `THE SET. The one surface the camera is pointed at, described once in the "set" field, at least ${SET_MIN_CHARS} characters: what it is made of, the three or four large objects on it, and where each one sits in relation to the others — "a brass lamp at the back left, a shallow parts tray in front of it, a closed notebook squared to the right edge". Named positions are the point: a set described that way can be drawn the same twice, and "a cluttered bench" cannot. Every scene happens at THIS set, and the objects on it do not move between shots unless a scene says the character moves one.`,
+    ``,
     `THE WORLD. One place, described once in the "world" field, at least 300 characters: what it is built from, how big it is, where the light comes from and what it falls on, the palette, what is always in it. Describe the place and nothing else — no instructions about shots or framing, because this text is sent with every frame and a rule inside it is obeyed on every frame.`,
     ``,
     `Rules for the scenes:`,
@@ -414,6 +444,21 @@ export function storyPrompt(input: {
      */
     `THE STORY. These lines are read in order by somebody who knows nothing about this business and will not rewind. Together they must tell one story that makes sense: the first line establishes who the character is and what the situation is, each line follows from the one before, and a stranger reaching the end understands what happened. A line that only makes sense if you already know the premise is a line that fails.`,
     `THE TURN. The film sets up an expectation and then flips it. The last beat is the flip — the thing the viewer did not see coming — and it is what gets the film shared. A last line that summarises the product is not a turn.`,
+    ``,
+    `THE TONE: ${format.tone}`,
+    ``,
+    /*
+     * Craft, not structure. The rules above say where the joke goes; these say
+     * what one is. Without them the scripts came back with the shape of comedy
+     * and the register of a motivational poster — "I didn't quit, I just
+     * handed it to tomorrow" is a line for a wall, not one anybody repeats.
+     */
+    `HOW TO BE FUNNY, which is a craft and not a mood:`,
+    `- Be specific. "I am being out-built by a toaster" is funny; "others are doing better than me" is not. The joke lives in the exact, concrete, slightly wrong detail — a named object, a number, a brand of biscuit.`,
+    `- Understate it. The character reports an absurd situation flatly, as though it were ordinary. Never signal that something was a joke, never use an exclamation mark, and never let the character find themselves funny.`,
+    `- The best line is usually an admission. Something unflattering, specific and true that the character would rather not have said.`,
+    `- Never write the inspirational register: no "keep going", no "you've got this", no "one step at a time", no line that would work on a poster. It is the exact opposite of funny and it is the thing you will drift into if you stop paying attention.`,
+    `- Do not explain. If a line needs the next line to make sense of the joke, the joke is in the wrong line.`,
     ``,
     `Rules for the lines:`,
     /*
@@ -448,7 +493,7 @@ export function storyPrompt(input: {
     ``,
     `HOW IT IS SHOT, which matters as much as what is in it: ${format.look}`,
     ``,
-    `Answer as JSON: { "world": "...", ${format.character ? `"character": "...", ` : ""}"lines": [ { "beat": "...", "onScreen": "...", "scene": "..." } ], "callToAction": "..." }`,
+    `Answer as JSON: { "world": "...", "set": "...", ${format.character ? `"character": "...", ` : ""}"lines": [ { "beat": "...", "onScreen": "...", "scene": "..." } ], "callToAction": "..." }`,
   ].filter((line) => line !== "").join("\n");
 }
 

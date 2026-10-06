@@ -118,3 +118,94 @@ describe("a plan from the model", () => {
     expect(() => sanitizePlan(null)).toThrow();
   });
 });
+
+/*
+ * A plan's fields are cut to length, and that cut is read as prose.
+ *
+ * Reported from a generated plan: sentences ending mid-word — "pending proof and
+ * el". Nothing was wrong with the plan. Every field is bounded, the bound was a
+ * plain `.slice(0, max)`, and it cut wherever the character count landed. A
+ * reader cannot tell that from a model that lost its thread, which is the damage:
+ * the plan looks broken rather than shortened.
+ */
+describe("a plan's fields, cut to length", () => {
+  const sentence = "The route is viable pending proof and election of an S-corp, which changes the tax position materially.";
+  const planWith = (over: Record<string, unknown>) => sanitizePlan({ summary: "A summary.", ...over });
+
+  it("never ends a field mid-word", () => {
+    const plan = planWith({
+      actions: [{ title: "Do the thing", detail: sentence, when: sentence, moves: sentence }],
+      figures: [{ label: "Free cash", value: sentence, note: sentence }],
+    });
+    for (const [what, text] of [
+      ["when", plan.actions[0].when],
+      ["value", plan.figures[0].value],
+    ] as [string, string][]) {
+      expect(text, `${what} was not cut at all`).toMatch(/…$/);
+      /* The character before the ellipsis ends a word: a letter followed by the
+         cut is only acceptable if the whole word fitted. */
+      const body = text.replace(/…$/, "");
+      expect(sentence.startsWith(body), `${what} is not a prefix of the original`).toBe(true);
+      expect(
+        sentence[body.length] === " " || sentence.length === body.length,
+        `${what} stopped mid-word: "${body.slice(-24)}"`,
+      ).toBe(true);
+    }
+  });
+
+  it("says it was cut, so a short field does not read as all there was", () => {
+    const plan = planWith({ figures: [{ label: "Free cash", value: sentence }] });
+    expect(plan.figures[0].value.endsWith("…")).toBe(true);
+  });
+
+  it("leaves a field that fits completely alone", () => {
+    /* No stray ellipsis on "$4k", which is most of what these fields hold. */
+    const plan = planWith({ figures: [{ label: "Free cash", value: "$4k", note: "typical range" }] });
+    expect(plan.figures[0].value).toBe("$4k");
+    expect(plan.figures[0].note).toBe("typical range");
+  });
+
+  it("does not leave a dangling comma or dash before the ellipsis", () => {
+    const plan = planWith({ figures: [{ label: "l", value: "Proof of the route, election of an S-corp, and the tax position" }] });
+    expect(plan.figures[0].value).not.toMatch(/[,;:.\-]…$/);
+  });
+
+  it("still cuts a single token longer than the limit", () => {
+    /* A URL or an identifier with no space in it. Dropping the field entirely
+       would be worse than cutting it where it must be cut. */
+    const plan = planWith({ figures: [{ label: "l", value: "x".repeat(200) }] });
+    expect(plan.figures[0].value.length).toBeLessThanOrEqual(60);
+    expect(plan.figures[0].value.endsWith("…")).toBe(true);
+  });
+
+  it("keeps every field inside its own limit", () => {
+    /* The point of the bound in the first place — the fix must not widen it. */
+    const plan = planWith({
+      actions: [{ title: sentence.repeat(4), detail: sentence.repeat(20), when: sentence, moves: sentence }],
+      figures: [{ label: sentence, value: sentence, note: sentence.repeat(4) }],
+      assumptions: [sentence.repeat(6)],
+      gaps: [sentence.repeat(6)],
+      sections: [{ heading: sentence, body: sentence.repeat(60) }],
+    });
+    expect(plan.actions[0].title.length).toBeLessThanOrEqual(140);
+    expect(plan.actions[0].detail.length).toBeLessThanOrEqual(600);
+    expect(plan.actions[0].when!.length).toBeLessThanOrEqual(60);
+    expect(plan.figures[0].label.length).toBeLessThanOrEqual(80);
+    expect(plan.figures[0].note!.length).toBeLessThanOrEqual(200);
+    expect(plan.assumptions[0].length).toBeLessThanOrEqual(300);
+    expect(plan.sections[0].body.length).toBeLessThanOrEqual(3000);
+  });
+
+  it("cuts the written answer later steps read at a word too", () => {
+    const plan = planWith({
+      summary: sentence,
+      sections: Array.from({ length: 8 }, () => ({ heading: "H", body: sentence.repeat(20) })),
+      actions: Array.from({ length: 25 }, (_, i) => ({ title: `Action ${i} ${sentence}`, detail: sentence })),
+    });
+    const answer = renderPlanAnswer(plan);
+    expect(answer.length).toBeLessThanOrEqual(4000);
+    if (answer.endsWith("…")) {
+      expect(answer).not.toMatch(/[a-z]…$/i);
+    }
+  });
+});

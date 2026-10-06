@@ -85,6 +85,22 @@ export interface AdScript {
    * no face in it at all.
    */
   character?: string;
+  /**
+   * The exact station the camera is looking at, described once.
+   *
+   * The world says what the place is made of and the character says who is in
+   * it; neither pins the bench. So every shot redrew the workstation from the
+   * world's palette and a one-line scene, and somebody watching saw "the desk
+   * station that the robot works at keeps changing throughout the video" —
+   * which is the thing a viewer notices, because it is the thing they are
+   * looking at for the whole film.
+   *
+   * It is the set: one surface, the few large objects on it, and where those
+   * objects are in relation to each other. Named positions are the point —
+   * "a brass lamp at the back left, a shallow parts tray in front of it" is a
+   * set that can be drawn twice, and "a cluttered bench" is not.
+   */
+  set?: string;
 }
 
 /**
@@ -148,6 +164,8 @@ export type ScriptProblem =
   | { kind: "world_directs"; phrase: string }
   | { kind: "missing_character" }
   | { kind: "thin_character"; was: number; want: number }
+  | { kind: "missing_set" }
+  | { kind: "thin_set"; was: number; want: number }
   | { kind: "product_too_early"; beat: string; notBefore: string }
   | { kind: "vague_scene"; beat: string; word: string }
   | { kind: "scene_describes_overlay"; beat: string; word: string };
@@ -189,6 +207,15 @@ export const WORLD_MIN_CHARS = 300;
  * description that produces a different young woman in every shot.
  */
 export const CHARACTER_MIN_CHARS = 120;
+
+/**
+ * How much the set has to say before it can be drawn the same way twice.
+ *
+ * Shorter than the world and longer than nothing: it needs a surface, three or
+ * four objects and where they sit. "A cluttered bench" is eighteen characters
+ * and describes a different bench every time it is read.
+ */
+export const SET_MIN_CHARS = 140;
 
 /**
  * Phrases that turn the world from a description into a shot list.
@@ -251,6 +278,8 @@ export function checkScript(
     needsWorld?: boolean;
     /** Formats that follow somebody must describe them before any scene does. */
     needsCharacter?: boolean;
+    /** Formats shot at one station must describe it, or it is redrawn every shot. */
+    needsSet?: boolean;
     /**
      * How long a line may be, when it is not a headline.
      *
@@ -290,6 +319,14 @@ export function checkScript(
     if (!who) problems.push({ kind: "missing_character" });
     else if (who.length < CHARACTER_MIN_CHARS) {
       problems.push({ kind: "thin_character", was: who.length, want: CHARACTER_MIN_CHARS });
+    }
+  }
+
+  if (context.needsSet) {
+    const set = script.set?.trim() ?? "";
+    if (!set) problems.push({ kind: "missing_set" });
+    else if (set.length < SET_MIN_CHARS) {
+      problems.push({ kind: "thin_set", was: set.length, want: SET_MIN_CHARS });
     }
   }
 
@@ -420,6 +457,8 @@ export function describeProblem(p: ScriptProblem): string {
     case "cta_changed": return `The call to action must be exactly "${p.expected}" and was "${p.was}".`;
     case "missing_scene": return `The ${p.beat} beat has no scene. Describe what is in shot, in one sentence.`;
     case "missing_world": return `There is no "world" field. Describe the place every shot happens in — materials, scale, light, colour, time of day, what is always in it — before writing any scene.`;
+    case "missing_set": return `There is no "set" field. Describe the one surface the camera is looking at — what it is made of, the three or four large objects on it, and where each one sits — before writing any scene.`;
+    case "thin_set": return `The "set" is ${p.was} characters and needs at least ${p.want}. "A cluttered bench" is a different bench every time it is drawn; name the objects and say where they are in relation to each other.`;
     case "missing_character": return `There is no "character" field. Describe the one person this film follows — age, build, hair, clothes, what they are holding, how they carry themselves — before writing any scene.`;
     case "thin_character": return `The "character" is ${p.was} characters and needs at least ${p.want}. "A young woman" is a different young woman in every shot; name what they are wearing and what they are holding.`;
     case "product_too_early": return `The ${p.beat} scene shows the product, which must not appear before the "${p.notBefore}" beat. The beats before it are the story that earns it — take it out of this one entirely, including on screens, shelves and in hands.`;

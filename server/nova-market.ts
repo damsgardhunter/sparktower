@@ -37,8 +37,79 @@ const str = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
 /** What Nova is told about the business, and the shape it has to answer in. */
+/**
+ * What a "customer" and a "price" mean in the trades that are not software.
+ *
+ * The prompt below is written for a business that sells a thing to a buyer for a
+ * price, because for five of the eight project types that is exactly what
+ * happens. Three of them are new and one of those three breaks the assumption
+ * outright: a YouTube channel's audience does not pay it. Asked for "what this
+ * segment considers a normal price" about a viewer, a model either invents a
+ * subscription nobody charges or writes a per-view figure of $0.004 that the
+ * market's own floor rounds to a dollar — a market where one viewer is worth as
+ * much as one enterprise licence.
+ *
+ * So each of these says what the four quantities are *in that trade*, in the
+ * terms the model is being asked for. Software types get nothing extra: the
+ * general prompt is already theirs.
+ *
+ * See `PROJECT_SUBCATEGORIES.ship_mvp` in shared/goals.ts, which is where these
+ * ids come from.
+ */
+const SHAPE_NOTES: Record<string, string[]> = {
+  channel: [
+    "THIS TRADE: a channel. The audience does not buy anything, and that changes what three of",
+    "the numbers above mean. Write them in these terms and say so in the voice:",
+    "  A customer is a subscriber — a person who comes back for the next one. Segments are kinds",
+    "  of viewer who want different things from the same channel, and they disagree about how much",
+    "  they will put up with to get it, not about price.",
+    "  referencePrice is what ONE subscriber is worth to the channel over a period, everything in:",
+    "  advertising, memberships, a share of sponsorship. That is a few dollars a year for a good",
+    "  channel and under one for a weak one, so write single digits and let the size of the audience",
+    "  carry the business — not tens or hundreds, which is a licence fee, not a viewer.",
+    "  SIZE, for this trade only: ignore the beachhead range above and write the audience as the",
+    "  hundreds of thousands it really is — 50,000 to 400,000 a segment. A channel with two",
+    "  thousand subscribers is not a business and a market written that small forces the engine to",
+    "  make each viewer worth tens of dollars to keep the founder solvent, which is the one number",
+    "  in a channel's market that must stay small. Measured: the same channel written at 75,000",
+    "  subscribers had its prices lifted nearly fourfold; at 685,000 the lift is half that and the",
+    "  per-subscriber figure stays in single digits, where it belongs.",
+    "  priceSensitivity is how readily they drift away when the channel asks more of them: more ads,",
+    "  a paywall, a longer wait between uploads. Same axis, their version of it.",
+    "  Capacity is what the channel can actually publish and keep up — the cadence, not a warehouse.",
+    "  The incumbents are the channels and shows already holding this attention, including the big",
+    "  generalist nobody can out-produce and the adjacent format that is really a different medium.",
+    "  Regions can be languages or territories where the audience and the advertising rate differ.",
+  ],
+  food: [
+    "THIS TRADE: food or drink. Buyers do pay, so the prices are ordinary — but write them as what",
+    "one order or one cover costs, not a monthly fee. Capacity is what the kitchen or the line can",
+    "actually produce in a period, and unit cost is ingredients and packaging, which is a real",
+    "fraction of the price rather than the near-nothing of software. Regions are neighbourhoods,",
+    "cities or the shelf in somebody else's shop.",
+  ],
+  physical: [
+    "THIS TRADE: a physical product. Prices are per unit sold. Unit cost is the landed cost of",
+    "making and shipping one — a large share of the price, which is the whole difficulty of the",
+    "trade and must not be written as though it were software. Capacity is units a period, bounded",
+    "by whoever manufactures. Regions can be territories or routes to market, and selling direct",
+    "and selling through a retailer are different places with different entry costs.",
+  ],
+};
+
 export function buildMarketPrompt(input: {
-  project: { title?: string | null; description?: string | null; goal?: string | null; category?: string | null };
+  project: {
+    title?: string | null; description?: string | null; goal?: string | null; category?: string | null;
+    /**
+     * Which of the path's project types this is — `app`, `saas`, `game`,
+     * `website`, `physical`, `food`, `channel`, `other`.
+     *
+     * It was never passed, so a market was written for "a YouTube channel"
+     * from the description alone and against a prompt that assumes the audience
+     * pays. See `SHAPE_NOTES`.
+     */
+    subcategory?: string | null;
+  };
   company?: { name?: string | null; industry?: string | null; description?: string | null } | null;
   /** Where the project has actually got to, in whatever words the app has. */
   progress?: string | null;
@@ -143,6 +214,13 @@ export function buildMarketPrompt(input: {
       "VOICE: what this trade calls a customer, a sale, capacity and a region. A vet practice has",
       "clinics and licences, not users and units.",
       "",
+      /*
+       * The shape of this particular trade, where it is not the one the prompt
+       * above assumes. Placed after VOICE on purpose: the note tells the model
+       * what a customer and a price *are* here, and the voice is where it says so.
+       */
+      ...(SHAPE_NOTES[String(input.project.subcategory ?? "")] ?? []),
+      "",
       "WORKFORCE: two to four kinds of people this business employs beneath the five founders —",
       "the ones who do the work. A kitchen has chefs and front of house; a studio has engineers",
       "and game masters; a practice has vets and receptionists. For each:",
@@ -186,6 +264,7 @@ export function buildMarketPrompt(input: {
       `WHAT THEY ARE BUILDING\n${str(input.project.title, 200)}`,
       input.project.description ? `${str(input.project.description, 2500)}` : "",
       input.project.category ? `Category: ${str(input.project.category, 80)}` : "",
+      input.project.subcategory ? `Project type: ${str(input.project.subcategory, 40)}` : "",
       input.project.goal ? `Their goal: ${str(input.project.goal, 200)}` : "",
       "",
       input.company?.name ? `COMPANY\n${str(input.company.name, 120)}` : "",

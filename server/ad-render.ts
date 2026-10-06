@@ -390,6 +390,8 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
       })
       : undefined,
     needsCharacter: !!story?.character,
+    /* A format shot at one station must pin it, or every shot redraws it. */
+    needsSet: !!story?.keyframes,
     /*
      * The same budget the prompt quoted. Passing one and checking the other is
      * how every story line came out at thirty characters while the prompt
@@ -498,6 +500,7 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         logoRole: shoot.logoRole,
         world: written.script.world ?? null,
         character: written.script.character ?? null,
+        set: written.script.set ?? null,
         /* The framing lives here, not in the animation prompt. */
         look: shoot.plate,
         previousFrame: previous,

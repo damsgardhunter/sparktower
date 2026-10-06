@@ -64,18 +64,37 @@ export async function ffmpegAvailable(): Promise<boolean> {
 }
 
 /**
- * ffmpeg's `drawtext` escaping.
+ * ffmpeg's `drawtext` escaping, for a value wrapped in single quotes.
  *
- * Backslash, colon, apostrophe and the percent sign all mean something to the
- * filter parser. A business called "Mum's: Kitchen" is not an unusual name and
- * it would break the render in three different ways at once.
+ * Backslash, colon, apostrophe and the percent sign all mean something here. A
+ * business called "Mum's: Kitchen" is not an unusual name and it would break
+ * the render in three ways at once.
+ *
+ * The colon took one backslash, not two, and this was wrong until a POV film
+ * whose first line is "POV: it's 2am" failed at composition — after all four
+ * clips had been generated and paid for. Inside single quotes the parser reads
+ * `\\:` as a literal backslash followed by a colon, and the colon then ends the
+ * option. Each of these was checked against ffmpeg rather than reasoned about,
+ * because the quoting rules here are not guessable and the cost of getting one
+ * wrong is a finished render thrown away at the last step.
  */
 export function escapeDrawText(s: string): string {
   return s
-    .replace(/\\/g, "\\\\\\\\")
+    .replace(/\\/g, "\\\\")
+    /* No ASCII apostrophe survives, so the single quotes around the value hold. */
     .replace(/'/g, "’")
-    .replace(/:/g, "\\\\:")
-    .replace(/%/g, "\\\\%");
+    .replace(/:/g, "\\:");
+  /*
+   * The percent sign is deliberately not escaped, and that is only safe
+   * because every `drawtext` here sets `expansion=none`.
+   *
+   * drawtext runs its text through strftime unless told not to, and in that
+   * mode every spelling of a percent fails: "100%" and "100\%" and "100%%" all
+   * warn "Stray %" and draw nothing at all — a blank frame, with ffmpeg
+   * exiting zero. Escaping it harder was the wrong direction; turning the
+   * expansion off makes the text what somebody typed, braces and percent signs
+   * included, which is what a caption should always have been.
+   */
 }
 
 /** `#RRGGBB` to the `0xRRGGBB` ffmpeg wants, with an alpha. */
@@ -280,6 +299,11 @@ export function composeShot(shot: ComposeShot): string[] {
       [
         `drawtext=fontfile='${font}'`,
         `text='${escapeDrawText(line.text)}'`,
+        /*
+         * No strftime, no variable expansion. The text is somebody's words and
+         * nothing in them should be interpreted — see escapeDrawText.
+         */
+        `expansion=none`,
         `fontcolor=${ffColor(color)}`,
         `fontsize=${size}`,
         `x=${x}`,

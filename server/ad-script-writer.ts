@@ -74,6 +74,7 @@ export interface ScriptRequest {
    */
   promptText?: string;
   needsCharacter?: boolean;
+  needsSet?: boolean;
   /** The budget the prompt quoted, so the check cannot disagree with it. */
   limitFor?: (beat: string, seconds: number) => number;
   productNotBefore?: { beat: string; words: string[] } | null;
@@ -240,6 +241,7 @@ function readScript(raw: string): AdScript {
     callToAction: typeof parsed?.callToAction === "string" ? parsed.callToAction.trim() : "",
     world: typeof parsed?.world === "string" ? parsed.world.trim() : undefined,
     character: typeof parsed?.character === "string" ? parsed.character.trim() : undefined,
+    set: typeof parsed?.set === "string" ? parsed.set.trim() : undefined,
   };
 }
 
@@ -292,6 +294,9 @@ export function stubScript(input: ScriptRequest): AdScript {
     }),
     callToAction: input.callToAction?.trim() || "See the site",
     /* Long enough to satisfy the same check a real answer has to. */
+    set: input.needsSet
+      ? "A scarred plywood bench against a brick wall: a brass desk lamp at the back left with its shade tilted down, a shallow steel parts tray directly in front of it, a closed oilcloth notebook squared to the right edge, and a mug with a chipped handle beside the notebook."
+      : undefined,
     character: input.needsCharacter
       ? "A woman in her thirties, short dark hair pushed back, navy work shirt with the sleeves rolled, a pencil behind one ear and a scuffed notebook in her left hand. Moves quickly and talks with her hands."
       : undefined,

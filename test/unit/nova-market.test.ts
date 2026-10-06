@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { buildMarketPrompt, parseMarket } from "../../server/nova-market";
 import { MAX_INCUMBENTS, MAX_REGIONS, MIN_SEGMENT_SIZE } from "@shared/simulation/custom-market";
+import { winnabilityOf } from "@shared/simulation/winnable";
 
 /**
  * A market with two segments and three regions is the same market every time.
@@ -139,4 +140,139 @@ describe("the winnability guard on a written market", () => {
      */
     expect(parseMarket(UNPLAYABLE, "hostile", { check: false })).toBeTruthy();
   });
+});
+
+/*
+ * The project types that are not software.
+ *
+ * `PROJECT_SUBCATEGORIES.ship_mvp` grew three: `physical`, `food` and `channel`.
+ * The phase tree got variants for them; the market generator did not even know
+ * which type a project was — `subcategory` was never passed — and its prompt
+ * assumes throughout that a customer is somebody who pays a price.
+ *
+ * For two of the three that is survivable. A channel breaks it outright: the
+ * audience does not pay. Asked "what does this segment consider a normal price"
+ * about a viewer, a model either invents a subscription nobody charges or writes
+ * $0.004 a view, which the market's own floor rounds up to a dollar — and one
+ * viewer becomes worth as much as one enterprise licence.
+ */
+describe("a market for a project that is not software", () => {
+  it("tells the model which type of project it is", () => {
+    const prompt = buildMarketPrompt({
+      project: { title: "Weeknight Woodwork", description: "A channel.", subcategory: "channel" },
+      startup: true,
+    });
+    expect(prompt.user).toContain("Project type: channel");
+  });
+
+  it("says what a customer and a price are, for the trades where the prompt's answer is wrong", () => {
+    for (const subcategory of ["channel", "food", "physical"]) {
+      const prompt = buildMarketPrompt({ project: { title: "X", subcategory }, startup: true });
+      expect(prompt.system, `${subcategory} got no shape note`).toContain("THIS TRADE");
+    }
+  });
+
+  it("leaves the software types alone, because the general prompt is already theirs", () => {
+    for (const subcategory of ["app", "saas", "game", "website", "other", ""]) {
+      const prompt = buildMarketPrompt({ project: { title: "X", subcategory }, startup: true });
+      expect(prompt.system, `${subcategory} was given a note it does not need`).not.toContain("THIS TRADE");
+    }
+  });
+
+  it("tells a channel to write the audience large and the value per head small", () => {
+    /*
+     * Both halves, because either alone produces a market that reads as nonsense:
+     * a large audience at licence prices, or a tiny audience whose viewers the
+     * engine has to make valuable to keep the founder solvent.
+     */
+    const prompt = buildMarketPrompt({ project: { title: "X", subcategory: "channel" }, startup: true }).system;
+    expect(prompt).toMatch(/subscriber is worth/);
+    expect(prompt).toMatch(/single digits/);
+    expect(prompt).toMatch(/hundreds of thousands/);
+  });
+
+  /*
+   * And the shape has to survive the engine, which is the part a prompt cannot
+   * promise. A channel market is unlike any of the seven: an enormous audience
+   * worth a few dollars a head, against a cost base that is almost all people.
+   */
+  const CHANNEL = JSON.stringify({
+    name: "Weeknight Woodwork",
+    premise: "Small woodworking projects you can finish after work.",
+    baseUnitCost: 1,
+    voice: {
+      customers: "subscribers", customer: "subscriber", sale: "a watched video",
+      capacity: "uploads", capacityShort: "uploads", region: "territory",
+      turnedAway: "people who clicked away",
+    },
+    segments: [
+      { id: "dabblers", name: "Weekend dabblers", size: 380_000, referencePrice: 2, growth: 0.06, priceSensitivity: 0.85, qualityFocus: 0.35, brandFocus: 0.25, serviceFocus: 0.2, loyalty: 0.2 },
+      { id: "regulars", name: "Regular makers", size: 160_000, referencePrice: 5, growth: 0.05, priceSensitivity: 0.5, qualityFocus: 0.7, brandFocus: 0.4, serviceFocus: 0.45, loyalty: 0.55 },
+      { id: "pros", name: "Working joiners", size: 55_000, referencePrice: 9, growth: 0.03, priceSensitivity: 0.3, qualityFocus: 0.9, brandFocus: 0.5, serviceFocus: 0.6, loyalty: 0.75 },
+      { id: "gifters", name: "Present-makers", size: 90_000, referencePrice: 3, growth: 0.08, priceSensitivity: 0.75, qualityFocus: 0.4, brandFocus: 0.6, serviceFocus: 0.25, loyalty: 0.15 },
+    ],
+    regions: [
+      { id: "uk", name: "UK and Ireland", weight: 0.3, entryCost: 2_000, note: "" },
+      { id: "us", name: "United States", weight: 0.34, entryCost: 12_000, note: "" },
+      { id: "anz", name: "Australia and NZ", weight: 0.14, entryCost: 4_000, note: "" },
+      { id: "ca", name: "Canada", weight: 0.12, entryCost: 3_500, note: "" },
+      { id: "eu", name: "Europe, in English", weight: 0.1, entryCost: 5_000, note: "" },
+    ],
+    incumbents: [
+      { id: "i1", name: "Shed & Chisel", posture: "fortress", startingShare: 0.24, quality: 78, brand: 82, service: 55, priceIndex: 1 },
+      { id: "i2", name: "Quick Cuts Daily", posture: "brawler", startingShare: 0.14, quality: 48, brand: 62, service: 35, priceIndex: 0.7 },
+      { id: "i3", name: "The Joinery School", posture: "innovator", startingShare: 0.1, quality: 88, brand: 44, service: 70, priceIndex: 1.4 },
+      { id: "i4", name: "HomeFix Everything", posture: "coaster", startingShare: 0.08, quality: 52, brand: 70, service: 40, priceIndex: 0.9 },
+    ],
+    workforce: [
+      { id: "editors", name: "editors", one: "an editor", does: "product", pay: 0.9, share: 0.5, serves: 400 },
+      { id: "research", name: "researchers", one: "a researcher", does: "product", pay: 1.1, share: 0.2 },
+      { id: "community", name: "community managers", one: "a community manager", does: "service", pay: 0.8, share: 0.3 },
+    ],
+  });
+
+  it("builds a channel market the engine will accept", () => {
+    const niche = parseMarket(CHANNEL, "weeknight-woodwork");
+    expect(niche, "a channel market was refused outright").toBeTruthy();
+    /* The voice is the whole point: this market must not talk about users and units. */
+    expect(niche!.voice.customers).toBe("subscribers");
+    expect(niche!.voice.capacityShort).toBe("uploads");
+    expect(niche!.segments).toHaveLength(4);
+  }, 30_000);
+
+  it("keeps a subscriber worth single digits rather than making them an enterprise licence", () => {
+    /*
+     * `pricedForABusiness` lifts every price together until a founder can clear
+     * break-even, which is right and is why the audience has to be written large:
+     * at 75,000 subscribers the same market came back with a viewer worth $33.
+     */
+    const niche = parseMarket(CHANNEL, "weeknight-woodwork")!;
+    const dearest = Math.max(...niche.segments.map((s) => s.referencePrice));
+    expect(dearest, `a subscriber ended up worth ${dearest}`).toBeLessThan(30);
+  }, 30_000);
+
+  it("keeps the order Nova put the segments in, even when the prices move", () => {
+    /*
+     * The lift moves every price together so the *shape* survives — who pays more
+     * than whom. That is the guarantee `pricedForABusiness` documents, and it is
+     * what makes positioning mean anything in a generated market.
+     */
+    const niche = parseMarket(CHANNEL, "weeknight-woodwork")!;
+    const byId = Object.fromEntries(niche.segments.map((s) => [s.id, s.referencePrice]));
+    expect(byId.dabblers).toBeLessThan(byId.regulars);
+    expect(byId.regulars).toBeLessThan(byId.pros);
+    expect(byId.gifters).toBeLessThan(byId.regulars);
+  }, 30_000);
+
+  it("is a season somebody could actually play", () => {
+    /*
+     * The guard in `parseMarket` already refuses an unplayable market, so this
+     * would fail as a null above — asserted on its own anyway, because "it parsed"
+     * and "a founder can build something here" are different claims and this is
+     * the one that matters to whoever gets the season.
+     */
+    const niche = parseMarket(CHANNEL, "weeknight-woodwork")!;
+    const verdict = winnabilityOf(niche);
+    expect(verdict.ok, `unwinnable: ${verdict.problems.join("; ")}`).toBe(true);
+  }, 30_000);
 });

@@ -90,6 +90,15 @@ export interface KeyframeRequest {
    * differently twice is two people, which ends the film.
    */
   character?: string | null;
+  /**
+   * The station, restated on every frame.
+   *
+   * The same argument as the world and the character, and the one a viewer
+   * notices soonest: a place drawn differently twice is a continuity wobble, a
+   * person drawn differently twice is two people, and a bench drawn
+   * differently twice is the thing somebody is staring at for the whole film.
+   */
+  set?: string | null;
   /** The previous clip's last frame, as a PNG buffer, for continuity. */
   previousFrame?: Buffer | null;
   ownerId: string;
@@ -105,7 +114,7 @@ export interface KeyframeRequest {
  */
 export function keyframePrompt(input: {
   scene: string; brief: string; logoRole?: string | null; world?: string | null;
-  character?: string | null; look?: string | null;
+  character?: string | null; look?: string | null; set?: string | null;
   hasLogo: boolean; hasPrevious: boolean;
 }): string {
   const refs: string[] = [];
@@ -134,6 +143,9 @@ export function keyframePrompt(input: {
     input.world?.trim() ? `` : "",
     input.character?.trim()
       ? `The person in this film, the same one in every frame they appear in: ${input.character.replace(/\s+/g, " ").trim()}`
+      : "",
+    input.set?.trim()
+      ? `The station this frame is at, identical in every frame of this film — the same objects, in the same places, at the same angles: ${input.set.replace(/\s+/g, " ").trim()}`
       : "",
     `Draw a single photographic frame: ${input.scene.replace(/\s+/g, " ").trim()}`,
     ``,
@@ -212,6 +224,7 @@ export async function drawKeyframe(input: KeyframeRequest): Promise<{ base64: st
     logoRole: input.logoRole,
     world: input.world,
     character: input.character,
+    set: input.set,
     look: input.look,
     hasLogo: !!logo,
     hasPrevious: !!input.previousFrame,

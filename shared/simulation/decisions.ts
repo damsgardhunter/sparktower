@@ -198,9 +198,31 @@ export interface OpsDecision {
 export interface ExecutiveDecision {
   /** Where the company says its effort goes. Concentrating beats hedging in a market this contested. */
   focus: "growth" | "margin" | "quality" | "survival";
-  /** Seats to close, folding their levers into whoever is left. Saves salary and costs judgement. */
+  /**
+   * Seats to close, folding their levers into whoever is left.
+   *
+   * **Nothing reads this.** `resolveYear` has never looked at it, it is not in
+   * `LEVER_FIELDS`, and neither client can set it — so a reader of this type
+   * would have found a feature that does not exist. `types.ts` records the
+   * decision ("those come back to this list when they come back to
+   * `resolveYear`, and not before"); this is the same note where somebody would
+   * actually meet the field.
+   *
+   * Closing a seat is real and arrives another way: `RecoveryKind
+   * "dissolve_seat"` in `recovery.ts`, offered to a company in trouble and filed
+   * through its own route. Kept rather than deleted so the one-shot reset in
+   * `defaultDraft` keeps clearing a stale value out of a carried draft, and so
+   * the history is legible to whoever wires it up.
+   */
   dissolveSeats?: Role[];
-  /** An offer to another company in the niche. */
+  /**
+   * An offer to another company in the niche.
+   *
+   * **Nothing reads this either**, and `targetCompanyId` appears nowhere else in
+   * the repository. Buying another team's company is live and has its own home:
+   * `canOffer`, `assessOffer` and `applyAcquisition` in `mergers.ts`, driven from
+   * `simulation-market-routes.ts` and settled by the tick.
+   */
   offer?: { targetCompanyId: string; kind: "buy_asset" | "acquire" | "merge"; assetId?: string; amount: number };
   /**
    * Who the company is for.

@@ -287,6 +287,111 @@ describe("what the formats were actually asked for", () => {
   });
 });
 
+describe("being funny is a craft, not a structure", () => {
+  const prompt = (id: string) => {
+    const format = storyFormat(id)!;
+    const plan = storyPlan(format, 15);
+    return storyPrompt({
+      format, plan, brief: "A place to build things.",
+      businessName: "SparkTower", callToAction: "Start at sparktower.app",
+      limitFor: (_b, s) => Math.round(s * 17),
+    });
+  };
+
+  it("gives every format its own comic register", () => {
+    /*
+     * "Set up an expectation and flip it" says where the joke goes and nothing
+     * about what a joke is. Deadpan is not the same joke as panic, and a
+     * nature documentary played straight is not the same joke as a character
+     * complaining — so each format says which it is.
+     */
+    for (const format of STORY_FORMATS) {
+      expect(format.tone, `${format.id} has no tone`).toBeTruthy();
+      expect(format.tone.length, `${format.id}'s tone is too thin to act on`).toBeGreaterThan(60);
+    }
+    /* And they are genuinely different from one another. */
+    expect(new Set(STORY_FORMATS.map((f) => f.tone)).size).toBe(STORY_FORMATS.length);
+  });
+
+  it("puts the register in the instructions", () => {
+    expect(prompt("character_vlog")).toContain(storyFormat("character_vlog")!.tone);
+    expect(prompt("fake_out")).toContain(storyFormat("fake_out")!.tone);
+  });
+
+  it("asks for specificity, which is where jokes actually live", () => {
+    const p = prompt("character_vlog");
+    expect(p).toMatch(/Be specific/);
+    expect(p, "the example is what carries the point").toMatch(/out-built by a toaster/);
+  });
+
+  it("bans the inspirational register outright", () => {
+    /*
+     * The thing the writer drifts into when it stops paying attention, and the
+     * exact opposite of funny: "I didn't quit. I just handed it to tomorrow."
+     * is a line for a wall, not one anybody repeats.
+     */
+    const p = prompt("pov");
+    expect(p).toMatch(/Never write the inspirational register/);
+    expect(p).toMatch(/would work on a poster/);
+  });
+
+  it("tells it not to explain the joke or signal it", () => {
+    const p = prompt("character_vlog");
+    expect(p).toMatch(/Understate it/);
+    expect(p).toMatch(/never use an exclamation mark/);
+    expect(p).toMatch(/Do not explain/);
+  });
+
+  it("does not ask the one format that is not a comedy to be funny", () => {
+    /* An ASMR film is satisfying rather than funny, and a gag breaks the spell. */
+    expect(storyFormat("impossible")!.tone).toMatch(/No jokes/);
+  });
+});
+
+describe("the set, which is the thing a viewer stares at", () => {
+  const beats = [{ id: "greet", seconds: 3 }];
+  const base = {
+    lines: [{ beat: "greet", onScreen: "Hello there, I live in this shed now.", scene: "A brass lamp throws light across the plywood bench." }],
+    callToAction: "", world: "w".repeat(320), character: "c".repeat(130),
+  };
+  const kinds = (set?: string) =>
+    checkScript({ ...base, set } as AdScript, beats, { needsSet: true, needsWorld: true, needsCharacter: true }).map((p) => p.kind);
+
+  it("is required, because the world and the character do not pin the furniture", () => {
+    /*
+     * "the desk station that the robot works at keeps changing throughout the
+     * video". The world keeps the palette and light consistent and the
+     * character keeps the person consistent; neither says where the lamp is,
+     * so every shot redrew the bench.
+     */
+    expect(kinds()).toContain("missing_set");
+  });
+
+  it("refuses a description that would draw a different bench each time", () => {
+    expect(kinds("A cluttered bench."), "'a cluttered bench' is not a set").toContain("thin_set");
+    expect(kinds("x".repeat(150))).not.toContain("thin_set");
+  });
+
+  it("asks for named positions rather than a list of objects", () => {
+    const format = storyFormat("character_vlog")!;
+    const prompt = storyPrompt({
+      format, plan: storyPlan(format, 15), brief: "A place to build things.",
+      limitFor: (_b, s) => Math.round(s * 17),
+    });
+    expect(prompt).toMatch(/THE SET\./);
+    expect(prompt, "positions are what make a set drawable twice").toMatch(/where each one sits in relation to the others/);
+    expect(prompt).toMatch(/a cluttered bench" cannot/);
+    expect(prompt, "and the objects have to stay put").toMatch(/do not move between shots/);
+  });
+
+  it("is asked for by every format that draws its own frames", () => {
+    /* A format that generates its plates has no still to be consistent with. */
+    for (const format of STORY_FORMATS) {
+      expect(format.keyframes, `${format.id}`).toBe(true);
+    }
+  });
+});
+
 describe("the catalogue", () => {
   it("answers for every id it lists, and nothing else", () => {
     for (const id of STORY_FORMAT_IDS) expect(storyFormat(id)?.id).toBe(id);

@@ -12,7 +12,7 @@ import { AD_DURATIONS, AD_FORMATS, beatPlan } from "@shared/ads";
 import { AD_STYLES, adStyle } from "@shared/ad-styles";
 import { CHANNEL_PIECES, PLATE_SECONDS, SHOT_KINDS, generationsFor, planPlates, planShots } from "@shared/ad-shots";
 import { SAFE_AREAS, YOUTUBE_OUTRO_RULE, safeBox } from "@shared/ad-safe-areas";
-import { composeShot, composeConcat, escapeDrawText, ffColor } from "../../server/ad-compositor";
+import { composeShot, composeConcat, escapeDrawText, ffColor , escapeDrawText } from "../../server/ad-compositor";
 
 const BRAND = { primaryColor: "#1B9AAA", backgroundColor: "#0B2027", displayName: "ACME" };
 const shot = (over: Partial<Parameters<typeof composeShot>[0]> = {}) => composeShot({
@@ -284,14 +284,24 @@ describe("drawtext escaping", () => {
      */
     const escaped = escapeDrawText("Mum's: Kitchen 50% off");
     expect(escaped).not.toMatch(/(?<!\\)'/);
-    expect(escaped).toContain("\\\\:");
-    expect(escaped).toContain("\\\\%");
+    /*
+     * One backslash on the colon, and none on the percent.
+     *
+     * This test asserted two of each, and it passed for as long as the code
+     * was wrong — because it checked the escaping against itself rather than
+     * against ffmpeg. The double colon failed a render at composition after
+     * four clips had been paid for, and the escaped percent drew a blank frame
+     * while exiting zero. Both were settled by rendering a frame and looking
+     * at it; `expansion=none` is what makes the bare percent safe.
+     */
+    expect(escaped).toBe("Mum’s\\: Kitchen 50% off");
   });
 
   it("produces arguments ffmpeg will accept for a punctuated line", () => {
     const args = shot({ lines: [{ text: "Mum's: 50% off", atHeight: 0.5, sizeRatio: 0.06 }] }).join(" ");
-    /* The raw colon must not survive inside the drawtext value. */
-    expect(args).toContain("text='Mum’s\\\\: 50\\\\% off'");
+    /* The raw colon must not survive inside the drawtext value, and one backslash is what escapes it. */
+    expect(args).toContain("text='Mum’s\\: 50% off'");
+    expect(args, "a bare percent is only safe with expansion off").toContain("expansion=none");
   });
 
   it("turns a hex colour into what ffmpeg wants", () => {
@@ -454,5 +464,51 @@ describe("the opening frame, held", () => {
     const args = composeShot({ ...base, holdFirstFrame: 0.5 });
     const t = args[args.indexOf("-t") + 1];
     expect(Number(t), "the shot got longer to fit the freeze").toBe(5);
+  });
+});
+
+describe("text that ffmpeg will actually draw", () => {
+  const shot = (text: string) => composeShot({
+    input: "plate.mp4", startSeconds: 0, seconds: 4, format: "vertical" as const,
+    brand: null, output: "out.mp4",
+    lines: [{ text, atHeight: 0.78, sizeRatio: 0.055, bold: true }],
+  }).join(" ");
+
+  it("escapes a colon with one backslash, not two", () => {
+    /*
+     * The POV format's first line is "POV: it's 2am", and two backslashes made
+     * the parser read a literal backslash followed by a colon — which then
+     * ended the option. It failed at composition, after all four clips had
+     * been generated and paid for. Checked against ffmpeg rather than reasoned
+     * about: the quoting rules here are not guessable.
+     */
+    expect(escapeDrawText("POV: 2am")).toBe("POV\\: 2am");
+    expect(escapeDrawText("POV: 2am")).not.toContain("\\\\:");
+  });
+
+  it("replaces an apostrophe rather than escaping it, so the quotes hold", () => {
+    expect(escapeDrawText("it's")).toBe("it’s");
+    expect(escapeDrawText("it's")).not.toContain("'");
+  });
+
+  it("leaves a percent sign alone, because expansion is off", () => {
+    /*
+     * Every spelling of it failed while strftime expansion was on — "100%",
+     * "100\%" and "100%%" all warned "Stray %" and drew nothing, with ffmpeg
+     * exiting zero. Escaping harder was the wrong direction.
+     */
+    expect(escapeDrawText("100% done")).toBe("100% done");
+  });
+
+  it("turns expansion off on every line it draws", () => {
+    const args = shot("100% done");
+    const draws = (args.match(/drawtext=/g) ?? []).length;
+    const offs = (args.match(/expansion=none/g) ?? []).length;
+    expect(draws, "nothing was drawn").toBeGreaterThan(0);
+    expect(offs, "a drawtext pass can still expand the text").toBe(draws);
+  });
+
+  it("passes a brace through, which only expansion=none makes safe", () => {
+    expect(escapeDrawText("a {x} b")).toBe("a {x} b");
   });
 });
