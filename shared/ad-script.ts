@@ -367,7 +367,7 @@ export function scriptPrompt(input: {
     `Voice: ${input.voice.label}. ${input.voice.how}`,
     ``,
     input.style.logoRole
-      ? `First, establish the WORLD: the one place every shot of this advert happens in. At least ${WORLD_MIN_CHARS} characters, and dense with specifics — what the place is built from, how big it is, the quality and direction of the light, the time of day, the palette, what the air looks like, what is in it. Every detail you leave out is one the camera will invent differently in each shot, so leave out nothing.\nDescribe the place and nothing else. No instructions about shots, framing or what the camera should do — this text is sent with every frame, so a rule inside it is obeyed on every frame and taken literally. Then write the beats, every one of them inside that world.`
+      ? `First, establish the WORLD: the one place every shot of this advert happens in. At least ${WORLD_MIN_CHARS} characters, and dense with specifics — what the place is built from, how big it is, the quality and direction of the light, the time of day, the palette, what the air looks like, what is in it. Say where the light in this place comes from, and give it enough of it to be seen by: a world with no light sources named is one the camera renders nearly black. Every detail you leave out is one the camera will invent differently in each shot, so leave out nothing.\nDescribe the place and nothing else. No instructions about shots, framing or what the camera should do — this text is sent with every frame, so a rule inside it is obeyed on every frame and taken literally. Then write the beats, every one of them inside that world.`
       : ``,
     input.style.logoRole ? `` : ``,
     `For each beat, write two things: the line that appears on screen, and the scene the camera is looking at while it does.`,
@@ -390,6 +390,19 @@ export function scriptPrompt(input: {
      */
     input.style.logoRole
       ? `- Say what MOVES in the shot, not just what is in it: who walks where, what is lifted, what the light does, which way the camera travels. Each shot is a few seconds of motion, and a scene that describes only furniture produces a photograph.`
+      : ``,
+    /*
+     * A light source in every scene, named.
+     *
+     * A world set at night or at blue hour is a world the model will happily
+     * render nearly black, and it is right to — it was told it is dark. Two
+     * shots of one advert came back with the lower half of the frame lost.
+     * Brightening that afterwards only lifts noise; what fixes it is something
+     * in the scene that is actually giving off light, which is also how a
+     * cinematographer would solve it.
+     */
+    input.style.logoRole
+      ? `- Name a light in every scene and say what it falls on — a lamp, a doorway, a screen, a window, a flame, a work light. A dark world is still a lit frame: a viewer has to be able to see the thing the shot is about.`
       : ``,
     `- Concrete and specific, and written as what a camera sees. Name the things: what they are made of, what colour, how big, how lit. Two sentences at most.`,
     /*

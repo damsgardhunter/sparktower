@@ -626,6 +626,7 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
   const style = adStyle(row.style)!;
   const plates = (row.plates as unknown as PlateRecord[]) ?? [];
+  const format = adFormat(row.format)!;
   const script = row.script as { lines: { beat: string; onScreen: string }[]; callToAction: string } | null;
   const brand = (row.brand as any)?.kit as BrandKitInput | null;
   const resolved = (row.brand as any)?.resolved ?? resolvedBrand(brand);
