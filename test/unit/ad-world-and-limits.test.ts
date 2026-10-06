@@ -10,7 +10,11 @@ import { describe, it, expect } from "vitest";
 import { isRateLimited, isTransient } from "../../server/kling-client";
 import { keyframePrompt, keyframeSize } from "../../server/ad-keyframe";
 import { sceneMoments, checkScript, type AdScript } from "@shared/ad-script";
+import { composeDissolve, CROSSFADE_SECONDS, CROSSFADE_SECONDS_CONTINUOUS } from "../../server/ad-compositor";
 import { adStyle, AD_STYLES } from "@shared/ad-styles";
+import { platePrompt, fitWorld, PROMPT_MAX_CHARS } from "@shared/ad-plate-prompt";
+import { planShots, planPlates } from "@shared/ad-shots";
+import { beatPlan, AD_DURATIONS } from "@shared/ads";
 import { AD_FORMATS } from "@shared/ads";
 
 describe("telling a busy queue from a bad clip", () => {
@@ -109,12 +113,151 @@ describe("the frame drawn before anything is animated", () => {
   });
 });
 
+describe("what the world may and may not say", () => {
+  const beats = [{ id: "hook" as const, seconds: 3 }];
+  const lines = [{ beat: "hook" as const, onScreen: "Build here", scene: "Hands lifting a steel panel onto an oak bench in low side light." }];
+  const check = (world: string) => checkScript({ lines, callToAction: "", world }, beats, { needsWorld: true }).map((p) => p.kind);
+  const GOOD = "A four-storey workshop of pale yellow brick and worn oak floors, its ground floor open to the street through tall steel-framed doors. Late afternoon light comes in low from the west and lands in long bars across the boards. The palette is brick, oak, brass and painted green steel, and there are benches, tools and half-finished work everywhere.";
+
+  it("accepts a world that describes the place", () => {
+    expect(check(GOOD)).toEqual([]);
+  });
+
+  it("refuses one that is too thin to stop the camera inventing things", () => {
+    expect(check("A workshop.")).toContain("thin_world");
+    expect(check("")).toContain("missing_world");
+  });
+
+  it("refuses one that directs the camera instead of describing the place", () => {
+    /*
+     * The bug this is for: a world that said "every shot keeps the spire or
+     * its reflection in frame" went to the image model with every frame, was
+     * obeyed on every frame, and produced an interior containing a scale model
+     * of the building standing on a plinth.
+     */
+    for (const directive of [
+      "every shot keeps the spire in frame.",
+      "The camera always stays low.",
+      "The tower must appear in each frame.",
+    ]) {
+      expect(check(`${GOOD} ${directive}`), directive).toContain("world_directs");
+    }
+  });
+});
+
+describe("scenes that describe nothing", () => {
+  const beats = [{ id: "hook" as const, seconds: 3 }];
+  const kinds = (scene: string) =>
+    checkScript({ lines: [{ beat: "hook", onScreen: "Hi", scene }], callToAction: "" }, beats, {}).map((p) => p.kind);
+
+  it("refuses the words that sound like a specification and commit to nothing", () => {
+    for (const word of ["modern", "sleek", "futuristic", "high-tech", "state-of-the-art"]) {
+      expect(kinds(`A ${word} workspace with people in it.`), word).toContain("vague_scene");
+    }
+  });
+
+  it("accepts a scene that names what things are made of", () => {
+    expect(kinds("A pale brick wall behind an oak bench, lit low from the west.")).toEqual([]);
+  });
+});
+
+describe("joining shots that were generated apart", () => {
+  it("advances each offset by exactly the dissolve it asks the filter for", () => {
+    /*
+     * These were two numbers — the offset advanced by one value and the filter
+     * given another — so every join where they differed put the next offset
+     * past the end of its input. xfade does not complain, it truncates, and
+     * across eight joins a thirty-second advert came out at eight seconds.
+     */
+    const args = composeDissolve(["a.mp4", "b.mp4", "c.mp4"], [5, 5, 5], "out.mp4");
+    const chain = args[args.indexOf("-filter_complex") + 1];
+    const steps = chain.split(";").map((s) => {
+      const duration = Number(/duration=([\d.]+)/.exec(s)![1]);
+      const offset = Number(/offset=([\d.]+)/.exec(s)![1]);
+      return { duration, offset };
+    });
+    let expected = 0;
+    for (const [i, step] of steps.entries()) {
+      expected += 5 - step.duration;
+      expect(step.offset, `join ${i} offset must match the durations before it`).toBeCloseTo(expected, 2);
+    }
+  });
+
+  it("dissolves for longer when the clips were drawn from one another", () => {
+    /* Independent clips share nothing, so a long mix of them is visibly two images. */
+    expect(CROSSFADE_SECONDS_CONTINUOUS).toBeGreaterThan(CROSSFADE_SECONDS);
+    const args = composeDissolve(["a.mp4", "b.mp4"], [5, 5], "out.mp4", undefined, CROSSFADE_SECONDS_CONTINUOUS);
+    expect(args.join(" ")).toContain(`duration=${CROSSFADE_SECONDS_CONTINUOUS.toFixed(3)}`);
+  });
+});
+
+describe("the prompt the provider will actually accept", () => {
+  const world = "SparkTower is a colossal tower of dark basalt banded with brushed steel. ".repeat(20);
+
+  it("never exceeds the provider's limit, whatever it is given", () => {
+    /*
+     * Kling answers 400 with "prompt: size must be between 0 and 2500" and
+     * generates nothing. A dense world is a thousand characters on its own and
+     * goes out with every clip, so a thirty-second advert refused all nine.
+     */
+    let worst = 0;
+    for (const style of AD_STYLES) {
+      for (const duration of AD_DURATIONS) {
+        for (const plate of planPlates(planShots(beatPlan(duration, style.beatWeights)))) {
+          for (const scenes of [[], ["A short scene"], ["A ".repeat(400)], ["A ".repeat(400), "B ".repeat(400)]]) {
+            const out = platePrompt({ brief: "A business.", style, plate, brandMoment: true, scenes, world });
+            worst = Math.max(worst, out.length);
+            expect(out.length, `${style.id} ${duration}s`).toBeLessThanOrEqual(PROMPT_MAX_CHARS);
+          }
+        }
+      }
+    }
+    expect(worst, "the budget is being used, not merely respected").toBeGreaterThan(PROMPT_MAX_CHARS / 2);
+  });
+
+  it("keeps the scene whole and trims the world, because the scene is what makes this shot", () => {
+    const plate = planPlates(planShots(beatPlan(30)))[0];
+    const scene = "Through the doorway into a cutaway atrium of steel stairs and grated catwalks under electric white light";
+    const out = platePrompt({ brief: "A business.", style: adStyle("brand_world")!, plate, brandMoment: false, scenes: [scene], world });
+    expect(out).toContain(scene);
+    expect(out, "some of the world survives too").toContain("basalt");
+  });
+
+  it("cuts the world at a sentence rather than mid-clause", () => {
+    const trimmed = fitWorld("Built from basalt. Lit from the west. Full of people.", 30);
+    expect(trimmed).toBe("Built from basalt.");
+  });
+
+  it("falls back to characters when even the first sentence will not fit", () => {
+    const trimmed = fitWorld("One enormously long opening sentence that will not fit at all.", 20);
+    expect(trimmed.length).toBeLessThanOrEqual(20);
+    expect(trimmed.length).toBeGreaterThan(0);
+  });
+});
+
 describe("the style whose logo is a place", () => {
   const world = adStyle("brand_world")!;
 
   it("draws its own keyframes, and says where the logo lives", () => {
     expect(world.keyframes).toBe(true);
     expect(world.logoRole, "without this the logo is just drawn somewhere").toBeTruthy();
+  });
+
+  it("describes where the mark lives without making it the subject of every frame", () => {
+    /*
+     * `logoRole` reads as harmless prose and is sent to the image model with
+     * every frame, so a phrase in it is applied to every frame. It said "the
+     * scene is built around" the building — and nine clips came back as nine
+     * centred portraits of the same tower, which somebody watching described
+     * as everything centring too hard on it and each clip being one locked-off
+     * scene. These are the phrasings that do that.
+     */
+    for (const directive of ["built around", "every frame", "every shot", "always", "in frame", "must appear"]) {
+      expect(world.logoRole!.toLowerCase(), `logoRole says "${directive}", which applies to every frame`)
+        .not.toContain(directive);
+    }
+    /* And it still has to say the mark is a physical thing, or it is not a role. */
+    expect(world.logoRole!.toLowerCase()).toMatch(/structure|building|landmark/);
   });
 
   it("is the only one that pays for keyframes, since most adverts do not need them", () => {

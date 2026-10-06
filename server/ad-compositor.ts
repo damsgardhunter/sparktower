@@ -210,9 +210,34 @@ export function composeShot(shot: ComposeShot): string[] {
   for (const line of shot.lines ?? []) {
     const size = Math.round(shortEdge * line.sizeRatio);
     const font = fontPath(line.bold === false ? brandFont(brand.font.id).regular : brand.font.file);
-    const y = Math.round(box.y + box.height * line.atHeight);
+    const restY = Math.round(box.y + box.height * line.atHeight);
     /* Centred in the safe box, not the frame — the two differ by the platform's furniture. */
     const x = `${box.x}+(${box.width}-text_w)/2`;
+
+    /*
+     * The type arrives and leaves rather than being stamped on.
+     *
+     * A line that appears at full opacity on frame one and vanishes on the
+     * last is the single clearest tell that it was added afterwards — nothing
+     * else in the frame behaves that way. Easing it in over a third of a
+     * second, with a small rise that settles, reads as something that belongs
+     * to the shot it is in.
+     *
+     * `alpha`, `x` and `y` are the drawtext parameters evaluated per frame;
+     * `fontsize` is not, which is why the movement is a rise rather than a
+     * scale. Quoted because the expressions contain commas, and an unquoted
+     * comma ends the filter.
+     */
+    const appear = Math.min(0.35, shot.seconds / 3);
+    const leave = Math.min(0.25, shot.seconds / 4);
+    const rise = Math.round(size * 0.22);
+    const held = Math.max(0.01, shot.seconds - leave);
+
+    /* 0 → 1 across the entrance, then 1. Used for both the fade and the rise. */
+    const entering = `min(1\,t/${appear.toFixed(3)})`;
+    const alpha = `'if(lt(t\,${appear.toFixed(3)})\,t/${appear.toFixed(3)}\,if(gt(t\,${held.toFixed(3)})\,max(0\,(${shot.seconds}-t)/${leave.toFixed(3)})\,1))'`;
+    /* Eased: the square makes it decelerate into place rather than arriving at a constant speed. */
+    const y = `'${restY}+${rise}*(1-pow(${entering}\,2))'`;
 
     /**
      * One `drawtext` per layer, widest first.
@@ -235,6 +260,7 @@ export function composeShot(shot: ComposeShot): string[] {
         `fontsize=${size}`,
         `x=${x}`,
         `y=${y}`,
+        `alpha=${alpha}`,
         ...(borderWidth > 0 ? [`borderw=${borderWidth}`, `bordercolor=${ffColor(color)}`] : []),
         ...(shadow && type.shadowRatio > 0
           ? [
@@ -444,6 +470,107 @@ export async function renderShot(shot: ComposeShot): Promise<string> {
  * rather than a second encode, which is both faster and avoids the
  * generation loss of encoding twice.
  */
+/**
+ * How long one shot dissolves into the next.
+ *
+ * Short. A long dissolve is a slideshow and a hard cut between two
+ * independently generated clips is a jolt — the camera is in a different place
+ * and the light has moved, so the eye reads it as a mistake rather than an
+ * edit. A fifth of a second is enough for the two frames to agree with each
+ * other and too fast to be noticed as a transition.
+ */
+export const CROSSFADE_SECONDS = 0.2;
+
+/**
+ * The dissolve for an advert whose clips were drawn from one another.
+ *
+ * Twice as long, because it can be. Independently generated clips share
+ * nothing, so a long dissolve between them is two unrelated images visibly
+ * mixed; chained keyframes mean consecutive clips are the same place in the
+ * same light, and a longer overlap reads as the camera carrying on rather than
+ * as a transition. The short one was leaving the cuts abrupt.
+ */
+export const CROSSFADE_SECONDS_CONTINUOUS = 0.4;
+
+/**
+ * Join shots with a dissolve between each pair.
+ *
+ * `composeConcat` is still the right thing for footage that was continuous to
+ * begin with, and this is for footage that was not. Every clip here is a
+ * separate generation: shot two does not begin where shot one ended, however
+ * well the keyframes were chained, and cutting straight between them is the
+ * choppiness somebody watching described. `xfade` overlaps them so each cut
+ * lands on two frames that are already dissolving into one another.
+ *
+ * The cost is a re-encode — `xfade` is a filter, so `-c copy` is not available
+ * — and a small amount of runtime, since each dissolve consumes its own
+ * length from the shot it starts. Both are accounted for by the caller, which
+ * knows the shot lengths and the total the advert was sold at.
+ */
+export function composeDissolve(
+  files: string[],
+  seconds: number[],
+  output: string,
+  /**
+   * How long each join lasts, one per gap, when they are not all the same.
+   *
+   * They are not all the same whenever a shot could not be rendered longer
+   * than its window — a window that ends where its plate ends has nothing to
+   * extend into, so that shot cannot pay for its own dissolve. Using the full
+   * length there anyway is where a thirty-second advert came out at 29.2:
+   * every join that could not be paid for was taken out of the runtime
+   * instead. Matching the dissolve to the room that actually existed keeps the
+   * total exact.
+   */
+  joins?: number[],
+  /** Overridden for footage that was drawn from a shared first frame. */
+  crossfade: number = CROSSFADE_SECONDS,
+): string[] {
+  if (files.length === 1) return ["-y", "-i", files[0], "-c", "copy", "-movflags", "+faststart", output];
+
+  const args = ["-y"];
+  for (const f of files) args.push("-i", f);
+
+  /*
+   * Each dissolve starts `CROSSFADE_SECONDS` before the running total, and the
+   * total itself shrinks by that much per join — which is why the offset is
+   * accumulated rather than summed from the original lengths. Getting this
+   * wrong does not error, it silently freezes the last frame of a shot for the
+   * length of the drift.
+   */
+  const steps: string[] = [];
+  let carry = "0:v";
+  let offset = 0;
+  for (let i = 1; i < files.length; i++) {
+    /*
+     * One value, used for both the filter and the arithmetic.
+     *
+     * They were two: the offset was advanced by the requested join while the
+     * filter was given a clamped minimum, so every join where the two differed
+     * put the next offset past the end of the stream it was cutting into.
+     * `xfade` does not complain, it truncates — and across eight joins a
+     * thirty-second advert came out at eight seconds. A join of zero is still
+     * a single frame, because xfade with a duration of zero is invalid.
+     */
+    const join = Math.max(1 / 24, joins?.[i - 1] ?? crossfade);
+    offset += seconds[i - 1] - join;
+    const label = i === files.length - 1 ? "out" : `x${i}`;
+    steps.push(`[${carry}][${i}:v]xfade=transition=fade:duration=${join.toFixed(3)}:offset=${offset.toFixed(3)}[${label}]`);
+    carry = label;
+  }
+
+  args.push(
+    "-filter_complex", steps.join(";"),
+    "-map", "[out]",
+    "-an",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    "-preset", "medium", "-crf", "20",
+    output,
+  );
+  return args;
+}
+
 export function composeConcat(listFile: string, output: string): string[] {
   return [
     "-y",

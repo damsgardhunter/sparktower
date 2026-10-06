@@ -42,7 +42,7 @@ import { spend, refund } from "./wallet";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { klingSubmit, klingStatus, klingConfigured, isRateLimited, isTransient, type KlingSubmit, type KlingTask } from "./kling-client";
 import { aiStubbed } from "./ai-stub";
-import { composeConcat, renderShot, runFfmpeg, ffmpegAvailable, escapeDrawText } from "./ad-compositor";
+import { composeDissolve, CROSSFADE_SECONDS, CROSSFADE_SECONDS_CONTINUOUS, renderShot, runFfmpeg, ffmpegAvailable, escapeDrawText } from "./ad-compositor";
 import { writeAdScript, ScriptUnusableError } from "./ad-script-writer";
 import { brandKitFor } from "./ad-brand-routes";
 import {
@@ -130,8 +130,18 @@ export interface RenderQuote {
  * stored on the row, so the quote is not a separate estimate that can disagree
  * with what gets made.
  */
-export function quoteRender(duration: AdDuration): RenderQuote {
-  const beats = beatPlan(duration);
+export function quoteRender(duration: AdDuration, styleId?: string | null): RenderQuote {
+  /*
+   * With the style's emphasis, when a style is known.
+   *
+   * It was computed without it, which quietly made every style's beatWeights
+   * dead code: "Why I made this" is supposed to spend its time on the
+   * problem and "Demonstration" on the product, and both were planned
+   * identically. The quote route has no style yet — somebody is still
+   * choosing — so it asks without one and gets the base shape, which is the
+   * right answer to "what does thirty seconds cost".
+   */
+  const beats = beatPlan(duration, styleId ? adStyle(styleId)?.beatWeights : undefined);
   /* planShots marks the brand moments itself, and inserts the sweep before the product beat. */
   const shots = planShots(beats);
   const plates = planPlates(shots);
@@ -196,7 +206,7 @@ export async function startRender(
   if (refusal) return { ok: false, refusal, status: 400 };
 
   const duration = request.duration as AdDuration;
-  const quote = quoteRender(duration);
+  const quote = quoteRender(duration, request.style);
 
   const paid = await spend(userId, quote.priceCents, {
     outcome: quote.outcome,
@@ -303,7 +313,8 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
   const brand = (row.brand as any)?.kit as BrandKitInput | null;
   const resolved = (row.brand as any)?.resolved ?? resolvedBrand(brand);
   const plan = row.plan as { shots: Shot[]; plates: Plate[] };
-  const beats = beatPlan(row.durationSeconds as AdDuration);
+  /* The same plan the row was priced and planned against. */
+  const beats = beatPlan(row.durationSeconds as AdDuration, style.beatWeights);
 
   /* How many clips each beat is cut from, so the script can write one moment per clip. */
   const momentsPerBeat = new Map<string, number>();
@@ -347,6 +358,9 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
       plate,
       brandMoment: plate.windows.some((w) => plan.shots[w.shotIndex]?.brandMoment),
       businessName: brand?.displayName ?? null,
+      world: written.script.world ?? null,
+      /* A drawn first frame changes the prompt from a description into a move. */
+      fromKeyframe: !!style.keyframes,
       /* What the script asked to see, for the beats this plate covers. */
       scenes: plate.beats
         .map((id) => written.script.lines.find((l) => l.beat === id)?.scene)
@@ -396,6 +410,7 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
         format: row.format as AdFormatId,
         logoPath: brand?.logoPath ?? null,
         logoRole: style.logoRole ?? null,
+        world: written.script.world ?? null,
         previousFrame: previous,
         ownerId: row.requestedBy,
       });
@@ -625,17 +640,64 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
 
     const logoFile = brand?.logoPath ? await fetchLogo(brand.logoPath, work) : null;
 
-    /* One shot per window, in the order they play. */
+    /*
+     * One shot per window, in the order they play.
+     *
+     * Each one is rendered a dissolve longer than its window, because the
+     * dissolve is consumed from it when the shots are joined. Without the
+     * extra the advert comes out short by a fifth of a second per cut — on a
+     * thirty-second cut with eight joins that is more than a second and a
+     * half less than was sold, which is the sort of shortfall nobody notices
+     * and everybody is entitled to.
+     */
+    const totalWindows = plan.plates.reduce((n, p) => n + p.windows.length, 0);
+
+    /*
+     * How long each shot is rendered, worked out before any of them are.
+     *
+     * Each one wants to be a dissolve longer than its window, because the
+     * dissolve is taken out of it when the shots are joined. Some cannot be: a
+     * five-second window cut from a five-second plate has nothing after it to
+     * extend into, and on a thirty-second advert four of the nine shots were
+     * like that — which is where 0.8 of a second went, delivering 29.2 against
+     * a thirty-second sale.
+     *
+     * So what one shot cannot pay for, another does. The shortfall is summed
+     * and handed to whichever shots still have plate left, which is a question
+     * that can only be answered once every window is known.
+     */
+    /* A longer dissolve where the clips were drawn from one another. */
+    const crossfade = style.keyframes ? CROSSFADE_SECONDS_CONTINUOUS : CROSSFADE_SECONDS;
+
+    const windows = plan.plates.flatMap((plate, plateIndex) =>
+      plate.windows.map((window) => ({ plate, plateIndex, window })));
+
+    const plans = windows.map(({ plate, window }, i) => {
+      const wants = window.seconds + (i === windows.length - 1 ? 0 : crossfade);
+      const room = plate.seconds - window.startSeconds;
+      return { seconds: Math.min(wants, room), short: Math.max(0, wants - room), spare: Math.max(0, room - wants) };
+    });
+
+    let owed = plans.reduce((n, p) => n + p.short, 0);
+    for (const p of plans) {
+      if (owed <= 0) break;
+      const give = Math.min(owed, p.spare);
+      p.seconds += give;
+      owed -= give;
+    }
+
     const pieces: string[] = [];
+    const lengths: number[] = [];
     for (const [plateIndex, plate] of plan.plates.entries()) {
       for (const window of plate.windows) {
         const shot = plan.shots[window.shotIndex];
         const line = script?.lines.find((l) => l.beat === shot.beat);
         const output = path.join(work, `shot-${String(pieces.length).padStart(2, "0")}.mp4`);
+        const seconds = plans[pieces.length].seconds;
         await renderShot({
           input: plateFiles[plateIndex],
           startSeconds: window.startSeconds,
-          seconds: window.seconds,
+          seconds,
           format: row.format as AdFormatId,
           brand: resolved,
           lines: line?.onScreen ? [{ ...fitted(line.onScreen, row.format as AdFormatId), atHeight: 0.78, bold: true }] : [],
@@ -654,14 +716,22 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
           output,
         });
         pieces.push(output);
+        lengths.push(seconds);
+
       }
     }
 
-    /* Concatenated by the demuxer with -c copy: no second encode, no second generation loss. */
-    const listFile = path.join(work, "pieces.txt");
-    await fs.writeFile(listFile, pieces.map((p) => `file '${p}'`).join("\n"));
+    /*
+     * Dissolved rather than concatenated.
+     *
+     * The demuxer with `-c copy` is faster and avoids a second encode, and it
+     * is the wrong tool here: every shot is a separate generation, so the
+     * camera jumps and the light moves at every cut and the eye reads it as a
+     * fault rather than an edit. Somebody watching called it choppy and they
+     * were describing exactly that.
+     */
     const finished = path.join(work, "advert.mp4");
-    await runFfmpeg(composeConcat(listFile, finished));
+    await runFfmpeg(composeDissolve(pieces, lengths, finished, undefined, crossfade));
 
     const outputPath = await new ObjectStorageService().writeObjectBuffer(
       await fs.readFile(finished),

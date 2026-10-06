@@ -102,9 +102,20 @@ export type AskModel = (prompt: { system: string; user: string }) => Promise<str
  * Module-level and free of interpolation, so it is the byte-identical cached
  * prefix of every script call. Everything that varies is in the user message.
  */
-const SCRIPT_RULES = `You are writing the words for a short advert that will be set large over moving footage.
+const SCRIPT_RULES = `You are writing a short advert: the words that appear on screen, and the scene the camera is looking at while each one does.
 Every line is read in the time it is on screen, so lines are a few words, not sentences. Write only what the business told you: never invent a customer, a quote, a number, a price, a result or an award.
-Respond ONLY with JSON of exactly this shape: {"lines":[{"beat":"","onScreen":"","voiceover":""}],"callToAction":""}`;
+Respond ONLY with a JSON object, in exactly the shape given at the end of the instructions that follow. No prose, no fences, no fields that were not asked for.`;
+/*
+ * The shape is named in the user message and nowhere else, deliberately.
+ *
+ * It used to be spelled out here as well, and the two drifted: `scene` was
+ * added to the advert, then `world`, and this string kept describing the shape
+ * from before both. A model handed two different shapes in one request obeys
+ * the more specific-looking one — so it returned the old shape, and the
+ * checker reported a missing world and a missing line for every beat, three
+ * times, and failed an advert that nothing was wrong with. One statement of
+ * the shape, in the message that varies.
+ */
 
 const askOpenAi: AskModel = async ({ system, user }) => {
   const completion = await openai.chat.completions.create({
@@ -139,10 +150,20 @@ export async function writeAdScript(
     const script = readScript(raw);
 
     const { repaired } = repairCta(script, input.callToAction);
-    const problems = checkScript(script, input.beats, input);
+    const problems = checkScript(script, input.beats, { ...input, needsWorld: !!input.style.logoRole });
 
     if (problems.length === 0) return { script, attempts: attempt, repaired, rejected };
 
+    /*
+     * The start of what came back, when an attempt is rejected.
+     *
+     * Without it a failure says only what the checker wanted and never what
+     * the model actually said, and the two have completely different fixes: a
+     * script with a long line is a prompt that needs tightening, and a script
+     * with no lines at all is a prompt the model did not understand. Working
+     * out which took a wasted run.
+     */
+    console.warn(`[ad-script] attempt ${attempt} rejected (${problems.map((p) => p.kind).join(", ")}): ${raw.slice(0, 300).replace(/\s+/g, " ")}`);
     rejected.push(problems);
     last = problems;
   }
@@ -194,6 +215,7 @@ function readScript(raw: string): AdScript {
         scene: typeof l.scene === "string" ? l.scene.trim() : undefined,
       })),
     callToAction: typeof parsed?.callToAction === "string" ? parsed.callToAction.trim() : "",
+    world: typeof parsed?.world === "string" ? parsed.world.trim() : undefined,
   };
 }
 
@@ -244,6 +266,10 @@ export function stubScript(input: ScriptRequest): AdScript {
       return { beat: b.id, onScreen: safeLine(want, b, input), voiceover: "", scene: scene[b.id] };
     }),
     callToAction: input.callToAction?.trim() || "See the site",
+    /* Long enough to satisfy the same check a real answer has to. */
+    world: input.style.logoRole
+      ? "A single brick-and-timber workshop building on a quiet street, four storeys, its ground floor open to the pavement through tall steel-framed doors. Walls of pale yellow brick, floors of worn oak, steel stair rails rubbed bright at the handholds. Late afternoon light comes in low from the west through the tall windows and lands in long bars across the floor; the air is warm and a little dusty where it catches. The palette is brick, oak, brass and the deep green of painted steel. Benches, tools and half-finished work are everywhere, and there are always people in it."
+      : undefined,
   };
 }
 

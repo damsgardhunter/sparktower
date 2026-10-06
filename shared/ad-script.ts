@@ -54,6 +54,23 @@ export interface AdScript {
   lines: ScriptLine[];
   /** The one action, repeated verbatim from the brand kit rather than reworded. */
   callToAction: string;
+  /**
+   * The world every shot of this advert happens in, established once.
+   *
+   * Written before the scenes and sent with every single generation — into
+   * each plate prompt and each keyframe. Without it the model is handed one
+   * sentence per clip and invents everything the sentence does not mention,
+   * which is a different building, a different time of day and a different
+   * palette each time. It takes the shortest path from the words it is given
+   * to something plausible, and the way to stop that is to leave it less to
+   * invent rather than to ask it to try harder.
+   *
+   * So this is deliberately dense: materials, scale, light, colour, the time
+   * of day, what the place is made of and what is always in it. Repetition
+   * across clips is the point. It is the only thing in the advert that does
+   * not change.
+   */
+  world?: string;
 }
 
 /**
@@ -84,6 +101,10 @@ export type ScriptProblem =
   | { kind: "unsupported_claim"; beat: AdBeatId; phrase: string }
   | { kind: "cta_changed"; expected: string; was: string }
   | { kind: "missing_scene"; beat: AdBeatId }
+  | { kind: "missing_world" }
+  | { kind: "thin_world"; was: number; want: number }
+  | { kind: "world_directs"; phrase: string }
+  | { kind: "vague_scene"; beat: AdBeatId; word: string }
   | { kind: "scene_describes_overlay"; beat: AdBeatId; word: string };
 
 /**
@@ -105,6 +126,50 @@ export type ScriptProblem =
  * this stops the scene direction asking for them in the first place, which no
  * negative prompt reliably survives.
  */
+/**
+ * How much the world has to say before it is worth sending.
+ *
+ * A sentence is not a world. The number is in characters because that is what
+ * can be checked: anything shorter than this has not named the materials, the
+ * light and the scale, and those three are what the model otherwise invents
+ * differently in every clip.
+ */
+export const WORLD_MIN_CHARS = 300;
+
+/**
+ * Phrases that turn the world from a description into a shot list.
+ *
+ * The world is sent to an image model with every single frame, and an
+ * instruction in it is obeyed on every single frame — literally, and in the
+ * cheapest way that satisfies the words. A world that said "every shot keeps
+ * the spire or its reflection in frame" produced an interior scene with a
+ * scale model of the tower standing on a plinth in the room, being filmed.
+ * The rule was followed exactly and the advert was wrong.
+ *
+ * Continuity between shots is this code's job and it is handled in the prompt
+ * scaffolding. The world's job is to say what the place is made of, so that
+ * when a shot does show it, it is the same place.
+ */
+export const WORLD_DIRECTIVES = [
+  "every shot", "each shot", "every frame", "each frame", "in frame",
+  "the camera", "camera always", "always keep", "must appear", "always show",
+  "never cut", "always include",
+];
+
+/**
+ * Words that describe nothing.
+ *
+ * Every one of these is the model — or the writer — reaching for a shortcut:
+ * they sound like a specification and leave the frame entirely to chance.
+ * "A modern workspace" is not a place, and six clips of it are six different
+ * places. Refused in a scene, so the retry has to name something instead.
+ */
+export const VAGUE_WORDS = [
+  "modern", "sleek", "stylish", "beautiful", "vibrant", "dynamic", "futuristic",
+  "generic", "various", "something", "some kind", "etc", "and so on",
+  "high-tech", "state-of-the-art", "cutting-edge", "innovative",
+];
+
 export const SCENE_FORBIDDEN = [
   "logo", "text", "lettering", "sign", "signage", "caption", "subtitle",
   "price", "label", "packaging", "watermark", "screen showing", "ui", "interface",
@@ -126,9 +191,28 @@ export const CLAIM_PHRASES = [
 export function checkScript(
   script: AdScript,
   beats: { id: AdBeatId; seconds: number }[],
-  context: { avoidWords?: string[]; callToAction?: string | null; supportedClaims?: string[] },
+  context: {
+    avoidWords?: string[]; callToAction?: string | null; supportedClaims?: string[];
+    /** Styles that draw their own keyframes must establish the world first. */
+    needsWorld?: boolean;
+  },
 ): ScriptProblem[] {
   const problems: ScriptProblem[] = [];
+
+  if (context.needsWorld) {
+    const world = script.world?.trim() ?? "";
+    if (!world) problems.push({ kind: "missing_world" });
+    else if (world.length < WORLD_MIN_CHARS) {
+      problems.push({ kind: "thin_world", was: world.length, want: WORLD_MIN_CHARS });
+    } else {
+      for (const phrase of WORLD_DIRECTIVES) {
+        if (world.toLowerCase().includes(phrase)) {
+          problems.push({ kind: "world_directs", phrase });
+          break;
+        }
+      }
+    }
+  }
   const supported = (context.supportedClaims ?? []).map((s) => s.toLowerCase());
 
   for (const beat of beats) {
@@ -150,6 +234,11 @@ export function checkScript(
     if (!scene) {
       problems.push({ kind: "missing_scene", beat: beat.id });
     } else {
+      for (const word of VAGUE_WORDS) {
+        if (new RegExp(`\\b${word.replace(/[-\s]/g, "[-\\s]")}\\b`, "i").test(scene)) {
+          problems.push({ kind: "vague_scene", beat: beat.id, word });
+        }
+      }
       for (const word of SCENE_FORBIDDEN) {
         /* Word boundaries: "ui" must not match "building", "sign" must not match "design". */
         if (new RegExp(`\\b${word}\\b`, "i").test(scene)) {
@@ -210,6 +299,10 @@ export function describeProblem(p: ScriptProblem): string {
     case "unsupported_claim": return `The ${p.beat} line says "${p.phrase}", which is a claim the business has not supported. Remove it.`;
     case "cta_changed": return `The call to action must be exactly "${p.expected}" and was "${p.was}".`;
     case "missing_scene": return `The ${p.beat} beat has no scene. Describe what is in shot, in one sentence.`;
+    case "missing_world": return `There is no "world" field. Describe the place every shot happens in — materials, scale, light, colour, time of day, what is always in it — before writing any scene.`;
+    case "world_directs": return `The "world" says "${p.phrase}", which directs the camera instead of describing the place. It is sent with every frame, so an instruction in it is obeyed on every frame, literally — one that asked for the building to stay in shot produced a scale model of it standing in a room. Describe only what the place is made of, how big it is and how it is lit.`;
+    case "thin_world": return `The "world" is ${p.was} characters and needs at least ${p.want}. Name the materials, the scale, the light, the colour and the time of day; anything left out is something the camera will invent differently in every shot.`;
+    case "vague_scene": return `The ${p.beat} scene says "${p.word}", which describes nothing and leaves the frame to chance. Name the actual thing: what it is made of, what colour, what size.`;
     case "scene_describes_overlay": return `The ${p.beat} scene asks for "${p.word}" to be in shot. That is added afterwards from the business's own files — describe only what the camera sees.`;
   }
 }
@@ -273,13 +366,41 @@ export function scriptPrompt(input: {
     ``,
     `Voice: ${input.voice.label}. ${input.voice.how}`,
     ``,
+    input.style.logoRole
+      ? `First, establish the WORLD: the one place every shot of this advert happens in. At least ${WORLD_MIN_CHARS} characters, and dense with specifics — what the place is built from, how big it is, the quality and direction of the light, the time of day, the palette, what the air looks like, what is in it. Every detail you leave out is one the camera will invent differently in each shot, so leave out nothing.\nDescribe the place and nothing else. No instructions about shots, framing or what the camera should do — this text is sent with every frame, so a rule inside it is obeyed on every frame and taken literally. Then write the beats, every one of them inside that world.`
+      : ``,
+    input.style.logoRole ? `` : ``,
     `For each beat, write two things: the line that appears on screen, and the scene the camera is looking at while it does.`,
     ``,
     `Rules for the scene:`,
     input.style.logoRole
       ? `- These scenes are moments of ONE journey through ONE place, in order, and the company's mark is part of that place: ${input.style.logoRole} Each scene carries on from the last — further in, further up, further out — and the place stays recognisably the same throughout. Say where this moment is in the journey.`
       : ``,
-    `- One sentence, concrete, and specific to this business. Name what is in shot: where it is, who is there, what they are doing, what the light is like.`,
+    /*
+     * Variety of scale, demanded rather than hoped for. Left to itself the
+     * model writes an establishing shot every time, and nine establishing
+     * shots of the same building is a slideshow of one idea.
+     */
+    input.style.logoRole
+      ? `- Vary how close the camera is. Only one or two of these are wide shots of the whole place; the rest are inside it, at a bench, over a shoulder, on a detail — hands, a tool, a face turned away, something being lifted. A run of wide shots of the same building is one idea repeated, not a journey.`
+      : ``,
+    /*
+     * The move, named per scene. Each clip is animated from a still, so if the
+     * scene does not say what happens, almost nothing does.
+     */
+    input.style.logoRole
+      ? `- Say what MOVES in the shot, not just what is in it: who walks where, what is lifted, what the light does, which way the camera travels. Each shot is a few seconds of motion, and a scene that describes only furniture produces a photograph.`
+      : ``,
+    `- Concrete and specific, and written as what a camera sees. Name the things: what they are made of, what colour, how big, how lit. Two sentences at most.`,
+    /*
+     * Named rather than described, because "be specific" is advice and a list
+     * of refused words is a rule. These are the words that sound like a
+     * specification and commit to nothing.
+     */
+    `- Never use these words, which describe nothing: ${VAGUE_WORDS.slice(0, 10).join(", ")}. If one of them is the word that fits, the detail has not been decided yet — decide it.`,
+    input.style.logoRole
+      ? `- Carry the world through. Every scene restates the details of the place that are visible in it — the same materials, the same light, the same palette — because each shot is generated on its own and anything unsaid is re-invented.`
+      : ``,
     splitBeats.length
       ? `- Where a beat says it is cut from several shots, write that many moments in its scene, separated by " | ", in the order they play. Each moment is a different shot of its own — a different floor, a different angle, a different distance — not the same shot described twice.`
       : ``,
@@ -304,6 +425,8 @@ export function scriptPrompt(input: {
       : `- There is no call to action supplied, so end on what the viewer should do in four words or fewer.`,
     `- ${input.style.avoid}`,
     ``,
-    `Answer as JSON: { "lines": [ { "beat": "...", "onScreen": "...", "scene": "...", "voiceover": "..." } ], "callToAction": "..." }`,
+    input.style.logoRole
+      ? `Answer as JSON: { "world": "...", "lines": [ { "beat": "...", "onScreen": "...", "scene": "...", "voiceover": "..." } ], "callToAction": "..." }`
+      : `Answer as JSON: { "lines": [ { "beat": "...", "onScreen": "...", "scene": "...", "voiceover": "..." } ], "callToAction": "..." }`,
   ].filter(Boolean).join("\n");
 }

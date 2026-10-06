@@ -94,7 +94,15 @@ export const AD_STYLES: AdStyle[] = [
     avoid: "Letting the world become the point. Every floor of it has to be somebody doing something a viewer recognises, or it is architecture with nobody in it.",
     blurb: "The brand as somewhere you walk into, shot as one journey.",
     keyframes: true,
-    logoRole: "the structure itself — the building, the landmark, the silhouette on the skyline that the scene is built around, at architectural scale and made of real materials.",
+    /*
+     * "the scene is built around" was the whole of it, and it was wrong. That
+     * sentence goes to the image model with every frame, so every frame was
+     * built around the building: a centred hero shot of the same tower nine
+     * times, which somebody watching described as everything centring too hard
+     * on it and each clip being one locked-off scene. A place is not a place if
+     * the camera never looks at anything else in it.
+     */
+    logoRole: "a real structure in this world, at architectural scale and made of real materials — the building people are going in and out of. It is where the advert happens: most shots are inside it, beside it, or looking out from it, and a wide view of the whole building is worth one or two shots of the advert at most.",
   },
   {
     id: "problem_solution",

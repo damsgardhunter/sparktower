@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { AD_DURATIONS, AD_PRICE, AD_COST, adOutcome, adPriceCents, plateCostCents, expectedCostCents, beatPlan } from "@shared/ads";
 import { planShots, planPlates } from "@shared/ad-shots";
 import { OUTCOME_PRICE_CENTS, OUTCOME_COPY } from "@shared/plans";
+import { AD_STYLES } from "@shared/ad-styles";
 
 describe("what an advert costs the person who asks for it", () => {
   it("charges the per-second rate at every length, off the price list", () => {
@@ -37,12 +38,22 @@ describe("whether the price covers the cost", () => {
    * AD_COST.attemptsPerFinished every length loses money, which is the
    * condition this asserts rather than assumes.
    */
-  it("is above the cost of generating each plate once, at every length", () => {
-    for (const duration of AD_DURATIONS) {
-      const plates = planPlates(planShots(beatPlan(duration)));
-      const cost = plateCostCents(plates.map((p) => p.seconds));
-      expect(adPriceCents(duration), `${duration}s: ${cost}c to make, ${adPriceCents(duration)}c charged`)
-        .toBeGreaterThan(cost);
+  it("is above the cost of generating each plate once, at every length and in every style", () => {
+    /*
+     * Every style, because a style's beatWeights change the shot list and so
+     * the number of clips generated — which is the entire cost. They used to
+     * be computed and thrown away, so this only ever exercised one shape; now
+     * that they reach the plan, a style that happened to generate more seconds
+     * than it sells is a real way to go underwater, and it would be invisible
+     * until the ledger said so.
+     */
+    for (const style of AD_STYLES) {
+      for (const duration of AD_DURATIONS) {
+        const plates = planPlates(planShots(beatPlan(duration, style.beatWeights)));
+        const cost = plateCostCents(plates.map((p) => p.seconds));
+        expect(adPriceCents(duration), `${style.id} at ${duration}s: ${cost}c to make, ${adPriceCents(duration)}c charged`)
+          .toBeGreaterThan(cost);
+      }
     }
   });
 
