@@ -160,9 +160,16 @@ export async function writeAdScript(
     const raw = await ask({ system: SCRIPT_RULES, user });
     const script = readScript(raw);
 
-    const { repaired } = repairCta(script, input.callToAction);
+    /*
+     * The call-to-action repair is for adverts. A story format's last line is
+     * its turn, and putting the business's address there is exactly what the
+     * prompt now forbids — so the repair would quietly undo the rule.
+     */
+    const { repaired } = repairCta(script, input.promptText ? null : input.callToAction);
     const problems = checkScript(script, input.beats, {
       ...input,
+      /* Same reason as the repair above: a story's last line is not an address. */
+      callToAction: input.promptText ? null : input.callToAction,
       needsWorld: !!input.style.logoRole || !!input.promptText,
     });
 

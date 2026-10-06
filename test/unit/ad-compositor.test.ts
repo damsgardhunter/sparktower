@@ -428,3 +428,31 @@ describe("compositing the product", () => {
     expect(args[args.indexOf("-map") + 1]).toBe("[out]");
   });
 });
+
+describe("the opening frame, held", () => {
+  const base = {
+    input: "plate.mp4", startSeconds: 0, seconds: 5, format: "vertical" as const,
+    brand: null, output: "out.mp4",
+  };
+
+  it("clones the first frame for exactly as long as it was asked to", () => {
+    const args = composeShot({ ...base, holdFirstFrame: 0.5 }).join(" ");
+    expect(args).toContain("tpad=start_mode=clone:start_duration=0.50");
+  });
+
+  it("adds nothing when it was not asked, which is every shot but the first", () => {
+    expect(composeShot(base).join(" ")).not.toContain("tpad");
+    expect(composeShot({ ...base, holdFirstFrame: 0 }).join(" ")).not.toContain("tpad");
+  });
+
+  it("takes the freeze out of the shot rather than adding it on", () => {
+    /*
+     * The advert is as long as it was sold. `tpad` pads the start and the `-t`
+     * on the output trims the end, so the freeze replaces the opening of the
+     * move instead of delaying it.
+     */
+    const args = composeShot({ ...base, holdFirstFrame: 0.5 });
+    const t = args[args.indexOf("-t") + 1];
+    expect(Number(t), "the shot got longer to fit the freeze").toBe(5);
+  });
+});

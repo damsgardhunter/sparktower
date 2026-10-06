@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import {
   STORY_FORMATS, STORY_FORMAT_IDS, storyFormat, storyPlan, productBeat,
-  planStoryShots, planStoryPlates, storyFitsIn, storyMinSeconds, type StoryFormat,
+  planStoryShots, planStoryPlates, storyFitsIn, storyMinSeconds, OPENING_FREEZE_SECONDS, storyPrompt, type StoryFormat,
 } from "@shared/ad-stories";
 import { checkScript, type AdScript } from "@shared/ad-script";
 import { AD_DURATIONS } from "@shared/ads";
@@ -216,6 +216,65 @@ describe("a format that cannot fit the length", () => {
         }
       }
     }
+  });
+});
+
+describe("what the formats were actually asked for", () => {
+  it("wants a fictional character who could not plausibly be filming, not a realistic person", () => {
+    /*
+     * The examples in the brief are Bigfoot vlogging, a stormtrooper on his
+     * break, a cat with a desk job, a delivery van complaining about its
+     * owner. Asking instead for "a specific character drawn from who this
+     * business is for" produced a realistic person in a garage — which is a
+     * testimonial, and nobody shares a testimonial. The absurdity is the hook.
+     */
+    const vlog = storyFormat("character_vlog")!.character!;
+    expect(vlog).toMatch(/fictional/i);
+    expect(vlog, "the examples are what carry the register").toMatch(/bigfoot|stormtrooper|cat|van/i);
+    expect(vlog).toMatch(/never a realistic person/i);
+  });
+
+  it("makes the POV format say POV in its first line, which is the premise", () => {
+    expect(storyFormat("pov")!.character).toMatch(/POV: /);
+  });
+
+  it("ends on the turn rather than an address", () => {
+    /*
+     * A drill with a googly eye built three beats of comedy and then said
+     * "Start at sparktower.app", because the line rule said the last line was
+     * exactly the call to action. That replaces the reason a film gets shared
+     * with the reason it gets scrolled past.
+     */
+    /*
+     * Asserted on the instructions rather than on the beat descriptions. Two
+     * attempts at matching words in the purposes both failed on sentences that
+     * *refuse* a call to action — "a documentary does not do a call to action"
+     * reads the same to a substring check as asking for one. The prompt is
+     * where the rule actually lives, so it is where the rule is checked.
+     */
+    const format = storyFormat("character_vlog")!;
+    const plan = storyPlan(format, 15);
+    const prompt = storyPrompt({
+      format, plan, brief: "A place to build things.",
+      businessName: "SparkTower", callToAction: "Start at sparktower.app",
+      limitFor: (_b, _s) => 32,
+    });
+    expect(prompt, "the last line is forced to be the address again").not.toMatch(/The last line is exactly/);
+    expect(prompt).toMatch(/Do NOT put "Start at sparktower\.app" or any web address in any line/);
+    expect(prompt, "and the last beat is named as the turn").toMatch(/THE TURN\./);
+    /*
+     * The rule that fixes "Hi. I live here now." — a first line that reads as
+     * nonsense because nothing around it says who is speaking or where. Every
+     * beat passed its own checks; the sequence was what failed.
+     */
+    expect(prompt, "nothing requires the lines to add up").toMatch(/THE STORY\./);
+    expect(prompt).toMatch(/somebody who knows nothing about this business and will not rewind/);
+    expect(prompt).toMatch(/the first line establishes who the character is/);
+  });
+
+  it("holds the opening frame still for long enough to register and not long enough to look broken", () => {
+    expect(OPENING_FREEZE_SECONDS).toBeGreaterThan(0.2);
+    expect(OPENING_FREEZE_SECONDS).toBeLessThan(1);
   });
 });
 

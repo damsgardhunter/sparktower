@@ -52,7 +52,7 @@ import {
 import { adStyle, availableStyles } from "@shared/ad-styles";
 import {
   storyFormat, storyPlan, storyPrompt, planStoryShots, planStoryPlates, productBeat,
-  storyFitsIn, storyMinSeconds,
+  storyFitsIn, storyMinSeconds, OPENING_FREEZE_SECONDS,
 } from "@shared/ad-stories";
 import { drawKeyframe } from "./ad-keyframe";
 import { planShots, planPlates, type Plate, type Shot } from "@shared/ad-shots";
@@ -811,6 +811,12 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
           seconds,
           format: row.format as AdFormatId,
           brand: resolved,
+          /*
+           * The opening frame, held. Only the first shot of a story: the pop
+           * is the change from still to moving, and doing it at every cut is a
+           * film that keeps stopping.
+           */
+          holdFirstFrame: story && pieces.length === 0 ? OPENING_FREEZE_SECONDS : 0,
           lines: typeset ? [{ ...typeset, atHeight, bold: true }] : [],
           /* A story format's captions carry no brand colour — see StoryFormat.captions. */
           typeStyle: story?.captions ?? "bubble",

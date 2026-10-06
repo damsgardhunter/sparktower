@@ -248,3 +248,49 @@ describe("the stub script", () => {
     expect(product.onScreen, "any English placeholder could contain a banned word").toMatch(/^[^a-z]*$/i);
   });
 });
+
+describe("a story script keeps its own ending", () => {
+  const STORY: ScriptRequest = {
+    brief: "A place where people build things together and keep going.",
+    style: { label: "Character vlog", bestFor: "", avoid: "" },
+    beats: [{ id: "greet", seconds: 3 }, { id: "react", seconds: 4 }],
+    voice: { label: "Plain", how: "." },
+    callToAction: "Order at ember.test",
+    /* Any prompt text marks this as a story rather than an advert. */
+    promptText: "Write a short film.",
+  };
+
+  const answer = JSON.stringify({
+    world: "w".repeat(320),
+    character: "c".repeat(130),
+    lines: [
+      { beat: "greet", onScreen: "I live in a lift", scene: "A dented robot holds a phone up under a clamp lamp." },
+      { beat: "react", onScreen: "Wait, I'm the collaborator?", scene: "It leans into the lens as the lamp steadies." },
+    ],
+    callToAction: "",
+  });
+
+  it("does not have its last line replaced by the call to action", async () => {
+    /*
+     * The repair is right for an advert and wrong for a film: a drill with a
+     * googly eye built three beats of comedy and then said "Start at
+     * sparktower.app", because the repair put it there. That swaps the reason
+     * the film gets shared for the reason it gets scrolled past.
+     */
+    const out = await writeAdScript(STORY, { ask: async () => answer });
+    expect(out.script.lines[out.script.lines.length - 1].onScreen).toBe("Wait, I'm the collaborator?");
+    expect(out.repaired, "the call to action was repaired into a story").toEqual([]);
+    expect(out.script.callToAction).not.toBe("Order at ember.test");
+  });
+
+  it("still repairs it for an ordinary advert", async () => {
+    const advert = { ...STORY, promptText: undefined, beats: [{ id: "hook", seconds: 3 }] };
+    const out = await writeAdScript(advert, {
+      ask: async () => JSON.stringify({
+        lines: [{ beat: "hook", onScreen: "Roasted this week", scene: "Steam off a cup on a counter." }],
+        callToAction: "Order today at Ember!",
+      }),
+    });
+    expect(out.script.callToAction).toBe("Order at ember.test");
+  });
+});

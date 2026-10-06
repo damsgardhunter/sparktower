@@ -92,22 +92,44 @@ export interface StoryFormat {
  */
 export const HOOK_HOLD_FRACTION = 0.2;
 
+/**
+ * How long the very first frame of a story is held still before it moves.
+ *
+ * Half a second: long enough for the change to register as a change, short
+ * enough that nobody thinks the video has failed to load. Applied only to the
+ * opening shot, because the trick is the transition from still to motion and a
+ * film that does it at every cut is a film that keeps stopping.
+ */
+export const OPENING_FREEZE_SECONDS = 0.5;
+
 export const STORY_FORMATS: StoryFormat[] = [
   {
     id: "character_vlog",
     label: "Character vlog",
     blurb: "A character films themselves talking about their day, and the product solves it.",
     bestFor: "Almost anything. The most reliable of these: a character carries a product nobody has heard of.",
-    character: "Invent one specific character with a job and a grievance, drawn from who this business is actually for — not a model, not an everyman. Someone with a face the camera can be close to and a reason to be filming.",
+    /*
+     * Fictional and absurd, which is the whole format.
+     *
+     * The first version of this asked for "one specific character drawn from
+     * who this business is for", and got a realistic person in a garage. That
+     * is a testimonial, and nobody shares a testimonial. The format is famous
+     * because of Bigfoot vlogs and stormtrooper vlogs: the comedy is that
+     * something which obviously cannot film itself is filming itself and
+     * complaining about its day. The business's customer is who the character
+     * is *about*, not who the character is.
+     */
+    character: "Invent a FICTIONAL, funny character who could not plausibly be making a vlog — an object, a vehicle, an animal, a creature, a machine — and give it a job, a grievance and a voice. Think Bigfoot filming a vlog, a stormtrooper on his break, a cat with a desk job, a delivery van complaining about its owner. It must be something the viewer did not expect to see holding a camera, and it must be connected to this business's world: whatever this business's customer struggles with, this character is the comic version of that struggle. Never a realistic person giving a testimonial.",
     look: "THIS FOOTAGE IS THE PHONE. It is the front-facing camera of the phone the character is holding at arm's length: their face fills the upper half of the frame, they are looking straight into the lens and talking to it, and the room is behind them. Not a camera watching somebody hold a phone — the phone's own view. Handheld and slightly unsteady, lit by whatever is actually there, no colour grade and no shallow depth of field.",
     productAt: 0.55,
     keyframes: true,
     captions: "native",
     beats: [
-      { id: "greet", label: "Greets the camera", purpose: "The character talks to the viewer from inside a situation that is already strange or funny. No setup, no explanation — they are mid-day and mid-problem.", share: 0.2, minSeconds: 2, shots: ["punch", "scene"] },
-      { id: "complain", label: "The grievance", purpose: "What is making their day worse, in their own words, specific and small rather than grand.", share: 0.27, minSeconds: 3, shots: ["scene"] },
-      { id: "discover", label: "Finds the thing", purpose: "The product arrives — shown, not announced. The first time it is on screen.", share: 0.27, minSeconds: 3, shots: ["scene", "punch"] },
-      { id: "react", label: "The turn", purpose: "Their reaction, which is the joke or the relief. This is what gets shared, so it is the line somebody repeats.", share: 0.26, minSeconds: 3, shots: ["scene"] },
+      /* 0–3s, 3–7s, 7–11s, 11–15s: the shape this format is known for. */
+      { id: "greet", label: "Greets the camera", purpose: "The character introduces itself to the camera from inside a situation that is already absurd, and the line establishes WHO it is and WHERE it is. A viewer who knows nothing must understand the premise from this one line and this one shot.", share: 0.2, minSeconds: 2, shots: ["punch", "scene"] },
+      { id: "complain", label: "The grievance", purpose: "What is ruining its day, in its own voice, specific and funny. This follows directly from the greeting: same character, same place, the problem the premise set up.", share: 0.27, minSeconds: 3, shots: ["scene"] },
+      { id: "discover", label: "Finds the thing", purpose: "The product arrives and changes the situation. Shown, not announced. It must answer the exact grievance just named.", share: 0.27, minSeconds: 3, shots: ["scene", "punch"] },
+      { id: "react", label: "The turn", purpose: "The flip: the character's reaction undercuts or exceeds what the viewer expected. This is the line somebody repeats, so it is a joke or a surprise, never a summary of the product.", share: 0.26, minSeconds: 3, shots: ["scene"] },
     ],
   },
   {
@@ -115,7 +137,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     label: "POV",
     blurb: "\"POV: you're a…\" — the viewer is the character, and the camera is their eyes.",
     bestFor: "A product whose user recognises themselves instantly. The struggle has to be one somebody has had this week.",
-    character: "The viewer is the character, so describe whose eyes these are: their situation, their hands, what is in front of them. Never show their face — a point of view with a face in it is not a point of view.",
+    character: "The viewer is the character, so describe whose eyes these are: their situation, their hands, what is in front of them. Never show their face — a point of view with a face in it is not a point of view. The first on-screen line begins \"POV: \" and names who the viewer is, which is the whole premise and must be said in the first two seconds.",
     look: "First person, camera at eye height, hands entering frame from below. Phone footage: a little shaky, available light, no grade. The viewer should feel they are holding the camera, not watching one.",
     productAt: 0.6,
     keyframes: true,
@@ -381,12 +403,38 @@ export function storyPrompt(input: {
       : ``,
     `- No lettering, signs, labels, prices or logos in any scene: words are typeset over the footage afterwards.`,
     ``,
+    /*
+     * The thing that was missing, and the reason a finished film read as
+     * nonsense. The beats were each individually fine and did not add up: the
+     * first line was "Hi. I live here now." and nothing before or after it
+     * said who was speaking, where, or why anybody should care.
+     *
+     * Stated as a property of the sequence rather than of any line, because
+     * every line passed on its own.
+     */
+    `THE STORY. These lines are read in order by somebody who knows nothing about this business and will not rewind. Together they must tell one story that makes sense: the first line establishes who the character is and what the situation is, each line follows from the one before, and a stranger reaching the end understands what happened. A line that only makes sense if you already know the premise is a line that fails.`,
+    `THE TURN. The film sets up an expectation and then flips it. The last beat is the flip — the thing the viewer did not see coming — and it is what gets the film shared. A last line that summarises the product is not a turn.`,
+    ``,
     `Rules for the lines:`,
     `- Each on-screen line fits its character limit. It is set large over moving footage: a few words, not a sentence.`,
+    `- The lines are the character talking, in its own voice, not a narrator describing it.`,
     `- Write only what the business told you. Never invent a customer, a quote, a number, a price or a result.`,
     input.avoidWords?.length ? `- Never use these words: ${input.avoidWords.join(", ")}.` : ``,
+    /*
+     * No call to action in the last line, and this is deliberate.
+     *
+     * Forcing it there cost a film its ending: a drill with a googly eye built
+     * to three beats of comedy and then said "Start at sparktower.app",
+     * because the rule said the last line was exactly that. The last beat of
+     * every one of these formats is the turn — the flip, the joke, the thing
+     * somebody repeats — and replacing it with an address is replacing the
+     * reason the film would be shared with the reason it would be scrolled
+     * past. The product has already appeared by then; that is what the late
+     * product beat is for, and it is the whole call to action these formats
+     * get.
+     */
     input.callToAction
-      ? `- The last line is exactly "${input.callToAction}". Reproduce it character for character.`
+      ? `- Do NOT put "${input.callToAction}" or any web address in any line. The last beat is the turn, not a call to action; the product has already appeared and that is enough.`
       : ``,
     ``,
     `HOW IT IS SHOT, which matters as much as what is in it: ${format.look}`,

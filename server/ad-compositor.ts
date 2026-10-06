@@ -152,6 +152,19 @@ export interface ComposeShot {
   brandBar?: boolean;
   /** Bubble by default; `outline` and `plain` are for brands that need quieter. */
   typeStyle?: TypeStyleId;
+  /**
+   * Hold the first frame still for this long before the shot moves.
+   *
+   * The still-to-motion pop: a film that opens on a frozen image and then
+   * starts moving holds attention through the first second better than one
+   * already in motion, because the change is the thing the eye catches. Worth
+   * having as a deliberate switch rather than an accident of generation.
+   *
+   * Taken out of the shot's own length rather than added to it, so the advert
+   * is still exactly as long as it was sold — the freeze replaces the opening
+   * of the move, it does not delay it.
+   */
+  holdFirstFrame?: number;
   /** A pre-blurred shadow, made by `renderShot`. Kept out of `composeShot` so it stays pure. */
   shadowFile?: string | null;
   output: string;
@@ -189,6 +202,17 @@ export function composeShot(shot: ComposeShot): string[] {
     `fps=24`,
     `setsar=1`,
   );
+
+  if (shot.holdFirstFrame && shot.holdFirstFrame > 0) {
+    /*
+     * Cloned from the first frame and then trimmed back to length by the `-t`
+     * on the output. `tpad` pads the start of the stream, so what plays is the
+     * frozen frame followed by the beginning of the move, and the end of the
+     * move is what falls off — which is the right end to lose, since the shot
+     * is cut from a longer plate anyway.
+     */
+    filters.push(`tpad=start_mode=clone:start_duration=${shot.holdFirstFrame.toFixed(2)}`);
+  }
 
   if (shot.brandBar) {
     /*
