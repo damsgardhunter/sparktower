@@ -45,9 +45,24 @@ export const PLATE_NEGATIVE = [
   "logo", "brand mark", "signage", "price tag", "packaging label",
   /* A generated face is a real person's likeness, used to sell something, without asking. */
   "faces", "people looking at camera", "recognisable faces",
-  /* The failure modes that make a generated clip read as generated. */
+  /*
+   * The failure modes that make a generated clip read as generated.
+   *
+   * The second group is the one somebody actually complained about, and none
+   * of it was named here: "instances with the person going through the desk
+   * they are working at and random floating objects and items on the desk
+   * morphing constantly". A negative prompt cannot fix a model's physics, but
+   * leaving the specific failures unnamed guarantees nothing is even trying.
+   */
   "extra fingers", "deformed hands", "warped straight lines", "flickering",
   "split screen", "collage", "frame within a frame",
+  /* Objects that do not behave like objects. */
+  "morphing objects", "objects changing shape", "objects appearing from nowhere",
+  "objects disappearing", "duplicated objects", "floating objects",
+  "objects hovering above surfaces", "melting", "warping geometry",
+  /* Bodies that do not behave like bodies. */
+  "limbs passing through solid objects", "hands clipping through surfaces",
+  "body intersecting furniture", "arms merging with the table",
 ] as const;
 
 export const plateNegativePrompt = (): string => PLATE_NEGATIVE.join(", ");
@@ -211,13 +226,52 @@ export function platePrompt(input: PlatePromptInput): string {
    * photograph it can see rather than building a place from a description, so
    * a few words of palette and light are enough to stop it drifting.
    */
+  /**
+   * The move, restrained for a clip that starts from a drawn frame.
+   *
+   * Animating a still means inventing everything the still does not show, and
+   * the bigger the move the more of that there is: an orbit has to imagine the
+   * far side of every object and the floor behind the subject, and what comes
+   * back is a person passing through their own desk. The frame already exists,
+   * so the camera's job is to breathe rather than to explore — and a small
+   * move on a good frame reads better than a large one on a disintegrating
+   * scene.
+   */
+  function gentle(camera: string): string {
+    /*
+     * Travelling moves and fast ones both. A "hard push in" does not go
+     * anywhere but it covers the distance quickly, and speed costs the model
+     * the same coherence that travel does — it was the move on the first clip
+     * of the vlog, and the first clip is where the desk ate an arm.
+     */
+    const big = /orbit|dolly through|crane|whip|snap|arc from|hard |fast |quick /i;
+    if (!big.test(camera)) return camera;
+    /*
+     * Keep the axis the planner chose and lose the speed. Collapsing them all
+     * to a push would make every restrained shot the same move, which trades
+     * one kind of sameness for another — the planner picked a tilt or a pan
+     * for a reason, and slow is the only part that needs changing.
+     */
+    if (/orbit|arc from|pan/i.test(camera)) return "a slow drift sideways, barely moving";
+    if (/crane|tilt down|settle/i.test(camera)) return "a slow settle downward, barely moving";
+    if (/tilt up/i.test(camera)) return "a slow tilt upward, barely moving";
+    if (/zoom|pull out/i.test(camera)) return "a slow pull back, barely moving";
+    return "a slow push in, barely moving";
+  }
+
   function motionPrompt(): string {
     return [
       `Animate this photograph. It is the first frame; everything below is what happens over the next few seconds.`,
       ``,
-      `Camera: ${plate.camera}, one continuous move, no cuts and no scene change. The camera travels — it does not sit still and it does not merely zoom.`,
+      `Camera: ${gentle(plate.camera)}, one continuous move, no cuts and no scene change. Keep the move small: the frame is already right, and a large move invents what is not in it.`,
       scenes.length ? `What happens: ${scenes.join(" Then: ")}` : "",
       `People and objects keep moving throughout: somebody walks, hands work, light shifts, dust or steam drifts. Nothing in frame is frozen.`,
+      /*
+       * Said in the positive, because the negative prompt is the other half of
+       * this and models drop negations. "Rests solidly on the surface" is a
+       * thing a camera can be pointed at; "does not float" is an argument.
+       */
+      `Everything in the frame is solid and stays itself: objects keep the same shape, size and position on the surfaces they rest on, hands and arms go around things rather than through them, and nothing appears, vanishes or changes into something else. Only the things named above move.`,
       ``,
       `Hold the photograph's own place, materials, palette and light exactly — this is a continuation of it, not a new scene. Do not cut away, do not change location, do not add or remove the structures already in it.`,
       input.world?.trim() ? `For reference, the world: ${fitWorld(input.world, 420)}` : "",

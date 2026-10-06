@@ -438,7 +438,7 @@ export function scriptPrompt(input: {
     `Voice: ${input.voice.label}. ${input.voice.how}`,
     ``,
     input.style.logoRole
-      ? `First, establish the WORLD: the one place every shot of this advert happens in. At least ${WORLD_MIN_CHARS} characters, and dense with specifics — what the place is built from, how big it is, the quality and direction of the light, the time of day, the palette, what the air looks like, what is in it. Say where the light in this place comes from, and give it enough of it to be seen by: a world with no light sources named is one the camera renders nearly black. Every detail you leave out is one the camera will invent differently in each shot, so leave out nothing.\nDescribe the place and nothing else. No instructions about shots, framing or what the camera should do — this text is sent with every frame, so a rule inside it is obeyed on every frame and taken literally. Then write the beats, every one of them inside that world.`
+      ? `First, establish the WORLD: the one place every shot of this advert happens in. At least ${WORLD_MIN_CHARS} characters, and dense with specifics — what the place is built from, how big it is, the quality and direction of the light, the time of day, the palette, what the air looks like, and the few large things that are always in it. Keep it to a handful of big objects rather than a list of small ones: anything small and scattered will morph and slide once the frames are animated. Say where the light in this place comes from, and give it enough of it to be seen by: a world with no light sources named is one the camera renders nearly black. Every detail you leave out is one the camera will invent differently in each shot, so leave out nothing.\nDescribe the place and nothing else. No instructions about shots, framing or what the camera should do — this text is sent with every frame, so a rule inside it is obeyed on every frame and taken literally. Then write the beats, every one of them inside that world.`
       : ``,
     input.style.logoRole ? `` : ``,
     `For each beat, write two things: the line that appears on screen, and the scene the camera is looking at while it does.`,
@@ -476,6 +476,11 @@ export function scriptPrompt(input: {
       ? `- Name a light in every scene and say what it falls on — a lamp, a doorway, a screen, a window, a flame, a work light. A dark world is still a lit frame: a viewer has to be able to see the thing the shot is about.`
       : ``,
     `- Concrete and specific, and written as what a camera sees. Name the things: what they are made of, what colour, how big, how lit. Two sentences at most.`,
+    /*
+     * Few and large, for the same reason as the keyframe. A scene that lists a
+     * dozen small objects is a clip in which a dozen small objects morph.
+     */
+    `- Name at most three or four things in shot, and make them big enough to see. Scattered small items — screws, cables, papers, offcuts, clutter — come out of a generated clip sliding, multiplying and changing shape, so a scene that asks for a cluttered bench gets one that will not hold still.`,
     /*
      * Named rather than described, because "be specific" is advice and a list
      * of refused words is a rule. These are the words that sound like a

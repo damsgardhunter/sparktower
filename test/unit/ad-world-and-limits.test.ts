@@ -12,7 +12,7 @@ import { keyframePrompt, keyframeSize } from "../../server/ad-keyframe";
 import { sceneMoments, checkScript, type AdScript } from "@shared/ad-script";
 import { composeDissolve, CROSSFADE_SECONDS, CROSSFADE_SECONDS_CONTINUOUS } from "../../server/ad-compositor";
 import { adStyle, AD_STYLES } from "@shared/ad-styles";
-import { platePrompt, fitWorld, PROMPT_MAX_CHARS } from "@shared/ad-plate-prompt";
+import { platePrompt, fitWorld, plateNegativePrompt, PROMPT_MAX_CHARS } from "@shared/ad-plate-prompt";
 import { planShots, planPlates } from "@shared/ad-shots";
 import { beatPlan, AD_DURATIONS } from "@shared/ads";
 import { AD_FORMATS } from "@shared/ads";
@@ -232,6 +232,87 @@ describe("the prompt the provider will actually accept", () => {
     const trimmed = fitWorld("One enormously long opening sentence that will not fit at all.", 20);
     expect(trimmed.length).toBeLessThanOrEqual(20);
     expect(trimmed.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the artifacts somebody actually watched", () => {
+  const plate = { seconds: 5, camera: "slow orbit around the subject", beats: ["greet"], windows: [] } as any;
+  const motion = (camera = "slow orbit around the subject") => platePrompt({
+    brief: "A place to build.", style: { label: "Vlog", plate: "Phone footage.", avoid: "" },
+    plate: { ...plate, camera }, brandMoment: false, fromKeyframe: true,
+    scenes: ["She lifts a panel onto the bench"],
+  });
+
+  it("names the failures, because an unnamed one is not even being tried for", () => {
+    /*
+     * "the person going through the desk they are working at and random
+     * floating objects and items on the desk morphing constantly" — none of
+     * which appeared anywhere in the negative prompt.
+     */
+    const negative = plateNegativePrompt();
+    for (const artifact of ["morphing", "floating objects", "passing through solid objects", "appearing from nowhere"]) {
+      expect(negative, artifact).toContain(artifact);
+    }
+  });
+
+  it("asks for solidity in the positive as well, because models drop negations", () => {
+    const p = motion();
+    expect(p).toMatch(/keep the same shape, size and position/i);
+    expect(p).toMatch(/around things rather than through them/i);
+  });
+
+  it("restrains a travelling or fast camera, and leaves a gentle one alone", () => {
+    /*
+     * Animating a still means inventing what the still does not show, and the
+     * bigger the move the more of that there is. An orbit has to imagine the
+     * far side of everything and the floor behind the subject.
+     */
+    for (const big of ["slow orbit around the subject", "dolly through and past", "hard push in", "whip pan settling", "crane down to table height"]) {
+      expect(motion(big), big).toMatch(/barely moving/);
+      expect(motion(big), `${big} survived into the prompt`).not.toContain(`Camera: ${big},`);
+    }
+    for (const gentle of ["slow push in", "gentle drift left", "handheld sway", "rack focus to subject"]) {
+      expect(motion(gentle), gentle).toContain(`Camera: ${gentle},`);
+    }
+  });
+
+  it("keeps the axis the planner chose when it slows a move down", () => {
+    /* Collapsing every restrained shot to a push trades one sameness for another. */
+    expect(motion("quick tilt up")).toMatch(/tilt upward/);
+    expect(motion("whip pan settling")).toMatch(/sideways/);
+    expect(motion("crane down to table height")).toMatch(/downward/);
+    expect(motion("snap zoom")).toMatch(/pull back/);
+  });
+});
+
+describe("what the drawn first frame may contain", () => {
+  const prompt = (over: Partial<Parameters<typeof keyframePrompt>[0]> = {}) =>
+    keyframePrompt({ scene: "A bench under a window", brief: "A place to build.", hasLogo: true, hasPrevious: false, ...over });
+
+  it("forbids lettering outright, with no exception for signs in the room", () => {
+    /*
+     * The exception — "except where it is physically part of the scene" —
+     * sounds reasonable, because real rooms have signs in them. It put a
+     * poster reading "SPAKTOWER" on a wall. A misspelling of the company's own
+     * name in their own advert is worse than a blank wall by a wide margin.
+     */
+    const p = prompt().toLowerCase();
+    expect(p).toContain("no lettering anywhere in the frame at all");
+    expect(p, "the exception is back").not.toContain("except where it is physically part");
+    for (const surface of ["signs", "posters", "labels"]) expect(p, surface).toContain(surface);
+  });
+
+  it("takes the logo's shapes without its wordmark", () => {
+    const p = prompt();
+    expect(p).toMatch(/SHAPES, FORMS AND COLOURS only/);
+    expect(p).toMatch(/never reproduce any lettering from it/i);
+  });
+
+  it("asks for few large objects, because small scattered ones are what morph", () => {
+    const p = prompt().toLowerCase();
+    expect(p).toContain("few objects");
+    expect(p).toMatch(/no scattered small items/);
+    expect(p, "contact with a surface is what stops things floating").toMatch(/resting solidly on a surface/);
   });
 });
 

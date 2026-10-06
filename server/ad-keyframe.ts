@@ -96,7 +96,15 @@ export function keyframePrompt(input: {
   hasLogo: boolean; hasPrevious: boolean;
 }): string {
   const refs: string[] = [];
-  if (input.hasLogo) refs.push("The first reference image is the company's actual logo.");
+  if (input.hasLogo) {
+    /*
+     * The shape, not the wordmark. A logo handed over whole is a logo with the
+     * company's name written in it, and a model reproducing that reproduces
+     * the lettering too — approximately, which is how a misspelt version of
+     * somebody's own name ends up in their own advert.
+     */
+    refs.push("The first reference image is the company's actual logo. Use its SHAPES, FORMS AND COLOURS only — never reproduce any lettering from it, and never write the company's name anywhere in the frame.");
+  }
   if (input.hasPrevious) {
     refs.push(
       `The ${input.hasLogo ? "second" : "first"} reference image is the last frame of the previous shot in this same advert. ` +
@@ -127,9 +135,33 @@ export function keyframePrompt(input: {
      * over this frame afterwards, so lettering drawn here ends up underneath
      * it — two attempts at the same words, one of them misspelt.
      */
-    `No captions, no subtitles, no watermark and no lettering anywhere in the frame except where it is physically part of the scene.`,
+    /*
+     * No lettering at all, with no exception.
+     *
+     * There used to be one — "except where it is physically part of the
+     * scene" — and it is the clause that put a poster reading "SPAKTOWER" on
+     * a wall. The exception sounds reasonable: real rooms have signs in them.
+     * But an image model asked for a sign spells it right most of the time and
+     * not every time, and a misspelling of the company's own name, on a wall,
+     * in their own advertisement, is worse than a blank wall by a wide margin.
+     * The words in this film are typeset afterwards, where they are correct by
+     * construction.
+     */
+    `No lettering anywhere in the frame at all: no signs, no posters, no labels, no screens with words on, no captions, no watermark. Surfaces that would carry writing are blank.`,
     `No faces looking at the camera and no recognisable person.`,
     `Leave the lower third of the frame simple and uncluttered: a line of type is set over it.`,
+    /*
+     * Few, large, settled.
+     *
+     * This frame is about to be animated, and small scattered objects are the
+     * first thing a video model destroys: loose screws, wires, tape and clutter
+     * come out of the clip morphing, sliding and multiplying. Somebody watching
+     * described "random floating objects and items on the desk morphing
+     * constantly", and the keyframe is where that is decided — a frame with
+     * forty small things in it cannot be animated without most of them moving
+     * wrongly.
+     */
+    `Few objects, and large ones. No scattered small items — no loose screws, cables, offcuts, papers or clutter. Every object is clearly separated from the others, resting solidly on a surface, in contact with it.`,
     ``,
     `Photographic and real: full-frame camera, fast prime lens, natural light, shallow depth of field, true-to-life colour. Not an illustration, not a 3D render, not stylised.`,
     ``,
