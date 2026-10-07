@@ -97,10 +97,12 @@ const DISPLAY_NAME = "Nova Business";
  * still a flag you type, because creating an account that will appear beside
  * real ones is not a thing to do by accident.
  */
+const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"];
+
+export const isLocal = (url: string): boolean => LOCAL_HOSTS.includes(new URL(url).hostname);
+
 function assertIntentional(url: string): void {
-  const host = new URL(url).hostname;
-  const local = ["localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"];
-  if (local.includes(host) || allowRemote) return;
+  if (isLocal(url) || allowRemote) return;
   throw new Error(
     `${host} does not look like a local database.\n`
     + "This creates an account that will appear beside real ones. Add --allow-remote if that is what you mean.",
@@ -228,7 +230,9 @@ async function hasMarketplace(): Promise<boolean> {
   return Number(rows[0]?.n ?? 0) === 2;
 }
 
-export async function seedNovaBusiness(opts: { password?: string } = {}): Promise<{ id: string; email: string; marketplace: boolean }> {
+export async function seedNovaBusiness(
+  opts: { password?: string; devUnlimited?: boolean } = {},
+): Promise<{ id: string; email: string; marketplace: boolean }> {
   const passwordHash = opts.password
     /* The app's own hasher, so the stored shape is whatever sign-in expects. */
     ? await (await import("../server/password-hash")).hashPassword(opts.password)
@@ -242,6 +246,7 @@ export async function seedNovaBusiness(opts: { password?: string } = {}): Promis
       authProvider: passwordHash ? "local" : "bot",
       isBot: true,
       emailVerifiedAt: new Date(),
+      ...(opts.devUnlimited ? { devUnlimited: true } : {}),
       ...(passwordHash ? { passwordHash } : {}),
     } as any)
     .onConflictDoUpdate({
@@ -251,6 +256,7 @@ export async function seedNovaBusiness(opts: { password?: string } = {}): Promis
         lastName: "Business",
         isBot: true,
         emailVerifiedAt: new Date(),
+        ...(opts.devUnlimited ? { devUnlimited: true } : {}),
         ...(passwordHash ? { passwordHash, authProvider: "local" } : {}),
       } as any,
     })
@@ -329,6 +335,18 @@ async function main(): Promise<number> {
   plan.push(`write the profile: name, headline, bio, ${SKILLS.length} skills, `
     + `${EXPERIENCE.length} roles, ${PORTFOLIO.length} portfolio entries, Nova's summary`);
   plan.push("mark onboarding complete");
+  /*
+   * Building a market around a project costs CREDIT_COSTS.simulationBuild, and
+   * this account has no money on it. `dev_unlimited` is the switch for that and
+   * it is honoured only when NODE_ENV is not production *and* the route that
+   * sets it is reachable — two gates, because a column that turns billing off
+   * deserves them. So it is set locally, where it works, and deliberately not
+   * written to a live row at all: inert today is still a landmine if those
+   * gates ever move.
+   */
+  plan.push(isLocal(url)
+    ? "set dev_unlimited, so it can build markets here without a balance"
+    : "LEAVE dev_unlimited alone — it is ignored in production, so this account needs a real balance to build markets");
   plan.push(await hasMarketplace()
     ? `accept the seller agreement (version ${SELLER_TERMS_VERSION})`
     : "SKIP the seller agreement — the marketplace tables are not on this database yet");
@@ -344,7 +362,7 @@ async function main(): Promise<number> {
 
   console.log("\napplying…");
 
-  const account = await seedNovaBusiness({ password });
+  const account = await seedNovaBusiness({ password, devUnlimited: isLocal(url) });
 
   const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, account.id));
   const missing = missingOnboarding(profile as any);

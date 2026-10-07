@@ -27,7 +27,9 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
-import { users, userProfiles, sellerAgreements } from "@shared/schema";
+import {
+  users, userProfiles, sellerAgreements, projects, companies, companyMembers, simSeasons,
+} from "@shared/schema";
 import { seedNovaBusiness } from "../../script/seed-nova-business";
 import { onboardingComplete } from "@shared/onboarding";
 
@@ -155,5 +157,119 @@ describe("the Nova Business account", () => {
     /* One consent row per version, however many times this runs. */
     const agreed = await db.select().from(sellerAgreements).where(eq(sellerAgreements.userId, first.id));
     expect(agreed.length).toBe(1);
+  });
+});
+
+/**
+ * The listing path this account actually exists for.
+ *
+ * The test above lists a built-in niche, which is the easy half. A *custom*
+ * market — one written for a particular business, which is what gets sold here —
+ * can only be listed from a season the author owns, because the create route
+ * fetches the market server-side rather than accepting one from the browser:
+ * "a browser that can send a market is a browser that was given one". So the
+ * chain is project → company → season → listing, all under this account, and
+ * every link is a place the listing can 404 for a reason that looks like
+ * something else.
+ */
+describe("Nova Business listing a market it wrote", () => {
+  /** The chain, written straight into the database: this test is about the listing. */
+  async function seasonOwnedBy(ownerId: string) {
+    const [project] = await db.insert(projects).values({
+      ownerId, title: `Nova market ${Date.now()}`,
+      description: "A business a custom market was written for.",
+      category: "saas", status: "active",
+    } as any).returning();
+
+    const [company] = await db.insert(companies).values({
+      name: "Clinic Scheduler", slug: `nova-cs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      projectId: project.id, createdBy: ownerId, createdAt: new Date(),
+    } as any).returning();
+    await db.insert(companyMembers).values({
+      companyId: company.id, userId: ownerId, role: "owner", joinedAt: new Date(),
+    });
+
+    const market = {
+      id: "vet_rota", name: "Vet rota software", premise: "Scheduling for clinics.",
+      baseUnitCost: 20, innovationPace: 1,
+      voice: {
+        customer: "clinic", customers: "clinics", unit: "licence", per: "a month", capacity: "seats",
+        place: "region", places: "regions", quality: "polish", brand: "name",
+      },
+      segments: [
+        { id: "single", name: "Single-site", description: "One vet.", size: 9_000, growth: 0.04, priceSensitivity: 0.6, qualityFocus: 0.5, brandFocus: 0.3, serviceFocus: 0.7, loyalty: 0.4, referencePrice: 90 },
+        { id: "groups", name: "Groups", description: "Five sites.", size: 3_000, growth: 0.07, priceSensitivity: 0.4, qualityFocus: 0.7, brandFocus: 0.5, serviceFocus: 0.6, loyalty: 0.6, referencePrice: 220 },
+      ],
+      cities: [
+        { id: "n", name: "North", weight: 0.4, entryCost: 14_000, note: "" },
+        { id: "s", name: "South", weight: 0.35, entryCost: 16_000, note: "" },
+        { id: "e", name: "East", weight: 0.25, entryCost: 11_000, note: "" },
+      ],
+      incumbents: [
+        { id: "a", name: "Alpha", posture: "fortress", startingShare: 0.3, quality: 65, brand: 60, service: 55, priceIndex: 1.1, persona: { tagline: "", boss: "", character: "", known: "", knock: "Slow", voice: "" } },
+        { id: "b", name: "Beta", posture: "coaster", startingShare: 0.2, quality: 50, brand: 45, service: 40, priceIndex: 0.9, persona: { tagline: "", boss: "", character: "", known: "", knock: "Dated", voice: "" } },
+      ],
+    };
+
+    const [season] = await db.insert(simSeasons).values({
+      nicheId: market.id, name: "Vet rota — season one", status: "forming",
+      totalYears: 4, companyId: company.id,
+      inviteCode: `NB${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      createdAt: new Date(), scope: "home", botTeams: 0, origin: "nova", cadence: "quarterly",
+      customMarket: market,
+    } as any).returning();
+
+    return { project, season, market };
+  }
+
+  it("lists a custom market from its own season, and sells it per seat", async () => {
+    const app = await getTestApp();
+    const { id, email } = await seedNovaBusiness({ password: PASSWORD });
+    const { season, market } = await seasonOwnedBy(id);
+
+    const agent = request.agent(app);
+    expect((await agent.post("/api/auth/login").set("x-forwarded-for", "198.51.151.15")
+      .send({ email, password: PASSWORD })).status).toBe(200);
+
+    const draft = await agent.post("/api/sim-market/listings")
+      .send({ fromSeasonId: season.id, title: "Vet rota software" });
+    expect(draft.status, `${draft.status}: ${(draft.text ?? "").slice(0, 300)}`).toBe(201);
+
+    const published = await agent.post(`/api/sim-market/listings/${draft.body.listing.id}/publish`).send({
+      title: "Vet rota software",
+      summary: "Two incumbents hold the region and neither of them is any good at groups.",
+      pricing: "perSeat",
+      seatPriceCents: 500,
+    });
+    expect(published.status, `${published.status}: ${(published.text ?? "").slice(0, 300)}`).toBe(200);
+    expect(published.body.listing.status).toBe("listed");
+    expect(published.body.listing.seatPriceCents).toBe(500);
+
+    /*
+     * The market itself never leaves the server, signed in or not, because the
+     * market is the product. Worth asserting on the author's own reply: this is
+     * the one request where sending it would look harmless.
+     */
+    expect(published.body.listing.customMarket, "the market is not shipped to any client").toBeUndefined();
+    expect(JSON.stringify(published.body)).not.toContain(market.incumbents[0].name);
+  }, 60_000);
+
+  it("will not list a market belonging to somebody else's project", async () => {
+    const app = await getTestApp();
+    const { email } = await seedNovaBusiness({ password: PASSWORD });
+
+    /* A season under a different owner entirely. */
+    const [stranger] = await db.insert(users).values({
+      email: `nova-stranger-${Date.now()}@example.test`, firstName: "Stranger",
+    } as any).returning();
+    const { season } = await seasonOwnedBy(stranger.id);
+
+    const agent = request.agent(app);
+    expect((await agent.post("/api/auth/login").set("x-forwarded-for", "198.51.151.16")
+      .send({ email, password: PASSWORD })).status).toBe(200);
+
+    const draft = await agent.post("/api/sim-market/listings").send({ fromSeasonId: season.id });
+    /* 404 rather than 403: whose season this is, is not the asker's business. */
+    expect(draft.status).toBe(404);
   });
 });
