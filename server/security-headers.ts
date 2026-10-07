@@ -21,16 +21,44 @@
 import helmet from "helmet";
 import type { RequestHandler } from "express";
 
-/** Every host outside our origin the pages use, and why. */
+/**
+ * Every host outside our origin the pages use, and why.
+ *
+ * ## Stripe
+ *
+ * Card payment needs three of these, and the policy had none of them, so
+ * `js.stripe.com` was blocked on every page that asks for money — adding a
+ * card, and topping up a balance with one already saved. The browser test that
+ * watches for violations had been reporting it as twelve blocked loads; the
+ * product symptom is a card form that never appears.
+ *
+ * Pledging a project was unaffected and still is: that redirects to a
+ * Stripe-hosted Checkout page, which is Stripe's own origin and Stripe's own
+ * policy. Only the in-page Elements forms (components/saved-cards.tsx,
+ * components/payment-dialog.tsx) need these.
+ *
+ *  - `js.stripe.com` in scripts: Stripe.js itself.
+ *  - `js.stripe.com` in frames: Elements renders the card fields in iframes
+ *    from there, which is the point of it — the card number never touches our
+ *    DOM. `hooks.stripe.com` too: that is where a 3-D Secure challenge opens.
+ *  - `api.stripe.com` in connect: Elements tokenises straight to Stripe.
+ *
+ * Narrow on purpose. Stripe's documented set includes wildcards for features
+ * this app doesn't use, and a wildcard is harder to reason about later than a
+ * failure that names the host it wants.
+ */
 export const CSP_SOURCES = {
   /** YouTube's IFrame Player API (components/promo-video-player.tsx) loads its widget script from here. */
-  scripts: ["https://www.youtube.com"],
+  scripts: ["https://www.youtube.com", "https://js.stripe.com"],
   styles: ["https://fonts.googleapis.com"],
   fonts: ["https://fonts.gstatic.com"],
-  /** Promotion videos: YouTube (privacy-enhanced host) and Vimeo. */
-  frames: ["https://www.youtube-nocookie.com", "https://www.youtube.com", "https://player.vimeo.com"],
-  /** Direct uploads go to a presigned object-storage URL. */
-  connect: ["https://storage.googleapis.com"],
+  /** Promotion videos: YouTube (privacy-enhanced host) and Vimeo; Stripe Elements and its 3-D Secure step. */
+  frames: [
+    "https://www.youtube-nocookie.com", "https://www.youtube.com", "https://player.vimeo.com",
+    "https://js.stripe.com", "https://hooks.stripe.com",
+  ],
+  /** Direct uploads go to a presigned object-storage URL; Elements tokenises to Stripe. */
+  connect: ["https://storage.googleapis.com", "https://api.stripe.com"],
 } as const;
 
 export function contentSecurityPolicy(opts: { production: boolean }): Record<string, string[]> {
