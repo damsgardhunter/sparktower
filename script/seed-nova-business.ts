@@ -62,7 +62,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
-import { db } from "../server/db";
+import { db, pool } from "../server/db";
 import { users, userProfiles, sellerAgreements } from "@shared/schema";
 import type { ProfileExperience, ProfileEducation, ProfilePortfolioProject } from "@shared/schema";
 import { SELLER_TERMS_VERSION } from "@shared/simulation-market-terms";
@@ -204,61 +204,42 @@ const WORK_STYLE = {
   experienceLevel: "expert" as const,
 };
 
-async function main(): Promise<number> {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("Set DATABASE_URL.");
-  assertIntentional(url);
+/**
+ * Create or update the account. Exported so a test can drive the real thing
+ * rather than a copy of it — the shape of these rows is the whole point of this
+ * script, and a test that built its own would prove nothing about it.
+ */
+/**
+ * Whether the simulation marketplace has been migrated here yet.
+ *
+ * It had not been, on production, when this script was written: `users` and
+ * `user_profiles` were there and `seller_agreements` and `simulation_listings`
+ * were not, because the marketplace work has not been deployed. The account is
+ * still worth creating without them — it is a profile people will see — but the
+ * seller agreement cannot be recorded and nothing can be listed until the
+ * migrations land, and the script says so rather than failing halfway through
+ * with a missing-relation error.
+ */
+async function hasMarketplace(): Promise<boolean> {
+  const { rows } = await pool.query<{ n: string }>(
+    `select count(*)::text n from information_schema.tables
+     where table_schema = 'public' and table_name in ('seller_agreements', 'simulation_listings')`,
+  );
+  return Number(rows[0]?.n ?? 0) === 2;
+}
 
-  console.log(`database: ${new URL(url).hostname}${new URL(url).pathname}`);
-
-  let passwordHash: string | null = null;
-  if (wantsLogin) {
-    const given = process.env.NOVA_BUSINESS_PASSWORD;
-    if (!given) {
-      console.error(
-        "--login needs NOVA_BUSINESS_PASSWORD in the environment.\n"
-        + "Read from the environment rather than argv so it does not land in a shell history.",
-      );
-      return 1;
-    }
+export async function seedNovaBusiness(opts: { password?: string } = {}): Promise<{ id: string; email: string; marketplace: boolean }> {
+  const passwordHash = opts.password
     /* The app's own hasher, so the stored shape is whatever sign-in expects. */
-    const { hashPassword } = await import("../server/password-hash");
-    passwordHash = await hashPassword(given);
-  }
+    ? await (await import("../server/password-hash")).hashPassword(opts.password)
+    : null;
 
-  const [existing] = await db.select().from(users).where(eq(users.email, EMAIL));
-  const plan: string[] = [];
-  if (!existing) plan.push(`create the account ${EMAIL}`);
-  else plan.push(`update the existing account ${EMAIL} (${existing.id})`);
-  plan.push("set is_bot, so it is excluded from matching, search and Discover");
-  plan.push("confirm the address, so it can publish listings");
-  plan.push(`write the profile: name, headline, bio, ${SKILLS.length} skills, `
-    + `${EXPERIENCE.length} roles, ${PORTFOLIO.length} portfolio entries, Nova's summary`);
-  plan.push("mark onboarding complete");
-  plan.push(`accept the seller agreement (version ${SELLER_TERMS_VERSION})`);
-  if (wantsLogin) plan.push("set a password, so a person can sign in and drive it");
-  else plan.push("leave it without a password: nothing can sign in as it (pass --login to change that)");
-
-  for (const line of plan) console.log(`  · ${line}`);
-
-  if (!apply) {
-    console.log("\nDry run — rerun with --apply.\n");
-    return 0;
-  }
-
-  console.log("\napplying…");
-
-  /*
-   * The account. `onConflictDoUpdate` on the address rather than a
-   * read-then-write, so a second run is an update and never a duplicate — the
-   * unique index on email is the only thing that can settle that.
-   */
   const [account] = await db.insert(users)
     .values({
       email: EMAIL,
       firstName: "Nova",
       lastName: "Business",
-      authProvider: wantsLogin ? "local" : "bot",
+      authProvider: passwordHash ? "local" : "bot",
       isBot: true,
       emailVerifiedAt: new Date(),
       ...(passwordHash ? { passwordHash } : {}),
@@ -304,15 +285,66 @@ async function main(): Promise<number> {
     .onConflictDoUpdate({ target: userProfiles.userId, set: profileValues as any });
 
   /* The consent record. One row per version, and only if this version is new. */
-  const accepted = await db.select().from(sellerAgreements).where(eq(sellerAgreements.userId, account.id));
-  if (!accepted.some((a) => a.version === SELLER_TERMS_VERSION)) {
-    await db.insert(sellerAgreements).values({
-      userId: account.id,
-      version: SELLER_TERMS_VERSION,
-      /* Null, not invented: there was no request and no address behind this. */
-      acceptedIp: null,
-    });
+  const marketplace = await hasMarketplace();
+  if (marketplace) {
+    const accepted = await db.select().from(sellerAgreements).where(eq(sellerAgreements.userId, account.id));
+    if (!accepted.some((a) => a.version === SELLER_TERMS_VERSION)) {
+      await db.insert(sellerAgreements).values({
+        userId: account.id,
+        version: SELLER_TERMS_VERSION,
+        /* Null, not invented: there was no request and no address behind this. */
+        acceptedIp: null,
+      });
+    }
   }
+
+  return { id: account.id, email: EMAIL, marketplace };
+}
+
+async function main(): Promise<number> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("Set DATABASE_URL.");
+  assertIntentional(url);
+
+  console.log(`database: ${new URL(url).hostname}${new URL(url).pathname}`);
+
+  let password: string | undefined;
+  if (wantsLogin) {
+    password = process.env.NOVA_BUSINESS_PASSWORD;
+    if (!password) {
+      console.error(
+        "--login needs NOVA_BUSINESS_PASSWORD in the environment.\n"
+        + "Read from the environment rather than argv so it does not land in a shell history.",
+      );
+      return 1;
+    }
+  }
+
+  const [existing] = await db.select().from(users).where(eq(users.email, EMAIL));
+  const plan: string[] = [];
+  if (!existing) plan.push(`create the account ${EMAIL}`);
+  else plan.push(`update the existing account ${EMAIL} (${existing.id})`);
+  plan.push("set is_bot, so it is excluded from matching, search and Discover");
+  plan.push("confirm the address, so it can publish listings");
+  plan.push(`write the profile: name, headline, bio, ${SKILLS.length} skills, `
+    + `${EXPERIENCE.length} roles, ${PORTFOLIO.length} portfolio entries, Nova's summary`);
+  plan.push("mark onboarding complete");
+  plan.push(await hasMarketplace()
+    ? `accept the seller agreement (version ${SELLER_TERMS_VERSION})`
+    : "SKIP the seller agreement — the marketplace tables are not on this database yet");
+  if (wantsLogin) plan.push("set a password, so a person can sign in and drive it");
+  else plan.push("leave it without a password: nothing can sign in as it (pass --login to change that)");
+
+  for (const line of plan) console.log(`  · ${line}`);
+
+  if (!apply) {
+    console.log("\nDry run — rerun with --apply.\n");
+    return 0;
+  }
+
+  console.log("\napplying…");
+
+  const account = await seedNovaBusiness({ password });
 
   const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, account.id));
   const missing = missingOnboarding(profile as any);
@@ -322,7 +354,11 @@ async function main(): Promise<number> {
   console.log(`  profile   /u/${USERNAME}`);
   console.log(`  sign in   ${wantsLogin ? `${EMAIL} with the password you set` : "not possible — no password"}`);
   console.log(`  onboarding${missing.length ? ` INCOMPLETE: ${missing.join(", ")}` : " complete"}`);
-  console.log(`  seller    agreement v${SELLER_TERMS_VERSION} on file`);
+  console.log(account.marketplace
+    ? `  seller    agreement v${SELLER_TERMS_VERSION} on file`
+    : "  seller    NOT recorded: seller_agreements and simulation_listings are not on this database.\n"
+      + "            The marketplace has not been deployed here yet, so this account cannot list\n"
+      + "            anything until those migrations land. Re-run this then; it is idempotent.");
   console.log(
     "\nThe builder index is left to what the account earns: markets played and contests won\n"
     + "are its actual job, so the strategy pillar will climb on its own. The header of this\n"
