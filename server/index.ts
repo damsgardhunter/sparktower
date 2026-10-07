@@ -9,6 +9,7 @@ import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startAdRenderJobs } from "./ad-render-routes";
+import { startSimulationMarketJobs } from "./simulation-market-compliance";
 import { startSimulationJobs } from "./simulation-tick";
 import { startStartupGameJobs } from "./startup-game";
 import { startAnalyticsJobs } from "./analytics";
@@ -171,6 +172,7 @@ let appReady = false;
   // running several server processes is safe.
   startBackingJobs();
   startAdRenderJobs();
+  startSimulationMarketJobs();
   startSimulationJobs();
   startStartupGameJobs();
   startAnalyticsJobs();

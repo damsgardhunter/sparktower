@@ -33,7 +33,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Users, ArrowRight, Clock } from "lucide-react";
+import { Building2, Users, ArrowRight, Clock , Store} from "lucide-react";
 import { GameEntry } from "@/components/game/entry";
 
 interface Venture {
@@ -140,6 +140,65 @@ function SimulationEntry() {
   );
 }
 
+/**
+ * The marketplace, under the two games rather than beside them.
+ *
+ * Full width and below, because it is a different kind of thing: the two above
+ * are games this platform wrote and you can start right now, and this is
+ * everybody else's. Put in the grid as a third card it would read as a third
+ * game, and the first question somebody has on this page — which of these do I
+ * play — would have three answers instead of two.
+ *
+ * It carries a count rather than a promise. "Eleven to play" is a reason to
+ * press it; "browse simulations" is a label.
+ */
+function MarketplaceEntry() {
+  const [, navigate] = useLocation();
+  const { data } = useQuery<{ listings: { id: string; pricing: "free" | "perSeat" }[] }>({
+    queryKey: ["/api/sim-market/listings"],
+  });
+
+  const listings = data?.listings ?? [];
+  const free = listings.filter((l) => l.pricing === "free").length;
+
+  return (
+    <Card className="nova-ring-soft mt-4 overflow-hidden" data-testid="card-marketplace-entry">
+      <CardContent className="p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-2 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              <span className="nova-chip flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+                <Store className="h-4 w-4" />
+              </span>
+              <h3 className="text-lg font-semibold">Simulations other people wrote</h3>
+              {listings.length > 0 && (
+                <Badge variant="secondary" data-testid="badge-marketplace-count">
+                  {listings.length} to play
+                </Badge>
+              )}
+              {free > 0 && (
+                <Badge variant="outline" className="font-normal">{free} free</Badge>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Markets built around a real business by the person running it. Play one with your team, or publish
+              your own and sell seats.
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" onClick={() => navigate("/simulations/market")} data-testid="button-browse-market">
+              Browse
+            </Button>
+            <Button onClick={() => navigate("/simulations/market/new")} data-testid="button-publish-sim">
+              Publish yours
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Sprints() {
   return (
     <div className="h-full overflow-y-auto">
@@ -148,8 +207,16 @@ export default function Sprints() {
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl" data-testid="text-sprints-title">
             Simulations
           </h1>
+          {/*
+            * "Both free" was true of two things and there are three now, one
+            * of which sells seats. A page that says everything on it is free
+            * above a card with a price on it is the kind of small untruth
+            * somebody notices at exactly the wrong moment — when they are
+            * deciding whether this place is straight with them about money.
+            */}
           <p className="mt-1 text-muted-foreground">
-            Invent a company in half an hour, or run one for a fortnight. Both free.
+            Invent a company in half an hour, or run one for a fortnight — both free. Or play a market somebody
+            else built.
           </p>
         </header>
 
@@ -163,6 +230,8 @@ export default function Sprints() {
           <GameEntry />
           <SimulationEntry />
         </div>
+
+        <MarketplaceEntry />
       </div>
     </div>
   );

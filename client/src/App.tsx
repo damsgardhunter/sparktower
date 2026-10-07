@@ -41,6 +41,9 @@ import ProjectSimPage from "@/pages/project-sim";
 import SimulationPage from "@/pages/simulation";
 import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
+import SimulationMarketplacePage from "@/pages/simulation-marketplace";
+import SimulationListingPage from "@/pages/simulation-listing";
+import SimulationPublishPage from "@/pages/simulation-publish";
 import SimulationStandingsPage from "@/pages/simulation-standings";
 import SimulationOffersPage from "@/pages/simulation-offers";
 import SimulationReportPage from "@/pages/simulation-report";
@@ -344,6 +347,13 @@ function Router() {
             {/* The market simulation lives under /sprints, the page now called "Simulations". */}
             {/* A project's own simulations, one to a page. See `project-sim.tsx`. */}
             <Route path="/projects/:id/simulate/:game" component={ProjectSimPage} />
+            {/* The marketplace of simulations people wrote and sell. Plural, so it
+                cannot be confused with /simulation/:id/market, which is one
+                season's own market screen. */}
+            <Route path="/simulations/market" component={SimulationMarketplacePage} />
+            {/* `/new` before `/:id`, or wouter matches "new" as a listing id. */}
+            <Route path="/simulations/market/new" component={SimulationPublishPage} />
+            <Route path="/simulations/market/:id" component={SimulationListingPage} />
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />

@@ -450,7 +450,14 @@ export type DuplicateAction = keyof typeof DUPLICATE_RULES;
  * they cannot see and which need not exist. A page with no post behind it was
  * unreportable and untakedownable at once.
  */
-export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "message", "project", "path_artifact", "user"] as const;
+/*
+ * `simulation_listing` is here because a marketplace without a report button
+ * is a marketplace where the only way to raise a copied market, a misleading
+ * description or something that should not be sold is to email somebody. The
+ * seller agreement promises every one of those can be acted on; this is what
+ * makes the promise reachable by the person who noticed.
+ */
+export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "message", "project", "path_artifact", "user", "simulation_listing"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
 /**
@@ -476,6 +483,7 @@ export const REPORT_TARGET_LABEL: Record<StoredReportTarget, string> = {
   project: "Project",
   path_artifact: "Published page",
   user: "Person",
+  simulation_listing: "Simulation listing",
 };
 
 /**
@@ -567,7 +575,7 @@ export const REPORT_NOTE_MAX = 500;
  * `path_artifacts.hiddenAt`, and /a/:id and the public artifact API both stop
  * serving it.
  */
-export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment", "project", "path_artifact"] as const satisfies readonly ReportTarget[];
+export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment", "project", "path_artifact", "simulation_listing"] as const satisfies readonly ReportTarget[];
 export const isActionableTarget = (t: string): boolean => (ACTIONABLE_TARGETS as readonly string[]).includes(t);
 
 /** What a reviewer can do about a reported comment. */

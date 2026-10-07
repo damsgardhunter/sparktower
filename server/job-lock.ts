@@ -79,6 +79,7 @@ export const JOB = {
   retention: "sparktower/retention-sweep",
   pushReceipts: "sparktower/push-receipts",
   adRenders: "sparktower/ad-renders",
+  simEarnings: "sparktower/sim-earnings",
 } as const;
 
 export type JobName = (typeof JOB)[keyof typeof JOB];

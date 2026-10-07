@@ -55,6 +55,8 @@ import { registerProjectVisualRoutes } from "./project-visuals";
 import { registerBrandKitRoutes } from "./brand-kit";
 import { registerAdBrandRoutes } from "./ad-brand-routes";
 import { registerAdRenderRoutes } from "./ad-render-routes";
+import { registerSimulationMarketplaceRoutes } from "./simulation-market-listings";
+import { registerSimulationComplianceRoutes } from "./simulation-market-compliance";
 import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
@@ -531,6 +533,8 @@ export async function registerRoutes(
   registerBrandKitRoutes(app);
   registerAdBrandRoutes(app);
   registerAdRenderRoutes(app);
+  registerSimulationMarketplaceRoutes(app);
+  registerSimulationComplianceRoutes(app);
   registerPostImageRoutes(app);
 
   // User Profile

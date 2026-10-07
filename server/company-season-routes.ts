@@ -275,7 +275,7 @@ export function newSeasonCode(): string {
   return code;
 }
 
-function isUniqueViolation(err: unknown): boolean {
+export function isUniqueViolation(err: unknown): boolean {
   // Drizzle wraps the driver error; the code is on the cause (see pgErrorCode in simulation-routes.ts).
   for (let e: any = err, hops = 0; e && hops < 5; e = e.cause, hops++) if (e.code === "23505") return true;
   return false;

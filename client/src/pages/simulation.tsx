@@ -47,7 +47,7 @@ import {
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
-import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown } from "lucide-react";
+import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown, Store} from "lucide-react";
 import { lookOf } from "@/components/sim/market-look";
 import { SeasonStanding } from "@/components/sim/season-standing";
 
@@ -165,6 +165,7 @@ export default function SimulationPage() {
 /* ── Choosing a market ─────────────────────────────────────────────────── */
 
 function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data, isLoading } = useQuery<{ niches: NicheView[]; roles: RoleView[]; lobbySize: number }>({
     queryKey: ["/api/sim/niches"],
@@ -274,6 +275,39 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
         </Card>
         );
       })}
+
+      {/*
+        * The marketplace, under the markets this platform wrote.
+        *
+        * Below rather than beside them, and deliberately a strip rather than a
+        * grid: the seven above are the thing somebody came here to play, and a
+        * second grid of equal weight would make the page a choice between two
+        * products instead of one product with more of it underneath.
+        */}
+      <Card className="nova-ring-soft border-0 overflow-hidden">
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Store className="h-4 w-4 text-primary" />
+                <h3 className="font-semibold">Simulations other people wrote</h3>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Markets built for a real business, published by the person who built them. Play one with your
+                team, or write your own and sell seats.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="outline" onClick={() => setLocation("/simulations/market")} data-testid="button-browse-marketplace">
+                Browse
+              </Button>
+              <Button onClick={() => setLocation("/simulations/market/new")} data-testid="button-publish-from-sims">
+                Publish yours
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {data?.roles && (
         <Card>

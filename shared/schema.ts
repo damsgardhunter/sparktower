@@ -3325,6 +3325,166 @@ export const adRenders = pgTable("ad_renders", {
   byStatus: index("ad_renders_status_idx").on(table.status),
 }));
 
+/**
+ * A simulation somebody wrote, offered to everybody else.
+ *
+ * The market itself is the product — `customMarket` holds exactly what
+ * `buildCustomMarket` validates and `sim_seasons` already plays — and the
+ * settings beside it are what make it a particular contest rather than a
+ * particular world.
+ *
+ * ## Why the market is copied onto the listing
+ *
+ * A listing is a promise about a thing somebody paid for. If it pointed at a
+ * market the author could keep editing, a table could buy a simulation on
+ * Monday and get a different one on Friday, and every season already running
+ * would drift under them. The author edits a draft and publishes it; what is
+ * published does not move.
+ */
+export const simulationListings = pgTable("simulation_listings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** The project this grew out of, when it grew out of one. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  /**
+   * The season whose market this was copied from.
+   *
+   * Kept so the same market cannot be listed twice by accident, and so a
+   * listing can be traced back to the thing that produced it. Not a foreign
+   * key with a cascade: deleting an old season must not take a published
+   * listing — and everything it was sold on — down with it.
+   */
+  fromSeasonId: varchar("from_season_id"),
+
+  title: text("title").notNull(),
+  /** The sentence or two on the card. Written by Nova when Nova built the market. */
+  summary: text("summary"),
+  /** The long description on the listing's own page. */
+  description: text("description"),
+  /** For search and the filter chips, from shared/simulation-market.ts. */
+  tags: text("tags").array(),
+
+  /* ── What is actually played ── */
+  /** The validated market, as `buildCustomMarket` returns it. */
+  customMarket: jsonb("custom_market"),
+  /** A catalogue market id, when the listing is settings over a hand-made world. */
+  nicheId: varchar("niche_id"),
+  cadence: text("cadence", { enum: ["yearly", "quarterly", "monthly"] }).default("yearly").notNull(),
+  botSkill: text("bot_skill", { enum: ["filler", "survivor"] }).default("survivor").notNull(),
+  totalYears: integer("total_years").default(14).notNull(),
+
+  /* ── What it costs ── */
+  pricing: text("pricing", { enum: ["free", "perSeat"] }).default("free").notNull(),
+  /** Zero when free. Bounded by SEAT_PRICE_MIN/MAX_CENTS at publish. */
+  seatPriceCents: integer("seat_price_cents").default(0).notNull(),
+
+  status: text("status", { enum: ["draft", "listed", "unlisted"] }).default("draft").notNull(),
+  publishedAt: timestamp("published_at"),
+
+  /*
+   * Counters, kept on the row rather than summed on every card.
+   *
+   * A marketplace page shows thirty cards and each one wants "how many people
+   * played this"; thirty aggregate queries to render a grid is the sort of
+   * thing that is fine until the day it is not. They are written in the same
+   * transaction as the thing they count, so they cannot drift from it.
+   */
+  seatsSold: integer("seats_sold").default(0).notNull(),
+  seasonsStarted: integer("seasons_started").default(0).notNull(),
+  grossCents: integer("gross_cents").default(0).notNull(),
+
+  /*
+   * Taken down by a reviewer, with the reason.
+   *
+   * Separate from `status`, which is the author's own switch. A listing the
+   * author unlisted and one a reviewer removed are different facts, and
+   * collapsing them would let an author quietly re-list something that was
+   * taken down.
+   */
+  takenDownAt: timestamp("taken_down_at"),
+  takenDownReason: text("taken_down_reason"),
+  takenDownBy: varchar("taken_down_by").references(() => users.id, { onDelete: "set null" }),
+
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byAuthor: index("sim_listings_author_idx").on(table.authorId, table.createdAt),
+  /* The marketplace's own query: what is listed, newest first. */
+  byStatus: index("sim_listings_status_idx").on(table.status, table.publishedAt),
+}));
+
+/**
+ * One purchase of seats on one listing.
+ *
+ * Both sides of the money are recorded, not just the total: what the buyer
+ * paid, what the platform kept and what the author earned. Derivable from the
+ * split at the time, which is exactly why it is stored — the platform's share
+ * is a number somebody will change, and a sale from before the change has to
+ * keep adding up afterwards.
+ */
+export const simulationPurchases = pgTable("simulation_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id, { onDelete: "cascade" }),
+  buyerId: varchar("buyer_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Kept so a seller's history survives their listing being taken down. */
+  sellerId: varchar("seller_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+
+  seats: integer("seats").notNull(),
+  paidCents: integer("paid_cents").notNull(),
+  platformCents: integer("platform_cents").default(0).notNull(),
+  sellerCents: integer("seller_cents").default(0).notNull(),
+  /** Seats not yet spent on a season. What a resale would draw from. */
+  seatsLeft: integer("seats_left").notNull(),
+
+  refundedCents: integer("refunded_cents").default(0).notNull(),
+  refundedAt: timestamp("refunded_at"),
+
+  /*
+   * The seller's money, held before it is theirs.
+   *
+   * It used to be credited at the moment of sale, which is money already gone
+   * when the refund arrives — the platform would then be taking it back out of
+   * a balance that may be empty, or absorbing it. Held for the same fourteen
+   * days a buyer has to change their mind, a refund is always paid out of
+   * money nobody has spent yet. The seats work immediately; the wait is on the
+   * money, not the product.
+   */
+  releasableAt: timestamp("releasable_at"),
+  releasedAt: timestamp("released_at"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byBuyer: index("sim_purchases_buyer_idx").on(table.buyerId, table.createdAt),
+  /* The release sweep's query: what is due and not yet paid. */
+  byRelease: index("sim_purchases_release_idx").on(table.releasedAt, table.releasableAt),
+  bySeller: index("sim_purchases_seller_idx").on(table.sellerId, table.createdAt),
+  byListing: index("sim_purchases_listing_idx").on(table.listingId),
+}));
+
+/**
+ * What a seller agreed to, and which version of it.
+ *
+ * "They accepted the terms" is worth nothing without "which terms". Terms
+ * change, and somebody who joined under the old ones did not agree to the new.
+ * The version is stored with the acceptance so the question "what did this
+ * person actually agree to" has an answer years later — which is the only form
+ * of that question anybody ever asks.
+ *
+ * One row per acceptance rather than a column on the user: the history is the
+ * point, and a column would overwrite the thing being evidenced.
+ */
+export const sellerAgreements = pgTable("seller_agreements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** SELLER_TERMS_VERSION at the moment of acceptance. */
+  version: integer("version").notNull(),
+  /** The address it was accepted from, which is what a dispute asks for. */
+  acceptedIp: varchar("accepted_ip"),
+  acceptedAt: timestamp("accepted_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("seller_agreements_user_idx").on(table.userId, table.version),
+}));
+
 // ─── Companies ───────────────────────────────────────────────────────────────
 
 /**
