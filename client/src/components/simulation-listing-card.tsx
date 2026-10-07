@@ -44,9 +44,23 @@ const CADENCE_LABEL: Record<ListingCard["cadence"], string> = {
   monthly: "Monthly",
 };
 
-export function SimulationListingCard({ listing }: { listing: ListingCard }) {
+export function SimulationListingCard({ listing, owned }: {
+  listing: ListingCard;
+  /**
+   * What this person already holds on it: seats they have not used and seasons
+   * they are in the middle of.
+   *
+   * On the grid rather than only on the detail page, because the mistake it
+   * prevents is made on the grid. Somebody who has bought a simulation, played
+   * it once and come back a week later has no way to tell their own listing
+   * from the forty beside it, and the cheapest version of that mistake is
+   * paying for seats they already own.
+   */
+  owned?: { seats: number; running: number };
+}) {
   const [, setLocation] = useLocation();
   const free = listing.pricing === "free";
+  const yours = (owned?.seats ?? 0) > 0 || (owned?.running ?? 0) > 0;
 
   return (
     <Card
@@ -64,13 +78,26 @@ export function SimulationListingCard({ listing }: { listing: ListingCard }) {
           * a price in muted grey beside a bright everything-else is the one
           * number they have to go looking for.
           */}
-        <Badge
-          variant={free ? "default" : "secondary"}
-          className="shrink-0"
-          data-testid={`price-${listing.id}`}
-        >
-          {priceLabel(listing)}
-        </Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge
+            variant={free ? "default" : "secondary"}
+            data-testid={`price-${listing.id}`}
+          >
+            {priceLabel(listing)}
+          </Badge>
+          {yours && (
+            /*
+              * What they hold, in the words that say what to do next: a
+              * running season is somewhere to go back to, spare seats are
+              * something to start. "Owned" on its own answers neither.
+              */
+            <Badge variant="outline" className="whitespace-nowrap text-xs font-normal" data-testid={`owned-${listing.id}`}>
+              {owned!.running > 0
+                ? `${owned!.running} running`
+                : `${owned!.seats} seat${owned!.seats === 1 ? "" : "s"} left`}
+            </Badge>
+          )}
+        </div>
       </CardHeader>
 
       <CardContent>

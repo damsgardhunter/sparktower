@@ -83,6 +83,14 @@ export const MINE: Owned[] = [
    * rather than worked around.
    */
   { table: "seller_agreements", column: "user_id" },
+  /*
+   * Which seasons somebody started from a listing. Theirs, by the same
+   * reasoning: `started_by` is `not null` and cascades.
+   *
+   * The season itself is not deleted with it, and should not be — other people
+   * are sitting in it. What goes is this person's record of having started it.
+   */
+  { table: "simulation_season_starts", column: "started_by" },
   { table: "health_finding_feedback", column: "user_id" },
   { table: "project_storyboards", column: "user_id" },
   { table: "investor_artifacts", column: "user_id" },

@@ -23,9 +23,9 @@
  * beside the first.
  */
 import type { Express } from "express";
-import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simulationListings, simulationPurchases, simSeasons, userProfiles, projects, companies } from "@shared/schema";
+import { simulationListings, simulationPurchases, simulationSeasonStarts, simSeasons, userProfiles, projects, companies } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { spend, refund, walletOf } from "./wallet";
@@ -75,6 +75,56 @@ export const listingDetail = (row: Listing, author: { name: string | null; avata
   description: row.description,
   projectId: row.projectId,
 });
+
+/**
+ * The seasons somebody started from listings, newest first.
+ *
+ * One query for every screen that has to answer "where is the thing I bought":
+ * the listing page, the library and the profile all ask it, and a season is
+ * only reachable through this table — starting one does not seat you in it, so
+ * `/api/sim/ventures` cannot see it until somebody follows the join link.
+ *
+ * `listingIds` narrows it to one listing for the detail page; omitted, it is
+ * the whole library.
+ */
+export async function seasonsStartedBy(userId: string, listingIds?: string[]) {
+  const where = [eq(simulationSeasonStarts.startedBy, userId)];
+  if (listingIds) {
+    if (!listingIds.length) return [];
+    where.push(inArray(simulationSeasonStarts.listingId, listingIds));
+  }
+  const rows = await db
+    .select({
+      start: simulationSeasonStarts,
+      name: simSeasons.name,
+      status: simSeasons.status,
+      year: simSeasons.year,
+      totalYears: simSeasons.totalYears,
+    })
+    .from(simulationSeasonStarts)
+    .leftJoin(simSeasons, eq(simSeasons.id, simulationSeasonStarts.seasonId))
+    .where(and(...where))
+    .orderBy(desc(simulationSeasonStarts.createdAt))
+    .limit(200);
+
+  return rows.map((r) => ({
+    seasonId: r.start.seasonId,
+    listingId: r.start.listingId,
+    purchaseId: r.start.purchaseId,
+    name: r.name,
+    /*
+     * Null when the season row is gone — a season can be swept, and a start
+     * that points at nothing should read as "no longer there" rather than
+     * crash a card or vanish silently.
+     */
+    status: r.status,
+    year: r.year,
+    totalYears: r.totalYears,
+    inviteCode: r.start.inviteCode,
+    joinUrl: r.start.inviteCode ? joinPathFor(r.start.inviteCode) : null,
+    startedAt: r.start.createdAt,
+  }));
+}
 
 const orderFor = (sort: ListingSort) => {
   switch (sort) {
@@ -144,10 +194,20 @@ export function registerSimulationMarketplaceRoutes(app: Express) {
       const mine = await db.select().from(simulationPurchases)
         .where(and(eq(simulationPurchases.listingId, row.id), eq(simulationPurchases.buyerId, req.user.id)));
 
+      /*
+       * And the seasons they already started from it, so the page offers the
+       * game they are in the middle of before it offers them another one.
+       */
+      const started = await seasonsStartedBy(req.user.id, [row.id]);
+
       res.json({
         listing: listingDetail(row, { name: author?.name ?? null, avatarUrl: author?.avatarUrl ?? null }),
         /* What this person already holds, so the page offers "play" rather than "buy". */
-        youOwn: { seats: mine.reduce((n, p) => n + p.seatsLeft, 0), purchases: mine.length },
+        youOwn: {
+          seats: mine.reduce((n, p) => n + p.seatsLeft, 0),
+          purchases: mine.length,
+          seasons: started,
+        },
         isAuthor: row.authorId === req.user.id,
       });
     } catch (error) {
@@ -458,6 +518,19 @@ export function registerSimulationMarketplaceRoutes(app: Express) {
       const name = String(req.body?.name ?? "").trim() || listing.title;
 
       /*
+       * Whether the other chairs are being saved for people.
+       *
+       * Nova fills a waiting room a minute after it opens, which is right for
+       * somebody playing alone — they pressed play and are owed a game, not a
+       * lobby. It is wrong for a table: a buyer who took five seats for their
+       * team and starts the season first would come back to find Nova playing
+       * three of them. `server/project-simulation-routes.ts` already declines
+       * the fill for exactly this reason, and it cannot be guessed from the
+       * seat count, because five seats is equally five solo seasons.
+       */
+      const withTeam = req.body?.withTeam === true;
+
+      /*
        * The author plays their own without owning seats. They wrote it; making
        * them buy from themselves would be the platform taking its share of a
        * sale that did not happen.
@@ -513,8 +586,21 @@ export function registerSimulationMarketplaceRoutes(app: Express) {
               customMarket: niche ?? null,
               origin: "nova",
               inviteCode,
+              botFill: !withTeam,
               createdAt: new Date(),
             }).returning();
+
+            /*
+             * Filed before the response, because the join link in the response
+             * is not a record of anything. See `simulationSeasonStarts`.
+             */
+            await db.insert(simulationSeasonStarts).values({
+              listingId: listing.id,
+              purchaseId,
+              seasonId: season.id,
+              startedBy: req.user.id,
+              inviteCode,
+            });
 
             await db.update(simulationListings)
               .set({ seasonsStarted: sql`${simulationListings.seasonsStarted} + 1`, updatedAt: new Date() })
@@ -579,12 +665,29 @@ export function registerSimulationMarketplaceRoutes(app: Express) {
         .where(eq(simulationListings.authorId, req.user.id))
         .orderBy(desc(simulationListings.createdAt));
 
+      /*
+       * Every season this person started from a listing, theirs or somebody
+       * else's, hung off the purchase it was started with.
+       *
+       * This is the whole point of the row: a purchase with four seats left is
+       * only half of "what have I got", and the other half — the game that is
+       * running right now — had no way to be asked for at all.
+       */
+      const started = await seasonsStartedBy(req.user.id);
+      const byPurchase = new Map<string, typeof started>();
+      const byListing = new Map<string, typeof started>();
+      for (const s of started) {
+        if (s.purchaseId) byPurchase.set(s.purchaseId, [...(byPurchase.get(s.purchaseId) ?? []), s]);
+        byListing.set(s.listingId, [...(byListing.get(s.listingId) ?? []), s]);
+      }
+
       res.json({
-        listings: mine.map((l) => forCard(l)),
+        listings: mine.map((l) => ({ ...forCard(l), seasons: byListing.get(l.id) ?? [] })),
         purchases: bought.map((b) => ({
           id: b.purchase.id, listingId: b.listingId, title: b.title,
           seats: b.purchase.seats, seatsLeft: b.purchase.seatsLeft,
           paidCents: b.purchase.paidCents, at: b.purchase.createdAt,
+          seasons: byPurchase.get(b.purchase.id) ?? [],
         })),
         sales: sold.map((s) => ({
           id: s.purchase.id, listingId: s.listingId, title: s.title,
@@ -595,6 +698,8 @@ export function registerSimulationMarketplaceRoutes(app: Express) {
           earnedCents: sold.reduce((n, s) => n + s.purchase.sellerCents, 0),
           spentCents: bought.reduce((n, b) => n + b.purchase.paidCents, 0),
           seatsLeft: bought.reduce((n, b) => n + b.purchase.seatsLeft, 0),
+          /* Games to go back to, which is the number somebody is looking for. */
+          running: started.filter((s) => s.status === "forming" || s.status === "running").length,
         },
       });
     } catch (error) {

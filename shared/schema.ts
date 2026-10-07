@@ -3485,6 +3485,41 @@ export const sellerAgreements = pgTable("seller_agreements", {
   byUser: index("seller_agreements_user_idx").on(table.userId, table.version),
 }));
 
+/**
+ * A season somebody started from a listing, so a bought simulation can be
+ * found again.
+ *
+ * Without this row the marketplace sold something nobody could get back to.
+ * Pressing play spent a seat, created a season and returned its join link
+ * once; close the tab before following it and the season was unreachable —
+ * not in `/api/sim/ventures`, because starting a season does not seat you in
+ * it, and not on the listing, which counted `seasonsStarted` without recording
+ * which ones. Somebody paid, lost a seat, and had nothing to show for it.
+ *
+ * Kept here rather than as a column on `sim_seasons` because it is a fact about
+ * a purchase, not about a season: a season plays the same whether it was bought
+ * or not, and this table is also what a resale or a dispute would have to read.
+ */
+export const simulationSeasonStarts = pgTable("simulation_season_starts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id, { onDelete: "cascade" }),
+  /**
+   * The purchase whose seat was spent, or null when the author played their
+   * own listing — they are not charged, so there is no purchase to point at.
+   */
+  purchaseId: varchar("purchase_id").references(() => simulationPurchases.id, { onDelete: "set null" }),
+  seasonId: varchar("season_id").notNull(),
+  startedBy: varchar("started_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Copied at the start so the join link survives without a second read. */
+  inviteCode: text("invite_code"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byStarter: index("sim_season_starts_starter_idx").on(table.startedBy, table.createdAt),
+  byListing: index("sim_season_starts_listing_idx").on(table.listingId),
+  /* One row per season: a retry must not file the same start twice. */
+  oneSeason: unique("sim_season_starts_season_once").on(table.seasonId),
+}));
+
 // ─── Companies ───────────────────────────────────────────────────────────────
 
 /**

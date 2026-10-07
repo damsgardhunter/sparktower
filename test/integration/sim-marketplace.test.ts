@@ -343,6 +343,143 @@ describe("starting a season", () => {
   });
 });
 
+describe("getting back to what you bought", () => {
+  /*
+   * The gap this covers was the marketplace's worst: pressing play spent a
+   * seat, created a season and returned its join link exactly once. Close the
+   * tab before following it and the season was gone — starting a season does
+   * not seat you in it, so `/api/sim/ventures` could not see it, and the
+   * listing counted `seasonsStarted` without recording which ones. Somebody
+   * paid, lost a seat, and had nothing.
+   */
+  async function soldAndStarted(app: any, priceCents = 300) {
+    const { agent: authorAgent, id: authorId } = await signUp(app, "Seller");
+    await acceptTerms(authorAgent);
+    const made = await draft(authorAgent, authorId);
+    const listingId = made.body.listing.id as string;
+    await authorAgent.post(`/api/sim-market/listings/${listingId}/publish`).send({
+      title: "Veterinary scheduling",
+      summary: "Two incumbents hold most of it and the way in is narrow.",
+      pricing: priceCents > 0 ? "perSeat" : "free",
+      seatPriceCents: priceCents,
+    });
+
+    const { agent: buyer, id: buyerId } = await signUp(app, "Buyer");
+    if (priceCents > 0) await buyer.post("/api/dev/credit-wallet").send({ amountCents: 5000 });
+    const bought = await buyer.post(`/api/sim-market/listings/${listingId}/buy`).send({ seats: 3 });
+    expect(bought.status, JSON.stringify(bought.body).slice(0, 200)).toBe(201);
+
+    const started = await buyer.post(`/api/sim-market/listings/${listingId}/play`).send({ name: "Northbound" });
+    expect(started.status, JSON.stringify(started.body).slice(0, 300)).toBe(201);
+    return { buyer, buyerId, authorAgent, listingId, purchaseId: bought.body.purchase.id as string, started };
+  }
+
+  it("lists the season on the purchase, so closing the tab costs nothing", async () => {
+    const app = await getTestApp();
+    const { buyer, listingId, purchaseId, started } = await soldAndStarted(app);
+
+    const mine = await buyer.get("/api/sim-market/me");
+    expect(mine.status).toBe(200);
+    const purchase = mine.body.purchases.find((p: any) => p.id === purchaseId);
+    expect(purchase, "the purchase is not in the buyer's own list").toBeTruthy();
+    expect(purchase.seasons, "a season was started and the purchase does not know about it").toHaveLength(1);
+    expect(purchase.seasons[0].seasonId).toBe(started.body.seasonId);
+    expect(purchase.seasons[0].listingId).toBe(listingId);
+  });
+
+  it("carries the join link, which was the one thing the response gave away for good", async () => {
+    const app = await getTestApp();
+    const { buyer, started } = await soldAndStarted(app);
+
+    const mine = await buyer.get("/api/sim-market/me");
+    const [season] = mine.body.purchases.flatMap((p: any) => p.seasons);
+    expect(season.joinUrl, "no way back into the season").toBeTruthy();
+    expect(season.joinUrl).toBe(started.body.joinUrl);
+    expect(season.inviteCode).toBe(started.body.inviteCode);
+  });
+
+  it("says what the season is and how far through it is", async () => {
+    /* A list of names with no progress on it is a list of identical rows. */
+    const app = await getTestApp();
+    const { buyer } = await soldAndStarted(app);
+
+    const mine = await buyer.get("/api/sim-market/me");
+    const [season] = mine.body.purchases.flatMap((p: any) => p.seasons);
+    expect(season.name).toBe("Northbound");
+    expect(season.status).toBe("forming");
+    expect(season.year).toBe(1);
+    expect(season.totalYears).toBeGreaterThan(1);
+  });
+
+  it("counts the games there are to go back to", async () => {
+    const app = await getTestApp();
+    const { buyer } = await soldAndStarted(app);
+
+    const mine = await buyer.get("/api/sim-market/me");
+    expect(mine.body.totals.running).toBe(1);
+    expect(mine.body.totals.seatsLeft, "three bought, one played").toBe(2);
+  });
+
+  it("offers the listing page the season before it offers another seat", async () => {
+    const app = await getTestApp();
+    const { buyer, listingId, started } = await soldAndStarted(app);
+
+    const page = await buyer.get(`/api/sim-market/listings/${listingId}`);
+    expect(page.status).toBe(200);
+    expect(page.body.youOwn.seasons, "the detail page cannot see the season you are in").toHaveLength(1);
+    expect(page.body.youOwn.seasons[0].seasonId).toBe(started.body.seasonId);
+    expect(page.body.youOwn.seats).toBe(2);
+  });
+
+  it("keeps the author's own seasons too, which cost no seat", async () => {
+    const app = await getTestApp();
+    const { authorAgent, listingId } = await soldAndStarted(app);
+    const started = await authorAgent.post(`/api/sim-market/listings/${listingId}/play`).send({ name: "My own run" });
+    expect(started.status).toBe(201);
+
+    const mine = await authorAgent.get("/api/sim-market/me");
+    const listing = mine.body.listings.find((l: any) => l.id === listingId);
+    expect(listing.seasons, "the author's own run is not recorded against the listing").toHaveLength(1);
+    expect(listing.seasons[0].purchaseId, "the author bought nothing, so there is no purchase").toBeNull();
+    expect(mine.body.totals.running).toBe(1);
+  });
+
+  it("shows one buyer nothing of another buyer's seasons", async () => {
+    const app = await getTestApp();
+    const { listingId } = await soldAndStarted(app, 0);
+    const { agent: other } = await signUp(app, "Other");
+    await other.post(`/api/sim-market/listings/${listingId}/buy`).send({ seats: 1 });
+
+    const page = await other.get(`/api/sim-market/listings/${listingId}`);
+    expect(page.body.youOwn.seasons, "somebody else's season is showing on this page").toHaveLength(0);
+    const mine = await other.get("/api/sim-market/me");
+    expect(mine.body.totals.running).toBe(0);
+  });
+
+  it("saves the other chairs when the season is started for a team", async () => {
+    /*
+     * Nova fills a waiting room a minute after it opens, which is right for
+     * one person playing alone and wrong for a table: a buyer who took seats
+     * for their team and started first would come back to find Nova playing
+     * three of them.
+     */
+    const app = await getTestApp();
+    const { buyer, listingId } = await soldAndStarted(app, 0);
+    const team = await buyer.post(`/api/sim-market/listings/${listingId}/play`).send({ withTeam: true });
+    expect(team.status).toBe(201);
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, team.body.seasonId));
+    expect(season.botFill, "Nova will take the seats this buyer paid to save").toBe(false);
+  });
+
+  it("fills the room for somebody playing on their own", async () => {
+    const app = await getTestApp();
+    const { started } = await soldAndStarted(app, 0);
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, started.body.seasonId));
+    expect(season.botFill, "one person who pressed play is owed a game, not a lobby").toBe(true);
+  });
+});
+
 describe("refunds", () => {
   it("gives back the unused seats, priced at what was actually paid", async () => {
     const app = await getTestApp();

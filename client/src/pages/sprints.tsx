@@ -33,7 +33,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Users, ArrowRight, Clock , Store} from "lucide-react";
+import { Building2, Users, ArrowRight, Clock, Store, Play } from "lucide-react";
 import { GameEntry } from "@/components/game/entry";
 
 interface Venture {
@@ -158,8 +158,30 @@ function MarketplaceEntry() {
     queryKey: ["/api/sim-market/listings"],
   });
 
+  /*
+   * And what this person already owns, so the card can lead with the game they
+   * are in the middle of rather than with the shop.
+   *
+   * Two requests on one card is worth it: a buyer whose season is running has
+   * no other way to find it from here, and sending them to Browse to look for
+   * something they have already paid for is the long way round.
+   */
+  const { data: mine } = useQuery<{
+    purchases: { seasons: { seasonId: string; status: string | null; joinUrl: string | null }[] }[];
+    listings: { seasons: { seasonId: string; status: string | null; joinUrl: string | null }[] }[];
+    totals: { seatsLeft: number; running: number };
+  }>({ queryKey: ["/api/sim-market/me"] });
+
   const listings = data?.listings ?? [];
   const free = listings.filter((l) => l.pricing === "free").length;
+  const running = mine?.totals.running ?? 0;
+  const seatsLeft = mine?.totals.seatsLeft ?? 0;
+  /* One row per season: a start shows against the purchase and the listing. */
+  const live = [...new Map(
+    [...(mine?.purchases ?? []).flatMap((p) => p.seasons), ...(mine?.listings ?? []).flatMap((l) => l.seasons)]
+      .filter((s) => s.status === "forming" || s.status === "running")
+      .map((s) => [s.seasonId, s]),
+  ).values()];
 
   return (
     <Card className="nova-ring-soft mt-4 overflow-hidden" data-testid="card-marketplace-entry">
@@ -179,13 +201,38 @@ function MarketplaceEntry() {
               {free > 0 && (
                 <Badge variant="outline" className="font-normal">{free} free</Badge>
               )}
+              {running > 0 && (
+                <Badge data-testid="badge-market-running">{running} of yours running</Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               Markets built around a real business by the person running it. Play one with your team, or publish
               your own and sell seats.
+              {seatsLeft > 0 && (
+                <>
+                  {" "}
+                  <span className="font-medium text-foreground">
+                    You have {seatsLeft} unused seat{seatsLeft === 1 ? "" : "s"}.
+                  </span>
+                </>
+              )}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
+            {/*
+              * One running season gets a button straight into it; several get
+              * one into the shelf that lists them. Picking between four rooms
+              * is a question this card is too small to ask well.
+              */}
+            {live.length === 1 && live[0].joinUrl ? (
+              <Button onClick={() => navigate(live[0].joinUrl!)} data-testid="button-resume-market-season">
+                <Play className="mr-1 h-4 w-4" /> Back to yours
+              </Button>
+            ) : live.length > 1 ? (
+              <Button onClick={() => navigate("/simulations/market")} data-testid="button-resume-market-season">
+                <Play className="mr-1 h-4 w-4" /> Back to yours
+              </Button>
+            ) : null}
             <Button variant="outline" onClick={() => navigate("/simulations/market")} data-testid="button-browse-market">
               Browse
             </Button>

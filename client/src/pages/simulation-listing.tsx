@@ -21,8 +21,9 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/user-avatar";
 import { priceLabel, type ListingCard } from "@/components/simulation-listing-card";
-import { Loader2, CalendarClock, Users, Play, ShieldCheck, ArrowLeft } from "lucide-react";
+import { Loader2, CalendarClock, Users, Play, ShieldCheck, ArrowLeft, UserPlus } from "lucide-react";
 import { ReportButton } from "@/components/report-button";
+import { isLive, type StartedSeason } from "@/components/simulation-library";
 
 interface Detail extends ListingCard {
   description: string | null;
@@ -37,7 +38,7 @@ export default function SimulationListingPage() {
 
   const { data, isLoading } = useQuery<{
     listing: Detail;
-    youOwn: { seats: number; purchases: number };
+    youOwn: { seats: number; purchases: number; seasons: StartedSeason[] };
     isAuthor: boolean;
   }>({ queryKey: [`/api/sim-market/listings/${id}`] });
 
@@ -55,9 +56,17 @@ export default function SimulationListingPage() {
   });
 
   const play = useMutation({
-    mutationFn: async () => apiRequest("POST", `/api/sim-market/listings/${id}/play`, {}),
+    mutationFn: async (withTeam: boolean) => apiRequest("POST", `/api/sim-market/listings/${id}/play`, { withTeam }),
     onSuccess: async (res: any) => {
       const body = await res.json();
+      /*
+       * The listing is refetched before we leave, so the season is on the page
+       * behind them. It used to only be in this response — somebody who came
+       * back got the buy panel again and no sign of the game they had just
+       * started with a seat they had just spent.
+       */
+      qc.invalidateQueries({ queryKey: [`/api/sim-market/listings/${id}`] });
+      qc.invalidateQueries({ queryKey: ["/api/sim-market/me"] });
       setLocation(body.joinUrl ?? "/simulation");
     },
     onError: (e: any) => toast({ title: "Couldn't start it", description: e?.message ?? "Try again", variant: "destructive" }),
@@ -79,6 +88,8 @@ export default function SimulationListingPage() {
   const free = listing.pricing === "free";
   const canPlay = isAuthor || youOwn.seats > 0;
   const total = free ? 0 : listing.seatPriceCents * seats;
+  /* Finished and abandoned seasons are history, not somewhere to go back to. */
+  const live = (youOwn.seasons ?? []).filter(isLive);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
@@ -153,16 +164,67 @@ export default function SimulationListingPage() {
                 {isAuthor && <Badge variant="secondary">Yours</Badge>}
               </div>
 
+              {/*
+                * Anything already running, above the button that would start
+                * another one. Somebody with a season in progress who lands
+                * here is far more likely to be looking for it than to want a
+                * second — and before this row existed, the page could not show
+                * it to them at all.
+                */}
+              {live.length > 0 && (
+                <div className="space-y-2 rounded-lg border border-border p-3">
+                  <p className="text-xs font-medium text-secondary">
+                    {live.length === 1 ? "You have one running" : `You have ${live.length} running`}
+                  </p>
+                  {live.map((season) => (
+                    <Button
+                      key={season.seasonId}
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => season.joinUrl && setLocation(season.joinUrl)}
+                      disabled={!season.joinUrl}
+                      data-testid={`button-resume-${season.seasonId}`}
+                    >
+                      <Play className="mr-2 h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{season.name?.trim() || listing.title}</span>
+                      <span className="ml-auto shrink-0 text-xs text-tertiary">
+                        {season.status === "forming" ? "Waiting" : `Year ${season.year ?? 1}`}
+                      </span>
+                    </Button>
+                  ))}
+                </div>
+              )}
+
               {canPlay ? (
                 <>
-                  <Button className="w-full" onClick={() => play.mutate()} disabled={play.isPending} data-testid="button-start-season">
-                    {play.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start a season"}
+                  <Button className="w-full" onClick={() => play.mutate(false)} disabled={play.isPending} data-testid="button-start-season">
+                    {play.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : live.length > 0 ? "Start another" : "Start a season"}
                   </Button>
-                  {!isAuthor && (
-                    <p className="text-xs text-tertiary">
-                      {youOwn.seats} seat{youOwn.seats === 1 ? "" : "s"} left. Starting a season uses one.
-                    </p>
-                  )}
+                  {/*
+                    * Solo or for a table, said here rather than guessed.
+                    *
+                    * Nova fills a waiting room a minute after it opens, which
+                    * is right for one person and ruinous for a team: the buyer
+                    * who starts the season first comes back to find Nova
+                    * playing three of their colleagues. It cannot be inferred
+                    * from the seat count — five seats is equally five solo
+                    * runs — so it is a second button rather than a guess.
+                    */}
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => play.mutate(true)}
+                    disabled={play.isPending}
+                    data-testid="button-start-for-team"
+                  >
+                    <UserPlus className="mr-1.5 h-4 w-4" /> Start one and hold the seats
+                  </Button>
+                  <p className="text-xs text-tertiary">
+                    {isAuthor
+                      ? "Yours to play as often as you like."
+                      : `${youOwn.seats} seat${youOwn.seats === 1 ? "" : "s"} left. Starting a season uses one.`}
+                    {" "}Holding the seats keeps Nova out of the empty chairs until your table arrives.
+                  </p>
                 </>
               ) : (
                 <>

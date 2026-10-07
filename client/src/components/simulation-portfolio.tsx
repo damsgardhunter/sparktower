@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimulationListingCard, type ListingCard } from "@/components/simulation-listing-card";
+import { SimulationLibrary } from "@/components/simulation-library";
 import { Store, Clock, Plus } from "lucide-react";
 
 interface Mine {
@@ -66,6 +67,13 @@ export function SimulationPortfolio({ isOwnProfile }: { isOwnProfile: boolean })
 
   return (
     <div className="space-y-6">
+      {/*
+        * The way back into anything running, before any of the accounting.
+        * Somebody opening this tab is more likely to be looking for a game
+        * than for a figure.
+        */}
+      <SimulationLibrary heading="Playing now" />
+
       {/* The money, first and small. Three figures, each answering one question. */}
       {(sales.length > 0 || purchases.length > 0) && (
         <div className="grid gap-3 sm:grid-cols-3">

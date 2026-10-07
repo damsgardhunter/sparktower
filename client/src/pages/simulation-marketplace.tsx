@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SimulationListingCard, type ListingCard } from "@/components/simulation-listing-card";
+import { SimulationLibrary } from "@/components/simulation-library";
 import { Search, Store, Plus } from "lucide-react";
 
 type Sort = "newest" | "popular" | "priceLow" | "priceHigh";
@@ -45,6 +46,26 @@ export default function SimulationMarketplacePage() {
     },
   });
 
+  /*
+   * What they hold, so the grid can say so on the cards.
+   *
+   * The same request the shelf above makes, which react-query serves from one
+   * cache — so this costs nothing and stops somebody buying seats on a
+   * simulation they already own.
+   */
+  const { data: mine } = useQuery<{
+    purchases: { listingId: string | null; seatsLeft: number; seasons: { seasonId: string; status: string | null }[] }[];
+  }>({ queryKey: ["/api/sim-market/me"] });
+
+  const heldByListing = new Map<string, { seats: number; running: number }>();
+  for (const p of mine?.purchases ?? []) {
+    if (!p.listingId) continue;
+    const at = heldByListing.get(p.listingId) ?? { seats: 0, running: 0 };
+    at.seats += p.seatsLeft;
+    at.running += p.seasons.filter((s) => s.status === "forming" || s.status === "running").length;
+    heldByListing.set(p.listingId, at);
+  }
+
   const listings = data?.listings ?? [];
 
   return (
@@ -58,6 +79,17 @@ export default function SimulationMarketplacePage() {
           Business simulations other people have written. Play one with your team, or publish your own and sell seats.
         </p>
       </header>
+
+      {/*
+        * What they already own, above what they could buy.
+        *
+        * Somebody who has bought a simulation and comes back to this page is
+        * almost always here to get back into it, not to shop — and until this
+        * shelf existed there was no way to, because the join link was shown
+        * once and never again. It renders nothing for somebody who owns
+        * nothing, so a first visit is still a browse page.
+        */}
+      <SimulationLibrary />
 
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
@@ -129,7 +161,7 @@ export default function SimulationMarketplacePage() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {listings.map((listing) => (
-              <SimulationListingCard key={listing.id} listing={listing} />
+              <SimulationListingCard key={listing.id} listing={listing} owned={heldByListing.get(listing.id)} />
             ))}
           </div>
           {data?.rules && (
