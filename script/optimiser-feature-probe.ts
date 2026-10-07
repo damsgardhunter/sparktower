@@ -14,6 +14,33 @@
  * wrong one. So rather than argue from the code, this takes the optimiser's own
  * plan and moves money into the levers it refused, plays the year, and compares
  * what the company is worth afterwards.
+ *
+ * ## What it established, and what it did not
+ *
+ * Features are underfunded, and that result survives its own control. Moving a
+ * quarter of brand into features beats the optimiser's plan in 7 of 7 markets;
+ * *cutting* the same quarter and spending it on nothing is worse than the plan
+ * in four of them (-1% to -11%). In those four the destination is doing the
+ * work, not the cut, and the quality column shows the mechanism — features
+ * raise it, the bare cut lowers it. Without the control row this file proved
+ * nothing: "move money out of brand and things improve" is equally consistent
+ * with brand being over-funded, which has the opposite fix.
+ *
+ * The *cause* is not established. Three explanations were offered and all three
+ * are disproved, which is recorded here so nobody spends an afternoon on them
+ * again:
+ *
+ *   - "The search allocates with `forecastDemand`, which cannot see feature
+ *     spend." No: `measure()` runs the real engine through `resolveYear` for
+ *     every trial and scores off what happened. `forecastDemand` only sizes the
+ *     plant and the final year's demand.
+ *   - "Three years of lookahead is too short for a pipeline to pay." No:
+ *     `script/optimiser-horizon.ts` runs the same first-year decision at 3, 5
+ *     and 7 years. Features are £0 at all three. Other levers move — efficiency
+ *     appears at 7 — and features never do.
+ *   - "`draftOf` charges every pound of features another 40p of
+ *     `techDebtPaydown`, so it costs 1.4x at the margin." No: zeroing that term
+ *     produces byte-identical plans and identical scores.
  */
 import { buildWorld, economyFor } from "../shared/simulation/season";
 import { resolveYear } from "../shared/simulation/resolve";
@@ -55,6 +82,21 @@ function playOut(nicheId: string, years: number, seed: string, bend?: (d: TeamDe
  * whether the refused lever is worth *anything* at the margin, not whether it
  * is worth more than everything else put together.
  */
+/**
+ * Just cut a quarter of brand and spend it on nothing.
+ *
+ * The control this probe was missing. Every "bend" below moves money *out of
+ * brand* and into something else, so a gain could be the destination earning
+ * its keep or simply brand being over-funded — and those have opposite fixes.
+ * Without this row the whole probe is unreadable.
+ */
+const cutBrand = (d: TeamDecisions): TeamDecisions => {
+  const take = Math.round((d.cmo?.brandSpend ?? 0) * 0.25);
+  if (!take) return d;
+  d.cmo!.brandSpend = (d.cmo!.brandSpend ?? 0) - take;
+  return d;
+};
+
 const moveTo = (field: "featureSpend" | "supportSpend") => (d: TeamDecisions): TeamDecisions => {
   const take = Math.round((d.cmo?.brandSpend ?? 0) * 0.25);
   if (!take) return d;
@@ -83,6 +125,7 @@ console.log(pad("market", 18), pad("variant", 22), pad("mean cash", 11), pad("me
 for (const niche of NICHES) {
   const variants: [string, ((d: TeamDecisions) => TeamDecisions) | undefined][] = [
     ["as planned", undefined],
+    ["¼ brand cut, unspent", cutBrand],
     ["¼ brand → features", moveTo("featureSpend")],
     ["¼ brand → support", moveTo("supportSpend")],
   ];

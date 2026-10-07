@@ -21,6 +21,8 @@ import { resolveYear } from "../shared/simulation/resolve";
 import { optimise } from "../shared/simulation/optimiser";
 import { nicheById } from "../shared/simulation/niches";
 import { ROLES, type World, type Niche, type Role } from "../shared/simulation/types";
+import { distressOf } from "../shared/simulation/recovery";
+import { valuation } from "../shared/simulation/mergers";
 import { STARTUP_SPECS } from "./lib/startup-specs";
 
 /** Exact pounds, with separators. Rounding to thousands hides the year-one numbers entirely. */
@@ -44,7 +46,7 @@ function trace(label: string, cash: number, seats: Role[]) {
   console.log(`\n-- ${label}, ${seats.length === 1 ? "solo founder" : "five seats"}, opening on ${money(cash)} ${"-".repeat(Math.max(0, 28 - label.length))}`);
   console.log(
     pad("yr", 4), rpad("price", 8), rpad("brand", 11), rpad("perf", 11), rpad("feature", 9), rpad("reliability", 12),
-    rpad("support", 9), rpad("efficiency", 11), rpad("COMMITTED", 12), rpad("revenue", 13), rpad("profit", 13), rpad("cash end", 13), rpad("custs", 9),
+    rpad("support", 9), rpad("efficiency", 11), rpad("COMMITTED", 12), rpad("revenue", 13), rpad("profit", 13), rpad("cash", 11), rpad("DEBT", 13), rpad("state", 11), rpad("value", 12), rpad("custs", 9),
   );
 
   for (let year = 1; year <= 14; year++) {
@@ -68,7 +70,12 @@ function trace(label: string, cash: number, seats: Role[]) {
       rpad(money(d.cto?.reliabilitySpend ?? 0), 12), rpad(money(d.coo?.supportSpend ?? 0), 9),
       rpad(money(d.coo?.efficiencySpend ?? 0), 11), rpad(money(committed), 12),
       rpad(money(report?.revenue ?? 0), 13), rpad(money(report?.profit ?? 0), 13),
-      rpad(money(us?.cash ?? 0), 13), rpad(custs.toLocaleString(), 9),
+      rpad(money(us?.cash ?? 0), 11), rpad(money(us?.debt ?? 0), 13),
+      /* The state and the worth, which is where failure was always visible and my first trace never looked. */
+      rpad(us ? `${distressOf(us)}${us.bankruptSince ? ` y${us.bankruptSince}` : ""}` : "gone", 11),
+      /* `valuation` returns a Valuation, not a number — `.fair` is the figure. */
+      rpad(us ? money(valuation(us).fair) : "—", 12),
+      rpad(custs.toLocaleString(), 9),
     );
 
     if (!us || us.closed) { console.log(`     closed in year ${year}`); return; }
