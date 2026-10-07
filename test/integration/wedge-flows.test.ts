@@ -20,6 +20,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => {
   await closeTestApp();
@@ -37,6 +38,8 @@ async function signedIn(app: any, label: string) {
     .send({ email, password, firstName: label, lastName: "Tester" });
   expect(res.status).toBe(201);
   await verifyEmail(app, email);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, email, userId: res.body.id as string };
 }
 

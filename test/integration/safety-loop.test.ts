@@ -20,6 +20,7 @@ import { RATE_LIMITS } from "@shared/moderation";
 import { SAFETY_CHECKLIST_IDS, SAFETY_EVENTS } from "@shared/safety";
 import { flushRefusalCounts } from "../../server/moderation";
 import { passMfa } from "../helpers/mfa";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -30,6 +31,8 @@ async function person(app: any, name: string, email?: string) {
     .send({ email: email ?? `sl-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: name });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.104.${address}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

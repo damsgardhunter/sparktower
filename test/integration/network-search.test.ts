@@ -11,6 +11,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { projects } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -24,6 +25,8 @@ async function person(app: any, firstName: string) {
     .send({ email, password: "Testpass123!", firstName, lastName: "Searcher" });
   expect(res.status).toBe(201);
   await verifyEmail(app, email, `198.51.104.${170 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email };
 }
 

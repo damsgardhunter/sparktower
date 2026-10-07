@@ -12,6 +12,7 @@ import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { RATE_LIMITS, CONNECTION_NOTE_MAX } from "@shared/moderation";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -24,6 +25,8 @@ async function person(app: any) {
     .send({ email: `da-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: `P${n}` });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.104.${100 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

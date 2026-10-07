@@ -26,6 +26,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { userMatches, connections } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -39,6 +40,8 @@ async function person(app: any, profile: Record<string, unknown> = {}) {
   const id = res.body.id as string;
   // Connecting needs a confirmed address, like every route that reaches someone else.
   await verifyEmail(app, res.body.email, `198.51.105.${40 + (n % 150)}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   // Matching only considers people who finished onboarding.
   await agent.put("/api/profile").send({
     displayName: `Builder ${n}`, headline: "Building things", skills: ["typescript", "react"],

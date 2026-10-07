@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
+import { finishOnboarding } from "../helpers/onboarding";
 
 let reply: any = {};
 vi.mock("openai", () => {
@@ -43,6 +44,8 @@ async function builder(app: any, name: string) {
     .send({ email, password: "Testpass123!", firstName: name });
   expect(res.status).toBe(201);
   await verifyEmail(app, email, `203.0.114.${20 + (n % 200)}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, res.body.id));
   return { agent, id: res.body.id as string, email };
 }

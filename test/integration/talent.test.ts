@@ -21,6 +21,7 @@ import {
   simSeasons, simVentures, simSeats, simDecisions, simReports, simChallenges,
   startupGames, startupGameVerdicts,
 } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -35,6 +36,8 @@ async function person(app: any, first: string) {
     .send({ email, password: "a-good-passphrase-here", firstName: first });
   expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 300)}`).toBe(201);
   await verifyEmail(app, email, ip);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

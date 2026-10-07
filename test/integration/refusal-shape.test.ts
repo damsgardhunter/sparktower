@@ -26,6 +26,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { rateLimitHits, users } from "@shared/schema";
 import { RATE_LIMITED, RATE_LIMITS, type RateLimitAction } from "@shared/moderation";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -40,6 +41,8 @@ async function builder(app: any) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", ip).send({ email, password });
   expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 200)}`).toBe(201);
   await verifyEmail(app, email, ip);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email, ip };
 }
 

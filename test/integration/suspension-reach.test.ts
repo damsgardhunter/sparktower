@@ -20,6 +20,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { userMatches, users } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -35,6 +36,8 @@ async function person(app: any, first: string) {
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await verifyEmail(app, email, `198.51.151.${10 + (n % 200)}`);
   await agent.post("/api/profile/complete-onboarding").send({ displayName: `${first} S${n}` });
+  /* The form only sets the flag; the rule wants the five fields. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email, first };
 }
 

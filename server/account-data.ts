@@ -51,6 +51,38 @@ export const MINE: Owned[] = [
    * the half we do control.
    */
   { table: "game_play_purchases", column: "user_id" },
+  /*
+   * The adverts somebody ordered and the simulations they listed or bought.
+   *
+   * Listed as theirs for the same reason as the line above, and arrived at the
+   * same way: every one of these columns is `not null` and `on delete cascade`,
+   * so the database removes them with the account whatever this list says.
+   * Calling them kept would be a promise the schema breaks. Exported with the
+   * rest of their things first, which is the half we do control.
+   *
+   * `simulation_purchases` is worth a second look by whoever built it, though,
+   * and not by this list: it is a record of money changing hands between two
+   * people, and cascading it means a seller's record of a sale disappears when
+   * the buyer closes their account. Every other payment record here is kept for
+   * exactly that reason. Changing it is a schema decision, so it is named here
+   * rather than quietly compensated for.
+   */
+  { table: "ad_renders", column: "requested_by" },
+  { table: "simulation_listings", column: "author_id" },
+  { table: "simulation_purchases", column: "buyer_id" },
+  { table: "simulation_purchases", column: "seller_id" },
+  /*
+   * Accepting the seller terms, with the version, the time and the address it
+   * was accepted from. Listed as theirs because `user_id` is `not null` and
+   * `on delete cascade`, which is what the database will do whatever this says.
+   *
+   * Worth the same second look as `simulation_purchases` above, and by its own
+   * comment: the accepted address is kept because "that is what a dispute asks
+   * for", and a record kept for disputes that is deleted by one side closing
+   * their account cannot answer one. Also a schema decision, so also named here
+   * rather than worked around.
+   */
+  { table: "seller_agreements", column: "user_id" },
   { table: "health_finding_feedback", column: "user_id" },
   { table: "project_storyboards", column: "user_id" },
   { table: "investor_artifacts", column: "user_id" },
@@ -193,6 +225,14 @@ export const KEPT: Owned[] = [
   { table: "backer_reward_fulfilments", column: "delivered_by" },
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
+  /*
+   * Who took a marketplace listing down. The same shape and the same reason as
+   * the two lines below: `on delete set null`, so a moderator closing their
+   * account takes their name off the takedown and leaves the takedown. A
+   * removal that disappeared with the person who made it is a removal somebody
+   * can undo by leaving.
+   */
+  { table: "simulation_listings", column: "taken_down_by" },
   { table: "moderation_log", column: "target_user_id" },
   /*
    * "This screen is broken", and who dealt with it.

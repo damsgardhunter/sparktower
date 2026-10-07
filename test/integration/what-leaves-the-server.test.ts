@@ -13,6 +13,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { donations, projects, userProfiles, users } from "@shared/schema";
 import { verifyEmail } from "../helpers/verify-email";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -24,6 +25,8 @@ async function person(app: any, first: string) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.115.${10 + n}`).send({ email, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
   await verifyEmail(app, email, `198.51.116.${10 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email };
 }
 
@@ -61,6 +64,8 @@ describe("what leaves the server", () => {
     const res = await agent.post("/api/auth/register").set("x-forwarded-for", "198.51.117.10").send({ email, password: "Testpass123!" });
     expect(res.status).toBe(201);
     await verifyEmail(app, email, "198.51.117.11");
+    /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+    await finishOnboarding(res.body.id);
     /*
      * The shape this guards: no display name, no first name. Sign-up allows it,
      * and a profile made from an address like 123456@… gets no name either,
