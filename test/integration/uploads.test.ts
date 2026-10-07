@@ -155,10 +155,46 @@ describe("serving an uploaded object", () => {
     }
   });
 
-  it("404s for an object that was never uploaded", async () => {
+  /*
+   * The 404 is correct and, on its own, unhelpful. Local uploads live under
+   * the directory the server was started from, so running the app from a
+   * second checkout serves nothing while every file sits in the first — and
+   * the log said only "Object not found", which sends you to the database or
+   * the upload code rather than to the folder. Said once, with the folder.
+   */
+  it("404s for an object that was never uploaded, and says which folder it looked in", async () => {
     const app = await getTestApp();
-    const res = await request(app).get("/objects/uploads/00000000-0000-4000-8000-000000000000");
-    expect(res.status).toBe(404);
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    let res;
+    try {
+      res = await request(app).get("/objects/uploads/00000000-0000-4000-8000-000000000000");
+      // A second miss says nothing: one line about a misplaced folder, not one per image on the page.
+      await request(app).get("/objects/uploads/11111111-1111-4000-8000-111111111111");
+    } finally {
+      console.warn = warn;
+    }
+    expect(res!.status).toBe(404);
+    const said = warnings.filter((w) => w.includes("[objects]"));
+    expect(said, "once, not once per missing image").toHaveLength(1);
+    expect(said[0]).toContain(OBJECT_ROOT);
+    expect(said[0]).toContain("LOCAL_OBJECT_ROOT");
+  });
+
+  it("says nothing about folders when the path itself was refused", async () => {
+    const app = await getTestApp();
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      // A traversal attempt is not a misplaced folder, and reads badly as advice in the log.
+      await request(app).get("/objects/uploads/../../etc/passwd");
+      await request(app).get("/objects/");
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings.filter((w) => w.includes("[objects]"))).toHaveLength(0);
   });
 
   it("serves an object with no ACL policy to anyone", async () => {
