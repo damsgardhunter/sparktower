@@ -203,19 +203,6 @@ export function registerStartupGameRoutes(app: Express) {
     }
 
     /*
-     * Answered early so the common case costs nothing, but it is *not* the
-     * guard — `startGameFor` re-checks under an advisory lock inside the
-     * insert's transaction. Two taps in the same second (phone and laptop) got
-     * past a check up here every time, and the loser of that race was left
-     * with a second game nobody could open which still blocked them from
-     * starting another.
-     */
-    const open = await activeGamesFor(req.user.id);
-    if (open.length > 0) {
-      return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: open[0].id });
-    }
-
-    /*
      * One a day. Checked here, and checked again inside `startGameFor`'s
      * transaction under the same advisory lock that stops two taps making two
      * games — this one is the sentence, that one is the guarantee.
@@ -226,6 +213,27 @@ export function registerStartupGameRoutes(app: Express) {
      * midnight.
      */
     const daily = await dailyGameStatus(req.user.id);
+
+    /*
+     * An open game outranks the day's allowance, and both facts come from the
+     * one call above — which is the point of asking once.
+     *
+     * They used to be two queries: an open-game check, then the allowance. Two
+     * taps in the same second both read "no open game", the winner committed,
+     * and the loser read the allowance *after* that commit — spent, by the
+     * game it had just lost the race to. It was then told to come back
+     * tomorrow while a game of its own sat open on the next screen, with no id
+     * in the refusal to send it there. Under a loaded test run that is how it
+     * answered about one time in two.
+     *
+     * Neither of these is the guard. `startGameFor` re-checks both inside a
+     * transaction under an advisory lock, and takes the same precedence there:
+     * the open game first. This is where the sentence somebody reads is
+     * written.
+     */
+    if (daily.playing) {
+      return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: daily.playing });
+    }
     if (daily.spent) {
       return res.status(429).json({
         code: "played_today",
