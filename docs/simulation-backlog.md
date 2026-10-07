@@ -4267,3 +4267,48 @@ that each route carries the span and that no screen reads past its own end.
 
 Mutation-checked: a phone that disagrees about quarters per year, one that words a
 quarter differently, and one missing a cadence entirely are all caught.
+
+### Closed: three small things, and one that was never a gap
+
+**The standings table could not open a company.** The screen has existed since the
+profiles were built and was reachable only from the desk's rival rows — so the
+table where somebody is *looking at* the competition was the one place they could
+not tap one. The web opens it from here. Rows are now pressable, for the teams
+only: an incumbent has no profile route and a row that looks tappable and does
+nothing is worse than a row that does not.
+
+**`dissolveSeats` and `offer` read as live features and are not.** Nothing in
+`resolveYear` has ever looked at either, neither is in `LEVER_FIELDS`, and no
+client can set them — so the doc comments promised a reader two powers that do not
+exist. `types.ts` recorded the decision; the fields themselves did not, which is
+where somebody actually meets them. Both now say plainly that nothing reads them
+and point at what does: `RecoveryKind "dissolve_seat"` for closing a seat, and
+`canOffer`/`applyAcquisition` for buying a company. Kept rather than deleted so the
+one-shot reset in `defaultDraft` keeps clearing a stale value out of a carried
+draft.
+
+**`staffQuality` was phone-only, which was an asymmetry this work introduced.**
+It had been sent and read by neither client; the phone took it a few passes ago
+and the web did not. Now on both. It is what `staffLeverage` multiplies the
+support budget by, so a table that spent a year training its people could not see
+it working.
+
+### Withdrawn: `simSeatPurchases` being insert-only is correct
+
+Reported as a gap three times in this session — "written in two places, zero
+selects" — and wrong every time. The count is right and the conclusion was not.
+
+The entitlement lives as columns on `companies` (`simPlaySeatsPaid` and its
+siblings, read through `seatsHeld`). This table is an idempotency ledger, and its
+own doc comment already says so: *"The ledger exists for one reason: Stripe
+redelivers. Without a record keyed on the session, a webhook delivered twice
+credits the seats twice."* Its sibling `gamePlayPurchases` carries the same note.
+Insert-only is the design, not an omission, and a read route would have been
+speculative work on a table nobody needs to read.
+
+Worth recording because the audit that produced it was mechanical — "sent and
+never read" is a reliable way to find real gaps and an unreliable way to judge
+them. The same sweep flagged `desk.shock` (the CEO sees it through the lever's own
+label, which the server rewrites to `Answer: ${shock.headline}`) and
+`dissolvedSeats` on the desk payload (the web's rehire lever has its options
+filled from it server-side). Neither of those was a gap either.

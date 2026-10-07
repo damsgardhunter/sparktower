@@ -116,6 +116,15 @@ interface Desk {
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
     founderShare: number; pipeline: number; positioning: string | null;
     pipelineLater?: number; brandPipeline?: number; staff?: number;
+    /**
+     * How good the staff are at looking after people, 0–100.
+     *
+     * Sent since training existed and read by neither client until the phone
+     * took it — this is the web catching up rather than the phone getting
+     * something extra. It is what `staffLeverage` multiplies the support budget
+     * by, so a table that trained its people had no way to see it working.
+     */
+    staffQuality?: number;
     /** The seats the company still has; a dissolved one is gone from here. */
     seats?: Role[];
     /** A capacity build in flight, so the projected room matches the engine's. */
@@ -576,6 +585,24 @@ export default function SimulationDeskPage() {
                 sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
                 tone={c.founderShare < 0.6 ? "warn" : "plain"}
               />
+              {/*
+                * How good the staff are, which decides how much service the same
+                * support budget buys (`staffLeverage`). Shown rather than left on
+                * the payload: a table that spent a year training its people could
+                * not see it working.
+                */}
+              {c.staffQuality !== undefined && (
+                <Kpi
+                  label="Your people"
+                  value={`${Math.round(c.staffQuality)}`}
+                  sub={c.staffQuality >= 65
+                    ? "well trained — support money goes further"
+                    : c.staffQuality <= 40
+                      ? "green — support money buys less than it should"
+                      : "about ordinary at looking after people"}
+                  tone={c.staffQuality <= 40 ? "warn" : "plain"}
+                />
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2 sm:gap-3">

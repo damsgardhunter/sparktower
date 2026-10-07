@@ -126,7 +126,19 @@ export default function Standings() {
             market, and is no longer what decides the order.
           </Text>
           {rows.map((row) => (
-            <StandingRowView key={row.id} row={row} leaderShare={leaderShare} />
+            <StandingRowView
+              key={row.id}
+              row={row}
+              leaderShare={leaderShare}
+              /*
+               * Only the teams. An incumbent has no company screen behind it, and
+               * a row that looks tappable and does nothing is worse than a row
+               * that does not.
+               */
+              onOpen={row.kind === "player" && !row.isYou
+                ? () => router.push(`/sim/company/${id}/${row.id}` as any)
+                : undefined}
+            />
           ))}
 
           {/* The scoreboard arguing for itself, with names in it. Only when the

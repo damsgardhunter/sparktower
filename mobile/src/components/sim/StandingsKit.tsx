@@ -16,7 +16,7 @@
  */
 import { periodLabel, periodWords, seasonSpan } from "./period";
 import React from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
 import { Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
@@ -94,7 +94,20 @@ export function StandingsBanner({ year, totalYears, you, line, gap, totalPeriods
  * sliver and the table reads as nine identical rows. The number beside it is
  * the true share, so nothing the bar exaggerates goes unlabelled.
  */
-export function StandingRowView({ row, leaderShare }: { row: StandingRow; leaderShare: number }) {
+export function StandingRowView({ row, leaderShare, onOpen }: {
+  row: StandingRow;
+  leaderShare: number;
+  /**
+   * Opens this company's own screen.
+   *
+   * The screen has existed since the profiles were built and was reachable only
+   * from the desk's rival rows — so the table where somebody is *looking at* the
+   * competition was the one place they could not tap one. The web opens it from
+   * here. Absent for a row with nothing behind it: an incumbent has no profile
+   * route, and a chevron that does nothing is worse than no chevron.
+   */
+  onOpen?: () => void;
+}) {
   const tone = row.isYou ? colors.primary : row.kind === "incumbent" ? colors.textSecondary : colors.novaPurple;
   const fraction = leaderShare > 0 ? Math.max(0, Math.min(1, row.share / leaderShare)) : 0;
   /*
@@ -105,10 +118,14 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
    */
   const reading = shareReading(row);
 
+  /* A row that opens something is a control; one that does not stays a row. */
+  const Frame: any = onOpen ? Pressable : View;
+
   return (
-    <View
+    <Frame
       testID={`standings-row-${row.id}`}
-      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${exact(row.founderValue ?? 0)} of founder-owned value, ${reading.headline} of where it sells${reading.world ? `, ${reading.world} of the whole market` : ""}`}
+      {...(onOpen ? { onPress: onOpen, accessibilityRole: "button" } : {})}
+      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${exact(row.founderValue ?? 0)} of founder-owned value, ${reading.headline} of where it sells${reading.world ? `, ${reading.world} of the whole market` : ""}${onOpen ? ". Opens their company." : ""}`}
       style={{
         flexDirection: "row", alignItems: "flex-start", gap: spacing.sm,
         paddingVertical: spacing.sm, paddingHorizontal: row.isYou ? spacing.sm : 0,
@@ -209,7 +226,7 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
           </Text>
         ) : null}
       </View>
-    </View>
+    </Frame>
   );
 }
 
