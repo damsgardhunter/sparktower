@@ -19,6 +19,7 @@
  */
 import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 /* This spec's own address, so its registrations don't spend another spec's sign-in budget. */
 test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.188" } });
@@ -33,9 +34,7 @@ async function projectFor(page: Page): Promise<string> {
     data: { email, password, firstName: "Robin", lastName: "Maker" },
   })).ok()).toBeTruthy();
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Robin Maker", headline: "Opening a tea room", bio: "Here for the logo." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Robin Maker", headline: "Opening a tea room", bio: "Here for the logo." });
 
   const created = await page.request.post("/api/projects", {
     data: {

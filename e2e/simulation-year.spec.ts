@@ -35,6 +35,7 @@ import { clearStrayLobbies } from "./sim-lobbies";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 
@@ -59,9 +60,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
     data: { email: `e2e-year-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Year" },
   })).ok()).toBeTruthy();
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Year`, headline: "Running a company", bio: "Here for the simulation." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Year`, headline: "Running a company", bio: "Here for the simulation." });
   return { context, api };
 }
 

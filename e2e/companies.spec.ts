@@ -13,6 +13,7 @@ import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 
@@ -44,9 +45,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
   })).ok()).toBeTruthy();
   const me = await (await api.get("/api/auth/user")).json();
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Co`, headline: "Running a business", bio: "Here for the company tools." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Co`, headline: "Running a business", bio: "Here for the company tools." });
   return { context, api, id: me.id as string };
 }
 

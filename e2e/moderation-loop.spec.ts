@@ -20,6 +20,7 @@ import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { passMfa } from "./mfa-helper";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -33,9 +34,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
   expect(res.ok()).toBeTruthy();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Mod`, headline: "Here for the loop", bio: "Testing moderation." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Mod`, headline: "Here for the loop", bio: "Testing moderation." });
   return { context, api, id: (await res.json()).id as string };
 }
 

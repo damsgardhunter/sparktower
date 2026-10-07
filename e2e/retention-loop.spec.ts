@@ -7,6 +7,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -17,7 +18,7 @@ test("the home screen brings you back to the next step, and a finished step can 
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ret-${stamp()}@example.test`, password, firstName: "Rae", lastName: "Return" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Rae Return", headline: "Building a meal planner", bio: "Here for the path." } })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Rae Return", headline: "Building a meal planner", bio: "Here for the path." });
   const title = `Return Path ${stamp()}`;
   const project = await (await page.request.post("/api/projects", {
     data: { title, description: "A meal planner that plans dinners from the fridge.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
@@ -70,7 +71,7 @@ test("finishing a step on the project moves the home card, with no reload", asyn
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-next-${stamp()}@example.test`, password, firstName: "Nat", lastName: "Next" } })).ok()).toBeTruthy();
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Nat Next", headline: "Shipping something", bio: "Here for the path." } })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Nat Next", headline: "Shipping something", bio: "Here for the path." });
   const project = await (await page.request.post("/api/projects", {
     data: { title: `Live Path ${stamp()}`, description: "A tool that turns receipts into a monthly report.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
   })).json();
@@ -100,7 +101,7 @@ test("a project with no path is offered one from the home card", async ({ page }
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-nopath-${stamp()}@example.test`, password, firstName: "Pat", lastName: "Path" } })).ok()).toBeTruthy();
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Pat Path", headline: "Older project", bio: "Here from before paths." } })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Pat Path", headline: "Older project", bio: "Here from before paths." });
   const project = await (await page.request.post("/api/projects", {
     data: { title: `Old Project ${stamp()}`, description: "Something built before paths existed at all.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
   })).json();
@@ -124,7 +125,7 @@ test("the path page is an address you can return to, and it leads back to the st
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-pathhome-${stamp()}@example.test`, password, firstName: "Pat", lastName: "Home" } })).ok()).toBeTruthy();
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Pat Home", headline: "Building something", bio: "Here for the path." } })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Pat Home", headline: "Building something", bio: "Here for the path." });
 
   // Nothing started yet: the page says so and offers the one thing that helps.
   await page.goto("/path");

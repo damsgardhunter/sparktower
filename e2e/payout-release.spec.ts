@@ -35,6 +35,7 @@ import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { passMfa } from "./mfa-helper";
 import { creatorPayoutCents, PLATFORM_FEE_PERCENT } from "../shared/backing";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -55,9 +56,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
   });
   expect(res.ok(), await res.text()).toBeTruthy();
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Payout`, headline: "In the money path", bio: "Here for the payout." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Payout`, headline: "In the money path", bio: "Here for the payout." });
   return { context, api, id: (await res.json()).id as string };
 }
 

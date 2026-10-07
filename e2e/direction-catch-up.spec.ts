@@ -14,6 +14,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.212" } });
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -26,9 +27,7 @@ test("a builder can reach 'catch up with my direction' without opening anything"
     data: { email, password: "Rt7wqz!Mk4vLp", firstName: "Dee" },
   })).ok()).toBeTruthy();
   await verifyEmail(page.request, email);
-  await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Dee Rivers", headline: "building", bio: "here to build" },
-  });
+  await finishOnboarding(page.request, { displayName: "Dee Rivers", headline: "building", bio: "here to build" });
   const made = await page.request.post("/api/projects", {
     data: {
       title: "Direction Co", description: "A project for checking the catch-up control is reachable.",

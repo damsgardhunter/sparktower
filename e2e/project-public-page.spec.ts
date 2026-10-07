@@ -16,6 +16,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.190" } });
 
@@ -42,9 +43,7 @@ test("the public page shows five tabs, and a role is what you apply to", async (
   const maraEmail = `e2e-mara-${stamp()}@example.test`;
   expect((await mara.post("/api/auth/register", { data: { email: maraEmail, password, firstName: "Mara" } })).ok()).toBeTruthy();
   await verifyEmail(mara, maraEmail);
-  expect((await mara.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Mara Okonkwo", headline: "Building a scheduling tool", bio: "Shipping in public." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(mara, { displayName: "Mara Okonkwo", headline: "Building a scheduling tool", bio: "Shipping in public." });
 
   const created = await mara.post("/api/projects", {
     data: {
@@ -65,9 +64,7 @@ test("the public page shows five tabs, and a role is what you apply to", async (
   const deviEmail = `e2e-devi-${stamp()}@example.test`;
   expect((await page.request.post("/api/auth/register", { data: { email: deviEmail, password, firstName: "Devi" } })).ok()).toBeTruthy();
   await verifyEmail(page.request, deviEmail);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Devi Raman", headline: "iOS, mostly", bio: "Looking for a team." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Devi Raman", headline: "iOS, mostly", bio: "Looking for a team." });
 
   await page.goto(`/projects/${projectId}`);
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 4_000 }).catch(() => {});

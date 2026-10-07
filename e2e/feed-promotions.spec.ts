@@ -10,6 +10,7 @@ import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { passMfa } from "./mfa-helper";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -24,7 +25,7 @@ test("featured tools rotate through the feed, can be hidden, and play an admin's
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.120" }, data: { email: `e2e-promo-${stamp()}@example.test`, password: "Testpass123!", firstName: "Promo", lastName: "Viewer" } })).json();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Promo Viewer", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Promo Viewer", headline: "x", bio: "y" });
   for (let i = 0; i < 3; i++) await api.post("/api/feed", { data: { postType: "project_update", content: `Progress note ${i} ${stamp()}` } });
 
   // Near the top: first, or right after the first post.
@@ -117,7 +118,7 @@ test("scrolling fast past loading videos doesn't throw", async ({ browser }) => 
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.121" }, data: { email: `e2e-promo-scroll-${stamp()}@example.test`, password: "Testpass123!", firstName: "Fast", lastName: "Scroller" } })).json();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Fast Scroller", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Fast Scroller", headline: "x", bio: "y" });
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [me.id]); } finally { await db.end(); }

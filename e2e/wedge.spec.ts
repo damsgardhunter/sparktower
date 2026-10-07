@@ -14,6 +14,7 @@
  */
 import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const newEmail = () => `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
@@ -32,18 +33,16 @@ async function signUp(page: Page, first = "Casey") {
   await page.getByTestId("input-signup-confirm").fill(password);
   await page.getByTestId("button-submit-signup").click();
 
-  // A brand-new account is sent to onboarding; that redirect is the proof
-  // the session was created and the profile provisioned.
-  await page.waitForURL(/\/onboarding/, { timeout: 15_000 });
+  // Signing up no longer sends anybody anywhere: the account lands on the feed
+  // and the banner says what's left. So the proof the session exists and the
+  // profile was provisioned is the banner, not a redirect.
+  await expect(page.getByTestId("onboarding-banner")).toBeVisible({ timeout: 15_000 });
 
   // Signing up through the form leaves the address unconfirmed, and posting needs it (server/email-verification.ts).
   await verifyEmail(page.request, email);
 
   // Same cookie jar as the page, so this is the signed-in user completing it.
-  const done = await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Builder`, headline: "Shipping weekly", bio: "Here for the loop." },
-  });
-  expect(done.ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: `${first} Builder`, headline: "Shipping weekly", bio: "Here for the loop." });
   return email;
 }
 

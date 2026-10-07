@@ -10,6 +10,7 @@ import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { createHash } from "node:crypto";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -23,7 +24,7 @@ test("an owner invites a collaborator by link; a stranger opens it signed out, s
   expect((await api.post("/api/auth/register", { data: { email: `e2e-owner-${stamp()}@example.test`, password: "Testpass123!", firstName: "Olive", lastName: "Owner" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Olive Owner", headline: "Building", bio: "Inviting a teammate." } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Olive Owner", headline: "Building", bio: "Inviting a teammate." });
   const project = await (await api.post("/api/projects", { data: { title: `Team Up ${stamp()}`, description: "A project that invites a collaborator.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
 
   // 1. The modal: an email, a role, a link to copy, and what happened to the email.
@@ -82,12 +83,17 @@ test("an owner invites a collaborator by link; a stranger opens it signed out, s
    * new member does one and publishes it — and the page they just made is
    * where they're asked to bring the next person in.
    */
-  // A brand-new account meets onboarding on the way in; the welcome has to survive that.
-  await expect(guest).toHaveURL(/\/onboarding$|\/projects\//, { timeout: 15_000 });
-  if (new URL(guest.url()).pathname === "/onboarding") {
-    expect((await stranger.request.post("/api/profile/complete-onboarding", { data: { displayName: "Ian Invitee", headline: "Engineer", bio: "Joined from an invite." } })).ok()).toBeTruthy();
-    await guest.goto(`/projects/${project.id}/manage`);
-  }
+  /*
+   * Finished first, because the new member publishes a step below and that is a
+   * write other people read — refused for a half-filled profile
+   * (shared/onboarding.ts).
+   *
+   * This used to be conditional on landing on /onboarding, which was where
+   * signing up sent people. Nothing redirects now, so the branch stopped
+   * running and the account stayed half-finished until the publish refused it.
+   */
+  await finishOnboarding(guest.request, { displayName: "Ian Invitee", headline: "Engineer", bio: "Joined from an invite." });
+  await expect(guest).toHaveURL(/\/projects\//, { timeout: 15_000 });
   await guest.getByTestId("btn-skip-onboarding").click({ timeout: 10_000 }).catch(() => {});
   const welcome = guest.getByTestId("just-joined");
   await expect(welcome).toContainText(project.title);

@@ -12,6 +12,8 @@
  * and neither can skip.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   missingOnboarding, onboardingComplete, onboardingPrompt, missingOnboardingLabels,
 } from "@shared/onboarding";
@@ -106,5 +108,39 @@ describe("what the banner says", () => {
   it("labels every requirement, so nothing can go missing unnamed", () => {
     expect(missingOnboardingLabels(null)).toHaveLength(missingOnboarding(null).length);
     for (const label of missingOnboardingLabels(null)) expect(label.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The rule and the form that satisfies it.
+ *
+ * These drifted apart once already and the failure was expensive to read. The
+ * rule became five profile fields; the form and the test fixtures still thought
+ * "onboarded" meant the `isOnboarded` column, which `POST
+ * /api/profile/complete-onboarding` sets without reading its body. Everything
+ * answered 200. A dozen browser specs registered accounts that looked finished,
+ * were not, and failed several screens later on a missing button — never at the
+ * call that was lying.
+ *
+ * The expensive half of that is unfixable by a test: an endpoint that ignores
+ * its body will always answer 200. The cheap half is this — if the rule asks
+ * for something the form never asks for, nobody can finish onboarding at all,
+ * by any route, and that is worth catching here rather than in production.
+ *
+ * Matched on the page source naming the field — as a registered input
+ * (`name="x"`) or through the form object (`watch("x")`, `setValue("x", …)`,
+ * which is how the skill chips are kept). A floor and not a proof: it says the
+ * form touches each requirement, not that the control sits on a step somebody
+ * is made to visit. The catastrophic case is the one where the field is absent
+ * altogether, and that is what this catches.
+ */
+describe("the form asks for what the rule requires", () => {
+  it("has a field for every required answer", () => {
+    const page = readFileSync(join(__dirname, "..", "..", "client", "src", "pages", "onboarding.tsx"), "utf8");
+    const asked = (field: string) =>
+      page.includes(`name="${field}"`) ||
+      new RegExp(`\\.(?:watch|setValue|getValues|trigger)\\(\\s*"${field}"`).test(page);
+    const unasked = missingOnboarding(null).filter((field) => !asked(field));
+    expect(unasked, `the rule requires these and the form never asks for them: ${unasked.join(", ")}`).toEqual([]);
   });
 });

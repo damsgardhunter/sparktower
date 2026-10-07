@@ -12,6 +12,7 @@
 import { test, expect, type APIRequestContext, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import { clearStrayLobbies } from "./sim-lobbies";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -28,9 +29,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
     data: { email: `e2e-season-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Season" },
   })).ok()).toBeTruthy();
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Season`, headline: "Running a company", bio: "Here for the simulation." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Season`, headline: "Running a company", bio: "Here for the simulation." });
   return { context, api };
 }
 

@@ -13,6 +13,7 @@ import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -30,7 +31,7 @@ test("running out of Nova actions on the path offers a pack, and topping up clea
   const me = await (await api.post("/api/auth/register", { data: { email: `e2e-revenue-${stamp()}@example.test`, password: "Testpass123!", firstName: "Payer", lastName: "Revenue" } })).json();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Payer Revenue", headline: "Out of credits", bio: "Here for the loop." } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Payer Revenue", headline: "Out of credits", bio: "Here for the loop." });
   const project = await (await api.post("/api/projects", { data: { title: `Revenue Loop ${stamp()}`, description: "A project that runs out of AI credits.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
 
   // Low first: the path says so before anything is refused.

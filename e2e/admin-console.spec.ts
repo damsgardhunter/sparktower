@@ -26,6 +26,7 @@ import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -39,7 +40,7 @@ async function customer(browser: any, ip: string, name: string) {
   const email = `e2e-cust-${stamp()}@example.test`;
   const me = await (await api.post("/api/auth/register", { data: { email, password, firstName: name } })).json();
   await verifyEmail(api, email);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: name, headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: name, headline: "x", bio: "y" });
   const made = await api.post("/api/projects", {
     data: { title: `${name}'s cafe`, description: "Trading for six years.", category: "Other", goal: "run_company", subcategory: "restaurant" },
   });
@@ -59,7 +60,7 @@ async function supportOperator(browser: any, ip: string) {
   const email = `e2e-support-${stamp()}@example.test`;
   const me = await (await api.post("/api/auth/register", { data: { email, password, firstName: "Sam" } })).json();
   await verifyEmail(api, email);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Sam Support", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Sam Support", headline: "x", bio: "y" });
 
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();

@@ -7,6 +7,7 @@
  */
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -19,9 +20,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
   expect(res.ok()).toBeTruthy();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Loop`, headline: "Here for the build loop", bio: "Testing feedback." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Loop`, headline: "Here for the build loop", bio: "Testing feedback." });
   return { context, api };
 }
 

@@ -16,6 +16,7 @@
  */
 import { test, expect, type APIRequestContext } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -41,7 +42,7 @@ test("someone who forgot their password gets back in from the sign-in form, and 
   await left.get("/");
   expect((await left.post("/api/auth/register", { data: { email, password: oldPassword, firstName: "Rae", lastName: "Reset" } })).ok()).toBeTruthy();
   await verifyEmail(left, email);
-  expect((await left.post("/api/profile/complete-onboarding", { data: { displayName: "Rae Reset", headline: "Locked out", bio: "Forgot it." } })).ok()).toBeTruthy();
+  await finishOnboarding(left, { displayName: "Rae Reset", headline: "Locked out", bio: "Forgot it." });
   expect((await left.get("/api/auth/user")).status(), "the laptop is signed in").toBe(200);
 
   // Somewhere else, signed out, the password doesn't work — and the way out is next to the field.
