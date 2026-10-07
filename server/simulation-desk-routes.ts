@@ -96,14 +96,14 @@ export async function currencyForSeason(companyId: string | null | undefined): P
   return currencyOf(row?.currency);
 }
 
-async function seatOf(ventureId: string, userId: string) {
+export async function seatOf(ventureId: string, userId: string) {
   const [seat] = await db.select().from(simSeats)
     .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, userId)));
   return seat ?? null;
 }
 
 /** Everything filed for a venture in a given year, as the engine's shape. */
-async function draftFor(ventureId: string, year: number): Promise<{ decisions: TeamDecisions; filedBy: Record<string, string> }> {
+export async function draftFor(ventureId: string, year: number): Promise<{ decisions: TeamDecisions; filedBy: Record<string, string> }> {
   const rows = await db
     .select({ role: simDecisions.role, payload: simDecisions.payload, userId: simDecisions.userId })
     .from(simDecisions)

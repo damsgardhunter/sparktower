@@ -53,6 +53,22 @@ async function throwIfResNotOk(res: Response, request?: FailedRequest) {
  * building a market with Nova, which lives at
  * `/api/projects/:id/simulation` — a different prefix, and still refreshed.
  */
+/**
+ * The exceptions: paths under a skipped prefix that *do* charge.
+ *
+ * `/api/sim/` was a blanket promise that nothing in a season costs anything,
+ * and it held until "have Nova plan this year" arrived — a search over the
+ * whole company, priced at NOVA_PLAN_ACTIONS of the month's free actions. It
+ * sits under the skipped prefix because it is a season route, and it has to be
+ * followed because the number in the corner is wrong the moment it returns.
+ *
+ * Matched as a suffix rather than a whole path, since the venture id is in the
+ * middle of it.
+ */
+export const CHARGES_ANYWAY = [
+  "/nova-plan",
+];
+
 export const SPENDS_NOTHING = [
   /*
    * Playing a season: joining, claiming a seat, naming the company, filing a
@@ -71,8 +87,12 @@ export const SPENDS_NOTHING = [
  * wrong — not by the list being wrong today, but by a charge being added later
  * to a route the list promised was free.
  */
-export const creditsFollow = (url: string): boolean =>
-  !url.startsWith("/api/subscription") && !SPENDS_NOTHING.some((prefix) => url.startsWith(prefix));
+export const creditsFollow = (url: string): boolean => {
+  if (url.startsWith("/api/subscription")) return false;
+  /* An exception beats the prefix: see CHARGES_ANYWAY. */
+  if (CHARGES_ANYWAY.some((suffix) => url.endsWith(suffix))) return true;
+  return !SPENDS_NOTHING.some((prefix) => url.startsWith(prefix));
+};
 
 let refreshCredits: ReturnType<typeof setTimeout> | null = null;
 function creditsMayHaveChanged(url: string) {

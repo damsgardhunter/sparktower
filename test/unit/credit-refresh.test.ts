@@ -18,7 +18,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { SPENDS_NOTHING, creditsFollow } from "../../client/src/lib/queryClient";
+import { SPENDS_NOTHING, CHARGES_ANYWAY, creditsFollow } from "../../client/src/lib/queryClient";
 import { roomPollMs } from "../../client/src/pages/simulation";
 
 const root = join(__dirname, "..", "..");
@@ -64,6 +64,27 @@ describe("when a write re-reads the credit balance", () => {
    * this is a floor and not a proof. It catches the realistic case, which is a
    * `requireCredits` or `deductCredits` added beside the other route handlers.
    */
+  /*
+   * The exceptions, held as tightly as the rule.
+   *
+   * An escape hatch that nothing checks is how the rule above gets quietly
+   * emptied: the cheap way to silence that test is to add a suffix to
+   * CHARGES_ANYWAY, and if nothing asserts what a suffix *means* then the list
+   * becomes a list of things nobody refreshes.
+   */
+  it("follows every path that charges under a skipped prefix", () => {
+    expect(CHARGES_ANYWAY.length, "an exception list that is empty should be deleted").toBeGreaterThan(0);
+    for (const suffix of CHARGES_ANYWAY) {
+      expect(creditsFollow(`/api/sim/ventures/abc${suffix}`), `${suffix} charges and must be followed`).toBe(true);
+    }
+  });
+
+  it("keeps the exceptions narrow: a sibling route is still skipped", () => {
+    /* `/nova-plan` must not quietly exempt the rest of the venture's routes. */
+    expect(creditsFollow("/api/sim/ventures/abc/nova-plan-preview")).toBe(false);
+    expect(creditsFollow("/api/sim/ventures/abc/decisions")).toBe(false);
+  });
+
   it("still holds: no route under a skipped prefix charges for anything", () => {
     const charging = /\b(requireCredits|deductCredits)\s*\(/;
     const offenders: string[] = [];
@@ -79,6 +100,12 @@ describe("when a write re-reads the credit balance", () => {
        */
       for (const m of src.matchAll(/app\.(?:post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g)) {
         const path = m[1];
+        /*
+         * A declared exception is not an offender — it is the opposite: a path
+         * under a skipped prefix that the client has been told to follow
+         * anyway. The test below checks each one actually is.
+         */
+        if (CHARGES_ANYWAY.some((suffix) => path.endsWith(suffix))) continue;
         if (SPENDS_NOTHING.some((prefix) => path.startsWith(prefix))) {
           offenders.push(`${name}: ${path}`);
         }

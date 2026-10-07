@@ -204,6 +204,30 @@ export async function requireCredits(
      * by the platform brake and, on the allowance path, the daily credit cap.
      */
     action?: string;
+    /**
+     * How many of the month's small actions this one costs. One by default,
+     * which is every call that has ever been made here.
+     *
+     * The file header says small actions are counted in actions and not
+     * weighted, and that is still the rule for everything Nova does at a
+     * builder's elbow: a chat turn is a chat turn whether it read three tasks
+     * or thirty, and weighting those would put us back to quoting people a
+     * number they have to convert into money.
+     *
+     * This exists for the one kind of action that is neither a chat turn nor a
+     * priced outcome: a search. `optimise` plays a whole company's year
+     * against the forecast a year out, sixteen slices at a time — it is not a
+     * model call at all, it is compute, and it is worth several elbow-turns of
+     * it. Charging it as one would have the free month buy twenty-five of
+     * them; pricing it in dollars would put a paywall in front of the thing
+     * somebody was invited in to try. So it takes a few actions off the same
+     * free allowance, which is the one place in this file where a number of
+     * actions is the honest unit.
+     *
+     * Only read on the allowance path. A priced outcome is priced in dollars,
+     * and nothing about this changes that.
+     */
+    actions?: number;
   }
 ): Promise<UserEntitlements | null> {
   /*
@@ -321,8 +345,14 @@ export async function requireCredits(
     holdCovered(res, userId);
     return ent;
   }
-  if (await storage.chargeCredits(userId, 1)) {
-    holdCredits(res, userId, 1);
+  /*
+   * Conditional in the UPDATE (`chargeCredits`), so a month with three left
+   * refuses a five-action search rather than going negative — and two tabs
+   * pressing it together cannot both spend the same last three.
+   */
+  const actions = Math.max(1, Math.round(opts?.actions ?? 1));
+  if (await storage.chargeCredits(userId, actions)) {
+    holdCredits(res, userId, actions);
     return ent;
   }
   /*
@@ -351,6 +381,23 @@ export async function requireCredits(
   const wallet = await walletOf(userId);
   const pack = OUTCOME_PRICE_CENTS.actionPack;
   const affordable = wallet.balanceCents >= pack;
+  /*
+   * "You've used all 25" is a lie to somebody who has three left and asked
+   * for something that costs five. The sentence has to name the shortfall, or
+   * the next thing they do is press it again.
+   */
+  if (actions > 1 && wallet.allowanceRemaining > 0) {
+    res.status(402).json(paymentRequired({
+      message:
+        `This one costs ${actions} of your free Nova actions and you have ` +
+        `${wallet.allowanceRemaining} left this month. ` +
+        (affordable
+          ? `${formatMoney(pack)} buys ${ACTIONS_PER_PACK} more, and they don't expire.`
+          : `Your allowance resets at the start of next month, or ${formatMoney(pack)} buys ${ACTIONS_PER_PACK} more whenever you want them.`),
+      label, outcome: "actionPack", cents: pack, wallet,
+    }));
+    return null;
+  }
   res.status(402).json(paymentRequired({
     message: affordable
       ? `You've used all ${wallet.allowanceLimit} free Nova actions this month. ` +

@@ -60,6 +60,22 @@
  */
 export const MONTHLY_SMALL_ACTIONS = 25;
 
+/**
+ * What one press of "have Nova plan this year" costs, in small actions.
+ *
+ * Five, which is the one weighted price in this file and is deliberate. It is
+ * not a chat turn — `shared/simulation/optimiser.ts` plays the whole company's
+ * year against the forecast a year out, sixteen slices at a time — and it is
+ * not a priced outcome either, because the person it is for has usually just
+ * been handed a link to a simulation of their own business and is deciding
+ * whether any of this is worth their time. A paywall there sells nothing.
+ *
+ * So the free month buys five of them rather than twenty-five, which is five
+ * years of a fourteen-year season planned for nothing. That is enough to see
+ * what running the business feels like, which is what the invitation promises.
+ */
+export const NOVA_PLAN_ACTIONS = 5;
+
 /** The outcomes that carry a price. Everything else Nova does is small, or free. */
 export type PricedOutcomeId =
   | "actionPack"

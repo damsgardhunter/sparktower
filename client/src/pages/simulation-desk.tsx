@@ -56,6 +56,7 @@ import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock"
 import { useProjection } from "@/components/sim/projection-panel";
 import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
+import { NovaPlanCard } from "@/components/sim/nova-plan";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope, Search,
@@ -701,6 +702,23 @@ export default function SimulationDeskPage() {
 
       {tab === "decisions" && (
         <>
+        {/*
+          * First on the tab, and first for a reason: somebody who was handed a
+          * link to a simulation of their own business is deciding whether this
+          * is worth an afternoon, not looking forward to setting eleven levers.
+          *
+          * Only while there is a year to file, and only for a seat that holds
+          * a desk — it files decisions, so it is offered exactly where filing
+          * is possible.
+          */}
+        {desk.phase !== "finished" && desk.yourRole && (
+          <NovaPlanCard
+            ventureId={desk.ventureId}
+            year={desk.year}
+            soloSeason={!!desk.solo}
+            filed={!!desk.submitted}
+          />
+        )}
         {/* Only for developers and for companies running their own season. */}
         {desk.canAdvance && desk.phase !== "finished" && desk.seasonId && (
           <AdvanceYearCard

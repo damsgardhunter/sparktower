@@ -18,15 +18,29 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SimulationListingCard, type ListingCard } from "@/components/simulation-listing-card";
-import { SimulationLibrary } from "@/components/simulation-library";
-import { Store, Clock, Plus } from "lucide-react";
+import { SimulationLibrary, isLive, type StartedSeason } from "@/components/simulation-library";
+import { Store, Clock, Plus, Play, CheckCircle2, XCircle, Hourglass } from "lucide-react";
 
 interface Mine {
-  listings: (ListingCard & { status: "draft" | "listed" | "unlisted" })[];
-  purchases: { id: string; listingId: string | null; title: string | null; seats: number; seatsLeft: number; paidCents: number; at: string }[];
+  listings: (ListingCard & { status: "draft" | "listed" | "unlisted"; seasons: StartedSeason[] })[];
+  purchases: { id: string; listingId: string | null; title: string | null; seats: number; seatsLeft: number; paidCents: number; at: string; seasons: StartedSeason[] }[];
   sales: { id: string; listingId: string | null; title: string | null; seats: number; earnedCents: number; at: string }[];
-  totals: { earnedCents: number; spentCents: number; seatsLeft: number };
+  totals: { earnedCents: number; spentCents: number; seatsLeft: number; running: number };
 }
+
+/**
+ * How a season reads once it is no longer somewhere to go back to.
+ *
+ * "Abandoned" is kept as its own word rather than folded into finished,
+ * because a season that was walked away from and one that was played to its
+ * last year are different things to have done, and the list is a record.
+ */
+const STATUS_LOOK: Record<string, { label: string; Icon: typeof Play }> = {
+  forming: { label: "Waiting to start", Icon: Hourglass },
+  running: { label: "Running", Icon: Play },
+  finished: { label: "Finished", Icon: CheckCircle2 },
+  abandoned: { label: "Abandoned", Icon: XCircle },
+};
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
@@ -48,6 +62,21 @@ export function SimulationPortfolio({ isOwnProfile }: { isOwnProfile: boolean })
   const listings = data?.listings ?? [];
   const sales = data?.sales ?? [];
   const purchases = data?.purchases ?? [];
+  /*
+   * Every season started from a listing, deduplicated.
+   *
+   * A start is recorded against both the purchase and the listing, so an
+   * author who bought seats on their own listing would otherwise see each of
+   * their seasons twice.
+   */
+  const titleOf = new Map<string, string | null>();
+  for (const l of listings) titleOf.set(l.id, l.title);
+  for (const p of purchases) if (p.listingId) titleOf.set(p.listingId, p.title);
+  const played = [...new Map(
+    [...purchases.flatMap((p) => p.seasons), ...listings.flatMap((l) => l.seasons)]
+      .map((s) => [s.seasonId, s]),
+  ).values()].sort((a, b) => +new Date(b.startedAt) - +new Date(a.startedAt));
+
   const nothingYet = !listings.length && !sales.length && !purchases.length;
 
   if (nothingYet) {
@@ -133,6 +162,66 @@ export function SimulationPortfolio({ isOwnProfile }: { isOwnProfile: boolean })
           </div>
         )}
       </section>
+
+      {/*
+        * Every season this person has started from the marketplace, finished
+        * ones included.
+        *
+        * The shelf at the top only shows what is still worth going back to,
+        * which is the right thing for a shelf and the wrong thing for a
+        * record: "what have I actually played" is a question about history,
+        * and until this section existed nothing could answer it. Ordinary
+        * catalogue seasons are not here — they are in the games list, which
+        * has always had them. This is the marketplace's own history.
+        */}
+      {played.length > 0 && (
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <h3 className="font-semibold">Seasons you've played</h3>
+            <Badge variant="outline" className="font-normal">{played.length}</Badge>
+          </div>
+          <Card className="nova-ring-soft border-0">
+            <CardContent className="divide-y divide-border p-0">
+              {played.map((season) => {
+                const look = STATUS_LOOK[season.status ?? ""] ?? { label: "No longer there", Icon: XCircle };
+                return (
+                  <div key={season.seasonId} className="flex items-center justify-between gap-3 p-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">
+                        {season.name?.trim() || titleOf.get(season.listingId) || "A simulation"}
+                      </p>
+                      <p className="flex items-center gap-1 text-xs text-tertiary">
+                        <look.Icon className="h-3 w-3 shrink-0" />
+                        {look.label}
+                        {season.status === "running" && season.year != null && (
+                          <> · year {season.year} of {season.totalYears ?? 14}</>
+                        )}
+                        {" · "}{new Date(season.startedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    {/*
+                      * A way in only while there is one. A finished season's
+                      * room is read-only and a button into it would promise a
+                      * game; its result lives on the company's own screen.
+                      */}
+                    {isLive(season) && season.joinUrl && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        onClick={() => setLocation(season.joinUrl!)}
+                        data-testid={`button-open-season-${season.seasonId}`}
+                      >
+                        Open
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       {sales.length > 0 && (
         <section>

@@ -55,6 +55,7 @@ import { registerProjectVisualRoutes } from "./project-visuals";
 import { registerBrandKitRoutes } from "./brand-kit";
 import { registerAdBrandRoutes } from "./ad-brand-routes";
 import { registerAdRenderRoutes } from "./ad-render-routes";
+import { registerNovaPlanRoutes } from "./simulation-nova-plan";
 import { registerSimulationMarketplaceRoutes } from "./simulation-market-listings";
 import { registerSimulationComplianceRoutes } from "./simulation-market-compliance";
 import { registerPostImageRoutes } from "./post-image-routes";
@@ -533,6 +534,7 @@ export async function registerRoutes(
   registerBrandKitRoutes(app);
   registerAdBrandRoutes(app);
   registerAdRenderRoutes(app);
+  registerNovaPlanRoutes(app);
   registerSimulationMarketplaceRoutes(app);
   registerSimulationComplianceRoutes(app);
   registerPostImageRoutes(app);
