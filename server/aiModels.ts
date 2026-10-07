@@ -58,3 +58,13 @@ export const IMAGE_QUALITY = (process.env.AI_IMAGE_QUALITY || "medium") as
   | "medium"
   | "high"
   | "auto";
+
+/**
+ * The voice model behind a character speaking.
+ *
+ * Separate from the image and text models because it is the only one whose
+ * output a person hears rather than reads, and the newer model is the one that
+ * takes a direction — "flat, unhurried, slightly defeated" — which is the
+ * difference between a character and a screen reader.
+ */
+export const SPEECH_MODEL = process.env.AI_SPEECH_MODEL || "gpt-4o-mini-tts";

@@ -61,6 +61,7 @@ import { resolvedBrand, brandVoice, type BrandKitInput } from "@shared/ad-brand"
 import { sceneMoments } from "@shared/ad-script";
 import { captionLimit } from "@shared/ad-script";
 import { placeLine, DEFAULT_HEIGHT } from "./ad-placement";
+import { speakToFit, mixArgs, type SpokenLine } from "./ad-voice";
 import { fitLine, fitParagraph } from "@shared/ad-type";
 import { safeBox, SAFE_AREAS } from "@shared/ad-safe-areas";
 
@@ -345,6 +346,81 @@ export async function advanceRender(renderId: string): Promise<RenderRow> {
 }
 
 /** Write the script, then submit every plate. */
+/**
+ * Speaks every line and mixes it onto the finished cut.
+ *
+ * Returns the silent file unchanged when there is nothing to say or the voice
+ * fails. A film with no sound is a worse film; a film that failed to render
+ * because the voice provider was down is no film at all, and the pictures have
+ * already been generated and paid for by this point.
+ */
+async function addVoice(input: {
+  story: { speaks: { voice: string; delivery: string } };
+  script: { lines: { beat: string; onScreen: string }[] } | null;
+  plan: { shots: Shot[]; plates: Plate[] };
+  lengths: number[];
+  crossfade: number;
+  silent: string;
+  work: string;
+  /** What the advert was sold as, which is what the audio is padded to. */
+  seconds: number;
+}): Promise<string> {
+  const lines = input.script?.lines ?? [];
+  if (!lines.length) return input.silent;
+
+  try {
+    /*
+     * Where each shot begins on the finished timeline. Each dissolve overlaps
+     * the two shots it joins, so every shot after the first starts a crossfade
+     * earlier than its predecessor's full length — the same arithmetic the
+     * `xfade` offsets use, and it has to agree with them or the words drift.
+     */
+    const startOf: number[] = [];
+    let at = 0;
+    for (const [i, seconds] of input.lengths.entries()) {
+      startOf[i] = at;
+      at += seconds - (i < input.lengths.length - 1 ? input.crossfade : 0);
+    }
+
+    /* The first shot that belongs to each beat, which is where its line is said. */
+    const shotOfBeat = new Map<string, number>();
+    let shotIndex = 0;
+    for (const plate of input.plan.plates) {
+      for (const window of plate.windows) {
+        const beat = input.plan.shots[window.shotIndex]?.beat;
+        if (beat && !shotOfBeat.has(beat)) shotOfBeat.set(beat, shotIndex);
+        shotIndex++;
+      }
+    }
+
+    const spoken: SpokenLine[] = [];
+    for (const line of lines) {
+      const shot = shotOfBeat.get(line.beat);
+      if (shot === undefined || !line.onScreen?.trim()) continue;
+      const beatSeconds = input.plan.shots
+        .filter((s) => s.beat === line.beat)
+        .reduce((n, s) => n + s.seconds, 0);
+      const out = await speakToFit({
+        text: line.onScreen,
+        voice: input.story.speaks.voice,
+        delivery: input.story.speaks.delivery,
+        seconds: beatSeconds,
+        intoDir: input.work,
+      });
+      spoken.push({ atSeconds: startOf[shot] ?? 0, file: out.file, seconds: out.seconds });
+    }
+
+    if (!spoken.length) return input.silent;
+    const voiced = path.join(input.work, "advert-voiced.mp4");
+    await runFfmpeg(mixArgs(spoken, input.silent, voiced, input.seconds));
+    return voiced;
+  } catch (error) {
+    /* The pictures are already paid for; a missing voice is not worth losing them. */
+    console.error("[ad-render] the voice failed, keeping the silent cut:", (error as Error)?.message);
+    return input.silent;
+  }
+}
+
 /** Dialogue's budget: one function, quoted to the writer and enforced by the checker. */
 const storyLimit = (_beat: string, seconds: number) => captionLimit(seconds);
 
@@ -490,13 +566,29 @@ async function beginGenerating(row: RenderRow): Promise<RenderRow> {
    * a cost measured in seconds rather than minutes.
    */
   if (shoot.keyframes) {
+    /*
+     * Which plate the brand may first be drawn into.
+     *
+     * The late-product rule was enforced on the script and not on the
+     * pictures: the logo went to every keyframe, so a thirty-second film whose
+     * product beat is third opened on a robot holding a tablet with the mark
+     * already on it. Refusing it in the scene text and then handing the image
+     * model the logo anyway is enforcing the rule in the one place nobody
+     * looks.
+     */
+    const productFrom = story ? productBeat(story, beats) : null;
+    const firstBranded = productFrom
+      ? plan.plates.findIndex((pl) => pl.beats.includes(productFrom))
+      : 0;
+
     let previous: Buffer | null = null;
     for (const p of plates) {
       const frame = await drawKeyframe({
         scene: p.scene || row.brief,
         brief: row.brief,
         format: row.format as AdFormatId,
-        logoPath: brand?.logoPath ?? null,
+        /* Nothing of the brand before the beat that earns it. */
+        logoPath: firstBranded >= 0 && p.index >= firstBranded ? brand?.logoPath ?? null : null,
         logoRole: shoot.logoRole,
         world: written.script.world ?? null,
         character: written.script.character ?? null,
@@ -886,8 +978,20 @@ async function composeFinal(row: RenderRow): Promise<RenderRow> {
     const finished = path.join(work, "advert.mp4");
     await runFfmpeg(composeDissolve(pieces, lengths, finished, undefined, crossfade));
 
+    /*
+     * The voice, laid onto the finished picture.
+     *
+     * After the cut rather than per shot, because a line belongs to a beat and
+     * a beat can span two clips — speaking it into one of them would cut it in
+     * half at the join. The start times come from the shot lengths that were
+     * actually rendered, so the words land where the picture put them.
+     */
+    const withVoice = story
+      ? await addVoice({ story, script, plan, lengths, crossfade, silent: finished, work, seconds: row.durationSeconds })
+      : finished;
+
     const outputPath = await new ObjectStorageService().writeObjectBuffer(
-      await fs.readFile(finished),
+      await fs.readFile(withVoice),
       "video/mp4",
       { owner: row.requestedBy, visibility: "private" },
     );

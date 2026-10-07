@@ -83,6 +83,15 @@ export interface StoryFormat {
    * played straight is not the same joke as a character complaining.
    */
   tone: string;
+  /**
+   * How the character sounds, and how it delivers the lines.
+   *
+   * `voice` is the provider's voice; `delivery` is the direction given with
+   * every line. The direction matters more than the voice: the same voice
+   * reading the same words flat or brightly is the difference between a
+   * character and a screen reader, and these formats live or die on tone.
+   */
+  speaks: { voice: string; delivery: string };
   /** Whether the first frame of each clip is drawn, for character consistency. */
   keyframes: boolean;
   /**
@@ -138,6 +147,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "THIS FOOTAGE IS THE PHONE. It is the front-facing camera of the phone the character is holding at arm's length: their face fills the upper half of the frame, they are looking straight into the lens and talking to it, and the room is behind them. Not a camera watching somebody hold a phone — the phone's own view. Handheld and slightly unsteady, lit by whatever is actually there, no colour grade and no shallow depth of field.",
     productAt: 0.55,
     tone: "Deadpan, and entirely self-aware. The character knows how ridiculous its situation is and reports it flatly, like somebody describing a bad week. The funniest line is usually an unflattering admission about itself.",
+    speaks: { voice: "ash", delivery: "Flat and unhurried, like somebody who has had a long day and is not performing. Never bright, never announcing. The joke lands because the delivery does not reach for it." },
     keyframes: true,
     captions: "native",
     beats: [
@@ -157,6 +167,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "First person, camera at eye height, hands entering frame from below. Phone footage: a little shaky, available light, no grade. The viewer should feel they are holding the camera, not watching one.",
     productAt: 0.6,
     tone: "Wry and self-deprecating, in the second person. The comedy is recognition — the viewer has done this exact thing — so it is specific and slightly pathetic rather than clever. Never triumphant.",
+    speaks: { voice: "sage", delivery: "Quiet and close, almost muttered, as though talking to yourself at 2am. Tired rather than sad." },
     keyframes: true,
     captions: "native",
     beats: [
@@ -175,6 +186,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "Shot in the borrowed format's own style exactly, and played straight: if it is a nature documentary it is long lenses and patient framing, if it is a news report it is a locked-off two-shot and hard light. The joke only lands if nothing winks at the camera.",
     productAt: 0.62,
     tone: "Utterly straight, which is the joke. The borrowed format is performed with complete sincerity and the comedy comes entirely from the gap between its gravity and the mundane thing it is describing. Nothing winks.",
+    speaks: { voice: "onyx", delivery: "Completely straight and faintly grand, the way a nature documentary is narrated. Absolute sincerity — the comedy is that nothing in the voice knows it is funny." },
     keyframes: true,
     captions: "native",
     beats: [
@@ -191,6 +203,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "The same camera position in both halves, so the cut carries the change. Ordinary light, ordinary room, nothing styled — a staged 'before' kills it.",
     productAt: 0.65,
     tone: "Dry and unspoken. The before is played without comment and the after needs no line at all; the humour is in how little is said about a large change.",
+    speaks: { voice: "nova", delivery: "Barely there. A single calm line, said once, with nothing riding on it." },
     keyframes: true,
     captions: "native",
     beats: [
@@ -208,6 +221,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     /* The exception that proves the rule: an ASMR film has nothing else to show. */
     productAt: 0,
     tone: "No jokes. This one is satisfying rather than funny, and a gag in it breaks the spell.",
+    speaks: { voice: "shimmer", delivery: "Soft and slow, almost whispered, matching the pace of the image. Nothing urgent." },
     keyframes: true,
     /* The exception: an ASMR film is already polished, so the brand may show. */
     captions: "bubble",
@@ -226,6 +240,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "Observational b-roll: hands working, a room early in the morning, the thing being made. Natural light, documentary distance, nobody performing for the lens.",
     productAt: 0.6,
     tone: "Honest and understated, with one moment of unexpected self-awareness. It is not a comedy, but a founder who can laugh at one thing about themselves is the one people believe.",
+    speaks: { voice: "alloy", delivery: "Plain and unhurried, an ordinary person telling you something true. No performance, no warmth laid on top." },
     keyframes: true,
     captions: "native",
     beats: [
@@ -244,6 +259,7 @@ export const STORY_FORMATS: StoryFormat[] = [
     look: "Consistent across episodes: the same camera, the same framing habits, the same light. A series is recognisable before the character speaks.",
     productAt: 0.55,
     tone: "Exasperated. The character is competent and the world is not cooperating, and the sting at the end is them realising it is about to happen again.",
+    speaks: { voice: "ash", delivery: "Exasperated but competent, like somebody narrating a problem they have had four times before." },
     keyframes: true,
     captions: "native",
     beats: [
