@@ -152,6 +152,37 @@ describe("Nova planning the year", () => {
     expect(filed.map((r) => r.role), "it filed a chair it does not hold").toEqual(["cmo"]);
   });
 
+  /*
+   * The complaint, as it was made: a chief executive at a table of five had
+   * Nova plan their year and could not see that anything had changed. The
+   * press now says what it moved, it plans around the colleague who has
+   * already saved, and every seat can see what each saved desk is doing.
+   */
+  it("plans the chief executive's desk around what the table saved, and every seat sees its effect", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const cmoSaved = { price: 9, brandSpend: 400_000, performanceSpend: 150_000, celebritySpend: 0, targetCities: [] };
+    const saved = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({ decision: cmoSaved });
+    expect(saved.status, JSON.stringify(saved.body).slice(0, 300)).toBeLessThan(300);
+
+    const planned = await seat("ceo").agent.post(`/api/sim/ventures/${ventureId}/nova-plan`).send({});
+    expect(planned.status, JSON.stringify(planned.body).slice(0, 300)).toBe(200);
+    expect(planned.body.filled).toEqual(["ceo"]);
+    expect(planned.body.changed, "the press says what it changed").toBeTruthy();
+
+    // The marketing seat's own filing is untouched.
+    const rows = await db.select().from(simDecisions).where(eq(simDecisions.ventureId, ventureId));
+    expect((rows.find((r) => r.role === "cmo")?.payload as any)?.brandSpend).toBe(400_000);
+
+    // And the operations seat — who saved nothing — sees both desks' effect.
+    const seen = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/projection`);
+    expect(seen.status).toBe(200);
+    const roles = (seen.body.impact as { role: string }[]).map((i) => i.role).sort();
+    expect(roles).toEqual(["ceo", "cmo"]);
+    expect(seen.body.filed.nextYear, "the year after is on the forecast too").toBeTruthy();
+  });
+
   it("bids for something the money can keep", async () => {
     /*
      * The one purchase in a year that is not a flow. Brand decays, hires

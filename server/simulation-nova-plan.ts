@@ -25,6 +25,9 @@ import { economyFor } from "@shared/simulation/season";
 import { projectYear } from "@shared/simulation/projection";
 import { optimise } from "@shared/simulation/optimiser";
 import { marketListings, biddableFunds } from "@shared/simulation/assets";
+import { dealsFor } from "@shared/simulation/world";
+import { valuation } from "@shared/simulation/mergers";
+import { isUnlocked, soloSchedule } from "@shared/simulation/responsibilities";
 import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
 import { seatOf, draftFor } from "./simulation-desk-routes";
 import { requireCredits } from "./entitlements";
@@ -114,6 +117,26 @@ export function registerNovaPlanRoutes(app: Express): void {
     });
     if (!ent) return;
 
+    /*
+     * What the table has already saved, and what the year looked like before
+     * this press — so the plan is made around the colleagues the company
+     * actually has, and the answer can say what it changed.
+     */
+    const before = await draftFor(venture.id, year);
+    const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
+    const { companyId: _beforeFor, ...savedByRole } = before.decisions as any;
+    const prior = projectYear({ world, companyId: venture.id, economy: economyFor(season.id, year), filed: savedByRole, previous });
+
+    /* The levers this company has this year, on whichever schedule the season is on. */
+    const soloLevers = soloSeason ? soloSchedule(totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence), periods) : null;
+    const offers = company.kind === "player"
+      ? dealsFor({
+          seasonId: season.id, year, company, niche,
+          incumbents: world.companies.filter((c) => c.kind === "incumbent"),
+          worth: valuation(company).fair,
+        }).map((o) => ({ id: o.id, title: o.title, terms: o.terms }))
+      : [];
+
     const plan = optimise({
       world,
       companyId: venture.id,
@@ -121,6 +144,11 @@ export function registerNovaPlanRoutes(app: Express): void {
       economy: economyFor(season.id, year),
       periods,
       totalYears: season.totalYears,
+      offers,
+      desks,
+      /* Every other chair as its occupant filed it; the plan is for these desks only. */
+      fixed: Object.fromEntries(Object.entries(savedByRole).filter(([r]) => !desks.includes(r as Role))),
+      unlocked: (r, field) => soloLevers ? (soloLevers.get(field) ?? Infinity) <= year : isUnlocked(r, field, year, periods),
     });
     /*
      * Returns null only when the company is not in the world, which the check
@@ -250,8 +278,22 @@ export function registerNovaPlanRoutes(app: Express): void {
       companyId: venture.id,
       economy: economyFor(season.id, year),
       filed: filedByRole,
-      previous: year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined,
+      previous,
     });
+
+    /*
+     * What the press changed, against the year as it stood a moment ago. This
+     * is the sentence that was missing: the desk refilled and every number on
+     * it could have been the same, and nothing said whether it was.
+     */
+    const changed = outlook && prior ? {
+      revenue: outlook.filed.revenue - prior.filed.revenue,
+      profit: outlook.filed.profit - prior.filed.profit,
+      cashEnd: outlook.filed.cashEnd - prior.filed.cashEnd,
+      customers: outlook.filed.customers - prior.filed.customers,
+      nextRevenue: (outlook.filed.nextYear?.revenue ?? 0) - (prior.filed.nextYear?.revenue ?? 0),
+      nextProfit: (outlook.filed.nextYear?.profit ?? 0) - (prior.filed.nextYear?.profit ?? 0),
+    } : null;
 
     res.json({
       ok: true,
@@ -263,6 +305,7 @@ export function registerNovaPlanRoutes(app: Express): void {
       yourRole: role,
       draft: cleanFor(role),
       expects: { serves: plan.serves, commits: plan.spends },
+      changed,
       preview: draftPreview({ company, niche, decisions, economy: economyFor(season.id, year) }),
       ...(outlook ?? {}),
     });

@@ -99,6 +99,9 @@ import { actionsForPeriods, foundersActions } from "./actions";
 import { atScale, expectedPrice, snapPrice } from "./market";
 import { EXECUTIVE, officersOf } from "./decisions";
 import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
+import { LEVER_FIELDS, type LeverField } from "./levers";
+import { withOptions, type OfferView } from "./lever-options";
+import { ROLES } from "./types";
 
 /** One lever the optimiser can put money into, and where it lives. */
 interface SpendLever {
@@ -231,6 +234,23 @@ interface Shape {
    * end of `optimise`.
    */
   actions?: string[];
+  /**
+   * Every other lever the plan has an answer for, per desk: the chief
+   * executive's focus and positioning, the feature bet, the programme, the
+   * insurance, the offers — the "wordy" decisions. Laid over the desk this
+   * year only; see `decideTheRest`.
+   */
+  extras?: Partial<Record<Role, Record<string, unknown>>>;
+  /**
+   * Desks somebody else has already filed, held exactly as filed.
+   *
+   * At a five-person table Nova plans one chair, and the best answer for that
+   * chair depends on what the other four actually chose — a positioning is
+   * worth something different at the price the marketing seat set than at the
+   * price Nova would have set. Planning against its own imagined colleagues
+   * gave an answer for a company that did not exist.
+   */
+  fixed?: Partial<Record<Role, any>>;
   /** What to draw down to pay for the plan. */
   borrow: number;
   /*
@@ -278,7 +298,7 @@ function draftOf(
    * digits.
    */
   const vote = shape.region ? { expandVote: { [shape.region]: "yes" as const } } : {};
-  return {
+  const planned: TeamDecisions = {
     companyId: company.id,
     cmo: {
       price,
@@ -287,6 +307,7 @@ function draftOf(
       celebritySpend: 0,
       targetCities: company.cities,
       ...vote,
+      ...shape.extras?.cmo,
     },
     cto: {
       featureSpend: spend.featureSpend ?? 0,
@@ -299,6 +320,7 @@ function draftOf(
        */
       techDebtPaydown: Math.round((spend.featureSpend ?? 0) * 0.4),
       ...vote,
+      ...shape.extras?.cto,
     },
     coo: {
       capacityTarget,
@@ -306,6 +328,7 @@ function draftOf(
       efficiencySpend: spend.efficiencySpend ?? 0,
       headcount,
       ...(shape.region ? { expand: shape.region } : {}),
+      ...shape.extras?.coo,
     },
     /*
      * And it borrows to pay for growth, which no bot has ever done either.
@@ -314,11 +337,15 @@ function draftOf(
      * for — and the engine bounds the draw at what the bank would actually
      * lend (see `drawdown`), so this cannot run away.
      */
-    cfo: { borrow: Math.max(0, Math.round(shape.borrow)), repay: 0, cashBuffer: 0, ...vote },
+    cfo: { borrow: Math.max(0, Math.round(shape.borrow)), repay: 0, cashBuffer: 0, ...vote, ...shape.extras?.cfo },
     // Growth, and an answer ready for whatever went wrong: silence recovers
     // far less of what a shock costs, and the forecast cannot see that either.
-    ceo: { focus: "growth", shockAnswer: "statement", founderActions: shape.actions ?? [], ...vote },
+    ceo: { focus: "growth", shockAnswer: "statement", founderActions: shape.actions ?? [], ...vote, ...shape.extras?.ceo } as TeamDecisions["ceo"],
   };
+  for (const [role, filed] of Object.entries(shape.fixed ?? {})) {
+    if (filed) (planned as any)[role] = filed;
+  }
+  return planned;
 }
 
 export interface OptimiserInput {
@@ -330,6 +357,18 @@ export interface OptimiserInput {
   periods?: number;
   /** How long the season runs, so the last years can be played as last years. */
   totalYears?: number;
+  /** This year's offers from outside, so the plan can answer them. */
+  offers?: OfferView[];
+  /**
+   * Which levers this company has this year. Defaults to the table's unlock
+   * schedule; a solo founder is on their own (`soloSchedule`), so the route
+   * passes theirs in.
+   */
+  unlocked?: (role: Role, field: string) => boolean;
+  /** The desks this plan is for. Every desk when absent. */
+  desks?: Role[];
+  /** Other desks' filed decisions, held fixed while these are planned. */
+  fixed?: Partial<Record<Role, any>>;
 }
 
 export interface OptimisedPlan {
@@ -393,7 +432,8 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
    */
   const affordable = headroom(company) * OPTIMISER_COMMITS * per;
   const step = affordable / OPTIMISER_STEPS;
-  const levers = SPEND_LEVERS.filter((l) => isUnlocked(l.role, l.field, year, periods));
+  const mine = (role: Role) => !input.desks || input.desks.includes(role);
+  const levers = SPEND_LEVERS.filter((l) => mine(l.role) && isUnlocked(l.role, l.field, year, periods));
 
   /** Staff enough to serve, and no more: every head is a salary whether it is busy or not. */
   /**
@@ -550,7 +590,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
         const carried: Record<string, number> = {};
         for (const [field, amount] of Object.entries(trial)) carried[field] = amount * grew;
         const plant = Math.max(held.capacity, Math.round(Math.max(heldNow, held.capacity * 0.6) * 1.4));
-        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0, actions: shape.actions });
+        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0, actions: shape.actions, fixed: shape.fixed });
         running = resolveYear({ ...after, year: year + ahead }, [onward], economy, { withoutEvent: true });
         after = running.world;
         valued = running.reports.find((r) => r.companyId === companyId)?.value ?? valued;
@@ -705,7 +745,9 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     return { score: valued + me.cash * CASH_WEIGHT + position * pending, serves, room };
   };
 
-  let shape: Shape = { region: null, borrow: 0, actions: [] };
+  /* Only the desks this plan is not for are held; a plan never overrides its own chair with a filing. */
+  const fixed = Object.fromEntries(Object.entries(input.fixed ?? {}).filter(([role]) => !mine(role as Role)));
+  let shape: Shape = { region: null, borrow: 0, actions: [], fixed };
   let price = Math.max(1, company.price);
   let best = measure(spend, price, shape);
 
@@ -716,7 +758,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     let at = measure(trialSpend, trialPrice, withShape);
 
     // The price first, against the company as it stands.
-    for (const tryPrice of priceTries) {
+    for (const tryPrice of mine("cmo") ? priceTries : []) {
       const got = measure(trialSpend, tryPrice, withShape);
       if (got.score > at.score) { at = got; trialPrice = tryPrice; }
     }
@@ -808,7 +850,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
       // Re-price every few slices: what the company is worth charging changes
       // as the plan makes it better.
       if (i % 4 === 3) {
-        for (const tryPrice of priceTries) {
+        for (const tryPrice of mine("cmo") ? priceTries : []) {
           const got = measure(trialSpend, tryPrice, withShape);
           if (got.score > at.score) { at = got; trialPrice = tryPrice; }
         }
@@ -886,6 +928,23 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     shape = { ...shape, actions: chosen };
   }
 
+  /*
+   * And then everything else, against the same score.
+   *
+   * Without this the plan had an answer for sixteen levers and filed the
+   * defaults for the rest — so a chief executive who pressed the button got
+   * `focus: growth` back, which is what the desk already said, and was told
+   * their year had been planned. See `decideTheRest`.
+   */
+  shape = decideTheRest({
+    company, niche, world, year, periods, offers: input.offers ?? [],
+    desks: input.desks ?? [...ROLES],
+    unlocked: input.unlocked ?? ((role, field) => isUnlocked(role, field, year, periods)),
+    shape, at: run.at,
+    measure: (withShape) => measure(run.spend, run.price, withShape),
+  });
+  run = { ...run, at: measure(run.spend, run.price, shape) };
+
   const spendFinal = run.spend;
   price = run.price;
   best = run.at;
@@ -894,8 +953,23 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   const rounded: Record<string, number> = {};
   for (const [field, amount] of Object.entries(spend)) rounded[field] = Math.round(amount / 1000) * 1000;
 
+  const decisions = draftOf(company, rounded, price, best.room, staffedFor(best.room), shape);
+  /*
+   * The marketing seat's forecast, filled with what the plan actually expects
+   * this year — the number operations and finance are told to plan on. Left
+   * empty it scored as a forecast of nobody, which is "out by more than 20%"
+   * and costs up to 8% of revenue on its own.
+   */
+  if ((input.unlocked ?? ((r: Role, f: string) => isUnlocked(r, f, year, periods)))("cmo", "forecast") && decisions.cmo) {
+    try {
+      const played = resolveYear({ ...world, year }, [decisions], economy, { withoutEvent: true });
+      const customers = played.reports.find((r) => r.companyId === companyId)?.customers;
+      if (customers != null) decisions.cmo.forecast = Math.round(customers);
+    } catch { /* A forecast is advice to the table, never the reason a plan fails. */ }
+  }
+
   return {
-    decisions: draftOf(company, rounded, price, best.room, staffedFor(best.room), shape),
+    decisions,
     score: best.score,
     serves: best.serves,
     spends: Object.values(rounded).reduce((sum, n) => sum + n, 0),
@@ -905,3 +979,139 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
 /** Kept so a caller can size a plan against the market rather than the company. */
 export const optimiserBudget = (company: Company, niche: Niche, per = 1): number =>
   Math.min(headroom(company) * OPTIMISER_COMMITS, atScale(4_000_000, company.scale)) * per;
+
+/**
+ * Levers the plan leaves alone, and why.
+ *
+ * Decided elsewhere in the search (the money ascent, the price, the plant, the
+ * region, borrowing, the founders' own time, the forecast), or not a plan's
+ * to make: selling equity, buying it back and paying it out change who owns
+ * the company rather than what it does; firing, overruling and holding back a
+ * colleague's spending are decisions about people at the table, and a press
+ * of a button must never make one of those for somebody.
+ */
+const DECIDED_ELSEWHERE = new Set([
+  "price", "brandSpend", "performanceSpend", "featureSpend", "reliabilitySpend", "techDebtPaydown",
+  "supportSpend", "efficiencySpend", "capacityTarget", "headcount", "borrow", "expand", "expandVote",
+  "founderActions", "forecast", "targetCities", "dealVotes",
+  "raiseAmount", "buyback", "dividendPct", "replaceSeat", "replaceBid", "overrule", "holdBack", "holdBackSeat",
+  "budget", "repay", "cashBuffer", "refinance", "factorPct",
+]);
+
+/** How many runs of the engine the pass below may spend, all levers together. */
+export const REST_BUDGET = 180;
+
+/**
+ * The values worth trying for one lever, from where it stands now.
+ *
+ * Not every value — a handful that span what the lever can do: each option of
+ * a choice, a modest and a bold amount of money, the ends and middle of a
+ * percentage, concentrating an allocation on each thing it can be aimed at.
+ * Exported because the audit (`script/lever-forecast-audit.ts`) asks the same
+ * question of every lever.
+ */
+export function candidatesFor(field: LeverField, company: Company, current: Record<string, any> | undefined, per = 1): unknown[] {
+  const now = current?.[field.id];
+  const scale = company.scale ?? 1;
+  const snap = (n: number) => {
+    const step = field.step ?? 1;
+    return Math.max(field.min ?? 0, Math.min(field.max ?? Infinity, Math.round(n / step) * step));
+  };
+  const opts = (field.options ?? []).map((o) => o.value);
+  switch (field.kind) {
+    case "money": {
+      const unit = atScale(100_000, scale) * per;
+      return [...new Set([0.5, 1, 2.5].map((m) => snap((Number(now) || 0) + unit * m)))].filter((v) => v !== now && v > 0);
+    }
+    case "price":
+      return [0.9, 1.1].map((m) => Math.max(1, Math.round((Number(now) || company.price) * m)));
+    case "count": {
+      const from = Number(now) || company.capacity || 1;
+      const step = field.step ?? 1;
+      /* Half as much again, and half; a market that counts in dozens still gets one step either way. */
+      return [...new Set([from * 1.5, from * 0.5, from + step].map(snap))].filter((v) => v > 0 && v !== now);
+    }
+    case "percent": {
+      const lo = field.min ?? 0, hi = field.max ?? 100;
+      return [...new Set([lo, Math.round((lo + hi) / 2), hi].map(snap))].filter((v) => v !== now);
+    }
+    case "choice":
+    case "segment":
+      return opts.filter((v) => v !== (now ?? ""));
+    case "actions":
+      return opts.map((v) => [v]);
+    case "cities": {
+      /* Opening each region not yet open, one at a time. */
+      const open = company.cities ?? [];
+      return opts.filter((id) => !open.includes(id)).map((id) => [...open, id]);
+    }
+    case "allocation":
+      return opts.length > 1 ? opts.map((v) => Object.fromEntries(opts.map((o) => [o, o === v ? 60 : Math.round(40 / (opts.length - 1))]))) : [];
+    case "tiers": {
+      const p = Number(current?.price) || company.price;
+      return opts.map((v) => ({ [v]: Math.round(p * 1.2) }));
+    }
+    case "levels":
+      return opts.flatMap((o) => (field.choices ?? []).map((c) => c.value)
+        .filter((c) => c !== field.defaultChoice)
+        .map((c) => ({ ...(now ?? {}), [o]: c })));
+    default:
+      return [];
+  }
+}
+
+/**
+ * Every lever the money search did not decide, one at a time, against the
+ * plan's own score.
+ *
+ * Coordinate ascent again, and for the same reason as the budget: each lever
+ * is tried at each of its candidate values with everything else held, and the
+ * best one is kept only if it actually beats leaving it alone. So a choice is
+ * only ever made because the engine, played three years out, says the company
+ * is worth more for it — a focus, a positioning, a programme, an answer to an
+ * offer. Bounded by `REST_BUDGET` runs, so a desk with forty levers costs a
+ * bounded amount however many options each one has.
+ */
+function decideTheRest(input: {
+  company: Company; niche: Niche; world: World; year: number; periods: number;
+  offers: OfferView[];
+  desks: Role[];
+  unlocked: (role: Role, field: string) => boolean;
+  shape: Shape;
+  at: { score: number };
+  measure: (shape: Shape) => { score: number };
+}): Shape {
+  const { company, niche, world, year, periods, offers, unlocked } = input;
+  let shape = input.shape;
+  let score = input.at.score;
+  let runs = 0;
+  const base = draftOf(company, {}, company.price, company.capacity, 0, shape) as Record<string, any>;
+  for (const role of input.desks) {
+    if (!company.seats?.includes(role)) continue;
+    for (const raw of LEVER_FIELDS[role]) {
+      if (DECIDED_ELSEWHERE.has(raw.id) || !unlocked(role, raw.id)) continue;
+      const field = withOptions(raw, { company, niche, seasonId: world.seasonId, year, solo: false, offers, openedNiches: world.openedNiches });
+      const current = { ...(base[role] ?? {}), ...(shape.extras?.[role] ?? {}) };
+      let bestValue: unknown = undefined;
+      /*
+       * Never a public blame. Pinning a shock on a colleague wins back the most
+       * reputation and costs that person dearly, and it is not a thing a
+       * button should do to somebody on the chief executive's behalf.
+       */
+      const tries = candidatesFor(field, company, current, 1 / periods)
+        .filter((v) => !(raw.id === "shockAnswer" && typeof v === "string" && v.startsWith("blame_")));
+      for (const value of tries) {
+        if (runs >= REST_BUDGET) return shape;
+        runs += 1;
+        const trial: Shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: value } } };
+        const got = input.measure(trial).score;
+        /* Better by something, not by rounding: a tie leaves the lever as it was. */
+        if (got > score + Math.abs(score) * 1e-6) { score = got; bestValue = value; }
+      }
+      if (bestValue !== undefined) {
+        shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: bestValue } } };
+      }
+    }
+  }
+  return shape;
+}

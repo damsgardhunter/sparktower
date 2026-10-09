@@ -32,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { NOVA_PLAN_ACTIONS } from "@shared/plans";
 import { Loader2, Sparkles, Wand2 } from "lucide-react";
+import { useMoney } from "@/components/sim/desk-currency";
 
 export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
   ventureId: string;
@@ -43,6 +44,9 @@ export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
 }) {
   const { toast } = useToast();
   const { creditsRemaining, isUnlimited } = useEntitlements();
+  const { compact } = useMoney();
+  /** "+£40k" / "−£12k", or nothing when the move is too small to be worth a word. */
+  const signed = (n: number | undefined) => n == null || Math.abs(n) < 1 ? null : `${n > 0 ? "+" : ""}${compact(n)}`;
 
   const plan = useMutation({
     mutationFn: async () => {
@@ -58,13 +62,25 @@ export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
        */
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/projection`] });
+      queryClient.invalidateQueries({ queryKey: ["sim-projection", ventureId] });
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
       const chairs = Array.isArray(body?.filled) ? body.filled.length : 1;
+      /*
+       * What the press actually changed, against the year as it stood a moment
+       * before. Without this a chief executive could press it, watch the desk
+       * refill, and have no way to tell whether a single number had moved.
+       */
+      const c = body?.changed;
+      const moved = c ? [
+        signed(c.profit) && `profit ${signed(c.profit)} this year`,
+        signed(c.nextProfit) && `${signed(c.nextProfit)} next year`,
+        Math.abs(c.customers ?? 0) >= 1 && `${c.customers > 0 ? "+" : ""}${Math.round(c.customers).toLocaleString()} customers`,
+      ].filter(Boolean) : [];
       toast({
         title: chairs > 1 ? `Year ${year} filed, all ${chairs} desks` : `Year ${year} filed`,
-        description: body?.expects?.serves
-          ? `Nova's plan expects to serve ${Math.round(body.expects.serves).toLocaleString()}. Change anything you disagree with — nothing is locked until the year turns.`
-          : "Change anything you disagree with — nothing is locked until the year turns.",
+        description: `${moved.length
+          ? `Nova's plan moves the forecast: ${moved.join(", ")}.`
+          : "Nova's plan matches what was already filed — nothing better was found."} See what each desk is doing under the forecast. Change anything you disagree with until the year turns.`,
       });
     },
     onError: (e: any) => toast({

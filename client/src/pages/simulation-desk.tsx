@@ -942,6 +942,7 @@ export default function SimulationDeskPage() {
           ventureId={id!}
           draft={draft}
           filedStamp={JSON.stringify(desk.filed ?? {})}
+          solo={!!desk.solo}
         />
 
         {(liveDemand ?? desk.forecast) && (

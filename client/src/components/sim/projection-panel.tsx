@@ -22,6 +22,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Table2, BarChart3, ShieldAlert } from "lucide-react";
 import type { Forecast } from "@shared/simulation/forecast";
+import { NextYearCard, SeatImpactCard, TeamCard, type SeatImpact, type SeatMood, type YearAhead } from "@/components/sim/forecast-impact";
 
 interface Projection {
   year: number;
@@ -44,6 +45,10 @@ interface Projection {
   target: { amount: number; projected: number; met: boolean; strikes: number; wouldRemove: boolean } | null;
   bankrupt: boolean;
   nextYearDemand: { likely: number; low: number; high: number } | null;
+  unitCost?: number;
+  founderShare?: number;
+  nextYear?: YearAhead | null;
+  team?: SeatMood[];
 }
 
 export interface ProjectionResponse {
@@ -54,6 +59,8 @@ export interface ProjectionResponse {
   absent: string[];
   /** This period's demand with the draft applied — see `demand` on ProjectionPair. */
   demand: Forecast | null;
+  /** What each saved desk moved, against leaving it on last year's plan. */
+  impact?: SeatImpact[];
 }
 
 const TITLES: Record<string, string> = {
@@ -458,12 +465,14 @@ export function useProjection(ventureId: string, draft: Record<string, any> | nu
   });
 }
 
-export function ProjectionPanel({ ventureId, draft, filedStamp }: {
+export function ProjectionPanel({ ventureId, draft, filedStamp, solo }: {
   ventureId: string;
   /** This seat's unfiled draft, or null. */
   draft: Record<string, any> | null;
   /** Changes whenever a teammate files, so the projection re-runs exactly then. */
   filedStamp: string;
+  /** One founder holding every desk: the impact rows are desks, not people. */
+  solo?: boolean;
 }) {
   const { data, isFetching, isError } = useProjection(ventureId, draft, filedStamp);
 
@@ -524,6 +533,18 @@ export function ProjectionPanel({ ventureId, draft, filedStamp }: {
         <div className="space-y-3">
           <Capacity p={p} />
           <Money p={p} />
+        </div>
+      </div>
+
+      {/*
+        * What every saved decision is doing — this year and next — and to
+        * the people at the table. See `forecast-impact.tsx`.
+        */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <SeatImpactCard impact={data.impact ?? []} yourRole={data.yourRole} solo={solo} />
+        <div className="space-y-3">
+          <NextYearCard p={p.nextYear ?? null} f={f.nextYear ?? null} />
+          {!solo && <TeamCard team={p.team ?? []} />}
         </div>
       </div>
     </section>
