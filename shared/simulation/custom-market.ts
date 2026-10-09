@@ -30,7 +30,7 @@ import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture 
 import type { WorkKind } from "./workforce";
 import { ASSET_SLOTS } from "./assets";
 import { marketScale } from "./world";
-import { officerCost } from "./decisions";
+import { officerCost, SALARY } from "./decisions";
 import { TRULY_OPEN_SHARE } from "./incumbents";
 
 /** What a small market is allowed to be. Below this the maths has nothing to work with. */
@@ -44,6 +44,49 @@ export const MIN_SEGMENT_SIZE = 2_000;
  * in the same order of magnitude as the seven, so the same levers move it.
  */
 export const MAX_SEGMENT_SIZE = 4_000_000;
+
+/**
+ * The most one sale may be worth.
+ *
+ * This was an unnamed `100_000` inside the parse, and it quietly destroyed
+ * every business whose customers pay more than that. A launch company written
+ * as 40 operators at £4.5m and 260 research payloads at £600k came out as two
+ * *identical* segments at £100,000 — the contrast the market was written to
+ * have, erased — and then could not survive its own payroll, because the unit
+ * cost stayed where it was while the price it was allowed to charge fell by
+ * a factor of forty-five.
+ *
+ * Ten million, because a sale really can be worth that: a dedicated small
+ * launch, an enterprise licence, a building, a ship. Not unbounded, for the
+ * same reason `MAX_SEGMENT_SIZE` is not — a model asked about "enterprise
+ * software" will write a number with no relation to anything, and
+ * `marketScale` caps at 1 anyway, so past a point the extra zeros buy nothing
+ * but an unreadable first year.
+ */
+export const MAX_REFERENCE_PRICE = 10_000_000;
+
+/**
+ * How much revenue one person on the payroll may be credited with, as a
+ * multiple of an ordinary salary.
+ *
+ * `serves` — how many customers one worker looks after — is market content, and
+ * the engine is now properly sensitive to it: a consultancy whose consultants
+ * cover eight clients each finishes a season on a 14% net margin, which is what
+ * a consultancy earns. The same engine with an editor covering sixty thousand
+ * viewers finishes on 55%, because `price x serves` is the revenue one person is
+ * held to produce and sixty thousand viewers at £12 is £720,000 a head.
+ *
+ * So the figure is believed and bounded, exactly as `affordableUnitCost` bounds
+ * what the model says a sale costs. Nobody employs a person who brings in less
+ * than about one and a half times their salary, and almost nobody — outside a
+ * business with barely any people in it — runs above six.
+ *
+ * The bound does the work a guess cannot: it is applied to what the market
+ * actually says rather than replacing it, so a market that knows its trade
+ * keeps its own number and only an implausible one is pulled back.
+ */
+export const MIN_REVENUE_PER_HEAD = 1.5;
+export const MAX_REVENUE_PER_HEAD = 6;
 export const MIN_SEGMENTS = 2, MAX_SEGMENTS = 5;
 export const MIN_REGIONS = 3, MAX_REGIONS = 10;
 export const MIN_INCUMBENTS = 2, MAX_INCUMBENTS = 5;
@@ -219,7 +262,7 @@ function cleanSegments(raw: unknown): Segment[] | null {
     serviceFocus: num(s?.serviceFocus, 0, 1, 0.4),
     loyalty: num(s?.loyalty, 0, 0.9, 0.4),
     // A price of zero divides by zero downstream; a pound is the floor.
-    referencePrice: Math.max(1, Math.round(num(s?.referencePrice, 1, 100_000, 40))),
+    referencePrice: Math.max(1, Math.round(num(s?.referencePrice, 1, MAX_REFERENCE_PRICE, 40))),
   }));
 }
 
@@ -360,10 +403,57 @@ function cleanWorkforce(raw: unknown): WorkKind[] | undefined {
       // Nobody is free and nobody is worth ten times an ordinary salary.
       pay: Math.max(0.4, Math.min(2.5, Number(k.pay) || 1)),
       share: Math.max(0.01, Math.min(1, Number(k.share) || 0.25)),
+      /*
+       * How many customers one of them looks after, which is the number that
+       * decides what a company here costs to run.
+       *
+       * This was dropped on the way in. `servesPerHead` prefers what the
+       * market says and only guesses when nothing is said; nothing was ever
+       * said, because the field never survived the parse — so every written
+       * market fell to a guess of one worker per fifty customers, whether a
+       * customer pays £2 a year or £173,400 a launch. A consultancy turning
+       * over £62.9m was staffed with five people and finished a season on a
+       * 60% net margin.
+       *
+       * Only for the kinds that serve customers: `servesPerHead` reads it off
+       * the "room" share and a figure on a product engineer means nothing.
+       * Undefined when unsaid, because `servesPerHead` distinguishes "said" from
+       * "not said" and a zero would read as "serves nobody".
+       */
+      ...(does === "room" && Number(k.serves) > 0
+        ? { serves: Math.max(1, Math.min(500_000, Math.round(Number(k.serves)))) }
+        : {}),
     };
   });
   // Two kinds at least, or it is not a mix and the generic one is better.
   return kinds.length >= 2 ? kinds : undefined;
+}
+
+/**
+ * The workforce, with any `serves` figure held to a believable revenue per head.
+ *
+ * See `MIN_REVENUE_PER_HEAD`. One worker covering sixty thousand viewers at £12
+ * apiece is £720,000 of revenue a head, which is not a business with employees
+ * in it — and the margin it produces is the difference between a season that
+ * teaches something and one that mints money.
+ *
+ * Only ever narrows what the market said, and only on the kinds that serve
+ * customers. A market that knows its trade — eight clients to a consultant —
+ * passes through untouched.
+ */
+function staffable(mix: WorkKind[] | undefined, segments: Segment[]): WorkKind[] | undefined {
+  if (!mix?.length || !segments.length) return mix;
+  const people = segments.reduce((sum, s) => sum + s.size, 0);
+  if (people <= 0) return mix;
+  /* What the average customer pays, weighted by how many of them there are. */
+  const perCustomer = segments.reduce((sum, s) => sum + s.referencePrice * s.size, 0) / people;
+  if (!(perCustomer > 0)) return mix;
+
+  const most = Math.max(1, Math.round((SALARY * MAX_REVENUE_PER_HEAD) / perCustomer));
+  const least = Math.max(1, Math.round((SALARY * MIN_REVENUE_PER_HEAD) / perCustomer));
+  return mix.map((k) => (k.serves && k.serves > 0
+    ? { ...k, serves: Math.max(least, Math.min(most, k.serves)) }
+    : k));
 }
 
 /**
@@ -680,7 +770,7 @@ export function buildCustomMarket(raw: unknown, fallbackId: string, options: Bui
     openShare,
     innovationPace: num(m.innovationPace, 0.4, 2.2, 1),
     voice: cleanVoice(m.voice),
-    workforce: cleanWorkforce(m.workforce),
+    workforce: staffable(cleanWorkforce(m.workforce), priced),
     assets: cleanAssets(m.assets),
   };
 }

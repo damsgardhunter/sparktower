@@ -7,6 +7,13 @@
  * vast unit cost and a handful of buyers, and a consultancy with eleven clients
  * in the whole market.
  *
+ * Each declares a `workforce` with `serves` on the kind that serves customers,
+ * because that is what a market Nova writes now carries: the field was dropped
+ * by `cleanWorkforce` on the way in and absent from the prompt, so every
+ * written market fell to a guess of one worker per fifty customers. Answered
+ * from the trade — a consultant covers 8 clients, a community manager 120,000
+ * players — since that is the number deciding what a company here costs to run.
+ *
  * Hand-written to the documented shape rather than produced by a live model
  * call. What `buildCustomMarket` does to a spec is arithmetic and holds whoever
  * wrote it; whether Nova would write these exact numbers is a separate
@@ -32,6 +39,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "newco", name: "Newco", posture: "innovator", startingShare: 0.3, quality: 75, brand: 35, service: 60, priceIndex: 0.9 },
       ],
       baseUnitCost: 30, innovationPace: 1.1,
+      workforce: [
+        { id: "support", name: "support staff", one: "a support rep", does: "room", pay: 0.8, share: 0.5, serves: 400 },
+        { id: "engineers", name: "engineers", one: "an engineer", does: "product", pay: 1.7, share: 0.5 },
+      ],
       voice: { customer: "clinic", customers: "clinics", unit: "licence", capacity: "seats" },
     },
   },
@@ -54,6 +65,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "steady", name: "SteadyHands", posture: "coaster", startingShare: 0.25, quality: 55, brand: 50, service: 30, priceIndex: 1 },
       ],
       baseUnitCost: 1, innovationPace: 1.6,
+      workforce: [
+        { id: "editors", name: "editors", one: "an editor", does: "room", pay: 1, share: 0.6, serves: 60_000 },
+        { id: "producers", name: "producers", one: "a producer", does: "product", pay: 1.3, share: 0.4 },
+      ],
       voice: { customer: "viewer", customers: "viewers", unit: "video", capacity: "uploads" },
     },
   },
@@ -76,6 +91,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "import", name: "Continental Import", posture: "coaster", startingShare: 0.35, quality: 45, brand: 40, service: 35, priceIndex: 0.8 },
       ],
       baseUnitCost: 7, innovationPace: 0.6,
+      workforce: [
+        { id: "roasters", name: "roasters", one: "a roaster", does: "room", pay: 0.9, share: 0.5, serves: 3_000 },
+        { id: "drivers", name: "drivers", one: "a driver", does: "service", pay: 0.7, share: 0.5 },
+      ],
       voice: { customer: "café", customers: "cafés", unit: "kilo", capacity: "roasting hours" },
     },
   },
@@ -98,6 +117,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "mill", name: "Content Mill", posture: "shark", startingShare: 0.4, quality: 35, brand: 55, service: 20, priceIndex: 0.5 },
       ],
       baseUnitCost: 2, innovationPace: 1.8,
+      workforce: [
+        { id: "community", name: "community managers", one: "a community manager", does: "room", pay: 0.8, share: 0.3, serves: 120_000 },
+        { id: "devs", name: "developers", one: "a developer", does: "product", pay: 1.6, share: 0.7 },
+      ],
       voice: { customer: "player", customers: "players", unit: "copy", capacity: "build slots" },
     },
   },
@@ -120,6 +143,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "boutique", name: "Boutique", posture: "innovator", startingShare: 0.25, quality: 85, brand: 35, service: 80, priceIndex: 1.1 },
       ],
       baseUnitCost: 4_000, innovationPace: 0.8,
+      workforce: [
+        { id: "consultants", name: "consultants", one: "a consultant", does: "room", pay: 1.6, share: 0.7, serves: 8 },
+        { id: "analysts", name: "analysts", one: "an analyst", does: "product", pay: 1, share: 0.3 },
+      ],
       voice: { customer: "client", customers: "clients", unit: "engagement", capacity: "consultant days" },
     },
   },
@@ -142,6 +169,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "legacy", name: "Legacy prime", posture: "coaster", startingShare: 0.25, quality: 70, brand: 65, service: 55, priceIndex: 2.2 },
       ],
       baseUnitCost: 180_000, innovationPace: 1.3,
+      workforce: [
+        { id: "techs", name: "launch technicians", one: "a technician", does: "room", pay: 1.3, share: 0.6, serves: 2 },
+        { id: "propulsion", name: "propulsion engineers", one: "an engineer", does: "product", pay: 1.9, share: 0.4 },
+      ],
       voice: { customer: "operator", customers: "operators", unit: "launch", capacity: "launch slots" },
     },
   },
@@ -164,6 +195,10 @@ export const STARTUP_SPECS: { label: string; note: string; spec: any }[] = [
         { id: "free", name: "The free one", posture: "coaster", startingShare: 0.3, quality: 40, brand: 55, service: 15, priceIndex: 0.2 },
       ],
       baseUnitCost: 2, innovationPace: 1.4,
+      workforce: [
+        { id: "coaches", name: "coaches", one: "a coach", does: "room", pay: 0.9, share: 0.5, serves: 25_000 },
+        { id: "devs", name: "developers", one: "a developer", does: "product", pay: 1.6, share: 0.5 },
+      ],
       voice: { customer: "member", customers: "members", unit: "subscription", capacity: "coach hours" },
     },
   },

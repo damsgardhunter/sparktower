@@ -35,6 +35,7 @@
 import type { CurrencyCode } from "../currency";
 import { defaultDraft } from "./levers";
 import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from "./decisions";
+import { PRICE_DRIFT_PER_YEAR } from "./market";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedFragmentedTail, seedIncumbents, TRULY_OPEN_SHARE } from "./incumbents";
@@ -152,9 +153,18 @@ export function economyFor(seasonId: string, period: number, periods = 1): {
     demand: Number((1 + wave * 0.12).toFixed(4)),
     // Rates lag the cycle: money gets dear after the boom, not during it.
     interestRate: Number((0.07 + Math.max(0, wave) * 0.05).toFixed(4)),
-    // Costs drift up over a season and never come back down, which is what
-    // stops year one's price holding for fourteen years.
-    costIndex: Number((1 + year * 0.012 + Math.max(0, wave) * 0.02).toFixed(4)),
+    /*
+     * Costs drift up over a season and never come back down.
+     *
+     * This used to claim it was "what stops year one's price holding for
+     * fourteen years", and for a long time it was not: nothing moved what a
+     * buyer thinks the ordinary thing costs, so the right play was to hold the
+     * price and absorb the drift, and the optimiser duly held one price for
+     * thirteen years. `PRICE_DRIFT_PER_YEAR` is the other half — the same rate
+     * applied to `referencePrice` — and the two are the same constant so they
+     * cannot come apart again.
+     */
+    costIndex: Number((1 + year * PRICE_DRIFT_PER_YEAR + Math.max(0, wave) * 0.02).toFixed(4)),
     outlook: nextWave - wave > 0.04 ? "expansion" : nextWave - wave < -0.04 ? "tightening" : "steady",
   };
 }

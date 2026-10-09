@@ -244,7 +244,9 @@ describe("the year-end report adds up", () => {
       const p = r.pnl!;
       // Building and leasing capacity are costs; a forecast's saving (or loss) is the other way round.
       const costs = p.costToServe + p.salaries + p.marketing + p.product + p.operations + p.idleCapacity + p.interest
-        + (p.capacity ?? 0) + (p.incidents ?? 0) + (p.partners ?? 0) + (p.insurance ?? 0) - (p.planning ?? 0);
+        + (p.capacity ?? 0) + (p.incidents ?? 0) + (p.partners ?? 0) + (p.insurance ?? 0)
+        /* Running the business: a share of revenue that grows with it. See `overheadShare`. */
+        + (p.overhead ?? 0) - (p.planning ?? 0);
       expect(p.revenue - costs, `${niche} y${r.year} operating`).toBeCloseTo(p.operatingProfit, 0);
       expect(p.operatingProfit - p.tax, `${niche} y${r.year} after tax`).toBeCloseTo(p.profit, 0);
       expect(p.profit, `${niche} y${r.year}`).toBeCloseTo(r.profit, 0);

@@ -20,7 +20,7 @@ import { WIND_DOWN_FROM, WIND_DOWN_RATE, WIND_UP_AFTER } from "./season";
 import { inPeriodWords } from "./cadence";
 import { allocate, marketShares, sharesWhereSold } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, officersOf, overheadShare, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { shortfalls, expectationsFor, weightsOf } from "./criteria";
 import { assetEffects, ageAssets, stillHeld } from "./assets";
 import { brandLanding, capacityBuild, qualityLanding, staffing } from "./lag";
@@ -28,7 +28,7 @@ import {
   EMERGENCY_REPUTATION, RATING_START, applyRepayment, boardChiefExecutive, creditMultiplier,
   interestOn, justifiedRating, nextRating, ratingGrade, reviewInvestors, termsFor,
 } from "./finance";
-import { reachOf, appealFor, atScale, paceFor } from "./market";
+import { reachOf, appealFor, atScale, paceFor, expectedPrice } from "./market";
 import { symbolOf } from "../currency";
 import { eventsDue, economyWithWeather, companyWithEvents, nextWeather, type MarketEvent } from "./events";
 import {
@@ -192,6 +192,12 @@ export interface ProfitAndLoss {
   partners?: number;
   /** Insurance premiums. */
   insurance?: number;
+  /**
+   * Running the company: premises, insurance of the ordinary kind, accountancy,
+   * software, the invoicing. See `overheadShare` — it is a share of revenue
+   * that grows with the business.
+   */
+  overhead?: number;
   interest: number;
   /** Before tax. */
   operatingProfit: number;
@@ -910,12 +916,42 @@ export function resolveYear(
      * viable before it has the revenue to hire anybody. See `workforce.ts`.
      */
     /*
-     * The staffing constraint is written and measured and not wired in here.
-     * See `workforce.ts`: a plant can only serve what its people can serve,
-     * and turning that on transforms the realism figures — salaries go from
-     * 6–16% of revenue to 20–24%, revenue per head from £1.3m to £250k — and
-     * breaks six balance guards, because every strategy fixture in the suite
-     * was written when room and people were unrelated. It wants its own pass.
+     * ## The staffing constraint: tried, measured, and still not wired in
+     *
+     * `canServe` in `workforce.ts` says a plant can only serve what its people
+     * can serve, and it is right: a restaurant chain turned over £50.7m and
+     * served 2.8 million covers with five founders and no staff, because
+     * `headcount` bought service and nothing else, so no table ever touched it
+     * and growth was free.
+     *
+     * Turning it on was attempted here, together with the half of the work the
+     * previous note asked for — the strategy fixtures in `balance.test.ts`
+     * hiring for the room they build, via `staffFor`, instead of carrying a
+     * fixed headcount of three to six written when room and people were
+     * unrelated. That fixture change is necessary and was not sufficient:
+     *
+     *   - with it, failures went from nine guards to seven, and their
+     *     character changed from "cheap is hopeless everywhere" to "cheap was
+     *     wiped out", "a competent plan was wiped out by bots", and
+     *     "restaurant_chain: building the business beat sitting on the money in
+     *     0 of 9 seasons".
+     *   - the markets it breaks are the thin-gross-margin ones. Restaurant
+     *     chain is £6 of unit cost against a £13 cheapest price; pay a
+     *     realistic payroll on top and the best way to play it loses money
+     *     every year for fourteen years.
+     *
+     * So the constraint does not land against the current market content. What
+     * it needs is the content re-tuned with it — unit costs, opening prices, or
+     * the `serves` figures themselves — across all seven catalogue markets, and
+     * the guards re-set against the new economics afterwards rather than to
+     * make a red suite green.
+     *
+     * Worth knowing before trying again: most of the margin benefit does not
+     * need this. `optimise` staffed itself by a flat `capacity / 40_000` and now
+     * reads `staffFor` from the market, which took a written consultancy from a
+     * 60% net margin to 14.2% and broke nothing — because the optimiser hires
+     * for the room it asks for, this constraint never binds for it. What this
+     * would add is teeth for a human player or a bot that under-hires.
      */
     const capacity = build.now + leased + shift.units + stockHeld;
     const price = Math.max(1, d.cmo?.price ?? company.price);
@@ -1302,7 +1338,8 @@ export function resolveYear(
         .filter((c) => c.id !== company.id)
         .sort((a, b) => (allocation.held[b.id]?.[segment.id] ?? 0) - (allocation.held[a.id]?.[segment.id] ?? 0))[0];
       if (!holder) continue;
-      const want = winBack({ spend: spend * (gone / totalLeft), left: gone, referencePrice: segment.referencePrice, fixed });
+      /* This year's money: what it takes to win somebody back moves with what they expect to pay. */
+      const want = winBack({ spend: spend * (gone / totalLeft), left: gone, referencePrice: expectedPrice(segment, world.year), fixed });
       const n = Math.min(want, room, allocation.held[holder.id]?.[segment.id] ?? 0);
       if (n <= 0) continue;
       allocation.held[holder.id][segment.id] -= n;
@@ -1626,9 +1663,15 @@ export function resolveYear(
     if (outage) {
       notesFor[company.id] = [...(notesFor[company.id] ?? []), `An outage. Technical debt at ${Math.round(base0?.techDebt ?? 0)} came due on a busy evening; service and reputation paid for it.`];
     }
-    const operatingProfit = revenue + planning - (variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium);
+    /*
+     * What it costs to be a company, before anybody decides anything. See
+     * `OPERATING_OVERHEAD`: the share of revenue that goes on running the
+     * business rather than on the levers.
+     */
+    const overhead = Math.max(0, revenue) * overheadShare(Math.max(0, revenue), company.scale ?? 1);
+    const operatingProfit = revenue + planning - (variable + discretionary + interest + idleCost + incidentCost + partnerShare + premium + overhead);
     const taxed = company.kind === "player" ? taxOn(operatingProfit, company.taxLosses ?? 0) : { tax: 0, carried: 0 };
-    const costs = variable + discretionary + interest + idleCost + plantCost + incidentCost + partnerShare + premium + taxed.tax - planning;
+    const costs = variable + discretionary + interest + idleCost + plantCost + incidentCost + partnerShare + premium + overhead + taxed.tax - planning;
     const profit = revenue - costs;
     /*
      * Kept, because the report used to throw this away and recompute profit as
@@ -1831,10 +1874,33 @@ export function resolveYear(
       }
     }
 
-    // What a bank will lend against reputation and what the company holds.
+    /*
+     * What a bank will lend against reputation and what the company holds.
+     *
+     * The reputation term is scaled to the market, and was not. `startingCompany`
+     * already fixed exactly this for the *opening* limit — its comment reads
+     * "left absolute, this was the one number that did not shrink with the
+     * business: a startup opening with 60,000 in the bank could borrow two
+     * million against it" — and the fix went in there and never here, where the
+     * limit is recomputed every period from scratch. So a thin line lasted one
+     * period and then the engine handed back a fat one.
+     *
+     * Measured on a one-van bike-repair round in a £1m market, opened at the
+     * earliest "actual" band: `atStanding` gave it a £688 credit line, to go
+     * with a credit score of 20 and a note saying a lender would not return its
+     * call. In its second month it borrowed £51,806 — reputation 35 times
+     * £4,000, times the thin-rating multiplier — and spent the next
+     * twenty-three months bleeding it away. The whole point of opening a
+     * company where it actually is was undone by its own bank.
+     *
+     * Revenue and assets need no scaling: both are already in the market's own
+     * money. Reputation is a number out of a hundred, so the pounds it is worth
+     * have to come from somewhere, and the market is the only honest source.
+     * A catalogue market is scale 1 and is untouched.
+     */
     const assetValue = company.assets.reduce((sum, a) => sum + a.bookValue, 0);
     const creditLimit = Math.max(0, Math.round(
-      (revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000)
+      (revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000 * (company.scale ?? 1))
       // A lender lends more to a company it rates, and far less to one it does not.
       * (company.kind === "player" ? creditMultiplier(ratedScore ?? RATING_START) : 1),
     ));
@@ -1968,7 +2034,14 @@ export function resolveYear(
       const lines: CashLine[] = [];
       if (opened && opened.cost > 0) lines.push({ label: `Opened in ${opened.names.join(", ")}`, amount: -opened.cost });
       lines.push({ label: "Sales", amount: revenue });
-      lines.push({ label: "Running the business", amount: -(variable + discretionary - room.build - room.lease + idleCost) + planning });
+      /*
+       * `overhead` belongs in here and not in a line of its own: a cash bridge
+       * is what somebody reads to see where the money went, and "running the
+       * business" is exactly what this is. It has to be *somewhere*, though —
+       * left out, the bridge lands short of the bank balance by the whole of
+       * it, which is what `forecast.test.ts` caught.
+       */
+      lines.push({ label: "Running the business", amount: -(variable + discretionary - room.build - room.lease + idleCost + overhead) + planning });
       if (incidentCost > 0) lines.push({ label: "Breaches and lawsuits", amount: -incidentCost });
       if (partnerShare > 0) lines.push({ label: "Distribution partners' share", amount: -partnerShare });
       if (premium > 0) lines.push({ label: "Insurance", amount: -premium });
@@ -2024,6 +2097,13 @@ export function resolveYear(
           incidents: incidentCost,
           partners: partnerShare,
           insurance: premium,
+          /*
+           * Its own line, because a cost inside the profit and absent from the
+           * column is a column that does not add up — which is the one thing a
+           * column of costs has to do, and four guards said so the moment this
+           * was added to `costs` and nowhere else.
+           */
+          overhead,
           idleCapacity: idleCost,
           interest,
           operatingProfit,

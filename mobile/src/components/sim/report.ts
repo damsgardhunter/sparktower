@@ -164,6 +164,7 @@ export function accountLines(pnl: ProfitAndLoss): AccountLine[] {
     { label: "Incidents", seat: "the table", amount: n(pnl.incidents), help: "What a breach, lawsuit or recall cost to clean up, after any insurer paid." },
     { label: "Partner share", seat: "the table", amount: n(pnl.partners), help: "The cut of revenue owed on a distribution deal." },
     { label: "Insurance", seat: "finance", amount: n(pnl.insurance), help: "The premium on whatever the company chose to cover." },
+    { label: "Running the business", seat: "the table", amount: n(pnl.overhead), help: "Premises, accountancy, software, invoicing — and more of it the bigger the company gets." },
     { label: "Interest", seat: "finance", amount: n(pnl.interest) },
   ];
 }

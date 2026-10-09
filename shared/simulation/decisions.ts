@@ -838,6 +838,136 @@ export function nextTechDebt(input: {
  */
 export const PLANT_OVERHEAD = 0.0;
 
+/**
+ * The cost of being a company at all, as a share of what it takes.
+ *
+ * Premises, insurance, accountancy, software, the phone, the van's MOT, the
+ * person who does the invoicing. None of it is a decision and all of it grows
+ * with the business, which is exactly the shape of cost this engine was
+ * missing: salaries are a step function in the number of officers, unit costs
+ * are per sale, and between them nothing scaled with size. So gross profit
+ * arrived at the bottom line almost untouched — 38-74% net across fourteen
+ * markets, against 5-25% in the trades being modelled.
+ *
+ * ## Why a share of revenue rather than of the plant
+ *
+ * `PLANT_OVERHEAD` above is the other candidate and was swept: at 0.25 it is
+ * the strongest margin instrument in the engine, taking a veterinary software
+ * business from 54.5% net to 21.3%. It also breaks five winnability guards
+ * across four markets, because it charges per unit of *capacity* at a quarter
+ * of the unit gross margin — which is ruinous in a high-volume market like
+ * drone delivery and cannot be eased without re-pricing the market itself.
+ *
+ * A share of revenue cannot do that. It is zero for a company with no
+ * revenue, so it cannot bankrupt a business for being new or small — the
+ * failure mode that stopped every previous attempt at raising the cost base —
+ * and it is largest exactly where the problem is, on the companies turning
+ * over tens of millions at a 70% margin.
+ *
+ * Fifteen per cent is the middle of what a real small business spends on
+ * running itself, and `script/simulation-report.ts` is how the figure was
+ * chosen rather than guessed.
+ */
+/**
+ * What running the company costs, as a share of what it takes — and the share
+ * grows with the company.
+ *
+ * A flat share was tried first and it is the wrong instrument. It charges the
+ * one-van operation and the £450m consultancy the same proportion, so the
+ * ceiling is set by the smallest business in the game: at 0.12 a one-town
+ * domestic builder loses £211,655 across fourteen years and the guard that
+ * asks for a business worth having fails, while the markets actually sitting
+ * at sixty per cent margins were barely touched.
+ *
+ * Which is backwards, because this is the one cost that really does rise with
+ * size. A builder with a van and a phone has almost no administration. A
+ * company turning over a third of its market has finance, HR, legal, premises,
+ * procurement and a floor of people who never meet a customer — and every one
+ * of them is paid out of the same revenue. Real general-and-administrative
+ * spend runs around five to eight per cent of revenue in a small firm and
+ * twenty to twenty-five in a large one.
+ *
+ * So the share is interpolated on how much of its own market the company has
+ * taken. `SMALL` applies to somebody with a rounding error of it, `LARGE` to
+ * somebody holding `OVERHEAD_AT_SHARE` of it or more. It leaves the bottom of
+ * the game alone and takes the top of it apart, which is where the 38-74% net
+ * margins were.
+ */
+/*
+ * ## The two rates, and why they are where they are
+ *
+ * Swept against every balance guard there is — `balance`, `every-market-winnable`,
+ * `known-imbalances`, `every-way-of-playing`, `responsibilities`, `depth`,
+ * `forecast` and `mobile-mirror`, 252 of them. Twice I swept a subset, reported
+ * a ceiling, and found it wrong when the rest ran; this is the number that
+ * survives all of them.
+ *
+ * 0.25 at the top is the ceiling. At 0.30 one guard fails and it is a lever
+ * promise rather than a balance figure: renting room stops paying for itself
+ * when a company is turning people away, because a quarter of the revenue the
+ * extra room wins goes straight back out as overhead. A lever that does not
+ * pay when it should is worse than a fat margin.
+ *
+ * It got this far only because the rate is progressive. A flat share is capped
+ * by the smallest business in the game — it charges the van and the £450m
+ * consultancy alike, so the ceiling was 0.10 and above it a one-town builder
+ * failed while the sixty-per-cent margins were barely touched.
+ */
+export const OVERHEAD_SMALL = 0.05;
+export const OVERHEAD_LARGE = 0.25;
+/**
+ * The turnover between which the share climbs, in a market of scale one.
+ *
+ * Keyed on what the company actually turns over and not on its share of the
+ * market, which was the first attempt and let the worst case through: a launch
+ * business taking £684m a year holds 6.7% of a £10.2bn market, so a
+ * share-keyed rate charged it 10.6% and left it on a 62.7% net margin — the
+ * fattest in the game, untouched. Administration does not care what fraction
+ * of a market you hold. It cares how many people you employ and how many
+ * offices they sit in, and those track turnover.
+ *
+ * Scaled by the market, like every other absolute figure in this engine, so a
+ * £1m market reaches the full rate at its own version of £50m rather than
+ * never.
+ */
+export const OVERHEAD_FROM = 1_000_000;
+export const OVERHEAD_TO = 50_000_000;
+
+/**
+ * The share of revenue this company spends on running itself.
+ *
+ * `scale` is the market's own size against the catalogue's, so the thresholds
+ * above mean the same thing in a £1m market as in a £400m one.
+ */
+export function overheadShare(revenue: number, scale = 1): number {
+  if (!(revenue > 0)) return 0;
+  const at = Math.max(0.001, scale);
+  const from = OVERHEAD_FROM * at;
+  const to = OVERHEAD_TO * at;
+  /*
+   * Nothing at all below the floor, and that is the part that took three
+   * attempts to get right.
+   *
+   * The floor used to charge `OVERHEAD_SMALL` — five per cent — to everybody,
+   * and five per cent is enough to break construction. Its self-funding way of
+   * playing ("out of revenue", in `every-way-of-playing.test.ts`) has no margin
+   * to give: at a flat 5% it never has a single profitable quarter in fourteen
+   * years and reaches 22% of the best play against a floor of 25%. Measured at
+   * 0.05, 0.08, 0.12, 0.2, 0.25 and 0.35 — it fails at every one of them, and
+   * passes the moment the share is zero.
+   *
+   * Which is also the truer shape. A sole trader's overhead is already inside
+   * their unit costs and whatever they pay themselves; there is no separate
+   * administration to account for. The explicit line appears when there are
+   * premises to heat, people to pay who never meet a customer, and somebody
+   * doing the invoicing — and that is exactly what being above the floor means.
+   */
+  if (revenue <= from) return 0;
+  if (revenue >= to) return OVERHEAD_LARGE;
+  const along = (revenue - from) / (to - from);
+  return OVERHEAD_SMALL + (OVERHEAD_LARGE - OVERHEAD_SMALL) * along;
+}
+
 export function plantOverhead(capacity: number, niche: Niche): number {
   const opening = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
   const perUnit = Math.max(0, (opening?.referencePrice ?? 0) - niche.baseUnitCost);

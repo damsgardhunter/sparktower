@@ -261,9 +261,14 @@ describe("the balance sheet", () => {
  * line of it has to be on the screen.
  */
 describe("the accounts", () => {
+  /*
+   * Every cost line the accounts have. A new one has to be added here or the
+   * identity below stops holding — which is the point: this list is the thing
+   * that notices a cost added to the engine and left out of the column.
+   */
   const lines = [
     "costToServe", "salaries", "marketing", "product", "operations",
-    "capacity", "incidents", "partners", "insurance", "idleCapacity", "interest",
+    "capacity", "incidents", "partners", "insurance", "overhead", "idleCapacity", "interest",
   ] as const;
 
   it("reconcile: sales, less every cost line, plus planning, is the profit", () => {

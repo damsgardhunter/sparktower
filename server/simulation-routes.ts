@@ -239,7 +239,7 @@ export function normalizeSeasonCode(raw: unknown): string | null {
  * Public matchmaking has no such seasons, so it keeps the default.
  */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string, seats = LOBBY_SIZE): Promise<string> {
+export async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string, seats = LOBBY_SIZE): Promise<string> {
   /*
    * A room with space, locked while we look at it. Without the lock two
    * people both see four seats, both take the fifth, and the room ends up
@@ -572,10 +572,29 @@ function pgErrorCode(err: unknown): string | undefined {
     const code = normalizeSeasonCode(req.params.code);
     if (!code) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
     const [season] = await db.select().from(simSeasons).where(eq(simSeasons.inviteCode, code));
-    if (!season?.companyId) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
-    const [company] = await db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, season.companyId));
-    const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
-      .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
+    if (!season) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    /*
+     * Two kinds of season arrive here, and only one of them has a company.
+     *
+     * A company's training season is gated on *membership as well as* the
+     * code, on purpose: a forwarded code must not confirm it works. A season
+     * started from a marketplace listing has no company and no membership to
+     * check — the code is the credential, which is what an eight-character
+     * CSPRNG code is for, and `seatCount` bounds how many people it can seat.
+     *
+     * This used to refuse every company-less season outright. Marketplace
+     * `/play` creates exactly that, so the join link it handed back answered
+     * "that join link isn't valid" to the person who had just paid for it:
+     * the sale completed, the seat was spent, the season existed, and nobody
+     * could reach it.
+     */
+    const [company] = season.companyId
+      ? await db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, season.companyId))
+      : [undefined];
+    const [member] = season.companyId
+      ? await db.select({ role: companyMembers.role }).from(companyMembers)
+        .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)))
+      : [undefined];
     /*
      * A table they are still at — not one that has been retired under them.
      *
@@ -628,11 +647,19 @@ function pgErrorCode(err: unknown): string | undefined {
     const code = normalizeSeasonCode(req.body?.code);
     if (!code) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
     const [season] = await db.select().from(simSeasons).where(eq(simSeasons.inviteCode, code));
-    if (!season?.companyId) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
-    const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
-      .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
-    // The same answer as a wrong code, as the comment above promises: a forwarded code must not confirm it works.
-    if (!member) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    if (!season) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    if (season.companyId) {
+      const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
+        .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
+      // The same answer as a wrong code, as the comment above promises: a forwarded code must not confirm it works.
+      if (!member) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    }
+    /*
+     * A season with no company is one started from a marketplace listing, and
+     * there the code is the credential — see the GET above. The seat census
+     * below is already conditional on a company, so nothing else here needs to
+     * know which kind this is.
+     */
 
     try {
       const outcome = await db.transaction(async (tx) => {

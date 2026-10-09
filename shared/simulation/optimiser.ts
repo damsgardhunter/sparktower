@@ -94,7 +94,8 @@ import type { TeamDecisions } from "./decisions";
 import { forecastDemand } from "./forecast";
 import { resolveYear } from "./resolve";
 import { isUnlocked } from "./responsibilities";
-import { atScale } from "./market";
+import { staffFor } from "./workforce";
+import { atScale, expectedPrice, snapPrice } from "./market";
 import { EXECUTIVE, officersOf } from "./decisions";
 import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
 
@@ -169,6 +170,7 @@ export const CASH_WEIGHT = 0.08;
 /** How much of the remaining credit line to try drawing on, as shares of it. */
 const BORROW_TRIES = [0.25, 0.5];
 
+
 /**
  * How many years of the position to count, when nobody says how long the
  * season is.
@@ -221,6 +223,31 @@ interface Shape {
   region: string | null;
   /** What to draw down to pay for the plan. */
   borrow: number;
+  /*
+   * ## Renting room: tried, and it is not what makes capital matter
+   *
+   * `leaseCapacity` is the one lever that buys *time* — room for this period
+   * rather than a build that opens next — so it looked like the reason the
+   * opening balance does not matter. A written consultancy finishes a season on
+   * £75.50m from £4.55m and £75.39m from £60k, a tenth of a per cent apart on
+   * seventy-six times the capital, and a company that cannot buy speed can
+   * only grow at the build lag whatever is in the bank.
+   *
+   * Wiring it in as a third structural choice did not change that. Measured
+   * across seven written markets at £60k against £4.55m: four finished
+   * *identical*, two finished worse with more money, and only one moved at all
+   * (by 2%). What it did do is let a launch business rent unbounded room in a
+   * market where a sale is £4.5m and a unit of plant is not — it finished on
+   * £10.5bn from £60,000, against £756m before.
+   *
+   * So capital irrelevance is not a missing lever. Over fourteen years of
+   * reinvestment an opening balance is a rounding error: the business funds
+   * growth from revenue, and `headroom` grows with revenue and reputation, so
+   * every company earns its way to the same place. Making capital matter needs
+   * either a shorter horizon or an advantage money buys that cannot be earned
+   * back — a region, a patent, a licence — and that is a design decision rather
+   * than a search one.
+   */
 }
 
 function draftOf(
@@ -330,12 +357,63 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
    */
   const life = Math.max(2, Math.min(VALUE_YEARS, (input.totalYears ?? ASSUMED_SEASON) - Math.floor((year - 1) / periods)) - 1);
 
+  /*
+   * What this period may commit: a share of what the company could lay hands
+   * on, as a rate over the year.
+   *
+   * ## Why the slice being small is not the thing starving a small business
+   *
+   * Dropping the `* per` was tried, because for a one-van business on £2,000
+   * it makes the slice £59 instead of £5 against lift thresholds of about
+   * £570, and £5 a month is not how anybody buys leaflets. It changes nothing:
+   * at £59 the search still declines every lever, each one scoring fifteen
+   * points *below* spending nothing. `OPT_TRACE=1` prints it either way.
+   *
+   * The reason is that the business is capacity-bound, not demand-bound. In
+   * month one it had room for twelve jobs and turned away 176 riders who
+   * wanted it. Brand buys demand, and demand it cannot serve is worth less
+   * than the money — so declining to market is the right answer, and what it
+   * does instead is build: capacity goes 12 to 44 over two years, which is as
+   * fast as £2,000 pays for. The discretionary levers are quiet because the
+   * operations lever is the one that matters, and that one is being used.
+   *
+   * So this stays as it was. Removing it would make a monthly season commit
+   * twelve times more per decision — including the company workshop seasons
+   * that run monthly — for no measured gain.
+   */
   const affordable = headroom(company) * OPTIMISER_COMMITS * per;
   const step = affordable / OPTIMISER_STEPS;
   const levers = SPEND_LEVERS.filter((l) => isUnlocked(l.role, l.field, year, periods));
 
   /** Staff enough to serve, and no more: every head is a salary whether it is busy or not. */
-  const headcount = Math.max(1, Math.round(officersOf(company) + (company.capacity / 40_000)));
+  /**
+   * How many people it takes to serve the room a plan asks for.
+   *
+   * This was `officers + capacity / 40_000`: a constant, in an engine where one
+   * worker in a consultancy looks after a handful of clients and one in a
+   * podcast network looks after tens of thousands. The market already says
+   * which — every niche carries a `workforce` whose `serves` figure is exactly
+   * this number — and `staffFor` already turns that into a headcount. It was
+   * never called by anything, along with `canServe` beside it.
+   *
+   * The constant is why margins come out where they do. A consultancy serving
+   * 2,016 clients at £31,210 apiece — £62.9m of revenue — ran on five people,
+   * because 2,627 of capacity over 40,000 rounds to nothing. Nothing else in
+   * the plan scales with the business either: the optimiser commits £0 in most
+   * years, so there is no marketing or product spend to absorb the gross
+   * margin, and payroll was the only cost left that could have. Post-tax net
+   * margins came out at 52-68% across fourteen markets, against 5-25% in the
+   * trades they are modelled on.
+   *
+   * Taken from the room rather than from today's capacity, because the plan is
+   * deciding the room: staffing the company it is now and then selling what
+   * the new plant can hold is how you serve £62.9m with five people.
+   */
+  const staffedFor = (room: number): number => {
+    const officers = officersOf(company);
+    const hired = staffFor(niche, Math.max(0, room), officers);
+    return Math.max(1, Math.round(officers + (Number.isFinite(hired) ? hired : 0)));
+  };
 
   /** What the company costs to run before it does anything: the floor the plan has to clear. */
   const fixedPerYear = officersOf(company) * EXECUTIVE * (company.scale ?? 1);
@@ -343,8 +421,49 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   const spend: Record<string, number> = {};
   for (const l of levers) spend[l.field] = 0;
 
-  /** What this segment thinks the ordinary thing costs: the anchor for every price tried. */
-  const reference = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0]?.referencePrice ?? company.price;
+  /**
+   * What this segment thinks the ordinary thing costs: the anchor for every
+   * price tried — in *this year's* money.
+   *
+   * Static, this was the whole reason a plan held one price for thirteen years.
+   * Every price the search considers is a multiple of this anchor, so an anchor
+   * that never moved meant the same ladder of candidate prices every year while
+   * the cost of serving a customer climbed underneath it. Holding the price was
+   * the correct answer to the question being asked; the question was wrong.
+   */
+  const cheapest = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
+  const reference = cheapest ? expectedPrice(cheapest, year) : company.price;
+
+
+  /**
+   * Every candidate price, as multiples of the cheapest segment's expectation.
+   *
+   * Anchored on the market and not on what the company charged last year: a
+   * search allowed to raise its own price by half a year reaches 290x where it
+   * started over fourteen years, one locally-optimal step at a time.
+   *
+   * ## Why the cheapest segment, and not all of them
+   *
+   * Widening the ladder to every segment's expectation was tried, because the
+   * cheapest-only anchor leaves the price lever dead in a market whose segments
+   * are far apart — a launch business opens at £4.5m while the ladder spans
+   * £330k to £900k, so every candidate is an 80% cut that loses money and the
+   * opening price survives all fourteen years untouched.
+   *
+   * It broke nine balance guards and they diagnosed it exactly: "the same
+   * strategy won everywhere: premium, premium, premium, premium, premium,
+   * premium, premium", and "cheap is hopeless everywhere". Given the option of
+   * pricing at the dear segment the search always takes it, because value is
+   * maximised by a fat margin on few customers — so the whole field converges
+   * on one strategy and the volume plays stop being viable at all.
+   *
+   * So this anchor is not only the anti-spiral guard. It is what keeps more
+   * than one way to play. The dead lever in a wide-spread market is the price
+   * of that and is the cheaper of the two problems; fixing it properly means
+   * making the appeal curve punish premium pricing harder, which is a change to
+   * how the market works rather than to how the search reads it.
+   */
+  const priceTries = PRICE_TRIES.map((m) => Math.max(1, snapPrice(reference * m, reference)));
 
   const measure = (trial: Record<string, number>, price: number, shape: Shape): { score: number; serves: number; room: number } => {
     /*
@@ -352,7 +471,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * independently. What is built this year opens next, so this is the plant
      * the plan is asking for.
      */
-    const probe = forecastDemand({ world, companyId, year, economy, draft: draftOf(company, trial, price, company.capacity, headcount, shape) });
+    const probe = forecastDemand({ world, companyId, year, economy, draft: draftOf(company, trial, price, company.capacity, staffedFor(company.capacity), shape) });
     if (!probe) return { score: -Infinity, serves: 0, room: company.capacity };
     /*
      * The plant is sized against the band, not the middle of it.
@@ -382,7 +501,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + n, 0);
     const canFill = Math.max(held, company.capacity * 0.6);
     const room = Math.max(company.capacity, Math.min(Math.round(probe.likely * 1.3), Math.round(canFill * 2)));
-    const draft = draftOf(company, trial, price, room, headcount, shape);
+    const draft = draftOf(company, trial, price, room, staffedFor(room), shape);
 
     /*
      * Play the year, then ask what the company it has become could sell the
@@ -421,7 +540,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
         const carried: Record<string, number> = {};
         for (const [field, amount] of Object.entries(trial)) carried[field] = amount * grew;
         const plant = Math.max(held.capacity, Math.round(Math.max(heldNow, held.capacity * 0.6) * 1.4));
-        const onward = draftOf(held, carried, price, plant, headcount, { region: null, borrow: 0 });
+        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0 });
         running = resolveYear({ ...after, year: year + ahead }, [onward], economy, { withoutEvent: true });
         after = running.world;
         valued = running.reports.find((r) => r.companyId === companyId)?.value ?? valued;
@@ -587,8 +706,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     let at = measure(trialSpend, trialPrice, withShape);
 
     // The price first, against the company as it stands.
-    for (const multiple of PRICE_TRIES) {
-      const tryPrice = Math.max(1, Math.round(reference * multiple));
+    for (const tryPrice of priceTries) {
       const got = measure(trialSpend, tryPrice, withShape);
       if (got.score > at.score) { at = got; trialPrice = tryPrice; }
     }
@@ -601,23 +719,86 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     const room = affordable + Math.max(0, withShape.borrow);
     let spent = 0;
     for (let i = 0; i < OPTIMISER_STEPS && spent + step <= room; i++) {
+      /*
+       * ## Every lever that pays, not only the one that pays most
+       *
+       * This took the argmax and gave it the whole slice. With a diminishing
+       * return on each lever that sounds right and starves the tail: `OPT_TRACE`
+       * shows `featureSpend` scoring *above* doing nothing and ranking fourth
+       * of six, every round, in every market — and the ascent only ever hands
+       * out two or three slices before no single slice pays, so the fourth-best
+       * lever is never reached. Features were funded in 1 of 126 company-years
+       * traced, and bending a quarter of brand into them beat the search's own
+       * plan in 14 of 14 markets.
+       *
+       * It is also why the plans idle. The stop condition is "no single slice
+       * improves", which with a coarse slice fires early and leaves a company
+       * sitting on millions: five of seven written markets spent nothing at all
+       * in three or more years.
+       *
+       * So each round funds every lever whose own slice beats doing nothing,
+       * which is what "brand and product and service all rising together" —
+       * this file's own description of what it produces — actually requires.
+       * The combined move is then measured, because levers interact and the sum
+       * of six good slices is not six times one; if the combination is worse
+       * than where the round started, it is undone and the round falls back to
+       * the single best lever, which is exactly the old behaviour.
+       */
       let bestField: string | null = null;
       let bestAt = at;
+      /*
+       * `OPT_TRACE=1` prints every lever's marginal score at every step.
+       *
+       * Kept because it is what finally answered a question three plausible
+       * explanations got wrong: features are not invisible to this search and
+       * never were. They score *positively* and rank fourth of six, and the
+       * ascent only ever hands out two or three slices before no single slice
+       * pays — so the fourth-best lever is never reached. Reading the scores
+       * took one run; guessing at the mechanism took an afternoon.
+       */
+      const trace = process.env.OPT_TRACE ? [] as string[] : null;
+      /** What each lever is worth on its own this round, kept for the round below. */
+      const alone: Record<string, number> = {};
       for (const lever of levers) {
         const trial = { ...trialSpend, [lever.field]: (trialSpend[lever.field] ?? 0) + step };
         const got = measure(trial, trialPrice, withShape);
+        alone[lever.field] = got.score;
+        trace?.push(`${lever.field}=${got.score === -Infinity ? "-inf" : Math.round(got.score).toLocaleString()}`);
         if (got.score > bestAt.score) { bestField = lever.field; bestAt = got; }
       }
+      if (trace) {
+        console.log(`[opt] step ${i} base=${at.score === -Infinity ? "-inf" : Math.round(at.score).toLocaleString()} step=${Math.round(step).toLocaleString()} | ${trace.join("  ")} | chose ${bestField ?? "nothing"}`);
+      }
       if (!bestField) break; // Nothing left that pays for itself.
-      trialSpend[bestField] = (trialSpend[bestField] ?? 0) + step;
-      spent += step;
-      at = bestAt;
+
+      /* Everything that paid on its own, best first, while there is room. */
+      const worth = levers
+        .map((l) => ({ field: l.field, score: alone[l.field] ?? -Infinity }))
+        .filter((l) => l.score > at.score)
+        .sort((a, b) => b.score - a.score);
+      const before = { ...trialSpend };
+      const spentBefore = spent;
+      for (const l of worth) {
+        if (spent + step > room) break;
+        trialSpend[l.field] = (trialSpend[l.field] ?? 0) + step;
+        spent += step;
+      }
+      const together = measure(trialSpend, trialPrice, withShape);
+      if (together.score > at.score) {
+        at = together;
+      } else {
+        /* The combination was worth less than its parts. Take the best one only. */
+        for (const k of Object.keys(trialSpend)) trialSpend[k] = before[k] ?? 0;
+        spent = spentBefore;
+        trialSpend[bestField] = (trialSpend[bestField] ?? 0) + step;
+        spent += step;
+        at = bestAt;
+      }
 
       // Re-price every few slices: what the company is worth charging changes
       // as the plan makes it better.
       if (i % 4 === 3) {
-        for (const multiple of PRICE_TRIES) {
-          const tryPrice = Math.max(1, Math.round(reference * multiple));
+        for (const tryPrice of priceTries) {
           const got = measure(trialSpend, tryPrice, withShape);
           if (got.score > at.score) { at = got; trialPrice = tryPrice; }
         }
@@ -662,7 +843,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   for (const [field, amount] of Object.entries(spend)) rounded[field] = Math.round(amount / 1000) * 1000;
 
   return {
-    decisions: draftOf(company, rounded, price, best.room, headcount, shape),
+    decisions: draftOf(company, rounded, price, best.room, staffedFor(best.room), shape),
     score: best.score,
     serves: best.serves,
     spends: Object.values(rounded).reduce((sum, n) => sum + n, 0),

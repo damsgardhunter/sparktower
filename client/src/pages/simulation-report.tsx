@@ -190,6 +190,7 @@ function Accounts({ r }: { r: CompanyReport }) {
     { label: "Incidents", seat: "the table", amount: p.incidents ?? 0, help: "What last year's breach, lawsuit or recall cost to clean up, after any insurer paid." },
     { label: "Partner share", seat: "the table", amount: p.partners ?? 0, help: "The cut of revenue owed on a distribution deal the table signed." },
     { label: "Insurance", seat: "finance", amount: p.insurance ?? 0, help: "The premium on whatever the company chose to cover." },
+    { label: "Running the business", seat: "the table", amount: p.overhead ?? 0, help: "Premises, accountancy, software, invoicing — and a bigger share of revenue the bigger the company gets." },
     { label: "Interest", seat: "finance", amount: p.interest },
   ];
   const scale = Math.max(p.revenue, ...lines.map((l) => l.amount), 1);

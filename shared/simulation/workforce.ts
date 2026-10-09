@@ -145,8 +145,24 @@ export function servesPerHead(niche: Pick<Niche, "workforce" | "segments">): num
     return Math.max(1, Math.round(each * room));
   }
 
-  // Nothing said. Guess from the size of the market, and badly on purpose:
-  // a written market should say, and this is what stops a season failing.
+  /*
+   * Nothing said. Guess from the size of the market, and badly on purpose:
+   * a written market should say, and this is what stops a season failing.
+   *
+   * It is badly on purpose and it is also just bad: a count of customers
+   * cannot be compared across markets where one pays £2 a year and another
+   * £173,400 a launch, so this over-staffs a market with many cheap customers
+   * (two thousand people for a podcast channel) and under-staffs one with few
+   * dear ones (five for a launch business). Replacing it with revenue-per-head
+   * was tried and is worse: it staffs the cheap markets sanely and makes the
+   * dear ones insolvent by year two, because a 50% unit cost plus a realistic
+   * payroll is genuinely unviable — which may be true of real launch startups
+   * and is not a market anybody can play.
+   *
+   * The fix is not a better guess. It is for written markets to say, which
+   * means `serves` has to be in the prompt that writes them — see
+   * `server/nova-market.ts`, which asks for a workforce without it.
+   */
   const people = niche.segments?.reduce((sum, s) => sum + s.size, 0) ?? 0;
   return Math.max(50, Math.round((people / 1000) * room));
 }

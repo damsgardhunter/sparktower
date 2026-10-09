@@ -228,6 +228,12 @@ export function buildMarketPrompt(input: {
       "    is what the thing is like, \"service\" is what happens around it. Nothing buys brand.",
       "  pay: what one costs against an ordinary salary. 0.6 is low-paid, 1.8 is a senior engineer.",
       "  share: roughly what fraction of the payroll they are. They should sum to about 1.",
+      "  serves: for \"room\" kinds only — how many customers ONE of them looks after. A vet nurse",
+      "    might cover 400 clients, a dispatcher 2,000 deliveries, a community manager 35,000",
+      "    viewers, a consultant 8 clients. This is the number that decides what a company here",
+      "    costs to run, so answer it from the trade rather than leaving it at zero: get it wrong",
+      "    by a factor of ten and the business is either absurdly profitable or cannot pay anyone.",
+      "    Omit it on \"product\" and \"service\" kinds, where it means nothing.",
       "Be specific to the trade. \"Staff\" is not an answer; \"dispatchers\" is.",
       "",
       "",
@@ -254,7 +260,20 @@ export function buildMarketPrompt(input: {
       '{"name":"","premise":"one or two sentences","baseUnitCost":0,"innovationPace":1,',
       '"voice":{"customer":"","customers":"","unit":"","per":"","capacity":"","place":"","places":"","quality":"","brand":""},',
       '"segments":[{"id":"","name":"","description":"","size":0,"growth":0.05,"priceSensitivity":0.5,"qualityFocus":0.5,"brandFocus":0.4,"serviceFocus":0.4,"loyalty":0.4,"referencePrice":0}],',
-      '"workforce":[{"id":"","name":"","one":"","does":"room","pay":1,"share":0.5}],',
+      /*
+       * `serves` is what decides whether a company here can afford its own
+       * payroll, and it was missing from this line. `servesPerHead` prefers
+       * what the market says and guesses when it does not — one worker per
+       * fifty customers — which is roughly right in a market of cheap
+       * customers and absurd in one where a customer pays six figures. A
+       * written consultancy turning over £62.9m was staffed with five people.
+       *
+       * Asked for only on the kinds that serve customers, and asked for in the
+       * terms the answer is actually known in: nobody thinks "customers per
+       * head per year", everybody knows how many clients one of their people
+       * can look after.
+       */
+      '"workforce":[{"id":"","name":"","one":"","does":"room","pay":1,"share":0.5,"serves":0}],',
       '"assets":[{"kind":"distribution","name":"","blurb":""}],',
       '"regions":[{"id":"","name":"","weight":0.25,"entryCost":0,"note":"","segmentMix":{}}],',
       '"incumbents":[{"id":"","name":"","posture":"fortress","startingShare":0.3,"quality":60,"brand":70,"service":50,"priceIndex":1.1,',

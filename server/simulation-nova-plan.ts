@@ -13,7 +13,7 @@
 import type { Express } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simVentures, simDecisions } from "@shared/schema";
+import { simSeasons, simVentures, simDecisions, simBids } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { marketOf } from "./simulation-scope";
@@ -23,6 +23,7 @@ import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/c
 import { economyFor } from "@shared/simulation/season";
 import { projectYear } from "@shared/simulation/projection";
 import { optimise } from "@shared/simulation/optimiser";
+import { marketListings, biddableFunds } from "@shared/simulation/assets";
 import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
 import { seatOf, draftFor } from "./simulation-desk-routes";
 import { requireCredits } from "./entitlements";
@@ -166,6 +167,73 @@ export function registerNovaPlanRoutes(app: Express): void {
       }
     });
 
+    /*
+     * ## And a bid, because this is where money buys something it cannot earn
+     *
+     * Every lever in a year is a flow: brand decays, a hire settles in, room
+     * fills up, and a company that stops paying goes back to where it started.
+     * The asset shelf is the exception — `ASSET_SLOTS` is a fixed pool, the
+     * patent says of itself "yours permanently, and not theirs, the rare thing
+     * here that does not expire", and whoever buys it holds it for the season
+     * while nobody else can.
+     *
+     * That is the one thing in the engine that makes an opening balance matter.
+     * Measured without it, a written consultancy finished a season on £75.50m
+     * from £4.55m and £75.39m from £60k — a tenth of a per cent apart on
+     * seventy-six times the capital — and I reported that as capital being
+     * structurally irrelevant. It was not: `optimise` has no bidding in it at
+     * all, so a table following Nova's plan never bought a patent, never bought
+     * a facility, and never converted money into anything it could keep. The
+     * bots have bid since they were written (`botBids`), gated on exactly this.
+     *
+     * So the plan bids. Ranked by what the thing is actually worth to this
+     * company rather than by a seed, and bounded the way a bot's purse is
+     * bounded — a share of cash, and never more than a third of what it could
+     * raise — so a bid cannot be the reason the year fails.
+     */
+    const bidsFiled: { listingId: string; amount: number; name: string }[] = [];
+    try {
+      const shelf = marketListings({
+        seasonId: season.id, year, niche,
+        periods,
+        /* A second copy of a patent it holds is not a second patent. */
+        owned: (company.assets ?? []).map((a) => a.name),
+      });
+      const purse = Math.max(0, Math.min((company.cash ?? 0) * 0.6, biddableFunds(company) * 0.33));
+      if (purse > 0 && shelf.length) {
+        /*
+         * What each one is worth here, in the company's own terms: a point of
+         * quality is worth more in a market that weighs quality, and a unit-cost
+         * cut is worth what it saves on the sales this company actually makes.
+         */
+        const weigh = (l: (typeof shelf)[number]) => {
+          const e = l.asset.effect ?? {};
+          const sold = Object.values(company.customers ?? {}).reduce((a, b) => a + Number(b), 0);
+          const perUnit = Math.max(0, (company.price ?? 0) - (company.unitCost ?? 0));
+          return (e.quality ?? 0) * 3 + (e.brand ?? 0) * 2 + (e.service ?? 0) * 2
+            + (e.capacity ?? 0) * perUnit * 0.0002
+            + (1 - (e.unitCost ?? 1)) * Math.max(sold, 1) * (company.unitCost ?? 0) * 0.002
+            /* Permanence is the whole point: an expiring deal is worth less than a patent. */
+            + (l.asset.expiresIn === undefined ? 12 : 0);
+        };
+        const best = [...shelf].sort((a, b) => weigh(b) - weigh(a))[0];
+        /* Just over the reserve: enough to win it uncontested, not a blank cheque. */
+        const amount = Math.round(Math.min(purse, best.reserve * 1.15));
+        if (best.reserve > 0 && amount >= best.reserve) {
+          await db.insert(simBids)
+            .values({ ventureId: venture.id, listingId: best.id, year, amount })
+            .onConflictDoUpdate({
+              target: [simBids.ventureId, simBids.listingId, simBids.year],
+              set: { amount, createdAt: new Date() },
+            });
+          bidsFiled.push({ listingId: best.id, amount, name: best.asset.name });
+        }
+      }
+    } catch (err) {
+      /* A bid is an extra, never the reason a filed year fails. */
+      console.error("[nova-plan] bidding failed:", err);
+    }
+
     /* Settles the hold taken above. Nothing is charged twice. */
     await storage.deductCredits(req.user.id, CHARGEABLE);
 
@@ -188,6 +256,8 @@ export function registerNovaPlanRoutes(app: Express): void {
       year,
       /* Which chairs it actually filled, so the screen does not claim five on a table of five. */
       filled: desks,
+      /* What it bid for, so the screen can say so. Empty when nothing was worth having. */
+      bids: bidsFiled,
       yourRole: role,
       draft: cleanFor(role),
       expects: { serves: plan.serves, commits: plan.spends },

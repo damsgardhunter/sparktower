@@ -86,11 +86,35 @@ export interface OpeningPosition {
   note: string;
 }
 
+/*
+ * ## Why the capacity shares are small, and were all 1
+ *
+ * Every band used to say `capacity: 1` — a multiplier, so an "actual" opening
+ * took cash to zero and customers to zero and left the plant at the full
+ * funded size. That is worse than either extreme: a company with no money and
+ * no customers paying idle-capacity costs on a plant built for a business it
+ * does not have, from its first month, with no lever reached in time to stop
+ * it.
+ *
+ * Measured on a one-van bike-repair round opened on £2,000 and allowed to
+ * commit £1,000 a month: the funded opening handed it 508 riders and £2,223 of
+ * revenue in month one, before a single decision. There was no bottom to start
+ * at, and nothing to decide — it spent nothing in 22 of 24 months because
+ * nothing affordable moved anything, and banked £36,677 by doing so. A passive
+ * annuity rather than a business.
+ *
+ * So the plant now scales with the stage, because that is what "where you
+ * actually are" means: somebody with an idea has a van and a toolkit, not a
+ * depot. Floored at one by `atStanding`, so nothing divides by zero.
+ *
+ * Only the "actual" opening is touched. A competitive season is bit-for-bit
+ * what it was, which is what every balance guard is written against.
+ */
 export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.15,
     position: {
-      cash: 0, credit: 0.1, creditScore: 20, brand: 0, reputation: 35, customers: 0, capacity: 1,
+      cash: 0, credit: 0.1, creditScore: 20, brand: 0, reputation: 35, customers: 0, capacity: 0.02,
       label: "An idea, and the work so far",
       note: "No money and no trading history. The first decision is where money comes from, and on a rating this thin it will be expensive.",
     },
@@ -98,7 +122,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.4,
     position: {
-      cash: 0.08, credit: 0.25, creditScore: 32, brand: 2, reputation: 40, customers: 0, capacity: 1,
+      cash: 0.08, credit: 0.25, creditScore: 32, brand: 2, reputation: 40, customers: 0, capacity: 0.08,
       label: "Building it",
       note: "A little put in and nothing coming back yet. Enough to move on one thing, not on three.",
     },
@@ -106,7 +130,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.7,
     position: {
-      cash: 0.2, credit: 0.5, creditScore: 45, brand: 5, reputation: 46, customers: 0.08, capacity: 1,
+      cash: 0.2, credit: 0.5, creditScore: 45, brand: 5, reputation: 46, customers: 0.08, capacity: 0.25,
       label: "Something people use",
       note: "The first customers, and a lender who will now return a call. Still far short of a year's costs.",
     },
@@ -114,7 +138,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: Infinity,
     position: {
-      cash: 0.35, credit: 0.8, creditScore: 55, brand: 9, reputation: 52, customers: 0.2, capacity: 1,
+      cash: 0.35, credit: 0.8, creditScore: 55, brand: 9, reputation: 52, customers: 0.2, capacity: 0.5,
       label: "Trading",
       note: "Revenue, a record, and a credit line worth having. The question stops being survival and starts being growth.",
     },

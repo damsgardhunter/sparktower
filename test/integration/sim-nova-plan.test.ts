@@ -18,7 +18,7 @@ import { eq, inArray } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeasons, simVentures, simDecisions, users } from "@shared/schema";
+import { simSeasons, simVentures, simDecisions, simBids, users } from "@shared/schema";
 import { startReadySeasons } from "../../server/simulation-tick";
 import { MONTHLY_SMALL_ACTIONS, NOVA_PLAN_ACTIONS } from "@shared/plans";
 
@@ -150,6 +150,44 @@ describe("Nova planning the year", () => {
 
     const filed = await db.select().from(simDecisions).where(eq(simDecisions.ventureId, ventureId));
     expect(filed.map((r) => r.role), "it filed a chair it does not hold").toEqual(["cmo"]);
+  });
+
+  it("bids for something the money can keep", async () => {
+    /*
+     * The one purchase in a year that is not a flow. Brand decays, hires
+     * settle in, room fills — but `ASSET_SLOTS` is a fixed pool and the patent
+     * says of itself that it does not expire, so whoever buys it holds it and
+     * nobody else can.
+     *
+     * It is also the only thing that makes an opening balance matter, and
+     * `optimise` has no bidding in it: a table following Nova's plan bought
+     * nothing it could keep, which is why a consultancy finished a season
+     * within a tenth of a per cent of itself on seventy-six times the capital.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await makeSolo(seasonId);
+    const ceo = seat("ceo");
+    /* Money to bid with: the shelf is priced at about a year of payroll. */
+    await db.update(simSeasons).set({ status: "running" }).where(eq(simSeasons.id, seasonId));
+
+    const planned = await ceo.agent.post(`/api/sim/ventures/${ventureId}/nova-plan`).send({});
+    expect(planned.status, JSON.stringify(planned.body).slice(0, 300)).toBe(200);
+    expect(Array.isArray(planned.body.bids), "the response says nothing about bidding").toBe(true);
+
+    const filed = await db.select().from(simBids).where(eq(simBids.ventureId, ventureId));
+    if (planned.body.bids.length > 0) {
+      expect(filed.length, "a bid was reported and none was filed").toBeGreaterThan(0);
+      expect(filed[0].amount).toBeGreaterThan(0);
+      expect(planned.body.bids[0].name, "a bid with nothing named on it").toBeTruthy();
+    } else {
+      /*
+       * Nothing worth having, or nothing affordable, is a real answer — the
+       * shelf is seeded per season and a company with no cash bids nothing.
+       * What must not happen is a bid filed that the response denies.
+       */
+      expect(filed, "a bid was filed that the response did not report").toHaveLength(0);
+    }
   });
 
   it("takes five of the month's free actions, not one", async () => {

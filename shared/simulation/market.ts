@@ -103,6 +103,72 @@ export function headStartAgainst(segment: Segment, company: Company, year?: numb
 export const PRICE_LICENCE_MAX = 0.09;
 
 /**
+ * How fast what a buyer considers a normal price drifts upwards.
+ *
+ * The same rate input costs drift at, and that is the point. `economyFor` in
+ * `season.ts` moves `costIndex` up by this much a year and never back down,
+ * with a comment saying it is "what stops year one's price holding for
+ * fourteen years" — and it could not do that, because nothing moved prices.
+ * Unit costs inflated (`resolve.ts`, the costIndex step), salaries inflated
+ * (`decisions.ts`), and `referencePrice` sat still for the whole season.
+ *
+ * Measured over fourteen years of the optimiser filing every decision: costs
+ * rose about 18% and the price it charged did not move at all — £180 for
+ * thirteen straight years in vet software, £21 for fourteen in a roastery. A
+ * frozen price was not a failure of the search. It was the right answer to a
+ * world where the only thing that ever changed was the bill.
+ *
+ * So the expectation drifts with the bill. A company that holds its nominal
+ * price becomes genuinely cheaper each year, which is what inflation does — it
+ * wins a little volume and loses a little margin — and one that wants to hold
+ * its position has to reprice, which is the decision this was always supposed
+ * to provoke.
+ *
+ * Only the structural drift, deliberately. `costIndex` also carries the
+ * business cycle (`max(0, wave) * 0.02`), and a cycle is not inflation: a boom
+ * does not permanently raise what anybody thinks a thing is worth, and feeding
+ * it in here would have expectations fall again when the cycle turned.
+ */
+export const PRICE_DRIFT_PER_YEAR = 0.012;
+
+/**
+ * What this segment thinks the ordinary thing costs, in this year's money.
+ *
+ * Year one is exactly `referencePrice`, so every market opens where it was
+ * written and nothing about a first year changes.
+ */
+export function expectedPrice(segment: Pick<Segment, "referencePrice">, year?: number): number {
+  return segment.referencePrice * (1 + PRICE_DRIFT_PER_YEAR * Math.max(0, (year ?? 1) - 1));
+}
+
+/**
+ * The smallest price difference worth expressing in this market.
+ *
+ * The `price` lever is declared `step: 1` — whole pounds — which is right for a
+ * market where the ordinary thing costs £180 and useless where it costs £2. At
+ * a £2 reference, a year of drift is two pence, so every candidate price
+ * rounded to the same pound and a channel held £3 for fourteen years while its
+ * costs climbed. Only `min` is enforced by `validateDecision`, never `step`, so
+ * a price finer than a pound was always legal — nothing had asked for one.
+ *
+ * About a tenth of a per cent of the going rate, snapped to a power of ten so
+ * the numbers stay ones a person would say: a penny in a £2 market, ten pence
+ * at £180, £10 at £18,000, £100 at £150,000.
+ */
+export function priceStep(reference: number): number {
+  if (!(reference > 0)) return 1;
+  const tenth = reference / 1000;
+  return Math.max(0.01, Math.pow(10, Math.floor(Math.log10(Math.max(tenth, 0.01)))));
+}
+
+/** A price snapped to this market's own granularity. */
+export function snapPrice(price: number, reference: number): number {
+  const step = priceStep(reference);
+  /* Rounded to the step, then to the penny, so floating point cannot produce £2.9300000000000004. */
+  return Math.round(Math.round(price / step) * step * 100) / 100;
+}
+
+/**
  * What this company has earned the right to charge.
  *
  * A segment's `referencePrice` is what it expects to pay *for the ordinary
@@ -135,7 +201,7 @@ export function appealFor(company: Company, segment: Segment, year?: number, mar
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
   // Each segment judges the price it is offered: its own tier, where there is one.
-  const priceRatio = priceFor(company, segment.id) / (segment.referencePrice * priceLicence(company, segment));
+  const priceRatio = priceFor(company, segment.id) / (expectedPrice(segment, year) * priceLicence(company, segment));
   /*
    * Cheaper helps, and only so much. Uncapped, this rewarded undercutting
    * without limit: a company charging a quarter of what a premium segment
@@ -1020,6 +1086,25 @@ export function marketShares(held: Record<string, Record<string, number>>): Reco
  * Scaling the threshold keeps the *decision* identical: spend a tenth of what
  * the market is worth and get the same effect you would in any other market.
  * The seven are scale one, so nothing about them changes at all.
+ */
+/*
+ * ## Making the levers cheaper does not make them worth buying
+ *
+ * A `LEVER_POTENCY` divisor was added here and swept at 1, 2 and 4 — halving
+ * and quartering every threshold in the engine. Margins moved from 54.5% to
+ * 49.0% to 54.7% in the market most affected and were flat in the other six;
+ * idle years were unchanged or worse.
+ *
+ * The threshold is not the binding constraint. `lift` caps the points a year
+ * can buy — sixteen of brand, nine of performance — so once a slice is past
+ * the threshold, cheapening it buys nothing: the slice was already saturated.
+ * `OPT_TRACE=1` shows the real shape, a £5,874 slice moving the objective by
+ * +888 while `CASH_WEIGHT` charges 470 for the cash, in every market at every
+ * potency.
+ *
+ * What would change it is raising the *caps*, which is a decision about how
+ * much a single year may change a company rather than about what a point
+ * costs.
  */
 export const atScale = (amount: number, scale = 1): number =>
   amount * Math.max(0.001, scale);
