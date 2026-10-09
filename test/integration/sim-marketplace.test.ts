@@ -11,7 +11,7 @@ import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simulationListings, simulationPurchases, simSeasons, companies, projects, contentReports } from "@shared/schema";
+import { simulationListings, simulationPurchases, simSeasons, simVentures, companies, projects, contentReports } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { walletOf } from "../../server/wallet";
 import { releaseDueEarnings } from "../../server/simulation-market-compliance";
@@ -477,6 +477,258 @@ describe("getting back to what you bought", () => {
     const { started } = await soldAndStarted(app, 0);
     const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, started.body.seasonId));
     expect(season.botFill, "one person who pressed play is owed a game, not a lobby").toBe(true);
+  });
+});
+
+describe("what a stranger with the link can see", () => {
+  /*
+   * The page at `/try/:id` renders before there is an account, so its read has
+   * to answer to a client with no session at all — not an agent that happens
+   * to be signed out, a bare request. If this needs a cookie then the link
+   * asks for the signup before it says what it is offering, which is the
+   * friction the whole flow exists to remove.
+   */
+  async function published(app: any) {
+    const { agent, id } = await signUp(app, "Author");
+    await acceptTerms(agent);
+    const made = await draft(agent, id);
+    const listingId = made.body.listing.id as string;
+    await agent.post(`/api/sim-market/listings/${listingId}/publish`).send({
+      title: "Veterinary scheduling",
+      summary: "Two incumbents hold most of it and the way in is narrow.",
+      pricing: "free",
+    });
+    return { listingId, agent, authorId: id };
+  }
+
+  it("reads the listing with no session", async () => {
+    const app = await getTestApp();
+    const { listingId } = await published(app);
+
+    /* `request(app)` rather than an agent: no cookie jar, nothing to send. */
+    const seen = await request(app).get(`/api/sim-market/listings/${listingId}/preview`);
+    expect(seen.status, `a stranger gets ${seen.status}: ${JSON.stringify(seen.body).slice(0, 160)}`).toBe(200);
+    expect(seen.body.listing.title).toBe("Veterinary scheduling");
+    expect(seen.body.listing.totalYears).toBeGreaterThan(0);
+  });
+
+  it("still never hands over the market itself", async () => {
+    /*
+     * The market is the product. Being public must not make it cheaper to
+     * steal.
+     *
+     * Asserted on the shape rather than by searching the JSON for words. The
+     * first version grepped for "incumbents" and failed on the listing's own
+     * description — `writeListingCopy` writes "Share held by incumbents: 65%"
+     * into prose a buyer is meant to read. A substring cannot tell a leak from
+     * a sentence about one.
+     */
+    const app = await getTestApp();
+    const { listingId } = await published(app);
+    const seen = await request(app).get(`/api/sim-market/listings/${listingId}/preview`);
+    expect(seen.status).toBe(200);
+    expect(seen.body.listing.customMarket, "the market itself came back").toBeUndefined();
+    expect(seen.body.listing.segments).toBeUndefined();
+    expect(seen.body.listing.incumbents).toBeUndefined();
+    expect(seen.body.listing.nicheId).toBeUndefined();
+    /* Nor anywhere else in the envelope: only the listing and the two known keys. */
+    expect(Object.keys(seen.body).sort()).toEqual(["isAuthor", "listing", "youOwn"]);
+  });
+
+  it("shows a stranger nothing of a draft, including its author", async () => {
+    const app = await getTestApp();
+    const { agent, authorId } = await published(app);
+    const second = await draft(agent, authorId);
+
+    const seen = await request(app).get(`/api/sim-market/listings/${second.body.listing.id}/preview`);
+    expect(seen.status, "an unpublished draft is readable by anybody with the id").toBe(404);
+  });
+
+  it("tells them nothing about anybody's purchases", async () => {
+    const app = await getTestApp();
+    const { listingId } = await published(app);
+    const seen = await request(app).get(`/api/sim-market/listings/${listingId}/preview`);
+    expect(seen.body.youOwn).toEqual({ seats: 0, purchases: 0, seasons: [] });
+    expect(seen.body.isAuthor).toBe(false);
+  });
+
+  it("refuses to start one without an account", async () => {
+    /* Reading is public; playing is not — a season belongs to somebody. */
+    const app = await getTestApp();
+    const { listingId } = await published(app);
+    const tried = await request(app).post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+describe("one tap into a playable year", () => {
+  /*
+   * The experience this is for: a link sent to one person who is thinking
+   * about starting a business. No waiting room, no seat to claim, no company
+   * to name, no colleagues. They open it and they are in year one.
+   */
+  async function listed(app: any, pricing: "free" | "perSeat" = "free") {
+    const { agent, id } = await signUp(app, "Sender");
+    await acceptTerms(agent);
+    const made = await draft(agent, id);
+    const listingId = made.body.listing.id as string;
+    const published = await agent.post(`/api/sim-market/listings/${listingId}/publish`).send({
+      title: "Veterinary scheduling",
+      summary: "Two incumbents hold most of it and the way in is narrow.",
+      pricing,
+      ...(pricing === "perSeat" ? { seatPriceCents: 300 } : {}),
+    });
+    expect(published.status, JSON.stringify(published.body).slice(0, 200)).toBe(200);
+    return { authorAgent: agent, listingId };
+  }
+
+  it("seats them and starts the year in one call", async () => {
+    const app = await getTestApp();
+    const { listingId } = await listed(app);
+    const { agent: guest } = await signUp(app, "Guest");
+
+    const tried = await guest.post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status, JSON.stringify(tried.body).slice(0, 300)).toBe(201);
+    expect(tried.body.ventureId, "nowhere to send them").toBeTruthy();
+    expect(tried.body.deskPath).toBe(`/simulation/${tried.body.ventureId}`);
+    expect(tried.body.running, "they would land on a waiting screen").toBe(true);
+  });
+
+  it("lands on a desk that is actually playable, not a lobby", async () => {
+    /*
+     * The whole claim. A desk that answers 409 "this season isn't running" is
+     * the waiting screen with extra steps.
+     */
+    const app = await getTestApp();
+    const { listingId } = await listed(app);
+    const { agent: guest } = await signUp(app, "Guest2");
+    const tried = await guest.post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status).toBe(201);
+
+    const desk = await guest.get(`/api/sim/ventures/${tried.body.ventureId}/desk`);
+    expect(desk.status, JSON.stringify(desk.body).slice(0, 200)).toBe(200);
+    expect(desk.body.phase, "still in a lobby").toBe("running");
+    expect(desk.body.yourRole, "no desk to decide at").toBeTruthy();
+    expect(desk.body.year).toBe(1);
+  });
+
+  it("gives them a market with rivals in it", async () => {
+    /* A season with one company in it teaches the wrong lesson about every decision. */
+    const app = await getTestApp();
+    const { listingId } = await listed(app);
+    const { agent: guest } = await signUp(app, "Guest3");
+    const tried = await guest.post(`/api/sim-market/listings/${listingId}/try`).send({});
+
+    const rooms = await db.select().from(simVentures).where(eq(simVentures.seasonId, tried.body.seasonId));
+    expect(rooms.length, "nobody to compete with").toBeGreaterThan(1);
+  });
+
+  it("is a table of one, so nothing waits for anybody", async () => {
+    const app = await getTestApp();
+    const { listingId } = await listed(app);
+    const { agent: guest } = await signUp(app, "Guest4");
+    const tried = await guest.post(`/api/sim-market/listings/${listingId}/try`).send({});
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, tried.body.seasonId));
+    expect(season.seatCount).toBe(1);
+    /* No empty chairs, so nothing for Nova to fill in front of them. */
+    expect(season.botFill).toBe(false);
+  });
+
+  it("records the start, so they can get back to it", async () => {
+    const app = await getTestApp();
+    const { listingId } = await listed(app);
+    const { agent: guest } = await signUp(app, "Guest5");
+    const tried = await guest.post(`/api/sim-market/listings/${listingId}/try`).send({});
+
+    const mine = await guest.get("/api/sim-market/me");
+    expect(mine.body.totals.running, "a season nobody can find again").toBe(1);
+  });
+
+  it("takes nothing for a free listing, and a seat for a paid one", async () => {
+    const app = await getTestApp();
+    const { listingId } = await listed(app, "perSeat");
+    const { agent: buyer } = await signUp(app, "Payer");
+    await buyer.post("/api/dev/credit-wallet").send({ amountCents: 5000 });
+    const bought = await buyer.post(`/api/sim-market/listings/${listingId}/buy`).send({ seats: 2 });
+
+    const tried = await buyer.post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status, JSON.stringify(tried.body).slice(0, 200)).toBe(201);
+    expect(tried.body.seatSpent).toBe(true);
+    const [row] = await db.select().from(simulationPurchases).where(eq(simulationPurchases.id, bought.body.purchase.id));
+    expect(row.seatsLeft).toBe(1);
+  });
+
+  it("refuses a paid listing to somebody holding no seats, and starts nothing", async () => {
+    const app = await getTestApp();
+    const { listingId } = await listed(app, "perSeat");
+    const { agent: stranger } = await signUp(app, "Stranger");
+
+    const tried = await stranger.post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status).toBe(402);
+    const mine = await stranger.get("/api/sim-market/me");
+    expect(mine.body.totals.running).toBe(0);
+  });
+
+  it("lets the author try their own without owning a seat", async () => {
+    const app = await getTestApp();
+    const { authorAgent, listingId } = await listed(app, "perSeat");
+    const tried = await authorAgent.post(`/api/sim-market/listings/${listingId}/try`).send({});
+    expect(tried.status, JSON.stringify(tried.body).slice(0, 200)).toBe(201);
+    expect(tried.body.seatSpent).toBe(false);
+  });
+});
+
+describe("the join link a purchase hands back", () => {
+  /*
+   * The end of the line for everything else in this file. A sale that cannot
+   * be played is not a sale, and the whole flow — buy, spend a seat, start a
+   * season, get a link — ends at a page reached by that link.
+   */
+  it("opens, rather than telling the buyer their link isn't valid", async () => {
+    const app = await getTestApp();
+    const { agent: authorAgent, id: authorId } = await signUp(app, "Writer");
+    await acceptTerms(authorAgent);
+    const made = await draft(authorAgent, authorId);
+    const listingId = made.body.listing.id as string;
+    await authorAgent.post(`/api/sim-market/listings/${listingId}/publish`).send({
+      title: "Veterinary scheduling",
+      summary: "Two incumbents hold most of it and the way in is narrow.",
+      pricing: "free",
+    });
+
+    const { agent: buyer } = await signUp(app, "Buyer");
+    await buyer.post(`/api/sim-market/listings/${listingId}/buy`).send({ seats: 1 });
+    const started = await buyer.post(`/api/sim-market/listings/${listingId}/play`).send({});
+    expect(started.status, JSON.stringify(started.body).slice(0, 300)).toBe(201);
+    expect(started.body.inviteCode).toBeTruthy();
+
+    /* Exactly what the page behind `joinUrl` asks the server. */
+    const page = await buyer.get(`/api/sim/join-code/${started.body.inviteCode}`);
+    expect(page.status, `the link the buyer was given answers ${page.status}: ${JSON.stringify(page.body).slice(0, 200)}`).toBe(200);
+    expect(page.body.seasonId).toBe(started.body.seasonId);
+  });
+
+  it("lets the buyer actually take a seat with it", async () => {
+    const app = await getTestApp();
+    const { agent: authorAgent, id: authorId } = await signUp(app, "Writer2");
+    await acceptTerms(authorAgent);
+    const made = await draft(authorAgent, authorId);
+    const listingId = made.body.listing.id as string;
+    await authorAgent.post(`/api/sim-market/listings/${listingId}/publish`).send({
+      title: "Veterinary scheduling",
+      summary: "Two incumbents hold most of it and the way in is narrow.",
+      pricing: "free",
+    });
+
+    const { agent: buyer } = await signUp(app, "Buyer2");
+    await buyer.post(`/api/sim-market/listings/${listingId}/buy`).send({ seats: 1 });
+    const started = await buyer.post(`/api/sim-market/listings/${listingId}/play`).send({});
+    expect(started.status).toBe(201);
+
+    const joined = await buyer.post("/api/sim/join-code").send({ code: started.body.inviteCode });
+    expect(joined.status, `joining answered ${joined.status}: ${JSON.stringify(joined.body).slice(0, 200)}`).toBeLessThan(300);
+    expect(joined.body.ventureId, "no table to sit at").toBeTruthy();
   });
 });
 

@@ -43,6 +43,7 @@ import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
 import SimulationMarketplacePage from "@/pages/simulation-marketplace";
 import SimulationListingPage from "@/pages/simulation-listing";
+import TrySimulationPage from "@/pages/try-simulation";
 import SimulationPublishPage from "@/pages/simulation-publish";
 import SimulationStandingsPage from "@/pages/simulation-standings";
 import SimulationOffersPage from "@/pages/simulation-offers";
@@ -129,7 +130,7 @@ function Router() {
    * pointless. Checked before both the auth gate and the onboarding redirect
    * so neither can swallow it.
    */
-  const isPublicRoute = /^\/(a|invite)\/[^/]+$/.test(window.location.pathname);
+  const isPublicRoute = /^\/(a|invite|s)\/[^/]+$/.test(window.location.pathname);
   if (isPublicRoute) {
     return (
       <Switch>
@@ -137,6 +138,14 @@ function Router() {
         <Route path="/a/:id" component={PublicArtifactPage} />
         {/* An invite link: who's inviting you to what, signed in or not. */}
         <Route path="/invite/:token" component={InviteAcceptPage} />
+        {/*
+          * A simulation somebody was sent. Here rather than only in the
+          * signed-out switch because the recipient may well already have an
+          * account — a link forwarded to a colleague is the ordinary case —
+          * and the one thing that must not happen is the auth gate or the
+          * onboarding banner swallowing a link somebody was sent.
+          */}
+        <Route path="/s/:token" component={TrySimulationPage} />
       </Switch>
     );
   }
@@ -167,6 +176,14 @@ function Router() {
           */}
         <Route path="/privacy" component={PrivacyPolicy} />
         <Route path="/terms" component={TermsOfService} />
+        {/*
+          * A simulation somebody was sent. Signed out on purpose, and the only
+          * reason this page exists: the recipient is being asked to try a
+          * market, not to join a product, and a link that bounces a stranger
+          * to the marketing page has failed before they read a word of it. The
+          * page signs them up inline and starts year one in the same press.
+          */}
+        <Route path="/try/:id" component={TrySimulationPage} />
         {/* Somebody looking for a job is not a customer and has no account. */}
         <Route path="/careers" component={Careers} />
         {/* Named by /.well-known/security.txt, so it must answer for a stranger. */}
@@ -354,6 +371,8 @@ function Router() {
             {/* `/new` before `/:id`, or wouter matches "new" as a listing id. */}
             <Route path="/simulations/market/new" component={SimulationPublishPage} />
             <Route path="/simulations/market/:id" component={SimulationListingPage} />
+            {/* The same sent link, for somebody who is already signed in. */}
+            <Route path="/try/:id" component={TrySimulationPage} />
             {/*
                 Three addresses that are easy to mix up:
                   /sprints              the "Simulations" hub (sidebar), with what you have running
