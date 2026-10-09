@@ -19,9 +19,9 @@
  */
 import type { Express } from "express";
 import crypto from "crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "./db";
-import { companies, companyMembers, projects, simSeasons } from "@shared/schema";
+import { companies, companyMembers, projectMembers, projects, simSeasons } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { requireCredits, modelFor } from "./entitlements";
@@ -40,6 +40,34 @@ import { marketNameOf } from "./simulation-scope";
 import { TRAINING_YEARS_MIN, joinPathFor, newSeasonCode, seatKindFor, seatsHeld, SEAT_COLUMN, SEAT_PRICE_CENTS } from "./company-season-routes";
 import { CADENCES, DEFAULT_YEARS, PERIOD_NAME, type Cadence } from "@shared/simulation/cadence";
 import { pathStatus } from "./phase-trees";
+import { takeSeatInSeason, advanceVenture } from "./simulation-routes";
+import { startSeason } from "./simulation-tick";
+
+/**
+ * Whether this project is one person, whatever its flag says.
+ *
+ * `soloMode` is a choice made at creation — "this is a solo build, no
+ * collaborators" — and most one-person projects never made it. Reading only
+ * the flag gave every one of them a five-chair table with Nova's fill turned
+ * off (those chairs are kept for named people on their way), so a founder on
+ * their own built a market, took their seat, and waited in an empty room for
+ * colleagues who did not exist. Nobody else on the project and nobody else in
+ * its company is a founder on their own, and gets the founder's season —
+ * unless they have bought a second seat at this kind of table, which is
+ * somebody saying a colleague is coming.
+ */
+async function isSoloProject(project: { id: string; ownerId: string; soloMode: boolean | null }, cadence: Cadence): Promise<boolean> {
+  if (project.soloMode) return true;
+  const [others] = await db.select({ id: projectMembers.userId }).from(projectMembers)
+    .where(and(eq(projectMembers.projectId, project.id), ne(projectMembers.userId, project.ownerId))).limit(1);
+  if (others) return false;
+  const [colleague] = await db.select({ id: companyMembers.userId }).from(companyMembers)
+    .innerJoin(companies, eq(companies.id, companyMembers.companyId))
+    .where(and(eq(companies.projectId, project.id), ne(companyMembers.userId, project.ownerId))).limit(1);
+  if (colleague) return false;
+  const [company] = await db.select().from(companies).where(eq(companies.projectId, project.id)).limit(1);
+  return !company || (seatsHeld(company)[seatKindFor("nova", cadence)] ?? 0) <= 1;
+}
 
 /** A slug that says nothing about how many companies share a name. */
 const slugify = (name: string) =>
@@ -295,6 +323,7 @@ export function registerProjectSimulationRoutes(app: Express): void {
        */
       if (!fellBack && !replayed) await storage.deductCredits(req.user.id, CREDIT_COSTS.simulationBuild);
 
+      const solo = await isSoloProject(project, cadence);
       const now = new Date();
       const made = await db.transaction(async (tx) => {
         // The project's company, or a new one standing in for it.
@@ -374,7 +403,7 @@ export function registerProjectSimulationRoutes(app: Express): void {
            * somebody a minute before they arrive is how a team of four turns
            * up to find three of them already being played.
            */
-          seatCount: project.soloMode ? 1 : LOBBY_SIZE,
+          seatCount: solo ? 1 : LOBBY_SIZE,
           botFill: false,
           /*
            * Competent teammates, not filler.
@@ -399,6 +428,27 @@ export function registerProjectSimulationRoutes(app: Express): void {
         }).returning();
         return { company, season };
       });
+
+      /*
+       * A founder on their own is started, not shown a lobby.
+       *
+       * Their chair, the room resolved — nothing to claim, nothing to name —
+       * and year one begun, here rather than on the minute job, the same way
+       * `/api/sim-market/listings/:id/try` does it. The response carries the
+       * desk to go to. Best-effort: the season exists either way, and the tick
+       * job starts any solo season it finds, so a hiccup here costs a minute
+       * rather than the season.
+       */
+      let ventureId: string | null = null;
+      if (solo) {
+        try {
+          ventureId = await db.transaction((tx) => takeSeatInSeason(tx, made.season.id, req.user.id, 1));
+          await advanceVenture(ventureId);
+          await startSeason(made.season.id);
+        } catch (err) {
+          console.error(`[project-sim] starting solo season ${made.season.id} failed:`, err);
+        }
+      }
 
       /*
        * What they are walking into, worked out from the world that was just
@@ -451,7 +501,10 @@ export function registerProjectSimulationRoutes(app: Express): void {
          * begin — the seats fill themselves, and the panel says so rather
          * than leaving somebody waiting for a table that is never coming.
          */
-        solo: !!project.soloMode,
+        solo,
+        /** Set for a solo season, which is already running: where their desk is. */
+        ventureId,
+        deskPath: ventureId ? `/simulation/${ventureId}` : null,
         /** Said plainly, because a market that is not theirs should not pretend to be. */
         fellBack,
       });

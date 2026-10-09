@@ -104,6 +104,15 @@ export default function SimulationPage() {
    * same room — the server is careful about that — but nobody would think to,
    * because the screen had already told them they were nowhere.
    */
+  /*
+   * `?pick=1` is "show me the markets", from a button that says "Join another
+   * market". Without it the effect below reopens your latest room, so the
+   * button took you back to the market you were trying to leave.
+   */
+  const [picking] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("pick") === "1"; } catch { return false; }
+  });
+
   const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string; seasonStatus?: string }[] }>({
     queryKey: ["/api/sim/ventures"],
     /*
@@ -125,7 +134,7 @@ export default function SimulationPage() {
   const left = useRef(new Set<string>());
 
   useEffect(() => {
-    if (ventureId || !mine?.ventures?.length) return;
+    if (picking || ventureId || !mine?.ventures?.length) return;
     /*
      * The most recent room still being played, and not one walked out of.
      * The server orders them.
@@ -142,7 +151,7 @@ export default function SimulationPage() {
       && v.seasonStatus !== "finished" && v.seasonStatus !== "abandoned"
       && !left.current.has(v.id));
     if (open) setVentureId(open.id);
-  }, [mine, ventureId]);
+  }, [mine, ventureId, picking]);
 
   const leave = () => {
     if (ventureId) left.current.add(ventureId);

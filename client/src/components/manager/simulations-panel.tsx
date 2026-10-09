@@ -203,7 +203,7 @@ function MarketSeason({ projectId }: { projectId: string }) {
                   </span>
                 </span>
                 {sn.ventureId
-                  ? <Link href={`/sim/${sn.ventureId}`}>
+                  ? <Link href={`/simulation/${sn.ventureId}`}>
                       <Button size="sm" data-testid={`button-open-${sn.id}`}>Open the desk <ArrowRight className="h-4 w-4 ml-1" /></Button>
                     </Link>
                   : sn.joinUrl
@@ -264,6 +264,8 @@ interface BuiltMarket {
   currency: string;
   /** Whether the other four seats are Nova's or need four more people. */
   solo: boolean;
+  /** A solo season is started as it is built; this is the desk it is running on. */
+  deskPath?: string | null;
   fellBack: boolean;
 }
 
@@ -334,13 +336,17 @@ function SeasonBuilt({ built, onDismiss }: { built: BuiltMarket; onDismiss: () =
             somebody else to the table is {businessMoney(built.seatPriceCents / 100, built.currency)} a seat, once, and
             the seat stays with the company for every season after it.
             {built.solo
-              ? " You take a seat and Nova plays the other four, reading this market — so you can begin on your own."
-              : " Five of you take the seats of one company; any seat nobody takes, Nova plays."}
+              ? " It's just you, so you hold every desk and year one has already begun."
+              : " Five of you take the seats of one company. Send the others the join link from the season."}
           </div>
 
           <div className="flex flex-wrap gap-2 pt-1">
-            <Button size="sm" onClick={() => navigate(`/companies/${built.companyId}?tab=training`)} data-testid="button-open-season">
-              Open the season <ArrowRight className="h-4 w-4 ml-1" />
+            <Button
+              size="sm"
+              onClick={() => navigate(built.deskPath ?? `/companies/${built.companyId}?tab=training`)}
+              data-testid="button-open-season"
+            >
+              {built.deskPath ? "Open your desk" : "Open the season"} <ArrowRight className="h-4 w-4 ml-1" />
             </Button>
             <Button size="sm" variant="outline" onClick={onDismiss} data-testid="button-built-done">Not now</Button>
           </div>
@@ -430,7 +436,7 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
         <ul className="text-sm text-muted-foreground max-w-2xl space-y-1">
           <li>· Four real competitors, laid out with the share each holds and what is left for you.</li>
           <li>· Sized to a business at your stage, so the opening move is one you could actually make.</li>
-          <li>· The seats you don't take are played by Nova, reading your market — so you can start alone.</li>
+          <li>· On your own, you hold every desk and start straight away — no waiting room.</li>
         </ul>
         {replayable.length > 0 && (
           /*

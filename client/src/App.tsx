@@ -354,6 +354,13 @@ function Router() {
             {/* `/new` before `/:id`, or wouter matches "new" as a listing id. */}
             <Route path="/simulations/market/new" component={SimulationPublishPage} />
             <Route path="/simulations/market/:id" component={SimulationListingPage} />
+            {/*
+                Three addresses that are easy to mix up:
+                  /sprints              the "Simulations" hub (sidebar), with what you have running
+                  /simulation           the market picker and the lobby (?pick=1 forces the picker)
+                  /simulations/market   the marketplace of simulations other people wrote
+                The bare plural is the hub, so typing it does not 404. */}
+            <Route path="/simulations"><Redirect to="/sprints" replace /></Route>
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />

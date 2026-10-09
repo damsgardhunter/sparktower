@@ -17,9 +17,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companies, companyMembers, projects, simSeasons, simVentures, users } from "@shared/schema";
-import { startReadySeasons } from "../../server/simulation-tick";
-import { advanceVenture } from "../../server/simulation-routes";
+import { companies, companyMembers, projectMembers, projects, simSeasons, simVentures, users } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -276,6 +274,8 @@ describe("playing a market again, and filling the table", () => {
     const owner = await person(app, "Owner");
     const colleague = await person(app, "Colleague");
     const project = await aProject(owner.id);
+    // A project with a team, so the build makes a table rather than starting a founder alone.
+    await db.insert(projectMembers).values({ projectId: project.id, userId: colleague.id, role: "member" });
     const { season, company } = await seasonWithMarket(owner.id, project.id);
 
     // The build's grant: one seat, for the person who built it.
@@ -329,6 +329,8 @@ describe("playing a market again, and filling the table", () => {
     const owner = await person(app, "Owner");
     const colleague = await person(app, "Colleague");
     const project = await aProject(owner.id);
+    // A project with a team, so the build makes a table rather than starting a founder alone.
+    await db.insert(projectMembers).values({ projectId: project.id, userId: colleague.id, role: "member" });
     const { season, company } = await seasonWithMarket(owner.id, project.id);
 
     const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id, cadence: "quarterly" });
@@ -371,6 +373,11 @@ describe("playing a market again, and filling the table", () => {
 
     const team = await person(app, "Team");
     const shared = await aProject(team.id);
+    const partner = await person(app, "Partner");
+    await db.insert(projectMembers).values([
+      { projectId: shared.id, userId: team.id, role: "owner" },
+      { projectId: shared.id, userId: partner.id, role: "member" },
+    ]);
     const pair = await seasonWithMarket(team.id, shared.id);
     const five = await team.agent.post(`/api/projects/${shared.id}/simulation`).send({ fromSeasonId: pair.season.id });
     expect(five.status, JSON.stringify(five.body)).toBe(201);
@@ -379,39 +386,39 @@ describe("playing a market again, and filling the table", () => {
   }, 60_000);
 
   /*
-   * A solo season starts itself.
+   * A founder on their own is started, not shown a lobby.
    *
-   * `startReadySeasons` only ever looked at seasons with no company, because
-   * a company's season is started by its organiser — who knows when the room
-   * is full, which the clock does not. Every project season has a company, so
-   * nothing in the product would start one: the founder took their chair,
-   * watched the lobby say it was ready, opened the desk and sat on "Waiting
-   * for year one" indefinitely. There is nobody for a table of one to wait
-   * for, which is the whole of why it is safe to start it.
+   * Two ways this left somebody waiting for ever. A solo season used to sit
+   * on "Waiting for year one" because nothing started a company's season;
+   * and a one-person project without the `soloMode` flag — most of them —
+   * was given five chairs with Nova's fill switched off, so its founder sat
+   * in an empty room for colleagues who did not exist. Built now means
+   * seated, running, and handed the desk.
    */
-  it("starts a solo season by itself, with the founder's own company name", async () => {
+  it("starts a one-person project's season on the spot, flag or no flag", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Owner");
-    const solo = await aProject(owner.id, { soloMode: true });
-    const { season, company } = await seasonWithMarket(owner.id, solo.id);
+    const project = await aProject(owner.id);
+    await db.insert(projectMembers).values({ projectId: project.id, userId: owner.id, role: "owner" });
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
 
-    const made = await owner.agent.post(`/api/projects/${solo.id}/simulation`).send({ fromSeasonId: season.id });
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id });
     expect(made.status, JSON.stringify(made.body)).toBe(201);
-    const seasonId = made.body.seasonId as string;
+    expect(made.body.solo, "nobody else on the project").toBe(true);
+    expect(made.body.deskPath).toBe(`/simulation/${made.body.ventureId}`);
 
-    // The founder takes their chair. One chair is the whole table, so the
-    // room needs nothing else to be ready.
-    const joined = await owner.agent.post("/api/sim/join-code").send({ code: made.body.inviteCode });
-    expect(joined.status, JSON.stringify(joined.body)).toBe(200);
-    await advanceVenture(joined.body.ventureId);
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.seatCount, "one founder, one chair").toBe(1);
+    expect(built.status, "nobody is coming, so nothing is waited for").toBe("running");
 
-    const [room] = await db.select().from(simVentures).where(eq(simVentures.id, joined.body.ventureId));
+    const [room] = await db.select().from(simVentures).where(eq(simVentures.id, made.body.ventureId));
     expect(room.phase, "one chair, nothing to claim and nothing to name").toBe("running");
     expect(room.name, "their own company, not an invented one").toBe(company.name);
 
-    expect(await startReadySeasons(), "nobody is coming, so nothing is waited for").toContain(seasonId);
-    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
-    expect(started.status).toBe("running");
+    // Following the join link afterwards returns them to the same desk, not a second room.
+    const again = await owner.agent.post("/api/sim/join-code").send({ code: made.body.inviteCode });
+    expect([200, 409]).toContain(again.status);
+    if (again.status === 200) expect(again.body.ventureId).toBe(made.body.ventureId);
   }, 60_000);
 
   /*

@@ -80,7 +80,13 @@ function SimulationEntry() {
           </p>
         </div>
 
-        <Button className="w-full sm:w-auto" onClick={() => navigate("/simulation")} data-testid="button-open-simulation">
+        {/*
+          * Straight to the list of markets. Plain `/simulation` reopens the
+          * room you were last in, so "Join another market" landed on the old
+          * market's lobby — and the rooms you are already in are listed right
+          * below this button anyway.
+          */}
+        <Button className="w-full sm:w-auto" onClick={() => navigate("/simulation?pick=1")} data-testid="button-open-simulation">
           {running.length ? "Join another market" : "Join a market"}
         </Button>
 
