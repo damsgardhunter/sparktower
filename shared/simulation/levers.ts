@@ -28,6 +28,7 @@ import type { Company, Niche, NicheVoice, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { interlock, fixedCosts, sanitiseDecisions } from "./decisions";
 import { reachOf } from "./market";
+import { actionsForPeriods, foundersActions } from "./actions";
 import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked, soloUnlocked } from "./responsibilities";
 import { SEVERANCE, payEffect } from "./people";
 import { featureCost } from "./product";
@@ -41,7 +42,7 @@ export interface LeverField {
   label: string;
   /** One line on what moving it actually does. */
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "actions";
   min?: number;
   max?: number;
   step?: number;
@@ -50,6 +51,8 @@ export interface LeverField {
   choices?: { value: string; label: string; help: string }[];
   /** For "levels": the answer an option carries when nobody has chosen one. */
   defaultChoice?: string;
+  /** For "actions": how many of `options` may be chosen at once. */
+  pick?: number;
   /**
    * The season year this lever first appears in, when it is not year one.
    * Set by the desk from `UNLOCKS`, so a screen can mark what is new.
@@ -239,6 +242,16 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "quality", label: "Quality", help: "Build something worth switching to, and wait for it." },
       { value: "survival", label: "Survival", help: "Stop the bleeding. Everything else can wait for next year." },
     ], help: "What the company is for this year. It does not override anyone — it is what you have told them all to weigh." },
+    /*
+     * What the founders do themselves, with the period rather than with money.
+     *
+     * A `cities`-shaped lever — a list of ids, cleaned against what exists —
+     * because the choice is "which of these, up to the allowance", and the
+     * allowance is a rule of the game rather than a thing to be typed. See
+     * `actions.ts`: one a month, two a quarter, three a year.
+     */
+    { id: "founderActions", label: "What you'll do yourself", kind: "actions",
+      help: "Your own time instead of your own money. Each one improves something — the product, the service, how well you are known — by a few points, free, and takes up part of the period. Worth most when there is nothing in the bank and almost nothing once there is." },
     { id: "positioning", label: "Who the company is for", kind: "segment",
       help: "Declaring a segment makes you meaningfully more appealing to those people and slightly less to everyone else. It is the decision the other four then have to live inside." },
     { id: "rehire", label: "Bring a seat back", kind: "choice", options: [], 
@@ -361,6 +374,13 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
     if (role === "cfo") carried.costReview = 0;
     // A feature bet is placed once; next year has its own menu.
     if (role === "cto") { carried.featureBet = ""; carried.featureMode = "build"; }
+    /*
+     * The founders' own work is spent when it is done, so the next period
+     * starts empty. Carried, it would quietly re-do last month's fortnight
+     * every month for nothing and make the one lever that costs time the one
+     * lever nobody has to choose.
+     */
+    if (role === "ceo") carried.founderActions = [];
     // Rented room goes back at the end of the year; renting it again is a new decision.
     if (role === "coo") { carried.leaseCapacity = 0; carried.shiftCapacity = 0; }
     // A factoring run, a refinancing and a buyback are each this year's call.
@@ -373,7 +393,7 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
     case "cto": return standing(role, company, { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 });
     case "coo": return standing(role, company, { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 });
     case "cfo": return standing(role, company, { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 });
-    case "ceo": return standing(role, company, { focus: "growth", positioning: company.positioning ?? "", rehire: "" });
+    case "ceo": return standing(role, company, { focus: "growth", positioning: company.positioning ?? "", rehire: "", founderActions: [] });
   }
 }
 
@@ -436,6 +456,17 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
 
     if (field.kind === "cities") {
       if (value !== undefined && !Array.isArray(value)) errors[field.id] = "Pick the places you sell.";
+      continue;
+    }
+
+    /*
+     * A list of action ids. Which ids and how many are `cleanDecision`'s job
+     * (it knows the market's list and the allowance); here it only has to be
+     * a list. Without this branch it fell through to the number check below,
+     * and every filing that chose an action was refused with "Needs a number".
+     */
+    if (field.kind === "actions") {
+      if (value !== undefined && value !== null && !Array.isArray(value)) errors[field.id] = "Pick from the list.";
       continue;
     }
 
@@ -541,6 +572,11 @@ export function cleanDecision(
     /** The market's segments: price tiers can only be set for ones that exist. */
     segmentIds?: readonly string[];
     /**
+     * What the founders may choose to do themselves, by id — see `actions.ts`.
+     * Absent means nothing is on offer, so nothing can be chosen.
+     */
+    actionIds?: readonly string[];
+    /**
      * How many decisions the whole season has, when one person is playing it
      * alone. Present means solo, and solo reads a different schedule
      * (`soloSchedule`) — so a filing cannot carry a lever the founder's own
@@ -564,6 +600,28 @@ export function cleanDecision(
         // A segment, or nobody. An unset choice is a real answer here.
         clean[field.id] = raw === undefined || raw === null ? "" : String(raw);
         break;
+      case "actions": {
+        /*
+         * The founders' own work, which is a list of ids like a city list and
+         * is bounded by the period rather than by what exists.
+         *
+         * Cleaned here because the allowance is a rule of the game: a filing
+         * that names five things to do in a month takes the first one. Checked
+         * against `context.actionIds` so an id nobody offered cannot buy three
+         * points of quality for nothing.
+         */
+        const offered = context.actionIds ?? [];
+        const allowed = actionsForPeriods(context.periods ?? 1);
+        const seen = new Set<string>();
+        clean[field.id] = Array.isArray(raw)
+          ? raw.map(String).filter((id) => {
+            if (seen.has(id) || !offered.includes(id)) return false;
+            seen.add(id);
+            return true;
+          }).slice(0, allowed)
+          : [];
+        break;
+      }
       case "cities":
         /*
          * A list of ids, filtered to places that exist.
@@ -1021,6 +1079,33 @@ function inPeriods(text: string | undefined, period: { one: string; many: string
     .replace(/\byears\b/g, period.many)
     .replace(/\bYear\b/g, period.one.charAt(0).toUpperCase() + period.one.slice(1))
     .replace(/\byear\b/g, period.one);
+}
+
+/**
+ * What the founders may do themselves, in this market's own words.
+ *
+ * Kept out of `speak` on purpose: every other lever is said with the voice
+ * alone, and this one needs the niche — a market brings its own list of action
+ * items (Nova writes them with the season) and the generic nine are only the
+ * fallback. Applied by the desk, so every surface reads one list.
+ *
+ * The allowance goes into the help as well as into `pick`, because a control
+ * that silently stops accepting the second tick is a bug report.
+ */
+export function offerActions(
+  field: LeverField,
+  niche: Pick<Niche, "id" | "voice" | "actions">,
+  periods: number,
+): LeverField {
+  if (field.kind !== "actions") return field;
+  const pick = actionsForPeriods(periods);
+  const period = periods >= 12 ? "month" : periods >= 4 ? "quarter" : "year";
+  return {
+    ...field,
+    pick,
+    help: `${field.help} ${pick === 1 ? "One" : pick === 2 ? "Two" : "Three"} a ${period}.`,
+    options: foundersActions(niche).map((a) => ({ value: a.id, label: a.name, help: a.blurb })),
+  };
 }
 
 export function speak(

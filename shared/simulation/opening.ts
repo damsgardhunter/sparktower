@@ -63,6 +63,23 @@ export interface OpeningPosition {
   /** Share of the opening capacity already serving somebody. */
   customers: number;
   /**
+   * What the founders draw, against a full executive salary each.
+   *
+   * A funded season pays five market salaries from the first day, which is
+   * right for a company that raised money to hire a team and wrong for the
+   * people this opening is for: nobody starting a business out of their own
+   * savings pays themselves £140,000 before they have a customer. They take
+   * what is left, which early on is nothing.
+   *
+   * It is also what made this opening unplayable. A competent founder on
+   * £60,000 was insolvent by year three in two markets out of three, and the
+   * one that lived turned £60,000 into £14,418 — because the executive bill
+   * arrived every year from the first, against a plant at two per cent of the
+   * funded size and no customers at all. Nothing in the suite noticed, because
+   * all 261 balance guards test the funded opening.
+   */
+  officerPay: number;
+  /**
    * How much of the funded opening plant this company has built.
    *
    * Left at the full opening on purpose, and this is the interesting part.
@@ -114,7 +131,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.15,
     position: {
-      cash: 0, credit: 0.1, creditScore: 20, brand: 0, reputation: 35, customers: 0, capacity: 0.02,
+      cash: 0, credit: 0.1, creditScore: 20, brand: 0, reputation: 35, customers: 0, capacity: 0.02, officerPay: 0,
       label: "An idea, and the work so far",
       note: "No money and no trading history. The first decision is where money comes from, and on a rating this thin it will be expensive.",
     },
@@ -122,7 +139,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.4,
     position: {
-      cash: 0.08, credit: 0.25, creditScore: 32, brand: 2, reputation: 40, customers: 0, capacity: 0.08,
+      cash: 0.08, credit: 0.25, creditScore: 32, brand: 2, reputation: 40, customers: 0, capacity: 0.08, officerPay: 0.2,
       label: "Building it",
       note: "A little put in and nothing coming back yet. Enough to move on one thing, not on three.",
     },
@@ -130,7 +147,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: 0.7,
     position: {
-      cash: 0.2, credit: 0.5, creditScore: 45, brand: 5, reputation: 46, customers: 0.08, capacity: 0.25,
+      cash: 0.2, credit: 0.5, creditScore: 45, brand: 5, reputation: 46, customers: 0.08, capacity: 0.25, officerPay: 0.5,
       label: "Something people use",
       note: "The first customers, and a lender who will now return a call. Still far short of a year's costs.",
     },
@@ -138,7 +155,7 @@ export const OPENING_BANDS: { upTo: number; position: OpeningPosition }[] = [
   {
     upTo: Infinity,
     position: {
-      cash: 0.35, credit: 0.8, creditScore: 55, brand: 9, reputation: 52, customers: 0.2, capacity: 0.5,
+      cash: 0.35, credit: 0.8, creditScore: 55, brand: 9, reputation: 52, customers: 0.2, capacity: 0.5, officerPay: 1,
       label: "Trading",
       note: "Revenue, a record, and a credit line worth having. The question stops being survival and starts being growth.",
     },
@@ -183,6 +200,8 @@ export function atStanding(company: Company, standing: Standing, niche: Niche): 
   return {
     ...company,
     capacity: built,
+    /* Founders take what is left, which at the start is nothing. See `officerPay`. */
+    officerPay: at.officerPay,
     cash: Math.round((company.cash ?? 0) * at.cash),
     creditLimit: Math.round((company.creditLimit ?? 0) * at.credit),
     creditScore: at.creditScore,

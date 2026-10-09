@@ -29,6 +29,7 @@
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
 import type { WorkKind } from "./workforce";
 import { ASSET_SLOTS } from "./assets";
+import { ACTION_SLOTS } from "./actions";
 import { marketScale } from "./world";
 import { officerCost, SALARY } from "./decisions";
 import { TRULY_OPEN_SHARE } from "./incumbents";
@@ -530,6 +531,36 @@ function cleanAssets(raw: unknown): { kind: string; name: string; blurb: string 
 }
 
 /**
+ * The founders' own nine, in this market's words.
+ *
+ * Unlike the asset shelf these are placed **by position**, because each slot
+ * carries its own economics and there is no `kind` on the result to re-key
+ * them by. So the model is asked for `moves` alongside the name — the axis the
+ * action is meant to improve — and an entry is kept only where that agrees
+ * with the slot it landed on. A model that drops one, or puts "answer every
+ * customer yourself" where the cost renegotiation goes, gets the generic line
+ * for that slot rather than three points of quality under a service heading.
+ *
+ * Padded to full length so later entries keep their index: a shorter array
+ * would be read positionally by `foundersActions` and that is fine, but an
+ * array with a hole in the middle must not slide everything after it up one.
+ */
+function cleanActions(raw: unknown): { name: string; blurb?: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: { name: string; blurb?: string }[] = [];
+  let kept = 0;
+  for (let i = 0; i < ACTION_SLOTS.length; i++) {
+    const e = (raw[i] ?? {}) as Record<string, unknown>;
+    const name = str(e.name, 80, "");
+    /* Blank keeps the position and takes the generic line — see the note above. */
+    if (!name || str(e.moves, 20, "") !== ACTION_SLOTS[i].moves) { out.push({ name: "" }); continue; }
+    out.push({ name, blurb: str(e.blurb, 200, "") });
+    kept++;
+  }
+  return kept ? out : undefined;
+}
+
+/**
  * What it costs to serve one customer, capped so somebody can be served.
  *
  * The model is asked for a unit cost and given no relationship to hold it
@@ -772,6 +803,7 @@ export function buildCustomMarket(raw: unknown, fallbackId: string, options: Bui
     voice: cleanVoice(m.voice),
     workforce: staffable(cleanWorkforce(m.workforce), priced),
     assets: cleanAssets(m.assets),
+    actions: cleanActions(m.actions),
   };
 }
 

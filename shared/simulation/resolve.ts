@@ -18,6 +18,7 @@
 import type { Company, Economy, Niche, World } from "./types";
 import { WIND_DOWN_FROM, WIND_DOWN_RATE, WIND_UP_AFTER } from "./season";
 import { inPeriodWords } from "./cadence";
+import { actionsTaken, founderEffects, founderPace, founderShare } from "./actions";
 import { allocate, marketShares, sharesWhereSold } from "./market";
 import { incumbentYear } from "./incumbents";
 import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, officersOf, overheadShare, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
@@ -656,6 +657,35 @@ export function resolveYear(
      */
     const pace = paceOf(d.ceo?.pace);
     const aim = dataEffects(company.data).aim;
+    /*
+     * The founders' own fortnight, instead of somebody else's invoice.
+     *
+     * Not scaled by `per` like the spends above it, and that is the whole
+     * design: the allowance is already a period's worth (one a month, two a
+     * quarter, three a year), so the work is counted once per decision rather
+     * than pro-rated out of a year's budget. And not run through `atScale`
+     * either — two people rewriting the onboarding get the same amount done
+     * whether the market is worth four hundred pounds or four million, which
+     * is what makes this the lever a company with an empty bank can still
+     * pull, and a rounding error to one spending two million on engineers.
+     */
+    /*
+     * Diluted by how much of the company the founders still are — their own
+     * heads against the payroll they have built (see `founderShare`). Taken
+     * from what the plan asks for rather than from what is established,
+     * because a company hiring forty people this period has forty people's
+     * work landing on the product whether or not they are any good yet.
+     */
+    const founders = founderEffects(
+      actionsTaken(d.ceo?.founderActions, niche, periods),
+      /*
+       * Their share of the work, times a period's share of a year's work —
+       * see `founderPace`, which is why a monthly season does not get four
+       * times the founder labour of a yearly one.
+       */
+      founderShare(officersOf(company), Math.max(company.staff ?? 0, d.coo?.headcount ?? 0))
+        * founderPace(periods),
+    );
     const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, atScale(220_000, company.scale) * per, 16 * per) * focus.marketing * eff.cmo * pace.marketing * aim;
     const perfGain = lift(d.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per) * focus.marketing * eff.cmo * pace.marketing * aim;
     // PR is a coin flip; a referral programme only works if the product is worth recommending.
@@ -953,7 +983,12 @@ export function resolveYear(
      * for the room it asks for, this constraint never binds for it. What this
      * would add is teeth for a human player or a bot that under-hires.
      */
-    const capacity = build.now + leased + shift.units + stockHeld;
+    /*
+     * Working the hours is room, not a promise of room: it opens now, like a
+     * second shift and unlike a build, because the founders are the ones
+     * turning up early. Rounded so capacity stays a whole number of units.
+     */
+    const capacity = Math.round((build.now + leased + shift.units + stockHeld) * founders.capacity);
     const price = Math.max(1, d.cmo?.price ?? company.price);
     /*
      * What they were charging before it, kept so the market can tell a rise
@@ -1197,7 +1232,7 @@ export function resolveYear(
       buildFrom: build.buildFrom,
       buildTo: build.buildTo,
       capacity,
-      brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand) * hBrand - decay.brand),
+      brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand + founders.brand) * hBrand - decay.brand),
       /*
        * `sourcing.quality` is a standing condition — outsourcing makes the
        * product a few points worse for as long as it is outsourced — written
@@ -1205,7 +1240,7 @@ export function resolveYear(
        * cost a monthly season 36 points of quality a year, which took a good
        * company from 38 to 5 over four years while it was shipping well.
        */
-      quality: clamp(company.quality + (quality.landed + shippedNow + yielded.quality) * hQuality + sourcing.quality * per - decay.quality),
+      quality: clamp(company.quality + (quality.landed + shippedNow + yielded.quality + founders.quality) * hQuality + sourcing.quality * per - decay.quality),
       reputation: clamp(company.reputation + reputationNow + yielded.reputation),
       security: securityNext(company.security, d.cto?.securitySpend, per, company.scale),
       data: dataNext(company.data, d.cto?.dataSpend, per, company.scale),
@@ -1213,7 +1248,7 @@ export function resolveYear(
       /** This year's PR backfire, if any, for reputation at settlement. Never stored. */
       prReputation: pr.reputation,
       // The review scar and the second shift's toll are both written per year.
-      service: clamp(company.service + (serviceGain + yielded.service) * hService - decay.service - (scar * REVIEW_SERVICE + shift.service) * per),
+      service: clamp(company.service + (serviceGain + yielded.service + founders.service) * hService - decay.service - (scar * REVIEW_SERVICE + shift.service) * per),
       staffQuality,
       automation: automation.now,
       /** Next year's automation, applied once the year is settled, like capacity. */
@@ -1244,7 +1279,7 @@ export function resolveYear(
          * compounded to 2.8x a year in a monthly season, and by year six the
          * company was charging eight times its opening price to stay level.
          */
-        company.unitCost * (1 - costCut) * yielded.unitCost
+        company.unitCost * (1 - costCut) * yielded.unitCost * founders.unitCost
           * Math.pow(auto.unitCost, per) * Math.pow(sourcing.unitCost, per) * Math.pow(focus.cost, per)
           * (nextEconomy.costIndex / (world.economy?.costIndex || 1)),
       ),

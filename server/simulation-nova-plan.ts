@@ -19,6 +19,7 @@ import { enforceRateLimit } from "./moderation";
 import { marketOf } from "./simulation-scope";
 import { ROLES, type Role, type World } from "@shared/simulation/types";
 import { cleanDecision, validateDecision, draftPreview } from "@shared/simulation/levers";
+import { foundersActions } from "@shared/simulation/actions";
 import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { economyFor } from "@shared/simulation/season";
 import { projectYear } from "@shared/simulation/projection";
@@ -133,6 +134,7 @@ export function registerNovaPlanRoutes(app: Express): void {
     const cleanFor = (desk: Role) => cleanDecision(desk, (plan.decisions as any)[desk] ?? {}, cityIds, {
       year, periods,
       segmentIds: niche.segments.map((s) => s.id),
+      actionIds: foundersActions(niche).map((a) => a.id),
       /* Solo reads its own unlock schedule, so no lever arrives before its desk opens. */
       ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
     });

@@ -188,12 +188,37 @@ const SLOTS: AssetTemplate[] = [
     effect: () => ({ brand: 7 }),
     blurb: "A quieter name than a celebrity, and it does not have opinions in public.",
   },
+  /*
+   * A collaboration, which is a different purchase from an ambassador.
+   *
+   * The celebrity slot above hires a face: three years, expensive, and the
+   * company borrows standing it has not earned. A collaboration is a peer —
+   * another channel, another studio, somebody doing the same thing to the same
+   * people — and it works the other way round: cheap, short, and it brings
+   * *their* audience rather than their reputation. One video together, one
+   * co-branded run, one guest season.
+   *
+   * So the effect is reach and a little standing rather than a lot of standing:
+   * `capacity` because their audience arrives whether or not you were ready for
+   * it, which is the trap in it — a collaboration that doubles the people
+   * knocking at a company with no room to serve them buys turned-away
+   * customers and the reputation hit that comes with them.
+   *
+   * Short-lived on purpose. It is the one asset a company with almost no money
+   * can reach, which matters because every other way of growing here needs a
+   * budget first.
+   */
+  {
+    kind: "celebrity", name: "A collaboration", weight: 0.7, life: 2,
+    effect: (n) => ({ brand: 5, capacity: Math.round(marketSize(n) * 0.01) }),
+    blurb: "Somebody else's audience, lent to you for a season. Cheap, quick, and gone again — and they arrive whether or not you have room.",
+  },
 ];
 
 const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 /**
- * The nine slots said in this market's own words, without asking a model.
+ * The slots said in this market's own words, without asking a model.
  *
  * The generic names above are retail's — shelves, carriers, fulfilment lines —
  * and they were shown to every market that had no catalogue entry, which is

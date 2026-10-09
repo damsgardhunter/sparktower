@@ -33,7 +33,8 @@ import { canEnter, continentOf, regionById } from "@shared/simulation/geography"
 import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
+import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, offerActions, speak } from "@shared/simulation/levers";
+import { foundersActions } from "@shared/simulation/actions";
 import { economyFor } from "@shared/simulation/season";
 import { debtDrag, IDLE_RATE, marketPriceOf, officersOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
@@ -450,7 +451,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const unlocksIn = solo
           ? Math.ceil((soloLevers.get(base.id) ?? 1) / periods)
           : unlockYear(desk, base.id);
-        const field = { ...speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        const field = { ...offerActions(speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), niche, periods), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         if (field.id === "tiers") {
           return {
             ...field,
@@ -1070,6 +1071,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const opts = {
           year: season.year, periods: periodsPerYear(season.cadence as Cadence),
           segmentIds: niche.segments.map((s) => s.id),
+          actionIds: foundersActions(niche).map((a) => a.id),
           ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
         };
         const cityIds = niche.cities.map((c) => c.id);
@@ -1178,6 +1180,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), {
       year: season.year, periods: periodsPerYear(season.cadence as Cadence),
       segmentIds: niche.segments.map((s) => s.id),
+      actionIds: foundersActions(niche).map((a) => a.id),
       // Solo reads its own schedule, so a filing cannot carry a lever the desk has not opened.
       ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
     });

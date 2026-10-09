@@ -61,7 +61,15 @@ const rp = (s: string, n: number) => s.padStart(n);
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
 /** What a person actually starts a business with. See the header. */
-const POCKET = Number(process.env.POCKET ?? 60_000);
+/**
+ * `POCKET=engine` opens each company on the figure the engine would give it.
+ *
+ * Which is the honest denominator for a multiple: dividing a launch business's
+ * £766m by a £60,000 pocket gives 12,600x and says more about the pocket than
+ * about the business, in a market whose own opening is £6m.
+ */
+const ENGINE_CASH = process.env.POCKET === "engine";
+const POCKET = ENGINE_CASH ? 0 : Number(process.env.POCKET ?? 60_000);
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const only = args[0]?.toLowerCase();
@@ -101,7 +109,9 @@ for (const { label, note, niche } of markets) {
   const built = buildWorld({ seasonId, niche, teams: [{ id: "us", name: "Us", seats: [...ROLES] }] });
   /* What the engine would have given them, kept for the comparison below. */
   const engineCash = built.companies.find((c) => c.id === "us")!.cash ?? 0;
-  const base: World = { ...built, companies: built.companies.map((c) => (c.id === "us" ? { ...c, cash: POCKET } : c)) };
+  const base: World = ENGINE_CASH
+    ? built
+    : { ...built, companies: built.companies.map((c) => (c.id === "us" ? { ...c, cash: POCKET } : c)) };
   let world: World = base;
   const opening = base.companies.find((c) => c.id === "us")!;
 
@@ -211,14 +221,19 @@ for (const { label, note, niche } of markets) {
 console.log("\n\n" + "=".repeat(118));
 console.log("  BALANCE ACROSS ALL SEVEN");
 console.log("=".repeat(118) + "\n");
-console.log(`  Opened at ${exact(POCKET)} each — what a person has. The engine's own figure is in brackets.\n`);
-console.log("  " + pad("startup", 20) + rp("opens on", 11) + rp("(engine)", 11) + rp("ends worth", 12) + rp("×", 7) + rp("customers", 11)
+console.log(ENGINE_CASH
+  ? `  Opened on the engine's own figure for each market, which is the honest denominator for a multiple.\n`
+  : `  Opened at ${exact(POCKET)} each — what a person has. The engine's own figure is in brackets.\n`);
+console.log("  " + pad("startup", 20) + rp("opens on", 11) + rp("(engine)", 11) + rp("ends worth", 12) + rp("×", 7) + rp("a year", 8) + rp("customers", 11)
   + rp("net margin", 11) + rp("price move", 13) + rp("quality", 9) + rp("idle yrs", 9) + rp("levers", 8));
 console.log("  " + "-".repeat(114));
 for (const v of verdicts) {
   const mult = v.openCash > 0 ? `${(v.endValue / v.openCash).toFixed(0)}×` : "—";
+  const cagr = v.openCash > 0 && v.endValue > 0
+    ? `${(((v.endValue / v.openCash) ** (1 / 14) - 1) * 100).toFixed(0)}%`
+    : "—";
   console.log("  " + pad(v.label, 20) + rp(money(v.openCash), 11) + rp(`(${money(v.engineCash)})`, 11) + rp(money(v.endValue), 12) + rp(mult, 7)
-    + rp(v.customers.toLocaleString(), 11) + rp(pct(v.margin), 11)
+    + rp(cagr, 8) + rp(v.customers.toLocaleString(), 11) + rp(pct(v.margin), 11)
     + rp(`${exact(v.priceFrom)}→${exact(v.priceTo)}`, 13) + rp(String(v.quality), 9)
     + rp(String(v.idleYears), 9) + rp(`${v.leversUsed.size}/6`, 8));
 }

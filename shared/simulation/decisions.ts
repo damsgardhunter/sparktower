@@ -199,6 +199,16 @@ export interface ExecutiveDecision {
   /** Where the company says its effort goes. Concentrating beats hedging in a market this contested. */
   focus: "growth" | "margin" | "quality" | "survival";
   /**
+   * What the founders will do with the period themselves, by action id.
+   *
+   * The only lever on this desk that spends time instead of money — see
+   * `actions.ts` for what each one does and why the effects are flat. Bounded
+   * by `cleanDecision` to what the market offered and to one a month, two a
+   * quarter, three a year, so neither a hand-written filing nor a bot can take
+   * five.
+   */
+  founderActions?: string[];
+  /**
    * Seats to close, folding their levers into whoever is left.
    *
    * **Nothing reads this.** `resolveYear` has never looked at it, it is not in
@@ -698,8 +708,9 @@ export const payScale = (scale?: number): number =>
  * built for two and a half times the payroll it actually paid. Both now ask
  * here.
  */
-export const officerCost = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
-  officersOf(company) * EXECUTIVE * payScale(company.scale);
+export const officerCost = (company: { seats?: Role[]; officers?: number; scale?: number; officerPay?: number }): number =>
+  /* `officerPay` is what founders actually draw — absent means a full salary. See `opening.ts`. */
+  officersOf(company) * EXECUTIVE * payScale(company.scale) * Math.max(0, company.officerPay ?? 1);
 
 /**
  * What technical debt does while you carry it.

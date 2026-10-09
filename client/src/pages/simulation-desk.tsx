@@ -1843,6 +1843,66 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
     );
   }
 
+  /*
+   * The founders' own time: a short list, a hard cap, and no prices.
+   *
+   * Its own control rather than the city checkboxes it started as, which read
+   * the `cities` array and so showed London and Manchester under "What you'll
+   * do yourself". Here the choices come from the field (`speak`/`offerActions`
+   * fill them in the market's own words) and `field.pick` is how many may be
+   * ticked at once.
+   *
+   * At the cap the unticked ones go quiet rather than disappearing, and the
+   * count is always on screen — a control that silently refuses the next tick
+   * is the thing people file bug reports about.
+   */
+  if (field.kind === "actions") {
+    const taken: string[] = Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
+    const pick = field.pick ?? 1;
+    const full = taken.length >= pick;
+    return (
+      <div>
+        <div className="flex items-baseline justify-between gap-2">
+          <Label className="text-sm font-medium">{field.label}{badge}</Label>
+          <span className="text-xs text-muted-foreground shrink-0 tabular-nums" data-testid="text-actions-taken">
+            {taken.length} of {pick}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
+        <Trade outcome={leverOutcome(role, field.id)} />
+        <div className="space-y-1.5">
+          {(field.options ?? []).map((option) => {
+            const selected = taken.includes(option.value);
+            return (
+              <button
+                key={option.value}
+                type="button"
+                /*
+                 * Choosing a tenth thing when three are allowed drops the
+                 * oldest rather than refusing: the cap is a rule about the
+                 * period, and the person is plainly changing their mind.
+                 */
+                onClick={() => onChange(selected
+                  ? taken.filter((id) => id !== option.value)
+                  : [...taken, option.value].slice(-pick))}
+                className={`w-full text-left rounded-lg border p-2.5 transition ${selected ? "border-primary bg-primary/5" : `border-border hover:border-muted-foreground/40 ${full ? "opacity-60" : ""}`}`}
+                data-testid={`action-${option.value}`}
+                aria-pressed={selected}
+              >
+                <span className="text-sm font-medium">{option.label}</span>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{option.help}</p>
+              </button>
+            );
+          })}
+        </div>
+        {(field.options?.length ?? 0) === 0 && (
+          <p className="text-xs text-muted-foreground">Nothing to take on this {field.pick === 1 ? "month" : "period"}.</p>
+        )}
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
   if (field.kind === "cities") {
     const open = new Set<string>(Array.isArray(value) ? value : []);
     return (

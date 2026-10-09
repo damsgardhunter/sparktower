@@ -9,7 +9,7 @@ import { Callout, Pill, isSwitchedOff } from "../../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
-  BufferCutWarning, BufferHoldNote, ChallengeCard, ChoiceField, CitiesField, CommitmentMeter,
+  ActionsField, BufferCutWarning, BufferHoldNote, ChallengeCard, ChoiceField, CitiesField, CommitmentMeter,
   DeskBanner, DilutionNote, DistressCard, EconomyStrip, EventCard, ExpansionVoteCard, FiledRow, LastChallengeCard,
   LevelsField, MapField, NewLeversNote, NumberField, OurNicheCard, PipelineNote, ReportCard, ResearchCard, RivalRow, ScoreBar, Stat, TechDebtNote,
 } from "../../../src/components/sim/DeskKit";
@@ -902,6 +902,19 @@ export default function Desk() {
                         error={message}
                         disabled={disabled}
                         listPrice={field.kind === "tiers" ? draft.price : undefined}
+                        onChange={change}
+                      />
+                    );
+                  }
+
+                  if (field.kind === "actions") {
+                    return (
+                      <ActionsField
+                        key={field.id}
+                        field={field}
+                        value={draft[field.id]}
+                        error={message}
+                        disabled={disabled}
                         onChange={change}
                       />
                     );

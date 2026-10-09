@@ -95,6 +95,7 @@ import { forecastDemand } from "./forecast";
 import { resolveYear } from "./resolve";
 import { isUnlocked } from "./responsibilities";
 import { staffFor } from "./workforce";
+import { actionsForPeriods, foundersActions } from "./actions";
 import { atScale, expectedPrice, snapPrice } from "./market";
 import { EXECUTIVE, officersOf } from "./decisions";
 import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
@@ -221,6 +222,15 @@ function headroom(company: Company): number {
 interface Shape {
   /** A region to open, if the table is putting one up this year. */
   region: string | null;
+  /**
+   * What the founders will do themselves this period, by action id.
+   *
+   * On the shape rather than in the budget because it costs no money: every
+   * other lever in the ascent competes for a slice, and these compete for the
+   * period. Chosen after the money is allocated — see the greedy pass at the
+   * end of `optimise`.
+   */
+  actions?: string[];
   /** What to draw down to pay for the plan. */
   borrow: number;
   /*
@@ -307,7 +317,7 @@ function draftOf(
     cfo: { borrow: Math.max(0, Math.round(shape.borrow)), repay: 0, cashBuffer: 0, ...vote },
     // Growth, and an answer ready for whatever went wrong: silence recovers
     // far less of what a shock costs, and the forecast cannot see that either.
-    ceo: { focus: "growth", shockAnswer: "statement", ...vote },
+    ceo: { focus: "growth", shockAnswer: "statement", founderActions: shape.actions ?? [], ...vote },
   };
 }
 
@@ -540,7 +550,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
         const carried: Record<string, number> = {};
         for (const [field, amount] of Object.entries(trial)) carried[field] = amount * grew;
         const plant = Math.max(held.capacity, Math.round(Math.max(heldNow, held.capacity * 0.6) * 1.4));
-        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0 });
+        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0, actions: shape.actions });
         running = resolveYear({ ...after, year: year + ahead }, [onward], economy, { withoutEvent: true });
         after = running.world;
         valued = running.reports.find((r) => r.companyId === companyId)?.value ?? valued;
@@ -695,7 +705,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     return { score: valued + me.cash * CASH_WEIGHT + position * pending, serves, room };
   };
 
-  let shape: Shape = { region: null, borrow: 0 };
+  let shape: Shape = { region: null, borrow: 0, actions: [] };
   let price = Math.max(1, company.price);
   let best = measure(spend, price, shape);
 
@@ -832,6 +842,48 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     const withDebt: Shape = { ...shape, borrow: amount };
     const alternative = ascend(run.spend, run.price, withDebt);
     if (alternative.at.score > run.at.score) { shape = withDebt; run = alternative; }
+  }
+
+  /*
+   * And then the one lever that costs no money, which has to be chosen last.
+   *
+   * Greedy and measured, not assumed. It is tempting to hard-code "always take
+   * the allowance" since the actions are free — but free is not the same as
+   * worth having, and which three are worth having depends entirely on the
+   * company: a business turning away customers wants the hours worked, one
+   * nobody has heard of wants the doors knocked, and one losing money on every
+   * sale wants the bills renegotiated. Scoring them is the only way the choice
+   * tracks the position.
+   *
+   * One at a time, keeping whichever adds most, up to the allowance — so the
+   * second choice is made knowing the first, which matters because the axes
+   * interact (room is worth nothing without demand and the other way round).
+   * Bounded at nine plus eight plus seven runs in a yearly season and at nine
+   * in a monthly one, where the allowance is one.
+   *
+   * Nothing is taken that does not actually score better than taking nothing.
+   * A founder's fortnight is not free to *them*, and an action that moves the
+   * company backwards — more room it cannot fill, carrying fixed cost — should
+   * be declined.
+   */
+  const offered = foundersActions(niche);
+  const allowance = actionsForPeriods(periods);
+  if (offered.length && allowance > 0) {
+    const chosen: string[] = [];
+    for (let slot = 0; slot < allowance; slot++) {
+      let tookId: string | null = null;
+      let tookAt = run.at;
+      for (const action of offered) {
+        if (chosen.includes(action.id)) continue;
+        const withAction: Shape = { ...shape, actions: [...chosen, action.id] };
+        const got = measure(run.spend, run.price, withAction);
+        if (got.score > tookAt.score) { tookAt = got; tookId = action.id; }
+      }
+      if (!tookId) break;
+      chosen.push(tookId);
+      run = { ...run, at: tookAt };
+    }
+    shape = { ...shape, actions: chosen };
   }
 
   const spendFinal = run.spend;

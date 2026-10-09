@@ -196,7 +196,18 @@ export const isUnlocked = (role: Role, field: string, period: number, periods = 
  */
 export const SOLO_ORDER: readonly string[] = [
   // ── The first period: what a business cannot open without. ──
-  "focus", "positioning", "price", "capacityTarget",
+  /*
+   * `founderActions` opens the season, and it is the one entry here that is not
+   * about money at all.
+   *
+   * It belongs in the first period precisely because of who plays alone: the
+   * founder who has been sent a season and has £60,000 and no staff. Every
+   * other lever on this line asks them to spend something; this one asks what
+   * they will do with the month. Handing it over in period six, after the ramp
+   * has got through the spending levers, would withhold the only lever that
+   * works on an empty balance sheet from the only person who needs it.
+   */
+  "focus", "positioning", "founderActions", "price", "capacityTarget",
   "brandSpend", "performanceSpend", "featureSpend", "supportSpend",
   "headcount", "borrow", "cashBuffer",
   // ── The rest of what a table holds on day one. ──
@@ -219,8 +230,16 @@ export const SOLO_ORDER: readonly string[] = [
   "buyback",
 ];
 
-/** How many open the season, before anything is spread. */
-const SOLO_OPENING = 11;
+/**
+ * How many open the season, before anything is spread.
+ *
+ * Twelve rather than eleven since `founderActions` joined the first line: the
+ * count is a deliberate ceiling on how much a first period asks of somebody,
+ * and leaving it at eleven would have pushed `cashBuffer` out of the opening
+ * to make room — taking away a decision a business really does make on day one
+ * to pay for one that costs nothing.
+ */
+const SOLO_OPENING = 12;
 
 /**
  * How much of the season is spent learning.

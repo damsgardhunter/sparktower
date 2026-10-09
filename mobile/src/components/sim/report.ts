@@ -42,6 +42,8 @@ export interface ProfitAndLoss {
   incidents?: number;
   partners?: number;
   insurance?: number;
+  /** What the company costs to run before it does anything: see `overheadShare`. */
+  overhead?: number;
   interest: number;
   operatingProfit: number;
   tax: number;

@@ -319,6 +319,22 @@ export const LEVER_OUTCOMES: Record<string, Outcome> = {
   },
 
   // ---- Chief Executive ----------------------------------------------------
+  /*
+   * The one lever whose cost is not money, which makes saying its cost out
+   * loud more important rather than less. Two real ones: the period is spent
+   * either way, and the whole thing fades as the company hires — a founder who
+   * plans to keep improving the product this way is planning not to grow.
+   */
+  "ceo.founderActions": {
+    up: [
+      "A category better for nothing — the only lever that works on an empty balance sheet",
+      "Yours to do now, with no budget, no hire and nobody to brief",
+    ],
+    down: [
+      "The month goes on this and not on the next thing",
+      "Worth less every time you hire: a rounding error once there is a real team",
+    ],
+  },
   "ceo.focus.growth": {
     up: ["Share, taken now"],
     down: ["Margin, worried about later"],

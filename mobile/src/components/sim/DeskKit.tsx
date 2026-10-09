@@ -667,6 +667,87 @@ export function ChoiceField({ field, value, error, onChange, disabled, emptyNote
  * shared/simulation/decisions.ts). Teams that only hear the first number
  * expand once and wonder why every following year is tighter.
  */
+/**
+ * The founders' own time, which is the one lever that costs none of the money.
+ *
+ * A capped multi-select. The choices arrive on the field itself — the desk
+ * route says them in the market's own words and sets `pick` from the cadence —
+ * so this control holds no market knowledge, unlike `CitiesField` above it.
+ *
+ * The count is in the header and not only implied by what is ticked, because
+ * the cap changes with the season's cadence: one a month, two a quarter, three
+ * a year. Somebody who plays a monthly season and then a yearly one should not
+ * have to find that out by tapping.
+ */
+export function ActionsField({ field, value, error, onChange, disabled }: {
+  field: LeverField;
+  value: any;
+  error?: string;
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+}) {
+  const options = field.options ?? [];
+  const taken: string[] = Array.isArray(value) ? value.filter((v: unknown) => typeof v === "string") : [];
+  const pick = field.pick ?? 1;
+
+  if (options.length === 0) {
+    return (
+      <View style={{ gap: 6 }}>
+        <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+          Nothing to take on yourself here.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ gap: spacing.sm }} testID="desk-actions">
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        <StatePill label={`${taken.length} of ${pick}`} icon="hand-left-outline" tone={taken.length > 0 ? "good" : "info"} />
+      </View>
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {field.help}
+      </Text>
+
+      <View style={{ gap: spacing.xs }}>
+        {options.map((option) => {
+          const selected = taken.includes(option.value);
+          return (
+            <Pressable
+              key={option.value}
+              testID={`desk-action-${option.value}`}
+              disabled={!!disabled}
+              /* Over the cap the oldest choice drops, as on the web desk: the
+                 person is changing their mind, not making a mistake. */
+              onPress={() => onChange(selected
+                ? taken.filter((id) => id !== option.value)
+                : [...taken, option.value].slice(-pick))}
+              style={{
+                gap: 2, padding: spacing.md, borderRadius: radius.sm,
+                backgroundColor: selected ? tintSoft(colors.primary, 0.08) : colors.surface,
+                borderWidth: 1, borderColor: selected ? tintSoft(colors.primary, 0.4) : colors.border,
+                opacity: disabled ? 0.6 : 1,
+              }}
+            >
+              <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{option.label}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+                {option.help}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {error ? (
+        <Text style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.regular }}>{error}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 export function CitiesField({ field, cities, value, error, onChange, disabled }: {
   field: LeverField;
   cities: DeskCity[] | undefined;

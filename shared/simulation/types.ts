@@ -239,6 +239,11 @@ export interface Niche {
    * than the generic name it replaced.
    */
   assets?: { kind: string; name: string; blurb: string }[];
+  /**
+   * What the founders can do with a period of their own time, in this market's
+   * words. Nine, matched to `ACTION_SLOTS` by position — see `actions.ts`.
+   */
+  actions?: { name: string; blurb?: string }[];
 }
 
 /**
@@ -399,6 +404,15 @@ export interface Company {
 
   /** 0–100. Slow to build, quick to lose, and the thing that makes everything else cheaper. */
   reputation: number;
+  /**
+   * What the officers draw, against a full executive salary each. Absent is a
+   * full salary, which is every company in a funded season.
+   *
+   * Set by `atStanding` for a company opened where it actually is: a founder
+   * paying themselves a market rate before they have a customer is not a
+   * founder, and the bill was killing the opening. See `opening.ts`.
+   */
+  officerPay?: number;
   /** 0–100. What the product is actually like. */
   quality: number;
   /** 0–100. How many people have heard of it and think well of it. */
