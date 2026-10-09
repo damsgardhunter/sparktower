@@ -47,7 +47,7 @@ import {
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
-import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown, Store} from "lucide-react";
+import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown, Store, Link2, Check, Share2 } from "lucide-react";
 import { lookOf } from "@/components/sim/market-look";
 import { SeasonStanding } from "@/components/sim/season-standing";
 
@@ -69,6 +69,8 @@ interface Room {
   seasonOver?: boolean;
   /** While filling: when the empty seats go to bots if nobody else arrives. Null when there's nothing to fill. */
   botsInSeconds?: number | null;
+  /** The code to send somebody, while there is still a seat for them. Null once the room is past gathering. */
+  inviteCode?: string | null;
   name: string | null;
   product: string | null;
   niche: { id: string; name?: string } | null;
@@ -351,6 +353,66 @@ export function roomPollMs(phase: string | undefined): number | false {
   return 2000;
 }
 
+/**
+ * Bring somebody into the room before it fills itself.
+ *
+ * The lobby told you four more people were needed and that players we run
+ * would take the chairs in a minute, and offered nothing to do about it. This
+ * is the thing that changes the outcome: a link, and a way to hand it over.
+ *
+ * `navigator.share` where the device has it — which is where most people are
+ * when they are trying to get a friend into something — and the clipboard
+ * otherwise, with the link shown in full underneath for the case where both
+ * are blocked. A share sheet the browser refuses must not leave somebody with
+ * nothing to send.
+ */
+function InviteToRoom({ code, seatsLeft }: { code: string; seatsLeft: number }) {
+  const [copied, setCopied] = useState(false);
+  const link = `${window.location.origin}/join-season/${code}`;
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  const hand = async () => {
+    const said = {
+      title: "Run a company with me",
+      text: `There's a seat for you — we need ${seatsLeft} more ${seatsLeft === 1 ? "person" : "people"} before this starts.`,
+      url: link,
+    };
+    try {
+      if (canShare) { await navigator.share(said); return; }
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      /*
+       * Cancelled, or refused. Neither is an error worth a message: the link
+       * is on screen below and can be selected by hand.
+       */
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border p-3" data-testid="invite-to-room">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm">
+          <span className="font-medium">Know someone who'd play?</span>{" "}
+          <span className="text-muted-foreground">
+            {seatsLeft === 1 ? "There's one seat left." : `There are ${seatsLeft} seats left.`} Anyone with the link can take one.
+          </span>
+        </p>
+        <Button size="sm" className="shrink-0" onClick={hand} data-testid="button-invite-to-room">
+          {copied
+            ? <><Check className="mr-1.5 h-3.5 w-3.5" /> Link copied</>
+            : canShare
+              ? <><Share2 className="mr-1.5 h-3.5 w-3.5" /> Invite someone</>
+              : <><Link2 className="mr-1.5 h-3.5 w-3.5" /> Copy invite link</>}
+        </Button>
+      </div>
+      {/* Shown in full, so a blocked clipboard and a refused share sheet both still leave something to send. */}
+      <code className="mt-2 block select-all break-all text-xs text-tertiary" data-testid="text-invite-link">{link}</code>
+    </div>
+  );
+}
+
 function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -400,6 +462,39 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
   }, []);
   const secondsLeft = Math.max(0, (room?.secondsLeft ?? 0) - ticked);
   const botsIn = room?.botsInSeconds == null ? null : Math.max(0, room.botsInSeconds - ticked);
+
+  /*
+   * Stop waiting, one way or the other.
+   *
+   * `true` fills the empty chairs now; `false` keeps them for people and stops
+   * the minute's countdown. The room was making this decision for everybody
+   * and offering no say in it, and the "keep them" half was worse than the
+   * other: a lobby that never fills retires itself and the seat is spent
+   * regardless.
+   */
+  const fill = useMutation({
+    mutationFn: (bots: boolean) =>
+      apiRequest("POST", `/api/sim/ventures/${ventureId}/fill`, { bots }).then((r) => r.json()),
+    onSuccess: (body: { bots?: boolean; seated?: number }) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
+      toast(body?.bots
+        ? {
+          title: body.seated ? "Starting" : "Nothing to fill",
+          description: body.seated
+            ? `${body.seated} ${body.seated === 1 ? "player" : "players"} we run took the empty seats.`
+            : "The room was already full.",
+        }
+        : {
+          title: "Holding the seats",
+          description: "Nobody we run will take them. Send the link to whoever is joining you.",
+        });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't do that",
+      description: errorText(e, "Try again."),
+      variant: "destructive",
+    }),
+  });
 
   const claim = useMutation({
     mutationFn: (role: Role) => apiRequest("POST", `/api/sim/ventures/${ventureId}/claim`, { role }),
@@ -506,7 +601,14 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
               </div>
             )}
           </div>
-          {room.phase === "filling" && botsIn != null && (
+          {/*
+            * Everything below is about empty chairs, so none of it belongs on a
+            * table of one. A season built for a solo founder has `lobbySize` 1
+            * (the season's own `seatCount`): it was being shown "waiting for 4
+            * more", a countdown to bots filling seats that do not exist, and an
+            * invite link offering four of them.
+            */}
+          {room.phase === "filling" && room.lobbySize > 1 && botsIn != null && (
             /*
              * The minute the room waits for people, on screen. The big clock
              * is the fifteen-minute one; without this, bots arriving at 14:00
@@ -518,6 +620,47 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
                 ? <span>Waiting for people. Bots take the empty seats in <span className="font-semibold tabular-nums">{countdown(botsIn)}</span> unless someone joins.</span>
                 : <span>Nobody new arrived, so bots are taking the empty seats…</span>}
             </p>
+          )}
+          {room.phase === "filling" && room.lobbySize > 1 && (
+            /*
+             * Two decisions the room used to make for you.
+             *
+             * Bots arrive a minute after the last person, which is right for
+             * somebody sitting alone and wrong for somebody holding seats for
+             * colleagues — and the flag that turns it off left them waiting for
+             * people who might not be coming, in a lobby that eventually
+             * retires itself and spends the seat anyway. Both directions are
+             * now a button.
+             */
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+              <Button
+                size="sm"
+                onClick={() => fill.mutate(true)}
+                disabled={fill.isPending}
+                data-testid="button-fill-now"
+              >
+                {fill.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Users className="mr-1.5 h-3.5 w-3.5" />}
+                Start now with players we run
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => fill.mutate(false)}
+                disabled={fill.isPending}
+                data-testid="button-keep-waiting"
+              >
+                Keep the seats for people
+              </Button>
+            </div>
+          )}
+          {room.phase === "filling" && room.lobbySize > 1 && room.inviteCode && room.seats.length < room.lobbySize && (
+            /*
+             * The one thing that changes the outcome the clock above is
+             * counting down to. Put here rather than further down the page
+             * because it answers the sentence directly above it: four more
+             * people are needed, and this is how you get one.
+             */
+            <InviteToRoom code={room.inviteCode} seatsLeft={room.lobbySize - room.seats.length} />
           )}
           {copy.deadline && <p className="text-xs text-muted-foreground mt-3 border-t border-border pt-3">{copy.deadline}</p>}
         </div>
