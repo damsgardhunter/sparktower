@@ -851,7 +851,45 @@ function pgErrorCode(err: unknown): string | undefined {
       /** Which year the next tick resolves, and how many there are. Null before the season starts. */
       year: season?.year ?? null,
       totalYears: season?.totalYears ?? null,
-      lobbySize: LOBBY_SIZE,
+      /*
+       * The season's own seat count, not the catalogue default.
+       *
+       * This was `LOBBY_SIZE` — a constant five — so a season built as a table
+       * of one reported a five-seat room to the screen. Somebody who started a
+       * solo season was told "waiting for 4 more", shown a countdown to bots
+       * taking chairs that do not exist, and handed an invite link offering
+       * four seats nobody could ever sit in. `seatCount` is the season's own
+       * shape (see the column), and a solo season is not a smaller version of
+       * the same game — so the room has to read it rather than assume.
+       */
+      lobbySize: season?.seatCount ?? LOBBY_SIZE,
+      /**
+       * The link to send somebody, while there is still a seat to send them to.
+       *
+       * The room already tells you four more people are needed and that players
+       * we run will take the empty chairs in a minute — and gave you no way to
+       * do anything about it. A lobby that counts down at somebody without
+       * offering them the one action that changes the outcome is a waiting
+       * screen, not a decision.
+       *
+       * Only while the room is still gathering, and only for a season whose
+       * code *is* the credential. A company's training season gates joining on
+       * membership as well (see `/api/sim/join-code`), so handing its code to
+       * whoever is looking at the room would be offering a link that cannot
+       * work for the person they send it to.
+       */
+      /*
+       * And no code at all for a table of one.
+       *
+       * A solo season has no second chair, so an invite link is an offer that
+       * cannot be honoured: whoever followed it would be refused, and the
+       * person who sent it would not know why. Belt and braces with the
+       * `lobbySize` fix above — the screen hides the panel once it knows the
+       * room is full, and this makes sure there is nothing to hide.
+       */
+      inviteCode: season && !season.companyId && venture.phase === "filling" && (season.seatCount ?? LOBBY_SIZE) > 1
+        ? season.inviteCode
+        : null,
       openRoles: openRoles(seats),
       /** Who's here, what they hold, and whether they chose it. */
       seats: rows.map((r) => ({
@@ -1050,6 +1088,78 @@ function pgErrorCode(err: unknown): string | undefined {
    * (older companies have one, and it is still shown), but the body is
    * optional and the room is asked for a name and nothing more.
    */
+  /**
+   * Stop waiting: fill the empty chairs now, or stop them being filled at all.
+   *
+   * ## Why a room needed this
+   *
+   * A forming room offered exactly one outcome and no say in it. Bots take the
+   * empty seats a minute after the last person arrives — right for somebody
+   * sitting alone, and wrong for a buyer who took five seats for colleagues,
+   * which is why `botFill` exists. But `botFill: false` left them with the
+   * opposite problem and no way out: the room waits for people who may not be
+   * coming, and a lobby that never fills retires itself
+   * (shared/simulation/lobby.ts). The seat is spent either way.
+   *
+   * So both directions are now somebody's choice rather than a consequence:
+   *
+   *   `{ bots: true }`  — fill the empty chairs now and get on with it.
+   *   `{ bots: false }` — keep them for people; stop the minute's countdown.
+   *
+   * Anybody seated in the room may do either. It is their game, the decision
+   * affects all of them equally, and there is no role in a lobby yet to hang a
+   * permission on — the CEO is chosen in the phase after this one.
+   */
+  app.post("/api/sim/ventures/:id/fill", isAuthenticated, async (req: any, res) => {
+    if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
+
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
+    if (!venture) return res.status(404).json({ message: "No such room." });
+
+    /* In the room, or it is none of their business. */
+    const [seat] = await db.select().from(simSeats)
+      .where(and(eq(simSeats.ventureId, venture.id), eq(simSeats.userId, req.user.id)));
+    if (!seat) return res.status(404).json({ message: "No such room." });
+
+    if (venture.phase !== "filling") {
+      return res.status(409).json({ message: "This room has already stopped gathering people.", code: "wrong_phase" });
+    }
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+    if (!season) return res.status(404).json({ message: "No such room." });
+
+    /*
+     * A table of one has no empty chair, so neither answer means anything —
+     * and offering the choice at all would be the room admitting it does not
+     * know its own shape, which is the bug this route was written alongside.
+     */
+    if ((season.seatCount ?? 1) <= 1) {
+      return res.status(409).json({ message: "This is a season for one; there are no empty seats.", code: "solo" });
+    }
+
+    const wantsBots = req.body?.bots !== false;
+
+    /*
+     * The flag is written either way, so the answer sticks. Pressing "wait for
+     * people" and having the minute job seat bots thirty seconds later would
+     * be the product ignoring what it had just been told.
+     */
+    await db.update(simSeasons).set({ botFill: wantsBots }).where(eq(simSeasons.id, season.id));
+
+    if (!wantsBots) return res.json({ ok: true, bots: false, seated: 0 });
+
+    /* `force`, because they asked: no waiting, and the held-seats flag has just been changed. */
+    const seated = await fillVentureWithBots(venture.id, { force: true });
+
+    /*
+     * And then the room moves on by the ordinary route. `advanceVenture` is
+     * what turns a full room into a seated company — reusing it rather than
+     * starting the season here keeps one path through the lobby.
+     */
+    await advanceVenture(venture.id);
+    res.json({ ok: true, bots: true, seated });
+  });
+
   app.post("/api/sim/ventures/:id/name", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
     await advanceVenture(req.params.id);
