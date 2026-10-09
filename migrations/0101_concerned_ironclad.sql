@@ -1,0 +1,2 @@
+ALTER TABLE "simulation_purchases" ADD COLUMN "idempotency_key" varchar;--> statement-breakpoint
+ALTER TABLE "simulation_purchases" ADD CONSTRAINT "sim_purchases_attempt_once" UNIQUE("buyer_id","idempotency_key");

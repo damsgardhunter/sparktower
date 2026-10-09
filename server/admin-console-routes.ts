@@ -50,7 +50,7 @@ import {
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { mfaGate } from "./mfa";
-import { atLeast, isOwner } from "./platform-roles";
+import { atLeast, isOwner, requireAdmin } from "./platform-roles";
 import { logModeration, rateLimit } from "./moderation";
 import { walletOf } from "./wallet";
 import { MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
@@ -59,14 +59,6 @@ import {
   MAX_REASON, MIN_REASON, consoleLogAction, isConsoleAction,
   type ConsoleAction,
 } from "@shared/admin-console";
-
-/** Admin, with a session that proved its second factor. Anything less doesn't learn this exists. */
-const requireAdmin: RequestHandler = (req: any, res, next) => {
-  if (!req.user) return res.status(401).json({ message: "Not signed in" });
-  if (!atLeast(req.user.platformRole, "admin")) return res.status(404).json({ message: "Not found" });
-  if (!mfaGate(req, res)) return;
-  next();
-};
 
 /**
  * Whether this caller may take this particular action.

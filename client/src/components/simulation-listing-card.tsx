@@ -28,6 +28,7 @@ export interface ListingCard {
   totalYears: number;
   seatsSold: number;
   seasonsStarted: number;
+  players: number;
   author: { id: string; name: string | null; avatarUrl: string | null };
 }
 
@@ -126,15 +127,19 @@ export function SimulationListingCard({ listing, owned }: {
           </div>
           <div className="flex items-center gap-3 text-sm text-tertiary shrink-0">
             {/*
-              * Seasons rather than seats: "played eleven times" is a thing a
-              * person can judge, and "sold forty seats" is a thing the seller
-              * cares about. Zero is left off rather than shown as a nought —
+              * People rather than seasons, and seasons rather than seats.
+              *
+              * "Eleven people have played this" is a thing a stranger can judge.
+              * "Eleven seasons were started" is the same number when eleven
+              * people each played once and a very different one when a single
+              * buyer replayed eleven seats — and it was the second reading that
+              * the sort ran on. Zero is left off rather than shown as a nought:
               * a new listing should not advertise that nobody has played it.
               */}
-            {listing.seasonsStarted > 0 && (
+            {listing.players > 0 && (
               <span className="flex items-center gap-1" data-testid={`plays-${listing.id}`}>
                 <Play className="h-4 w-4" />
-                {listing.seasonsStarted}
+                {listing.players}
               </span>
             )}
             {listing.seatsSold > 0 && (

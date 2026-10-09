@@ -70,10 +70,19 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/companies/:id/follows/:projectId": "following is how scouting works, and it carries no words of theirs",
   "DELETE /api/companies/:id/follows/:projectId": "unfollowing",
   "POST /api/projects/:id/health-check/apply": "applies a health check to their own board",
+  "POST /api/sim-market/shares/:id/revoke": "stops their own link working — the safe direction",
+  "POST /api/sim-market/shares/:token/try": "the recipient starting a game of their own, from a link addressed to them",
 };
 
-/** Route families that tend to put something in front of someone else. */
-const SOCIAL = /feed|comment|message|invite|report|connection|publish|apply|application|react|follow|contest|communit|discussion|games\/.*(submit|leave)/i;
+/**
+ * Route families that tend to put something in front of someone else.
+ *
+ * `share` was added after the fact, which is the thing this pattern is for.
+ * Minting a link that sends a simulation to somebody puts the author's words on
+ * a page open to anyone holding the URL, and it works on a draft — so it is a
+ * second `publish` by another name, and it matched none of these words.
+ */
+const SOCIAL = /feed|comment|message|invite|report|connection|publish|share|apply|application|react|follow|contest|communit|discussion|games\/.*(submit|leave)/i;
 
 describe("writes that reach other people", () => {
   it("are gated on a confirmed email, or named here with why they aren't", () => {

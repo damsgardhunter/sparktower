@@ -125,6 +125,11 @@ export function notificationText(n: NotificationShape): string {
     case "pledge_refunding": return n.projectTitle ? `${n.projectTitle} wasn't approved — your pledge is being refunded` : "Your pledge is being refunded";
     case "pledge_released": return n.projectTitle ? `Your pledge went to ${n.projectTitle}` : "Your pledge went to the project";
     case "pledge_refunded": return "Your pledge was refunded";
+    case "seats_refunded": return "Your simulation seats were refunded";
+    case "listing_published": return "New simulation to play";
+    case "listing_sold": return "Somebody bought your simulation";
+    case "listing_earnings_released": return "Your simulation earnings are yours";
+    case "listing_taken_down": return "Your simulation was taken down";
     /*
      * The excerpt carries which reward and whatever the creator wrote with it, so
      * the sentence stays about the thing that happened. "A reward you were
@@ -204,6 +209,22 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // Money: the project it was about, where the backing panel and its updates are.
   if (n.kind === "pledge_received" || n.kind === "campaign_decision") return n.projectId ? `/projects/${n.projectId}/manage?tab=setup` : "/";
   if (n.kind === "pledge_refunding" || n.kind === "pledge_released" || n.kind === "pledge_refunded") return n.projectId ? `/projects/${n.projectId}` : "/";
+  /*
+   * Their library, not the listing. The listing is unlisted by the time this
+   * is sent — its author has gone — so sending them to it is sending them to a
+   * page that says nothing. The library is where the refunded purchase and the
+   * seasons they already played both are.
+   */
+  if (n.kind === "seats_refunded") return "/simulations/market";
+  /*
+   * The listing itself for the three that are about one, and the library for a
+   * takedown — the listing page of something a reviewer removed is a page that
+   * tells its author nothing they can act on.
+   */
+  if (n.kind === "listing_published" || n.kind === "listing_sold") {
+    return n.targetId ? `/simulations/market/${n.targetId.split(":").pop()}` : "/simulations/market";
+  }
+  if (n.kind === "listing_earnings_released" || n.kind === "listing_taken_down") return "/simulations/market";
   if (n.kind === "job_due" || n.kind === "checkin_due") return n.projectId ? `/projects/${n.projectId}/manage?section=run_company` : "/";
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
@@ -247,6 +268,17 @@ export const PUSHABLE_KINDS: readonly NotificationKind[] = [
   "application_accepted",
   // Money.
   "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  /*
+   * Marketplace money, on the same grounds: a sale, a payout landing, and a
+   * refund the buyer did not ask for are all events with real money behind
+   * them that nothing else in the product announces.
+   *
+   * `listing_published` is deliberately absent. It is interesting, not urgent —
+   * somebody they follow put a market up for sale — and a push for every
+   * listing every builder they follow publishes is how people turn pushes off
+   * altogether, which costs them the ones above.
+   */
+  "seats_refunded", "listing_sold", "listing_earnings_released", "listing_taken_down",
   /*
    * A reward they paid for has been delivered. Nothing else in the product
    * changes visibly when a creator records a video, so without this the backer

@@ -20,6 +20,7 @@ import { deleteAccount, exportAccount, projectsLeavingWith } from "./account-dat
 import { checkSecondFactor, mfaCodeAccepted, limitMfaAttempts, mfaEnabledFor } from "./mfa";
 import { getUncachableStripeClient } from "./stripeClient";
 import { reconcileBackerBadge } from "./backer-badges";
+import { refundOpenSeatsOnSellerClose } from "./simulation-market-compliance";
 
 /** Subscription states Stripe will never bill again. */
 const FINISHED = new Set(["canceled", "incomplete_expired"]);
@@ -221,7 +222,27 @@ export function registerAccountRoutes(app: Express) {
         });
       }
 
-      const outcome = { ...(await deleteAccount(userId, { keepPosts: req.body?.keepPosts === true })), billingCancelled, pledgesRefunded };
+      /*
+       * And the marketplace, on the same terms: a seat is a licence to run a
+       * simulation its author stands behind, and nobody will be standing behind
+       * it. Fail closed again — leaving somebody holding seats on a seller who
+       * no longer exists is the state this is here to prevent.
+       */
+      let seatsRefunded = 0;
+      try {
+        seatsRefunded = await refundOpenSeatsOnSellerClose(userId);
+      } catch (err) {
+        console.error("[account] couldn't refund open simulation seats before deleting", userId, err);
+        return res.status(502).json({
+          message: "We couldn't refund the unused seats people bought from you just now, so your account wasn't deleted. Try again in a minute.",
+          code: "seat_refund_failed",
+        });
+      }
+
+      const outcome = {
+        ...(await deleteAccount(userId, { keepPosts: req.body?.keepPosts === true })),
+        billingCancelled, pledgesRefunded, seatsRefunded,
+      };
 
       // The session this came in on is already gone from the store; clear the cookie too.
       req.logout?.(() => {

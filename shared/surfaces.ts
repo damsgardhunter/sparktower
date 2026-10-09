@@ -76,6 +76,23 @@ export const SURFACES: SurfaceDef[] = [
    */
   { id: "decisionSim", label: "Decision simulator",   cls: "core", defaultEnabled: true, note: "One owner's own numbers: scenarios, ten years from now, what would it take. Costs a model call per run — turn off here if the spend or the answers misbehave, without touching the multiplayer simulation.", sequence: "supports" },
   { id: "resume",     label: "Résumé review",         cls: "core", defaultEnabled: true, note: "Reads an uploaded résumé into a profile. One model call per go.", sequence: "supports" },
+  /*
+   * Taking money. The one switch the product did not have.
+   *
+   * Every route that charges a card — a top-up, a credit pack, an Apple
+   * purchase, a saved-card charge — sat behind no flag at all, so the only way
+   * to stop charging people was a deploy. `backing`'s note says "turn off here
+   * if the payment path misbehaves" and that was true of pledges and of nothing
+   * else: a pricing bug, a double charge, a Stripe incident, and there was no
+   * control to reach for.
+   *
+   * It covers the *writes* only, named one at a time rather than by a `/api/nova`
+   * or `/api/wallet` prefix, because a surface that is off answers 404 for
+   * everything beneath it — reads included. Gating `GET /api/nova/wallet` or
+   * `GET /api/subscription` would blank the balance in the corner of every
+   * screen and read as an outage rather than as "you cannot buy right now".
+   */
+  { id: "payments",   label: "Taking payments",      cls: "core", defaultEnabled: true, note: "Every route that charges a card: top-ups, credit packs, Apple purchases, saved-card charges. Turn off to stop taking money without taking the product down — balances, plans and anything already paid for keep working.", sequence: "supports" },
 
   // --- Momentum: proof the company is moving ----------------------------
   { id: "discover",   label: "Discover",             cls: "momentum", defaultEnabled: true, note: "Where a shared link lands.", sequence: "supports" },
@@ -91,6 +108,22 @@ export const SURFACES: SurfaceDef[] = [
   { id: "feed",       label: "Feed",                 cls: "network", defaultEnabled: true,  note: "Works at small numbers — a post needs no counterpart. Highest spam surface.", needsPeople: 3, sequence: "wedge" },
   { id: "matches",    label: "Matches",              cls: "network", defaultEnabled: true,  note: "Compares profiles; thin until several people have onboarded.", needsPeople: 10, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and 10+ active builders a week are on paths." },
   { id: "sprints",    label: "Simulations", cls: "network", defaultEnabled: true, note: "Needs a partner, or four. Trial sprints, matchmaking, and the market simulation. Not the decision simulator in a project's Simulations tab — that runs one owner's own numbers and needs nobody.", needsPeople: 6, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and builders ask for a partner to do a step with." },
+  /*
+   * The marketplace is its own switch, for the reason `backing` is: it moves
+   * real money between two strangers and holds it for a fortnight in between.
+   *
+   * It also had no switch at all. `sprints` claims `/api/sim`, and the guards
+   * are mounted with `app.use`, which matches a mount path on segment
+   * boundaries — so `/api/sim` reaches `/api/sim/niches` and stops. Turning
+   * Simulations off hid the marketplace pages and left buying, selling,
+   * publishing and payouts answering normally. The one half of the simulation
+   * that can lose somebody money was the half with no control over it.
+   *
+   * Separate rather than folded into `sprints` on the same grounds the decision
+   * simulator was split out above: an owner who needs to stop the money path
+   * should not have to stop everybody's seasons to do it.
+   */
+  { id: "simMarket",  label: "Simulation marketplace", cls: "network", defaultEnabled: true, note: "Real money between two members, held for fourteen days before it is the seller's. Turn off here to stop new sales, listings and payouts without touching seasons already running.", needsPeople: 6, sequence: "after-wedge", unlocksWhen: "The wedge is proven, somebody has written a market worth selling, and the refund and payout paths have been watched once with real money." },
   { id: "connections", label: "Connections",         cls: "network", defaultEnabled: true,  note: "Needs people to connect to.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven; follows on published steps come first." },
   { id: "messages",   label: "Messages / DMs",       cls: "network", defaultEnabled: true,  note: "Highest abuse surface. Needs rate limits and reporting before wide sharing.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and reporting and limits are in place for DMs." },
   { id: "leaderboard", label: "Leaderboard",         cls: "network", defaultEnabled: true,  note: "Ranks public projects; a list until there are several.", needsPeople: 8, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and there are enough public projects to rank." },
@@ -138,6 +171,13 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
    * simulation reachable, which is the opposite of what the switch says it does.
    */
   sprints: ["/sprints", "/simulation"],
+  /*
+   * Listed explicitly rather than left to `/simulation` catching it as a string
+   * prefix. It did — "/simulations/market".startsWith("/simulation") is true —
+   * so the pages went dark with `sprints` while every API behind them stayed
+   * live, which is the worst shape for a switch to have: it looks off.
+   */
+  simMarket: ["/simulations/market"],
   messages: ["/messages"],
   discover: ["/discover"],
   /*
@@ -180,7 +220,7 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
    * gaps and summarizing progress are all Nova, all cost money, and none of
    * them was under the switch that claims to drive every other surface.
    */
-  nova: ["/api/chat", "/api/projects/:id/chat", "/api/projects/:id/ai", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/path/loops", "/api/projects/:id/health-check"],
+  nova: ["/api/chat", "/api/projects/:id/chat", "/api/projects/:id/ai", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/path/loops", "/api/projects/:id/health-check", "/api/nova/build-my-business", "/api/nova/image-pass"],
   roadmap: ["/api/projects/:id/roadmap"],
   /*
    * "Most-used surface in the product" and "In use" respectively, and neither
@@ -191,6 +231,18 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   milestones: ["/api/projects/:id/milestones", "/api/milestones"],
   decisionSim: ["/api/projects/:id/decision-sim", "/api/projects/:id/simulation", "/api/projects/:id/what-would-it-take"],
   resume: ["/api/profile/evaluate-resume", "/api/profile/resume-status"],
+  /*
+   * Exact paths, not prefixes. See the note on the surface: `/api/nova` and
+   * `/api/wallet` both carry reads the whole product renders from, and a
+   * surface guard does not distinguish a GET from a POST.
+   */
+  payments: [
+    "/api/checkout",
+    "/api/nova/top-up",
+    "/api/nova/apple-purchase",
+    "/api/wallet/topup",
+    "/api/stripe/sync-subscription",
+  ],
   codeAudit: ["/api/projects/:id/code-audit", "/api/code-audits"],
   mcp: ["/api/mcp", "/api/mcp-tokens"],
   documents: ["/api/projects/:id/documents", "/api/documents"],
@@ -217,6 +269,14 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
    * simulation is off.
    */
   sprints: ["/api/games", "/api/sim"],
+  /*
+   * `/api/sim-market` in its own right. It is not under `/api/sim`: these are
+   * mounted with `app.use`, which matches on segment boundaries, so `/api/sim`
+   * never reached a single marketplace route. `/api/admin/sim-market` too — the
+   * takedown and the revenue report belong to the surface they are about, the
+   * same way `/admin/backing` belongs to backing.
+   */
+  simMarket: ["/api/sim-market", "/api/admin/sim-market"],
   connections: ["/api/connections"],
   messages: ["/api/messages"],
   leaderboard: ["/api/leaderboard", "/api/reputation"],

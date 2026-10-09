@@ -9,7 +9,7 @@
  */
 import { useParams, useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Building2, Clock, Loader2, Users } from "lucide-react";
+import { Building2, Clock, Loader2, Users, Store } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { Card, CardContent } from "@/components/ui/card";
@@ -71,8 +71,19 @@ export default function JoinSeasonPage() {
 
   return (
     <Shell>
+      {/*
+        * Two kinds of season reach this page and only one of them has a
+        * company. It used to say "A company · private training season" for
+        * both, so a season started from a marketplace listing — which has no
+        * company at all — announced itself as somebody else's staff workshop
+        * to the person who had just paid for it.
+        */}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Building2 className="h-4 w-4" /> {data.company?.name ?? "A company"} · private training season
+        {data.company ? (
+          <><Building2 className="h-4 w-4" /> {data.company.name} · private training season</>
+        ) : (
+          <><Store className="h-4 w-4" /> From the simulation marketplace</>
+        )}
       </div>
       <h1 className="text-2xl font-bold tracking-tight mt-1" data-testid="text-season-name">{data.name}</h1>
       <p className="text-sm mt-3"><span className="font-medium">Market:</span> {data.niche.name}</p>
@@ -85,9 +96,20 @@ export default function JoinSeasonPage() {
       <div className="mt-6">
         {data.ventureId ? (
           <Button onClick={() => navigate(`/simulation?room=${data.ventureId}`)} data-testid="button-open-room">Go to your table</Button>
-        ) : !data.isMember ? (
+        ) : data.company && !data.isMember ? (
+          /*
+           * Membership is a company's rule, and only a company's.
+           *
+           * This was `!data.isMember` alone, and `isMember` is false for every
+           * season that has no company to be a member of — so a buyer who had
+           * just paid for a seat, started the season and followed the link they
+           * were handed was told it was "only for people at the company", with
+           * no company anywhere and no way forward. The server already allows
+           * these (see /api/sim/join-code): the code is the credential there,
+           * which is what an eight-character CSPRNG code is for.
+           */
           <p className="text-sm text-muted-foreground">
-            This season is only for people at {data.company?.name ?? "the company"}. Ask them for their team invite link first, then come back to this page.
+            This season is only for people at {data.company.name}. Ask them for their team invite link first, then come back to this page.
           </p>
         ) : !open ? (
           <p className="text-sm text-muted-foreground">

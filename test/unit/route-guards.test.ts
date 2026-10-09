@@ -194,6 +194,16 @@ const AFTER_WEDGE_FAMILIES: Record<string, RegExp> = {
   // for a long time every `/api/sim` route sat outside its flag because this
   // pattern only knew about the sprint games. Widened so the gap can't return.
   sprints: /\/(games|sim)(\/|$)/,
+  /*
+   * `/sim-market` is its own family because it is its own surface, and because
+   * the pattern above never reached it: `(sim)(\/|$)` stops at a segment
+   * boundary, so `/api/sim-market/...` matched nothing here and no route of the
+   * marketplace was ever held to a flag by this test. The same boundary is why
+   * `SURFACE_API_PREFIXES.sprints = ["/api/sim"]` never guarded it either —
+   * `app.use` matches mount paths the same way — so the half of the simulation
+   * that moves money had no switch and no test saying it should.
+   */
+  simMarket: /\/sim-market(\/|$)/,
   connections: /\/connections(\/|$)/,
   messages: /\/(messages|conversations)(\/|$)/,
   leaderboard: /\/(leaderboard|reputation)(\/|$)/,

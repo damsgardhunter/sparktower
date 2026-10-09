@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy, MessageSquareWarning } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Wallet as WalletIcon, Megaphone, ShieldAlert, LifeBuoy, MessageSquareWarning, Store } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,7 @@ import { formatMoney } from "@shared/plans";
 import { useWallet } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
-const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, Gamepad2, MessageSquare, Trophy, Medal, CreditCard, Banknote };
+const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, Gamepad2, MessageSquare, Trophy, Medal, CreditCard, Banknote, Store };
 const MORE_OPEN_KEY = "st_nav_more_open";
 
 /**
