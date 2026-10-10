@@ -209,6 +209,26 @@ export interface Niche {
    */
   penetration?: Partial<Record<ContinentId, number>>;
   /** What it costs to make one unit, before anyone improves anything. */
+  /**
+   * What it costs to acquire one customer here, in this market's money.
+   *
+   * Written by the market rather than derived, because it is the number every
+   * trade knows about itself and nobody can work out from the outside: a
+   * subscriber costs a few pounds, a clinic costs hundreds, a construction
+   * client costs a tender. Absent falls back to a few periods of what the
+   * customer pays — see `costPerCustomer`.
+   */
+  /**
+   * How much more than a segment's demand its companies may hold between them,
+   * as a share — nought in a market where a customer belongs to one supplier.
+   *
+   * An audience does not work that way: somebody can follow two channels, so a
+   * segment's subscriptions can exceed its people. Only `audienceMarket` sets
+   * it, on the copy of the niche it shapes for allocation, and only the shrink
+   * pass in `allocate` reads it. See `OVERLAP`.
+   */
+  overlap?: number;
+  acquisitionCost?: number;
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
   innovationPace: number;
@@ -244,6 +264,15 @@ export interface Niche {
    * words. Nine, matched to `ACTION_SLOTS` by position — see `actions.ts`.
    */
   actions?: { name: string; blurb?: string }[];
+  /**
+   * How the business earns. Unset is "sales": customers pay a price and
+   * capacity caps how many can be served. "audience" is a channel or a show:
+   * subscribing is free, capacity is production, and the money is ads,
+   * sponsors and memberships. See `creator.ts`.
+   */
+  model?: "sales" | "audience";
+  /** The audience market's rates, sponsors and milestones. Read through `audienceModelFor`. */
+  audience?: Partial<import("./creator").AudienceModel>;
 }
 
 /**
@@ -413,6 +442,12 @@ export interface Company {
    * founder, and the bill was killing the opening. See `opening.ts`.
    */
   officerPay?: number;
+  /**
+   * This period's push from the chief executive's focus, on appeal. Set on
+   * the copy of the market the year is decided on and never stored. See
+   * `FOCUS_DIRECT`.
+   */
+  focusPush?: number;
   /** 0–100. What the product is actually like. */
   quality: number;
   /** 0–100. How many people have heard of it and think well of it. */
@@ -637,6 +672,27 @@ export interface Company {
    * find on day fourteen that it won a market it owns a third of.
    */
   founderShare: number;
+  /**
+   * Work in progress on things the founders are making themselves rather than
+   * buying: weeks put in, against each marketplace listing's id.
+   *
+   * Carried between periods because a build is not a period's decision — a
+   * second kitchen line at twenty-five hours a week is a month's work at full
+   * commitment and three months at a third of it, and the whole point of
+   * putting fewer hours in is that it takes longer. See `buildProgress`.
+   */
+  builds?: Record<string, number>;
+  /**
+   * A per-segment appeal multiplier an incumbent gets where it is strongest,
+   * by segment id.
+   *
+   * Only set inside `audienceMarket`, and only for incumbents: an audience
+   * market has no regional holdings to be strong *in*, so this is how "the
+   * big channel in Texas already owns Texas" is expressed at all. Nothing
+   * reads it outside the appeal chain and nothing stores it between periods —
+   * it is derived, not state.
+   */
+  strongholds?: Record<string, number>;
 }
 
 /** Something a company owns that another company might want. */

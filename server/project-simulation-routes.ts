@@ -36,10 +36,12 @@ import { marketShares, RIVALS_IN_A_CUSTOM_SEASON } from "@shared/simulation/cust
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { marketScale } from "@shared/simulation/world";
 import { STARTING_CASH } from "@shared/simulation/season";
+import { positionFor } from "@shared/simulation/opening";
 import { marketNameOf } from "./simulation-scope";
 import { TRAINING_YEARS_MIN, joinPathFor, newSeasonCode, seatKindFor, seatsHeld, SEAT_COLUMN, SEAT_PRICE_CENTS } from "./company-season-routes";
 import { CADENCES, DEFAULT_YEARS, PERIOD_NAME, type Cadence } from "@shared/simulation/cadence";
 import { pathStatus } from "./phase-trees";
+import { AUDIENCE_SUBCATEGORIES, asAudience } from "@shared/simulation/creator";
 import { takeSeatInSeason, advanceVenture } from "./simulation-routes";
 import { startSeason } from "./simulation-tick";
 
@@ -171,6 +173,25 @@ export function registerProjectSimulationRoutes(app: Express): void {
        * can now choose it — see `shared/simulation/opening.ts`.
        */
       const opening: "competitive" | "actual" = req.body?.opening === "actual" ? "actual" : "competitive";
+      /*
+       * What the founder actually has in the bank, in the project's money.
+       *
+       * The opening used to decide this — the funded one hands everybody the
+       * market's standard purse, which on one founder's own project read "You
+       * start with $1.21m in the bank" to somebody who had nothing of the kind.
+       * A season about their business should open on their money, so it is
+       * asked for, and whatever they say is exactly what is in the bank on day
+       * one. Left out, the opening decides, as before.
+       */
+      const rawCash = req.body?.startingCash;
+      let startingCash: number | null = null;
+      if (rawCash !== undefined && rawCash !== null && rawCash !== "") {
+        const n = Number(rawCash);
+        if (!Number.isFinite(n) || n < 0 || n > 1_000_000_000) {
+          return res.status(400).json({ code: "invalid_input", field: "startingCash", message: "Starting cash is an amount between nothing and a billion." });
+        }
+        startingCash = Math.round(n);
+      }
 
       /*
        * Playing again a market this project already paid for.
@@ -296,6 +317,14 @@ export function registerProjectSimulationRoutes(app: Express): void {
        * seated. Trimmed by share so what goes is always the smallest — the four
        * that are left are the four a founder would have named anyway.
        */
+      /*
+       * A channel is played as an audience: subscribing is free and the money
+       * is ads, sponsors and members. A market written before that existed —
+       * replayed here — is converted on the way through, so "play again"
+       * gives the channel the new model without asking Nova for anything.
+       */
+      if (written && AUDIENCE_SUBCATEGORIES.has(String(project.subcategory ?? ""))) written = asAudience(written);
+
       if (written && written.incumbents.length > RIVALS_IN_A_CUSTOM_SEASON) {
         written.incumbents = [...written.incumbents]
           .sort((a, b) => b.startingShare - a.startingShare)
@@ -424,7 +453,11 @@ export function registerProjectSimulationRoutes(app: Express): void {
            * ticks off three milestones in week two has not changed the company
            * they started with.
            */
-          openingStanding: opening === "actual" ? await standingOf(project.id, company.id) : null,
+          openingStanding: await (async () => {
+            const standing = opening === "actual" ? await standingOf(project.id, company.id) : null;
+            if (startingCash === null) return standing;
+            return { ...(standing ?? {}), cash: startingCash };
+          })(),
         }).returning();
         return { company, season };
       });
@@ -461,7 +494,16 @@ export function registerProjectSimulationRoutes(app: Express): void {
        */
       const playing = (written ?? nicheById(nicheId))!;
       const { rivals, open } = marketShares(playing);
-      const openingCash = Math.round(STARTING_CASH * marketScale(playing));
+      /*
+       * What is in the bank on day one: the founder's own figure when they gave
+       * one, and otherwise what the opening works out — which for "where you
+       * actually are" is a fraction of the funded purse, not the purse itself.
+       */
+      const fundedCash = Math.round(STARTING_CASH * marketScale(playing));
+      const snap = made.season.openingStanding as { progress?: number } | null;
+      const openingCash = startingCash ?? (opening === "actual" && snap && typeof snap.progress === "number"
+        ? Math.round(fundedCash * positionFor({ progress: snap.progress, people: 1 }).cash)
+        : fundedCash);
 
       res.status(201).json({
         companyId: made.company.id,

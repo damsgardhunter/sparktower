@@ -64,6 +64,8 @@ export interface MarketingDecision {
   promo?: "none" | "free_month" | "january";
   /** Spent bringing back last year's leavers. From year four. */
   winbackSpend?: number;
+  /** Sponsor reads per video, 0–3, in a market that earns from an audience. See `creator.ts`. */
+  sponsorReads?: number;
   /** A research report: next year's expectations, or what the incumbents will charge. From year four. */
   research?: "none" | "expectations" | "rivals";
   /** How the year's marketing attention is split across the regions you sell in. From year four. */
@@ -199,15 +201,19 @@ export interface ExecutiveDecision {
   /** Where the company says its effort goes. Concentrating beats hedging in a market this contested. */
   focus: "growth" | "margin" | "quality" | "survival";
   /**
-   * What the founders will do with the period themselves, by action id.
+   * How the founders carve up their own week, as hours against action ids.
    *
    * The only lever on this desk that spends time instead of money — see
-   * `actions.ts` for what each one does and why the effects are flat. Bounded
-   * by `cleanDecision` to what the market offered and to one a month, two a
-   * quarter, three a year, so neither a hand-written filing nor a bot can take
-   * five.
+   * `actions.ts` for what each one does. Sixty hours a week, and `hoursTaken`
+   * scales a filing back in proportion if it claims more, so neither a
+   * hand-written filing nor a bot can work a hundred-hour week.
+   *
+   * This replaced `founderActions?: string[]`, an allowance of one action a
+   * month, two a quarter, three a year. The allowance taught the wrong thing:
+   * it asked "which single thing will you do", when the decision a founder
+   * really makes is how to split a week that is already full.
    */
-  founderActions?: string[];
+  founderHours?: Record<string, number>;
   /**
    * Seats to close, folding their levers into whoever is left.
    *
@@ -376,6 +382,8 @@ export function interlock(company: Company, d: TeamDecisions, niche: Niche): Int
 export function lift(spend: number, half: number, ceiling: number): number {
   return saturate(Math.max(0, spend), half) * ceiling;
 }
+
+
 
 /** What the company pays every year before it does anything at all. */
 /**
@@ -569,6 +577,45 @@ export const FOCUS_EFFECTS = {
   survival: { marketing: 0.7, quality: 0.75, cost: 0.9, fixed: 0.78, decay: 1.15 },
 } as const;
 
+/**
+ * What a focus does on its own, before anybody spends anything.
+ *
+ * The multipliers above are a thumb on everyone else's scale, and a thumb on
+ * nothing is nothing: a founder spending a few hundred a month saw growth
+ * make eighteen per cent of almost no marketing go further, and read the most
+ * important decision on the desk as decoration. So each focus also does a
+ * thing of its own, in flat points a year — like the founders' own hours,
+ * decisive when the company is small and a detail once it is not.
+ *
+ *   - growth: the whole company talking about itself — brand, every year
+ *   - margin: the customers already here paying properly — revenue
+ *   - quality: everyone's attention on the product — quality, every year
+ *   - survival: nothing of its own; its whole point is the cuts above
+ */
+/*
+ * `appeal` is felt this period: how hard the company goes after people who
+ * are not yet its customers. Growth chases them; margin and survival stop
+ * chasing to look after what is already here. It is what makes the choice
+ * show on the forecast the moment it is made, rather than as two points of
+ * brand a year from now.
+ */
+export const FOCUS_DIRECT = {
+  growth: { brand: 5, quality: 0, revenue: 1, appeal: 1.2 },
+  margin: { brand: 0, quality: 0, revenue: 1.12, appeal: 0.92 },
+  quality: { brand: 0, quality: 5, revenue: 1, appeal: 0.96 },
+  survival: { brand: 0, quality: 0, revenue: 1, appeal: 0.88 },
+} as const;
+
+/*
+ * Only in a market that earns from an audience, for now. The six that sell
+ * were balanced with focus as a thumb on the scale and nothing more, and the
+ * direct effects move a dozen of their guards — so they get these when they
+ * are re-tuned for them, not by accident.
+ */
+const NO_FOCUS = { brand: 0, quality: 0, revenue: 1, appeal: 1 } as const;
+export const focusDirect = (focus?: string, niche?: { model?: string }) =>
+  niche?.model === "audience" ? (FOCUS_DIRECT[(focus ?? "") as keyof typeof FOCUS_DIRECT] ?? NO_FOCUS) : NO_FOCUS;
+
 export type Focus = keyof typeof FOCUS_EFFECTS;
 
 /**
@@ -589,9 +636,9 @@ export const focusEffects = (focus?: string) =>
 
 /** What the focus did, in the words the team will read afterwards. */
 export const FOCUS_NOTES: Record<Focus, string> = {
-  growth: "The year was run for growth: marketing went further than it otherwise would, and everything cost a little more to do.",
-  margin: "The year was run for margin: each unit cost less to make and to serve, and the marketing did not reach as far.",
-  quality: "The year was run for quality: the product moved faster than the spending alone would explain, and fewer people heard about it.",
+  growth: "The year was run for growth: the whole company talked about itself, marketing went further than it otherwise would, and everything cost a little more to do.",
+  margin: "The year was run for margin: the customers already here paid properly, each unit cost less to make and to serve, and the marketing did not reach as far.",
+  quality: "The year was run for quality: everybody's attention was on the product, it moved faster than the spending alone would explain, and fewer people heard about it.",
   survival: "The year was run for survival: a hiring freeze and deferred everything. Much cheaper, and the company comes out of it behind where it would otherwise be.",
 };
 
@@ -1008,6 +1055,58 @@ export function plantOverhead(capacity: number, niche: Niche): number {
  * every way of playing intact and still makes a bad year a bad year.
  */
 
+/**
+ * How far a staff salary follows the market's own scale.
+ *
+ * Nothing scaled them at all to begin with, while every executive salary
+ * beside them went through `payScale`: on a market whose scale is 0.009 that
+ * came out as one employee costing $95,200 a year against $5,177 for all five
+ * founders put together, in a company holding $1,184. Hiring anybody was
+ * insolvency, so no small company hired, so it could never serve what it won.
+ *
+ * Scaling them the whole way (an exponent of 1) fixes that and costs the one
+ * advantage capital has: `from-nothing`'s "rewards capital" went red with
+ * £500,000 finishing behind £60,000, because staff cheap enough for a founder
+ * to hire are cheap enough that having money stops mattering. That was
+ * bisected twice — once by neutering the line here, once from a clean tree.
+ *
+ * A fractional power keeps most of the real-world weight of a wage while still
+ * bringing it into the market's own units. The exponent was measured rather
+ * than chosen: on a 0.009-scale market a head costs $95,200 a year unscaled,
+ * $18,300 at the square root, $42,000 at a quarter and about $58,000 here.
+ *
+ * ## This is not the dial for capital's advantage, and that was measured
+ *
+ * It looked like it was. Dearer staff ought to reward capital, because hiring
+ * sooner is what money buys, and `from-nothing`'s "rewards capital" guard did
+ * go green when the exponent came down from 1 to 0.5. It does not survive
+ * contact with the numbers. Swept on a settled tree, with the gap being
+ * £500,000's finish less £60,000's:
+ *
+ *     exponent 0 (no scaling at all)   -564,771   (-2.3%)
+ *     exponent 0.08                    -298,273   (-1.2%)
+ *     exponent 0.15                    -240,430   (-1.0%)
+ *
+ * Every one of them red, and **reverting this change entirely makes the gap
+ * wider, not narrower** — so the guard is not failing because of this line,
+ * and turning it further is turning a dial that is not connected to the thing
+ * it appeared to control. 0.15 is kept because it is the best of the three and
+ * because the inconsistency it fixes is real on its own terms: nothing scaled
+ * a staff wage while every executive salary beside it went through `payScale`,
+ * which had one employee costing eighteen times all five founders put
+ * together.
+ *
+ * What the sweep actually says is that capital's edge in this engine was
+ * partly an artefact of small companies being overcharged. Three correct bug
+ * fixes landed around this measurement — phantom wins credited in reports,
+ * founders drawing salaries they never chose, and founders being counted again
+ * as hired staff — and all three take costs off the *unfunded* company, which
+ * is the side of the comparison that was already winning. Making money matter
+ * is a question about what money can buy that effort cannot, and it belongs
+ * wherever that is decided, not here.
+ */
+export const SALARY_SCALING = 0.15;
+
 export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1, niche?: Pick<Niche, "workforce">): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
   /*
@@ -1017,7 +1116,40 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
    * is a different question in each. See `workforce.ts`.
    */
   const perHead = niche ? salaryIn(niche) : SALARY;
-  const salaries = headcount * perHead * economy.costIndex;
+  /*
+   * At this market's scale, exactly as `officerCost` below already does it.
+   *
+   * `salaryIn` is an absolute figure — £95,200 a head in a podcast network —
+   * and nothing scaled it, while every executive salary beside it goes through
+   * `payScale`. On a market whose whole scale is 0.009 that came out as **one
+   * employee costing eighteen times all five founders put together**: $95,200
+   * a year a head against $5,177 for the entire founding team, in a company
+   * holding $1,184. Hiring anybody was instant insolvency, so no small company
+   * ever hired, so it could never serve anyone it won.
+   *
+   * It is the same mismatch the player sees everywhere money meets a small
+   * market: the thresholds and the executive pay are scaled to the market and
+   * this one line was not, so the costs and the takings were in different
+   * currencies. Scaled, a head here costs $3,521 a year, which is a decision
+   * rather than a death sentence.
+   */
+  /*
+   * Part of the way to the market's scale, not all of it.
+   *
+   * Full `payScale` — what executives get — was measured and it does fix the
+   * thing it was aimed at, but it also flattens the one advantage capital has:
+   * `from-nothing`'s "rewards capital" guard went red, £500,000 finishing
+   * behind £60,000, because staff cheap enough for a founder to hire are cheap
+   * enough that having money stops mattering. Neutering the line put that
+   * guard straight back to green, which is how it was attributed.
+   *
+   * The square root sits between the two: on the season this was found on it
+   * takes a head from $95,200 a year to about $18,000, so hiring is a decision
+   * a small company can make and still a serious one — and a funded company
+   * can still hire more people sooner, which is the advantage that is supposed
+   * to be there.
+   */
+  const salaries = headcount * perHead * payScale(company.scale) ** SALARY_SCALING * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
   // `officersOf` rather than `seats.length`, because one founder holding five

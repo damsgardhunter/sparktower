@@ -33,8 +33,8 @@ import { canEnter, continentOf, regionById } from "@shared/simulation/geography"
 import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, offerActions, speak } from "@shared/simulation/levers";
-import { foundersActions } from "@shared/simulation/actions";
+import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, offerActions, speak, stepFor } from "@shared/simulation/levers";
+import { buildableActions, foundersActions } from "@shared/simulation/actions";
 import { economyFor } from "@shared/simulation/season";
 import { debtDrag, IDLE_RATE, marketPriceOf, officersOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
@@ -52,8 +52,9 @@ import {
 } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
 import { incumbentYear } from "@shared/simulation/incumbents";
-import { assetEffects } from "@shared/simulation/assets";
+import { assetEffects, marketListings } from "@shared/simulation/assets";
 import { withOptions } from "@shared/simulation/lever-options";
+import { audienceModelFor, isAudience, wordsOf } from "@shared/simulation/creator";
 import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
@@ -118,6 +119,33 @@ export async function draftFor(ventureId: string, year: number): Promise<{ decis
     filedBy[r.role] = r.userId;
   }
   return { decisions, filedBy };
+}
+
+/**
+ * This period's shelf, as things the founders' week could go into.
+ *
+ * Dealt from the season and the period exactly as the auction and
+ * `resolveYear` deal it — same seed, same hand — so the lot somebody puts
+ * hours into is the lot they were shown and the lot the engine will resolve.
+ * Only what `byHand` says is work comes back (see `buildableActions`), because
+ * an ambassador is not a thing anybody builds.
+ *
+ * One function rather than three copies: the desk, the projection and the
+ * filing all have to agree about what was on offer, and the filing is checked
+ * against it.
+ */
+function buildableNow(
+  seasonId: string,
+  niche: Niche,
+  year: number,
+  periods: number,
+  company: Company | undefined,
+) {
+  if (!company) return [];
+  return buildableActions(marketListings({
+    seasonId, year, niche, periods,
+    owned: (company.assets ?? []).map((a) => a.name),
+  }));
 }
 
 export function registerSimulationDeskRoutes(app: Express): void {
@@ -208,6 +236,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
+
+    const buildable = buildableNow(season.id, niche, year, periods, company);
     /*
      * The whole season's length, which the solo schedule needs: it spreads one
      * person's levers across the season rather than handing them five desks'
@@ -433,9 +463,11 @@ export function registerSimulationDeskRoutes(app: Express): void {
          * on one screen is nineteen decisions before the first one is made, so
          * theirs arrive a few a period across the season. See `soloSchedule`.
          */
-        .filter((base) => solo
+        /* A creator market's own levers: there from the start, and nowhere else. */
+        .filter((base) => !base.audienceOnly || isAudience(niche))
+        .filter((base) => base.audienceOnly || (solo
           ? (soloLevers.get(base.id) ?? Infinity) <= year
-          : isUnlocked(r, base.id, year, periods))
+          : isUnlocked(r, base.id, year, periods)))
         /*
          * And not the ones that are only decisions about colleagues. A founder
          * holding every desk has no budget to split between themselves and no
@@ -444,7 +476,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         .filter((base) => !solo || !LEVERS_FOR_A_TABLE.has(base.id))
         // Which desk it came from, kept so the unlock year below is asked of
         // the right one — solo puts five desks' levers in a single list.
-        .map((base) => ({ base, desk: r }))))
+        /* A founder's arrows move in thousands, not fifty-thousands — see `stepFor`. */
+        .map((base) => ({ base: stepFor(base, solo), desk: r }))))
         .map(({ base, desk }) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
@@ -452,7 +485,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const unlocksIn = solo
           ? Math.ceil((soloLevers.get(base.id) ?? 1) / periods)
           : unlockYear(desk, base.id);
-        const field = { ...offerActions(speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), niche, periods), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        const field = { ...offerActions(speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), niche, periods, buildable), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
         return withOptions(field, {
           company, niche, seasonId: season.id, year, solo,
           offers: offers.map((o) => ({ id: o.id, title: o.title, terms: o.terms })),
@@ -789,6 +822,20 @@ export function registerSimulationDeskRoutes(app: Express): void {
       /** Sealed bids this table has standing, so the commitment meter can count them. */
       bidsOutstanding,
       lastYear: lastReport?.report ?? null,
+      /*
+       * A channel's journey: the milestones ahead, the thresholds that switch
+       * the money on, and the sponsors in this market — so the desk can show a
+       * creator where they stand and what they are growing towards. Null for
+       * a market that sells.
+       */
+      audience: isAudience(niche) ? (() => {
+        const m = audienceModelFor(niche);
+        return {
+          partnerAt: m.partnerAt, sponsorsFrom: m.sponsorsFrom, milestones: m.milestones, words: wordsOf(niche),
+          sponsors: m.sponsors.map((sp) => ({ name: sp.name, sells: sp.sells, segment: niche.segments.find((x) => x.id === sp.segment)?.name ?? sp.segment })),
+          subscribers: Object.values(company.customers ?? {}).reduce((a, n) => a + Math.max(0, Number(n) || 0), 0),
+        };
+      })() : null,
       lastFiled: lastFiled ? { decisions: lastFiled.decisions, filedBy: lastFiled.filedBy } : null,
       rivals,
       standing,
@@ -852,6 +899,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
     const world = { ...(season.world as World), niche, year };
+    const mine = world.companies.find((c) => c.id === venture.id);
     /** One chair: the form on this desk carries all five desks' levers. */
     const soloSeason = (season.seatCount ?? 5) <= 1;
 
@@ -872,8 +920,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const opts = {
           year: season.year, periods: periodsPerYear(season.cadence as Cadence),
           segmentIds: niche.segments.map((s) => s.id),
-          actionIds: foundersActions(niche).map((a) => a.id),
+          actionIds: [...foundersActions(niche).map((a) => a.id), ...buildableNow(season.id, niche, season.year, periodsPerYear(season.cadence as Cadence), mine).map((a) => a.id)],
           ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+          audience: isAudience(niche),
         };
         const cityIds = niche.cities.map((c) => c.id);
         /*
@@ -982,9 +1031,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), {
       year: season.year, periods: periodsPerYear(season.cadence as Cadence),
       segmentIds: niche.segments.map((s) => s.id),
-      actionIds: foundersActions(niche).map((a) => a.id),
+      actionIds: [...foundersActions(niche).map((a) => a.id), ...buildableNow(season.id, niche, season.year, periodsPerYear(season.cadence as Cadence), company).map((a) => a.id)],
       // Solo reads its own schedule, so a filing cannot carry a lever the desk has not opened.
       ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+      audience: isAudience(niche),
     });
     const clean = cleanFor(role);
 

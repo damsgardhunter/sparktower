@@ -18,6 +18,7 @@
  * mean a state, and always beside an icon and a word.
  */
 import { useEffect, useMemo, useState } from "react";
+import { periodTitle, usePeriod } from "@/components/sim/desk-currency";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Table2, BarChart3, ShieldAlert } from "lucide-react";
@@ -474,6 +475,7 @@ export function ProjectionPanel({ ventureId, draft, filedStamp, solo }: {
   /** One founder holding every desk: the impact rows are desks, not people. */
   solo?: boolean;
 }) {
+  const period = usePeriod();
   const { data, isFetching, isError } = useProjection(ventureId, draft, filedStamp);
 
   if (!data) {
@@ -492,7 +494,7 @@ export function ProjectionPanel({ ventureId, draft, filedStamp, solo }: {
     >
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h3 className="text-base font-semibold">Year {data.year}, as it stands</h3>
+          <h3 className="text-base font-semibold">{periodTitle(period)} {data.year}, as it stands</h3>
           <p className="text-xs text-muted-foreground">
             Everything the table has filed{draft ? ", plus your changes" : ""} — run through the year, if the rest of the market holds still.
           </p>

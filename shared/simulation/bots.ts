@@ -345,7 +345,14 @@ export function botDecision(input: {
   const perPeriod = 1 / Math.max(1, Math.round(periods));
   const base = defaultDraft(role, company, previous);
   const draft: Record<string, any> = { ...base };
-  const fields = LEVER_FIELDS[role] ?? [];
+  /*
+   * Not a creator market's own levers. Left in, one extra field moved every
+   * seeded draw after it in every market; and in an audience market a nudge
+   * "within bounds" put a bot on nought sponsor reads as often as three, so a
+   * random half of bot channels turned every sponsor away. A bot runs the
+   * market's default of one read a video (`readsFor`).
+   */
+  const fields = (LEVER_FIELDS[role] ?? []).filter((f) => !f.audienceOnly);
 
   /*
    * What this bot is willing to spend on running the company this year.

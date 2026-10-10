@@ -15,21 +15,51 @@
  *   4. Money settles: revenue, costs, interest, and what that does to credit.
  *   5. Reputation moves, last, because it is a consequence rather than a lever.
  */
-import type { Company, Economy, Niche, World } from "./types";
+import type { Company, CompanyAsset, Economy, Niche, World } from "./types";
 import { WIND_DOWN_FROM, WIND_DOWN_RATE, WIND_UP_AFTER } from "./season";
 import { inPeriodWords } from "./cadence";
-import { actionsTaken, founderEffects, founderPace, founderShare } from "./actions";
-import { allocate, marketShares, sharesWhereSold } from "./market";
+import { breakoutFor, breakoutNote } from "./breakout";
+
+/** Points of product a year of spending can buy — see the note at `shipped`. */
+export const QUALITY_A_YEAR = 14;
+
+/**
+ * What it costs to buy half a year's worth of them, at this market's scale.
+ *
+ * Unchanged at £200,000, and that is a measured answer rather than an untouched
+ * default.
+ *
+ * Making the product easier to improve was asked for and tried five ways. The
+ * ceiling first: 14 points a year to 20 broke seven guards, including "every
+ * way of playing has a route" in three markets and "being better beats being
+ * louder" — a higher cap is worth most to whoever spends most, so it widens
+ * the gap between the frugal route and the funded one. Then the price, which
+ * ought to do the opposite, since the cap stays and a small spender simply
+ * gets further for the money: £140,000 broke six, £175,000 broke five.
+ *
+ * So the economics of getting good are load-bearing in both directions, and
+ * the honest conclusion is that this is not a constant to nudge — it is a
+ * rebalance across several guards, and a deliberate one.
+ *
+ * What *is* safe is the other channel to the same place: the founders' own
+ * hours. They improve the product for nothing, they are diluted the moment the
+ * company hires (`founderShare`), and so making them stronger helps the
+ * company with no money and does nothing for the one with plenty — which is
+ * the opposite of what broke the guards above. See `ACTION_SLOTS`.
+ */
+export const QUALITY_COSTS = 200_000;
+import { BUILD_PREFIX, buildListingId, buildableActions, founderEffects, founderShare, foundersActions, hoursTaken, isBuild } from "./actions";
+import { allocate, marketShares, sharesWhereSold, segmentDemand } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, officersOf, overheadShare, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, focusDirect, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, officersOf, overheadShare, plantOverhead, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { shortfalls, expectationsFor, weightsOf } from "./criteria";
-import { assetEffects, ageAssets, stillHeld } from "./assets";
+import { assetEffects, ageAssets, stillHeld, buildGrade, buildProgress, madeByHand, marketListings, servingCapacity } from "./assets";
 import { brandLanding, capacityBuild, qualityLanding, staffing } from "./lag";
 import {
   EMERGENCY_REPUTATION, RATING_START, applyRepayment, boardChiefExecutive, creditMultiplier,
   interestOn, justifiedRating, nextRating, ratingGrade, reviewInvestors, termsFor,
 } from "./finance";
-import { reachOf, appealFor, atScale, paceFor, expectedPrice } from "./market";
+import { reachOf, appealFor, atScale, paceFor, expectedPrice, saturate, costPerCustomer, CAN_BE_BOUGHT, BOUGHT_PER_EARNED } from "./market";
 import { symbolOf } from "../currency";
 import { eventsDue, economyWithWeather, companyWithEvents, nextWeather, type MarketEvent } from "./events";
 import {
@@ -37,6 +67,9 @@ import {
   annualPlans, bondTotal, capacityMoney, drawdown, forecastOutcome, freeTierBrand, fundYear, isUnlocked, priceFor, takings,
   type Bond,
 } from "./responsibilities";
+import {
+  AUDIENCE_SERVE_COST, FEED_DRAIN, adRevenueFor, discoveryFor, audienceMarket, audienceModelFor, isAudience, membersFor, milestonesCrossed, nextMilestone,
+  readsFor, sponsorMarket, viewsFor, type CreatorReport, OVERLAP } from "./creator";
 import {
   OVERRULE_LOYALTY, REVIEW_SERVICE, RESIGN_AT, STAFF_QUALITY_START, WARN_AT, effort, payEffect, personOf, poached,
   reviewSaving, staffLeverage, staffQualityNext, yearLoyalty,
@@ -54,8 +87,7 @@ import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./
 import {
   DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers, expansionOutcome,
   boughtReach, dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
-  statementCost, winBack, type Cover, type Shock, type ShockAnswer,
-} from "./world";
+  statementCost, winBack, type Cover, type Shock, type ShockAnswer, entryCostOf } from "./world";
 import { valuation, applyAcquisition, EARNINGS_MULTIPLE, EARNINGS_BAND} from "./mergers";
 
 /** What one company is told about the year it just had. */
@@ -76,6 +108,8 @@ export interface CompanyReport {
   shareWhereYouSell: number;
   shareChange: number;
   /** Customers who wanted them and couldn't be served. */
+  /** In an audience market: views, the three kinds of money, sponsors won and milestones. */
+  creator?: CreatorReport;
   turnedAway: number;
 
   revenue: number;
@@ -581,6 +615,8 @@ export function resolveYear(
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
   const notesFor: Record<string, string[]> = {};
+  /* This period's breakout video, by company, for the audience report. See `breakout.ts`. */
+  const breakoutById = new Map<string, NonNullable<ReturnType<typeof breakoutFor>>>();
   const segmentLabel = (id: string) => (niche.segments.find((s) => s.id === id)?.name ?? id).toLowerCase();
   /** What the world's moves cost each company this year, charged at settlement. */
   const worldSpend = new Map<string, { marketing: number; operations: number; cash: number }>();
@@ -676,17 +712,141 @@ export function resolveYear(
      * because a company hiring forty people this period has forty people's
      * work landing on the product whether or not they are any good yet.
      */
+    /*
+     * The week put into making something instead of buying it.
+     *
+     * The shelf is dealt here from the season and the period, exactly as the
+     * tick deals it for the auction — same seed, same hand — so a listing id
+     * filed against the week resolves to the same lot the player was shown.
+     * Nothing is stored for this to work and nothing can drift out of step.
+     *
+     * Progress is weeks, carried on the company. When a month's worth of the
+     * hours the lot asks for has gone in, they have it, graded by how much of
+     * the week actually went in: half the hours is a half-strength version
+     * that took twice as long, and a double week is a better one, sooner. See
+     * `buildGrade` and `madeByHand`.
+     */
+    const weeksInAPeriod = 52 / periods;
+    const builtThisPeriod: CompanyAsset[] = [];
+    const buildsNow: Record<string, number> = { ...(company.builds ?? {}) };
+    /*
+     * The week as filed, then the week as allowed, and the builds read from
+     * the second of those.
+     *
+     * Order matters here and the first version had it wrong: it took build
+     * progress straight off the filing, so a filing claiming sixty hours on a
+     * build *and* sixty on the product got full progress on the build and a
+     * capped week on the stats — sixty hours of work out of a hundred and
+     * twenty. `hoursTaken` is what holds the week, so everything has to come
+     * out of its answer, which means the build ids have to be known before it
+     * is called and the hours read after.
+     */
+    const filedRaw = (d.ceo?.founderHours ?? {}) as Record<string, number>;
+    const buildIds = Object.keys(filedRaw).filter((id) => isBuild(id) && (Number(filedRaw[id]) || 0) > 0);
+    const filedHours = hoursTaken(d.ceo?.founderHours, niche, buildIds);
+    if (buildIds.length) {
+      const shelf = marketListings({
+        seasonId: world.seasonId, year: world.year, niche, periods,
+        owned: (company.assets ?? []).map((a) => a.name),
+      });
+      const offered = buildableActions(shelf);
+      for (const id of buildIds) {
+        const option = offered.find((a) => a.id === id);
+        const listing = shelf.find((l) => l.id === buildListingId(id));
+        if (!option?.asks || !listing) continue;
+        const put = filedHours[id] ?? 0;
+        const step = buildProgress(put, option.asks, weeksInAPeriod);
+        const weeksIn = (buildsNow[listing.id] ?? 0) + step.weeksIn;
+        if (weeksIn >= weeksInAPeriod) {
+          const grade = buildGrade(put, option.asks);
+          builtThisPeriod.push(madeByHand(listing.asset, grade));
+          delete buildsNow[listing.id];
+          notesFor[company.id].push(
+            grade >= 1
+              ? `Built it yourselves: ${listing.asset.name}, for nothing but the hours. It would have cost ${Math.round(listing.reserve).toLocaleString()}.`
+              : `Built it yourselves, the simple version: ${listing.asset.name} at ${Math.round(grade * 100)}% of what a bought one does. Fewer hours, longer wait, smaller thing.`,
+          );
+        } else {
+          buildsNow[listing.id] = weeksIn;
+          const left = Math.max(0, weeksInAPeriod - weeksIn);
+          notesFor[company.id].push(
+            `${listing.asset.name} is coming along: about ${left.toFixed(1)} more ${left === 1 ? "week" : "weeks"} of the hours you are putting in.`,
+          );
+        }
+      }
+    }
+
+    /*
+     * And whether one of them took off.
+     *
+     * Rolled from the hours the founders put into the work itself — the
+     * actions that move the product, not the ones that move the price or the
+     * bills — so the thing that makes it more likely is the thing that
+     * actually makes it more likely. Money cannot buy a shot at this on
+     * purpose: paid promotion has its own path and its own bound, and letting
+     * a budget buy breakout chance would be a second advertising lever that
+     * beat being good at something. See `breakoutFor`.
+     */
+    const onTheWork = foundersActions(niche)
+      .filter((a) => a.moves === "quality")
+      .reduce((sum, a) => sum + (filedHours[a.id] ?? 0), 0)
+      + buildIds.reduce((sum, id) => sum + (filedHours[id] ?? 0), 0);
+    /*
+     * Not while the company is in collapse.
+     *
+     * Partly because it is true — nobody's video pops off in the month the
+     * bailiffs arrive — and mostly because a windfall has no business deciding
+     * whether the rescue machinery works. `balance`'s "can get a company out
+     * of insolvency" compares a rescued company against one left to fall, and
+     * a free hit landing in either arm moved the comparison by 4% and turned
+     * it red. A mechanic that is luck by design must not be able to answer a
+     * question about a mechanism.
+     */
+    const tookOff = company.bankruptSince ? null : breakoutFor({
+      seed: `${world.seasonId}:${world.year}:${company.id}`,
+      hoursOnTheWork: onTheWork,
+      quality: company.quality,
+      held: Object.values(company.customers ?? {}).reduce((sum, n) => sum + n, 0),
+      niche, scale: company.scale, periods,
+    });
+    if (tookOff) {
+      breakoutById.set(company.id, tookOff);
+      notesFor[company.id].push(breakoutNote(tookOff, niche.voice?.customers ?? "customers"));
+    }
+
     const founders = founderEffects(
-      actionsTaken(d.ceo?.founderActions, niche, periods),
-      /*
-       * Their share of the work, times a period's share of a year's work —
-       * see `founderPace`, which is why a monthly season does not get four
-       * times the founder labour of a yearly one.
-       */
-      founderShare(officersOf(company), Math.max(company.staff ?? 0, d.coo?.headcount ?? 0))
-        * founderPace(periods),
+      filedHours,
+      niche,
+      periods,
+      founderShare(officersOf(company), Math.max(company.staff ?? 0, d.coo?.headcount ?? 0)),
     );
     const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, atScale(220_000, company.scale) * per, 16 * per) * focus.marketing * eff.cmo * pace.marketing * aim;
+    /*
+     * Performance marketing, which buys *brand* — and that is the whole
+     * problem with it as a way of buying customers.
+     *
+     * Raising this ceiling was the obvious fix for "paying for promotion
+     * should gain users and I'm not sure it is" and it is not the fix.
+     * Measured on a generated channel market with the purse held at £50m so
+     * money was never the limit, twelve months, everything else still:
+     *
+     *            ceiling 9      ceiling 25
+     *     $0         3,504          3,504
+     *     $107       4,979          5,100
+     *     $214       5,671          5,865
+     *     $1,072     6,951          7,325
+     *     $4,288     7,379          7,830
+     *
+     * Nearly tripling the ceiling bought 6% more subscribers for £51,456 a
+     * year. The cap was never binding: this lever adds points of *brand*, and
+     * brand is clamped, headroomed and converted through the appeal curve, so
+     * money spent here runs into brand's own ceiling long before it runs into
+     * this one. Twenty times the threshold buys a rounding error either way.
+     *
+     * Which is why `boughtCustomers` below exists. Paying to be noticed and
+     * paying to acquire somebody are different things, and only the first of
+     * them was modelled.
+     */
     const perfGain = lift(d.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per) * focus.marketing * eff.cmo * pace.marketing * aim;
     // PR is a coin flip; a referral programme only works if the product is worth recommending.
     const seedOf = (what: string) => `${world.seasonId}:${world.year}:${company.id}:${what}`;
@@ -771,7 +931,24 @@ export function resolveYear(
      */
     const builders = (company.staff ?? 0) > 0 ? staffLeverage(company.staffQuality ?? STAFF_QUALITY_START) : 1;
     // An automated line is a line set up for what it already makes: product work buys less.
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(200_000, company.scale) * per, 14 * per) * paceFor({ positioning: d.ceo?.positioning ?? company.positioning }, niche) * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
+    /*
+     * How many points of product a full year of spending can buy.
+     *
+     * Raised from 14 to 20 on the owner's call, after a season's worth of
+     * measurement put a startup at quality 54 by the end of a year against
+     * rivals sitting at 81 — reachable, but only just, and only by spending
+     * every month without a break. Twenty makes getting good a year's work
+     * rather than two, which is the difference between "catch up eventually"
+     * and "catch up this season".
+     *
+     * Deliberately modest. Lifting improvement ceilings has broken the
+     * balance guards twice in this engine — once as a money multiplier, once
+     * as a catch-up term — and both times the thing that broke was "every way
+     * of playing has a route", because a higher ceiling helps whoever spends
+     * most. 14 → 20 is a 43% raise on one axis rather than a new mechanic, and
+     * the guards are run against it rather than hoped at.
+     */
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, atScale(QUALITY_COSTS, company.scale) * per, QUALITY_A_YEAR * per) * paceFor({ positioning: d.ceo?.positioning ?? company.positioning }, niche) * focus.quality) * drag.product * eff.cto * pay.output * auto.product * builders;
     /*
      * The pace again: shipping swings the year's result either way, and puts
      * part of it in front of customers now rather than next year.
@@ -1020,10 +1197,13 @@ export function resolveYear(
     const here = Array.isArray(company.cities) ? company.cities : niche.cities.map((c) => c.id);
     const wanted = new Set(d.cmo?.targetCities ?? here);
     const opened = niche.cities.filter((c) => wanted.has(c.id) && !here.includes(c.id));
-    const entryCost = opened.reduce((sum, c) => sum + c.entryCost, 0);
+    const entryCost = opened.reduce((sum, c) => sum + entryCostOf(c, niche), 0);
     if (opened.length > 0) {
       notesFor[company.id].push(
-        `Opened in ${opened.map((c) => c.name).join(", ")} for ${entryCost.toLocaleString()}. That is reach bought rather than earned, and it is only worth it if somebody sells there.`,
+        entryCost > 0
+          ? `Opened in ${opened.map((c) => c.name).join(", ")} for ${entryCost.toLocaleString()}. That is reach bought rather than earned, and it is only worth it if somebody sells there.`
+          /* Free, in an audience market — but thinner. See `entryCostOf`. */
+          : `Opened in ${opened.map((c) => c.name).join(", ")}. It costs nothing to be watched somewhere new; the cost is that you reach less of everywhere you already are.`,
       );
     }
     const cities = Array.from(new Set([...here, ...opened.map((c) => c.id)]));
@@ -1156,7 +1336,7 @@ export function resolveYear(
       const vote = expansionOutcome(votes);
       if (vote.carried) {
         expanding = { cityId: announced.id, opensYear: world.year + periods };
-        spent.cash += announced.entryCost * EXPANSION_DISCOUNT;
+        spent.cash += entryCostOf(announced, niche) * EXPANSION_DISCOUNT;
         notesFor[company.id].push(`${announced.name} went to the table, ${vote.yes} for and ${vote.no} against: committed for next year, at ${Math.round(EXPANSION_DISCOUNT * 100)}% of the usual cost to open.`);
       } else {
         notesFor[company.id].push(`${announced.name} went to the table, ${vote.yes} for and ${vote.no} against: not opened. The announcement stands; somebody else may take it.`);
@@ -1191,7 +1371,15 @@ export function resolveYear(
 
     return {
       ...company,
-      assets,
+      /*
+       * Anything the founders finished making this period, alongside anything
+       * bought or dealt. A made one is an asset like any other from here on —
+       * `assetEffects` reads it, it ages, it can be sold — which is the point:
+       * the hours bought the same kind of thing the money would have.
+       */
+      assets: [...assets, ...builtThisPeriod],
+      /** What is still part-built, in weeks. Dropped when there is none. */
+      ...(Object.keys(buildsNow).length ? { builds: buildsNow } : { builds: undefined }),
       cities: citiesNow,
       people,
       programmes,
@@ -1232,7 +1420,7 @@ export function resolveYear(
       buildFrom: build.buildFrom,
       buildTo: build.buildTo,
       capacity,
-      brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand + founders.brand) * hBrand - decay.brand),
+      brand: clamp(company.brand + (brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand + founders.brand + focusDirect(d.ceo?.focus, niche).brand * per) * hBrand - decay.brand + (tookOff?.brand ?? 0)),
       /*
        * `sourcing.quality` is a standing condition — outsourcing makes the
        * product a few points worse for as long as it is outsourced — written
@@ -1240,8 +1428,8 @@ export function resolveYear(
        * cost a monthly season 36 points of quality a year, which took a good
        * company from 38 to 5 over four years while it was shipping well.
        */
-      quality: clamp(company.quality + (quality.landed + shippedNow + yielded.quality + founders.quality) * hQuality + sourcing.quality * per - decay.quality),
-      reputation: clamp(company.reputation + reputationNow + yielded.reputation),
+      quality: clamp(company.quality + (quality.landed + shippedNow + yielded.quality + founders.quality + focusDirect(d.ceo?.focus, niche).quality * per) * hQuality + sourcing.quality * per - decay.quality + (tookOff?.quality ?? 0)),
+      reputation: clamp(company.reputation + reputationNow + yielded.reputation + founders.reputation + (tookOff?.reputation ?? 0)),
       security: securityNext(company.security, d.cto?.securitySpend, per, company.scale),
       data: dataNext(company.data, d.cto?.dataSpend, per, company.scale),
       features,
@@ -1337,8 +1525,23 @@ export function resolveYear(
     return { ...company, price: moves.price, quality: moves.quality, brand: moves.brand, service: moves.service, capacity: moves.capacity };
   });
 
-  /* 3. The market decides. */
-  const allocation = allocate(withIncumbents, niche, world.year, nextEconomy, periods);
+  /*
+   * 3. The market decides.
+   *
+   * In an audience market the viewers decide on a copy where nobody charges
+   * and nobody is out of room — see `audienceMarket`. Everything after this
+   * reads the real companies; only who holds whom comes from the copy.
+   */
+  const audience = isAudience(niche) ? audienceModelFor(niche) : null;
+  const readsById = new Map(withIncumbents.map((c) => [c.id, readsFor(c, byCompany.get(c.id)?.cmo?.sponsorReads)]));
+  /* The chief executive's focus, felt on appeal this period. See `FOCUS_DIRECT`. */
+  const pushed = withIncumbents.map((c) => c.kind === "player"
+    ? { ...c, focusPush: focusDirect(byCompany.get(c.id)?.ceo?.focus, niche).appeal }
+    : c);
+  const market = audience
+    ? audienceMarket(pushed, niche, (c) => readsById.get(c.id) ?? 1)
+    : { companies: pushed, niche };
+  const allocation = allocate(market.companies, market.niche, world.year, nextEconomy, periods);
   if (process.env.SIM_DEBUG) {
     console.log(`[dbg] demand=${(nextEconomy as any).demand} year=${world.year} periods=${periods}`);
     for (const c of withIncumbents) {
@@ -1364,7 +1567,7 @@ export function resolveYear(
     if (spend <= 0 || totalLeft <= 0) continue;
     const was = company.lastStats;
     const fixed = !was || company.quality > was.quality + 2 || company.service > was.service + 2 || company.price < was.price * 0.97;
-    let room = Math.max(0, company.capacity - Object.values(allocation.held[company.id] ?? {}).reduce((a, n) => a + n, 0));
+    let room = audience ? Number.POSITIVE_INFINITY : Math.max(0, company.capacity - Object.values(allocation.held[company.id] ?? {}).reduce((a, n) => a + n, 0));
     let back = 0;
     for (const segment of niche.segments) {
       const gone = left[segment.id] ?? 0;
@@ -1379,6 +1582,10 @@ export function resolveYear(
       if (n <= 0) continue;
       allocation.held[holder.id][segment.id] -= n;
       allocation.held[company.id][segment.id] = (allocation.held[company.id][segment.id] ?? 0) + n;
+      /* On the books as won back from them, so the year's bridge still lands on the count. */
+      const wonBack = (allocation.flows[segment.id] = allocation.flows[segment.id] ?? {});
+      const fromHolder = (wonBack[holder.id] = wonBack[holder.id] ?? {});
+      fromHolder[company.id] = (fromHolder[company.id] ?? 0) + n;
       room -= n;
       back += n;
     }
@@ -1388,6 +1595,236 @@ export function resolveYear(
         : "The win-back money found nobody to bring back — there was no room, or nobody had left."];
     }
   }
+
+  /*
+   * Paying to acquire somebody, which is not the same as paying to be noticed.
+   *
+   * `performanceSpend` buys points of brand above, and that is all it bought:
+   * measured with the purse held at £50m so money was never the limit, twenty
+   * times the lever's own threshold won 6% more subscribers over a year, and
+   * nearly tripling its ceiling changed that by nothing — brand saturates long
+   * before the ceiling binds. "Paying for promotion should gain users" was
+   * right and it was not what the engine did.
+   *
+   * So the same money also buys customers outright, at what a customer costs
+   * in this market (`costPerCustomer` — the market's own figure where Nova
+   * wrote one, otherwise a few months of what they pay). Taken from whoever
+   * holds them, biggest holder first, and bounded three ways, because an
+   * unbounded version is a button that buys the market:
+   *
+   *   - by the money, at the market's price per customer;
+   *   - by the room — somebody bought and then turned away is worse than not
+   *     buying them, and the reputation hit for turning people away is real;
+   *   - by `CAN_BE_BOUGHT`, a twentieth of the segment in a period, because
+   *     only the people actually shopping around can be bought.
+   *
+   * It is charged nothing extra here: the money has already left on the
+   * marketing line. This is what that line now does.
+   */
+  for (const company of withIncumbents) {
+    if (company.kind !== "player") continue;
+    const d = byCompany.get(company.id);
+    const spend = Math.max(0, d?.cmo?.performanceSpend ?? 0);
+    if (spend <= 0) continue;
+
+    const room = Math.max(0, servingCapacity(company) - Object.values(allocation.held[company.id] ?? {}).reduce((a, n) => a + n, 0));
+    if (room <= 0) continue;
+
+    let purse = spend;
+    let won = 0;
+    /* The dearest customers are also the ones worth most; take them in the order the market offers. */
+    for (const segment of niche.segments) {
+      if (purse <= 0 || won >= room) break;
+      const price = costPerCustomer(niche, segment, periods);
+      const inPlay = Math.floor(segment.size * CAN_BE_BOUGHT * per);
+      const affordable = Math.floor(purse / price);
+      /*
+       * And never more than this segment chose on its own merits — see
+       * `BOUGHT_PER_EARNED`. Money doubles down on what is working; it does
+       * not stand in for being worth choosing.
+       */
+      const earned = Math.floor((allocation.fresh[segment.id]?.[company.id] ?? 0) * BOUGHT_PER_EARNED);
+      const take = Math.max(0, Math.min(affordable, inPlay, earned, room - won));
+      if (take <= 0) continue;
+
+      /* Out of whoever holds them, biggest first — nobody appears from nowhere. */
+      let left = take;
+      const holders = withIncumbents
+        .filter((c) => c.id !== company.id)
+        .map((c) => ({ id: c.id, has: allocation.held[c.id]?.[segment.id] ?? 0 }))
+        .filter((h) => h.has > 0)
+        .sort((a, b) => b.has - a.has);
+      for (const holder of holders) {
+        if (left <= 0) break;
+        const n = Math.min(left, Math.floor(holder.has));
+        if (n <= 0) continue;
+        allocation.held[holder.id][segment.id] -= n;
+        allocation.held[company.id] = allocation.held[company.id] ?? {};
+        allocation.held[company.id][segment.id] = (allocation.held[company.id][segment.id] ?? 0) + n;
+        /*
+         * And recorded as a flow, because somebody lost them.
+         *
+         * The report's customer bridge adds up where every customer came from
+         * and has to land exactly on the count; a move that happens in `held`
+         * and nowhere else is a customer the report cannot explain. Caught by
+         * `forecast.test`'s bridge at 1,491 unaccounted swipers in one year
+         * — the same hole the feed and the win-back both had and both now
+         * fill. `flows` rather than `fresh`: these are people taken from a
+         * named rival, not new demand arriving.
+         */
+        const bySeg = (allocation.flows[segment.id] ??= {});
+        const from = (bySeg[holder.id] ??= {});
+        from[company.id] = (from[company.id] ?? 0) + n;
+        left -= n;
+      }
+      const got = take - left;
+      won += got;
+      purse -= got * price;
+    }
+
+    if (won > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []),
+        `Paid for ${won.toLocaleString()} new ${niche.voice?.customers ?? "customers"} at about ${Math.round((spend - purse) / won).toLocaleString()} each. They stay as long as the company keeps them.`];
+    }
+  }
+
+  /*
+   * The feed: how a channel actually grows. Each player's uploads are shown to
+   * strangers, and the ones who subscribe come out of whoever held their
+   * attention — never more than a quarter of any holder's in a period. See
+   * `discoveryFor`. Incumbents are grown channels already; this is the
+   * newcomer's door.
+   */
+  const discovered = new Map<string, { views: number; breakout: number; gained: number }>();
+  if (audience) {
+    /*
+     * How much of any one holder's audience the feed can move in a period,
+     * between every channel taking from it — so eight newcomers cannot empty
+     * an incumbent eight times as fast as one.
+     */
+    const drainLeft = new Map<string, number>();
+    const drainKey = (id: string, seg: string) => `${id}:${seg}`;
+    for (const c of withIncumbents) for (const seg of niche.segments) {
+      drainLeft.set(drainKey(c.id, seg.id), (allocation.held[c.id]?.[seg.id] ?? 0) * FEED_DRAIN * per);
+    }
+    /*
+     * Every channel is in the same feed — the incumbents too. Run one-way, the
+     * feed was a door that only opened inwards: newcomers found strangers and
+     * nobody ever found them back, and a long season ended with one network
+     * holding most of the market. Run for everybody, attention flows towards
+     * whoever is better at holding it, in both directions.
+     */
+    for (const company of withIncumbents) {
+      const d = byCompany.get(company.id);
+      const promotion = company.kind === "player"
+        ? saturate((d?.cmo?.performanceSpend ?? 0) / per, atScale(150_000, company.scale))
+        : 0.3;
+      /*
+       * No luck here. A video breaking out is `breakout.ts`'s, rolled once a
+       * period on the founders' hours and quality; rolling a second one inside
+       * the feed paid an audience market the same windfall twice.
+       */
+      const roll = undefined;
+      const already = Object.fromEntries(Object.entries(allocation.held[company.id] ?? {}).map(([k, n]) => [k, Math.max(0, n)]));
+      const subscriberViews = viewsFor({ company, subscribers: already, segments: niche.segments, model: audience, reads: readsById.get(company.id) ?? 1, per }).total;
+      const found = discoveryFor({
+        company, segments: niche.segments, model: audience, per, promotion, roll, subscriberViews,
+        open: niche.cities.filter((city) => (company.cities ?? []).includes(city.id)),
+        push: company.kind === "player" ? focusDirect(d?.ceo?.focus, niche).appeal : 1,
+      });
+      let gained = 0;
+      for (const segment of niche.segments) {
+        /*
+         * The feed shows you to strangers, and the more of a segment already
+         * watches you the fewer strangers are left in it. Without this a
+         * channel found people at the same rate at forty per cent of the
+         * market as at nothing, and a fourteen-year season ended with one
+         * show holding four fifths of every listener there was.
+         */
+        const segTotal = withIncumbents.reduce((a, c) => a + Math.max(0, allocation.held[c.id]?.[segment.id] ?? 0), 0) || 1;
+        const mine = Math.max(0, allocation.held[company.id]?.[segment.id] ?? 0) / segTotal;
+        let want = (found.gains[segment.id] ?? 0) * Math.pow(Math.max(0, 1 - mine), 2);
+        const holders = withIncumbents.filter((c) => c.id !== company.id && (drainLeft.get(drainKey(c.id, segment.id)) ?? 0) > 0);
+        const pool = holders.reduce((a, c) => a + (drainLeft.get(drainKey(c.id, segment.id)) ?? 0), 0);
+        /*
+         * Some of them are watching both, and that is the point.
+         *
+         * A new subscriber used to come entirely out of somebody else's
+         * subscriber list, as though attention were a fixed number of people
+         * passed between channels. It is not: somebody who finds a second golf
+         * channel they like keeps the first one. So a share of every gain is
+         * *additive* — nobody loses them — and only the rest is taken.
+         *
+         * The additive share goes on the books as `fresh`, not as a flow,
+         * because no named rival lost them; recording it as a flow would make
+         * the report say somebody was beaten when nobody was, and the customer
+         * bridge would stop landing on the count. (Four passes now move
+         * subscribers after `allocate` — the feed, the win-back, paid
+         * acquisition and the allocator's own trim — and every one of them has
+         * had this bug at least once.)
+         *
+         * The segment is still bounded: it can hold at most its own demand
+         * plus the overlap, so "they watch both" does not become "every channel
+         * holds everybody". The drain cap and the (1 − mine)² saturation above
+         * are untouched — this changes where the people come from, not how
+         * many are found.
+         */
+        /*
+         * How many arrive, decided before anybody is moved — and that order is
+         * the whole correctness argument.
+         *
+         * The first version capped the total *after* writing the books, so a
+         * gain trimmed by the segment's ceiling had already been recorded as
+         * taken from rivals and as fresh demand. `forecast.test`'s customer
+         * bridge caught it immediately: the report explained more people than
+         * arrived. So the number is settled first, then split, then written.
+         */
+        const takeable = Math.min(want * (1 - OVERLAP), pool);
+        const alsoWatch = want * OVERLAP;
+        /*
+         * This period's demand, not the segment's written size — the two
+         * differ once a segment has grown or the economy has turned, and the
+         * shrink pass in `allocate` bounds against the demand figure. A
+         * ceiling read off `size` was the tighter of the two, so grown
+         * segments were capped below what the allocator would happily hold.
+         */
+        const ceiling = segmentDemand(segment, world.year, nextEconomy, periods) * (1 + OVERLAP);
+        const standing = withIncumbents.reduce((a, c) => a + Math.max(0, allocation.held[c.id]?.[segment.id] ?? 0), 0);
+        /*
+         * The additive half is the only part that adds to the segment's total,
+         * so it is the only part the ceiling bounds — the taken half moves
+         * people who are already counted.
+         */
+        const extra = Math.max(0, Math.min(alsoWatch, ceiling - standing));
+        const arriving = takeable + extra;
+        if (arriving <= 0) continue;
+
+        for (const h of holders) {
+          const room = drainLeft.get(drainKey(h.id, segment.id)) ?? 0;
+          const take = takeable * (room / pool);
+          drainLeft.set(drainKey(h.id, segment.id), room - take);
+          allocation.held[h.id][segment.id] -= take;
+          /* On the books as won from them, so the year's bridge still lands on the count. */
+          const bySeg = (allocation.flows[segment.id] = allocation.flows[segment.id] ?? {});
+          const fromHolder = (bySeg[h.id] = bySeg[h.id] ?? {});
+          fromHolder[company.id] = (fromHolder[company.id] ?? 0) + take;
+        }
+        /*
+         * And the ones who simply added a second subscription — nobody's loss,
+         * so `fresh` and never `flows`. Recording them as a flow would have the
+         * report claim a rival was beaten when none was.
+         */
+        if (extra > 0) {
+          allocation.fresh[segment.id] = allocation.fresh[segment.id] ?? {};
+          allocation.fresh[segment.id][company.id] = (allocation.fresh[segment.id][company.id] ?? 0) + extra;
+        }
+        allocation.held[company.id] = allocation.held[company.id] ?? {};
+        allocation.held[company.id][segment.id] = (allocation.held[company.id][segment.id] ?? 0) + arriving;
+        gained += arriving;
+      }
+      discovered.set(company.id, { views: found.views, breakout: found.breakout, gained });
+    }
+  }
   const sharesAfter = marketShares(allocation.held);
   /*
    * And the same again, read against each company's own footprint. Both go on
@@ -1395,6 +1832,67 @@ export function resolveYear(
    * where it trades says how well it is trading.
    */
   const soldShares = sharesWhereSold(allocation.held, world.companies, niche);
+
+  /*
+   * The audience's money, worked out for every channel at once, because the
+   * sponsors choose between all of them: each has a year's budget, and what
+   * one channel wins another does not. Incumbents are channels too.
+   */
+  const creatorById = new Map<string, CreatorReport>();
+  if (audience) {
+    const views = new Map<string, ReturnType<typeof viewsFor>>();
+    const subsOf = (c: Company) => Object.fromEntries(
+      Object.entries(allocation.held[c.id] ?? {}).map(([id, n]) => [id, Math.max(0, Math.round(n))]));
+    for (const c of withIncumbents) {
+      views.set(c.id, viewsFor({ company: c, subscribers: subsOf(c), segments: niche.segments, model: audience, reads: readsById.get(c.id) ?? 1, per }));
+    }
+    const uploads = Math.max(1, audience.uploadsPerYear * per);
+    const deals = sponsorMarket({
+      model: audience, per, demand: nextEconomy.demand,
+      channels: withIncumbents.map((c) => ({
+        id: c.id, subscribers: subsOf(c), perUpload: views.get(c.id)!.perUpload, uploads,
+        reads: readsById.get(c.id) ?? 1, reputation: c.reputation,
+      })),
+    });
+    for (const c of withIncumbents) {
+      const subs = subsOf(c);
+      const count = Object.values(subs).reduce((a, n) => a + n, 0);
+      const before = Object.values(c.customers ?? {}).reduce((a, n) => a + Math.max(0, Number(n) || 0), 0);
+      const v = views.get(c.id)!;
+      const members = membersFor({ company: c, subscribers: subs, segments: niche.segments, model: audience, expected: (s) => expectedPrice(s, world.year) });
+      const mine = deals.get(c.id) ?? [];
+      creatorById.set(c.id, {
+        subscribers: count,
+        views: Math.round(v.total + (discovered.get(c.id)?.views ?? 0) + (breakoutById.get(c.id)?.views ?? 0)),
+        discovered: Math.round(discovered.get(c.id)?.gained ?? 0),
+        breakouts: breakoutById.has(c.id) ? 1 : 0,
+        ...(breakoutById.has(c.id) ? { breakout: { tier: breakoutById.get(c.id)!.tier, views: breakoutById.get(c.id)!.views } } : {}),
+        viewsPerUpload: Math.round(v.perUpload),
+        uploads,
+        reads: readsById.get(c.id) ?? 1,
+        adRevenue: adRevenueFor(v.bySegment, audience, count),
+        sponsorRevenue: mine.reduce((a, d) => a + d.amount, 0),
+        /* A period's worth: membership prices are a year's fee, like every price here. */
+        memberRevenue: members.revenue * per,
+        members: Math.round(members.members),
+        monetised: count >= audience.partnerAt,
+        sponsored: mine.length > 0,
+        deals: mine.map((d) => ({ ...d, amount: Math.round(d.amount), reads: Math.round(d.reads * 10) / 10 })),
+        stretched: v.stretched,
+        milestones: milestonesCrossed(audience, before, count),
+        next: nextMilestone(audience, count),
+      });
+      if (c.kind !== "player") continue;
+      /* The journey, said where the team reads the year. */
+      const cr = creatorById.get(c.id)!;
+      const say = (line: string) => { notesFor[c.id] = [...(notesFor[c.id] ?? []), line]; };
+      for (const m of cr.milestones) say(`${m.name}: ${count.toLocaleString()} ${niche.voice.customers}. ${m.means}`);
+      if (!cr.monetised) say(`Ads pay nothing until ${audience.partnerAt.toLocaleString()} ${niche.voice.customers}. You have ${count.toLocaleString()}.`);
+      if (cr.stretched < 0.9) say(`The audience has outgrown what you can make: each ${niche.voice.customer} saw about ${Math.round(cr.stretched * 100)}% of what they would have. More production would turn straight into views.`);
+      if (cr.deals.length) say(`Sponsored by ${cr.deals.map((d) => d.name).join(", ")}, for ${Math.round(cr.sponsorRevenue).toLocaleString()} in all.`);
+      else if (count >= audience.sponsorsFrom && cr.reads > 0) say("No sponsor chose you this time: they went to channels with more views per video or a closer fit for their buyers.");
+    }
+  }
 
   /* 4. Money. */
   const settled: Company[] = withIncumbents.map((company) => {
@@ -1432,7 +1930,20 @@ export function resolveYear(
     const freshUnits = niche.segments.reduce((a, s) => a + (allocation.fresh[s.id]?.[company.id] ?? 0), 0);
     const heldUnits = Object.values(customers).reduce((a, n) => a + n, 0);
     const promoFactor = promo.allRevenue * (1 - (1 - promo.newRevenue) * (heldUnits > 0 ? Math.min(1, freshUnits / heldUnits) : 0));
-    const revenue = took.revenue * plans.revenueFactor * promoFactor * per;
+    /*
+     * An audience market's money: ads and sponsors on this period's views, and
+     * the members' fees — the only part a promotion or an annual plan touches,
+     * because it is the only part anybody pays for.
+     */
+    const creator = creatorById.get(company.id);
+    /* A margin year: the customers already here pay properly. See `FOCUS_DIRECT`. */
+    const focusRevenue = company.kind === "player" ? focusDirect(d?.ceo?.focus, niche).revenue : 1;
+    const memberTake = creator ? creator.memberRevenue * plans.revenueFactor * promoFactor * focusRevenue : 0;
+    /* What members actually paid, after any offer or annual-plan discount: the figure the report shows. */
+    if (creator) creator.memberRevenue = memberTake;
+    const revenue = creator
+      ? creator.adRevenue + creator.sponsorRevenue + memberTake
+      : took.revenue * plans.revenueFactor * promoFactor * focusRevenue * per;
     const shareRate = company.kind === "player"
       ? (company.revenueShares ?? []).filter((r) => r.until >= world.year).reduce((a, r) => a + r.rate, 0)
       : 0;
@@ -1442,7 +1953,15 @@ export function resolveYear(
     const cover = (company.kind === "player" ? byCompany.get(company.id)?.cfo?.insurance : "none") as Cover | undefined;
     const premium = revenue * (PREMIUM[cover ?? "none"] ?? 0);
     // Free users are served too, more cheaply than paying ones.
-    const variable = ((units - took.freeUsers) * company.unitCost + took.freeUsers * company.unitCost * FREE_SERVE_COST) * per;
+    /*
+     * In an audience market a subscriber costs almost nothing — the cost is
+     * making the videos for them, which scales with the audience production is
+     * feeding, and a member's perks cost what a unit costs. Both at the unit
+     * cost, so cutting it is still cheaper production.
+     */
+    const variable = creator
+      ? (Math.min(units, Math.max(0, company.capacity)) * company.unitCost * AUDIENCE_SERVE_COST + creator.members * company.unitCost) * per
+      : ((units - took.freeUsers) * company.unitCost + took.freeUsers * company.unitCost * FREE_SERVE_COST) * per;
     const marketing = (d?.cmo?.brandSpend ?? 0) + (d?.cmo?.performanceSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0)
       + (d?.cmo?.prSpend ?? 0) + (d?.cmo?.referralSpend ?? 0) + extra.marketing;
     /*
@@ -1599,7 +2118,13 @@ export function resolveYear(
     const ownCapacity = (baseById.get(company.id) ?? company).capacity;
     // Leased room is paid for in full already; only the company's own room sits idle at a cost.
     const idle = company.kind === "player" ? Math.max(0, ownCapacity - (base0?.leased ?? 0) - units) : 0;
-    const idleCost = company.kind === "player" ? idleCapacityCost(idle, niche) * per : 0;
+    /*
+     * Not in an audience market. There, capacity is how much the team can
+     * make, and making less than it could is not a warehouse standing empty —
+     * the cost of production is charged on what is actually made (see
+     * `AUDIENCE_SERVE_COST`), so idle room would be charged twice.
+     */
+    const idleCost = company.kind === "player" && !audience ? idleCapacityCost(idle, niche) * per : 0;
     /*
      * What the whole plant costs to keep ready, full or not — `PLANT_OVERHEAD`,
      * which is 0 today and documented at length where it is declared.
@@ -1934,11 +2459,70 @@ export function resolveYear(
      * A catalogue market is scale 1 and is untouched.
      */
     const assetValue = company.assets.reduce((sum, a) => sum + a.bookValue, 0);
-    const creditLimit = Math.max(0, Math.round(
+    const rated = Math.max(0, Math.round(
       (revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000 * (company.scale ?? 1))
       // A lender lends more to a company it rates, and far less to one it does not.
       * (company.kind === "player" ? creditMultiplier(ratedScore ?? RATING_START) : 1),
     ));
+    /*
+     * And never below what has already been drawn.
+     *
+     * A facility that is cut to less than the balance outstanding on it makes
+     * the money already borrowed immediately overdue, and in this engine that
+     * is fatal in one step: `creditLimit - debt` is what the emergency loan
+     * draws on, so a limit under the debt means the next ordinary month's bills
+     * have no cover at all and the company is insolvent having done nothing
+     * wrong since the loan.
+     *
+     * Measured: a company borrowed £33,738 against a line of £102,237 to buy a
+     * marketplace lot, the period resolved, and the recomputed line came back
+     * £12,338 — a third drawn, 88% of the facility gone — so by month two the
+     * debt was above the limit and it was bankrupt. Buying anything on credit
+     * was a death sentence, which is why the search had learned never to.
+     *
+     * Banks do not do that. A drawn facility becomes a balance you owe on
+     * terms; what gets withdrawn is the *undrawn* part. So the rating decides
+     * how much more the company may borrow, and what it already borrowed stays
+     * borrowed — with the interest and the hit to the credit score it has
+     * already earned, which are the real consequences of being over-extended.
+     *
+     * ## And a little room on top, which is the difference between a hard
+     * ## month and a dead company
+     *
+     * Holding the limit at exactly the balance was the first attempt and it
+     * changes nothing: `creditLimit - debt` is nought, so the emergency loan
+     * has nothing to draw on and the first month that loses a pound is still
+     * fatal. Measured on the same season, with the founders' salaries out of
+     * it, the loss was **$253 a month** — a company dying of a quarter of a
+     * per cent of its own debt.
+     *
+     * So a fifth of the rated facility stays available whatever is drawn. It
+     * is the overdraft every real business has beside its loans: small, dear
+     * (the emergency rate is punitive and the credit score takes the hit), and
+     * enough that a company which over-borrowed has a few months to trade out
+     * of it rather than one. On the season above that is about $2,500 against
+     * a $253 loss — ten months of rope, which is what "commit a little for the
+     * next couple of months" needs to be true.
+     */
+    /*
+     * Withdrawn once the company has actually failed.
+     *
+     * The overdraft exists so that a company which borrowed to invest has a
+     * few months to trade out of a bad patch rather than dying of a $253 loss
+     * — see above. It is not meant to prop up a business that has already run
+     * out: `a-season-not-a-period`'s "stops paying people it cannot pay"
+     * caught exactly that, because with a fifth of the facility always
+     * available the company could keep meeting a payroll it had no business
+     * meeting, and nobody was ever let go. Bisected by setting it to nought,
+     * which made that test pass again.
+     *
+     * Which is also what a bank does. A facility is there for the business
+     * having a hard quarter and is pulled from the one in default, and the
+     * consequence of running out has to be real or the lever above is a
+     * cheat code rather than a cushion.
+     */
+    const overdraft = company.bankruptSince ? 0 : Math.round(rated * 0.2);
+    const creditLimit = Math.max(rated, Math.round(debt) + overdraft);
 
     /*
      * 5. Reputation: a consequence, not a lever. It is bought by keeping
@@ -2013,7 +2597,28 @@ export function resolveYear(
     let founderShare = base.founderShare ?? 1;
     if (raised > 0) {
       const units = Object.values(customers).reduce((sum, n) => sum + n, 0);
-      const worth = Math.max(500_000, revenue * 1.2 + assetValue - debt);
+      /*
+       * What an investor is buying: a year of the takings, what is owned, less
+       * what is owed.
+       *
+       * Two things were wrong with `Math.max(500_000, revenue * 1.2 + …)`.
+       *
+       * `revenue` here is the **period's** revenue, so a monthly season valued
+       * the same company at a twelfth of what a yearly one did — the cadence
+       * decided the share price. Annualised, so a year of takings means a year
+       * of takings however often the table files.
+       *
+       * And the floor was a flat half-million in every market. In a channel
+       * market worth £765,000 in total, a company earning £5,038 a year was
+       * valued at £500,000 — so raising was close to free money, and the only
+       * thing stopping the search selling the lot was the control bound added
+       * to the optimiser. Scaled to the market, a floor means "nobody is worth
+       * literally nothing" rather than "everybody is worth half a million".
+       */
+      const worth = Math.max(
+        atScale(500_000, company.scale),
+        revenue / per * 1.2 + assetValue - debt,
+      );
       founderShare = Math.max(0.05, founderShare * (worth / (worth + raised)));
       notesFor[company.id] = [
         ...(notesFor[company.id] ?? []),
@@ -2068,7 +2673,14 @@ export function resolveYear(
       const opening = company.cash + (opened?.cost ?? 0);
       const lines: CashLine[] = [];
       if (opened && opened.cost > 0) lines.push({ label: `Opened in ${opened.names.join(", ")}`, amount: -opened.cost });
-      lines.push({ label: "Sales", amount: revenue });
+      if (creator) {
+        /* Three lines rather than one, because they are three different businesses. */
+        lines.push({ label: "Ad revenue", amount: creator.adRevenue });
+        lines.push({ label: "Sponsorships", amount: creator.sponsorRevenue });
+        lines.push({ label: "Memberships and merch", amount: memberTake });
+      } else {
+        lines.push({ label: "Sales", amount: revenue });
+      }
       /*
        * `overhead` belongs in here and not in a line of its own: a cash bridge
        * is what somebody reads to see where the money went, and "running the
@@ -2323,9 +2935,18 @@ export function resolveYear(
    * play all legitimate ways to win, and makes diluting the company a decision
    * with a visible cost.
    */
+  /*
+   * A year of what a company takes in. For a seller it is customers at their
+   * tiers; for a channel it is this period's ads and sponsors carried over a
+   * year, plus a year of members.
+   */
+  const salesOf = (c: Company): number => {
+    const cr = creatorById.get(c.id);
+    return cr ? (cr.adRevenue + cr.sponsorRevenue + cr.memberRevenue) / per : takings(c, c.customers, niche.segments).revenue;
+  };
   const valueOf = (c: Company): number => {
     // A year of what its customers actually pay, tier by tier.
-    const sales = takings(c, c.customers, niche.segments).revenue;
+    const sales = salesOf(c);
     const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
     /*
      * And what the company earns, which the score used to be blind to.
@@ -2426,7 +3047,7 @@ export function resolveYear(
      * The engine has always known the real figures at settlement. It just
      * threw them away here.
      */
-    const traded = ledger[company.id] ?? { revenue: takings(company, company.customers, niche.segments).revenue, costs: 0, profit: 0 };
+    const traded = ledger[company.id] ?? { revenue: salesOf(company), costs: 0, profit: 0 };
     return {
       companyId: company.id,
       name: company.name,
@@ -2436,6 +3057,7 @@ export function resolveYear(
       shareWhereYouSell: soldShares[company.id] ?? 0,
       shareChange: (sharesAfter[company.id] ?? 0) - (sharesBefore[company.id] ?? 0),
       turnedAway: allocation.unserved[company.id] ?? 0,
+      ...(creatorById.has(company.id) ? { creator: creatorById.get(company.id) } : {}),
       revenue: traded.revenue,
       costs: traded.costs,
       profit: traded.profit,

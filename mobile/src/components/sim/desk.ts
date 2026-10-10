@@ -44,7 +44,7 @@ export interface LeverField {
   id: string;
   label: string;
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "actions";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "hours";
   min?: number;
   max?: number;
   step?: number;
@@ -55,8 +55,8 @@ export interface LeverField {
   choices?: { value: string; label: string; help: string }[];
   /** For "levels": the answer an option carries when nobody has chosen one. */
   defaultChoice?: string;
-  /** For "actions": how many of `options` may be chosen at once. */
-  pick?: number;
+  /** For "hours": the week the founders have to split across `options`. */
+  hours?: number;
 }
 
 /** Mirrors UnitPrices in shared/simulation/levers.ts: what one of each thing costs in this market. */

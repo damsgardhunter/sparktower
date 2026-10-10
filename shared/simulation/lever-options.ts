@@ -18,6 +18,7 @@ import { overrulable, personOf, WARN_AT } from "./people";
 import { featureCost, featureMenu } from "./product";
 import { SHIFT_MAX } from "./factory";
 import { SPENDING_SEATS } from "./responsibilities";
+import { audienceModelFor, isAudience, wordsOf } from "./creator";
 import {
   EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, programmeCost, researchCost, statementCost,
   type ProgrammeId,
@@ -39,8 +40,33 @@ export interface LeverOptionContext {
   openedNiches?: World["openedNiches"];
 }
 
-export function withOptions<F extends LeverField>(field: F, ctx: LeverOptionContext): F {
+/**
+ * The levers whose meaning changes when nobody pays to subscribe.
+ *
+ * The price is what a member pays, not what a viewer pays; capacity is what
+ * the team can make, not a door people are turned away at. Said in the
+ * market's own words, so a podcast talks about episodes and downloads.
+ */
+function inAudienceWords<F extends LeverField>(field: F, niche: Niche): F {
+  const w = wordsOf(niche);
+  const model = audienceModelFor(niche);
+  switch (field.id) {
+    case "price":
+      return { ...field, label: `Membership price`, help: `What a member pays — the ${niche.voice.customers} who want more than the free ${w.uploads}. Subscribing costs nothing whatever this is set to; it decides only how many join. Nought means no memberships.` };
+    case "tiers":
+      return { ...field, label: "Membership tiers", help: `A membership price for each kind of ${niche.voice.customer}. Superfans pay for perks a casual ${niche.voice.customer} never would.` };
+    case "capacityTarget":
+      return { ...field, help: `How much the team can make: ${w.uploads} at the quality you set. Nobody is ever turned away — but an audience bigger than what you make sees less of you, so each ${niche.voice.customer} brings fewer ${w.views}. Ads start paying at ${model.partnerAt.toLocaleString()} ${niche.voice.customers} and sponsors look from ${model.sponsorsFrom.toLocaleString()}.` };
+    case "performanceSpend":
+      return { ...field, label: "Promoting videos", help: `Paid promotion and thumbnails tested to death: ${niche.voice.customers} now, for as long as you keep paying.` };
+    default:
+      return field;
+  }
+}
+
+export function withOptions<F extends LeverField>(input: F, ctx: LeverOptionContext): F {
   const { company, niche, seasonId, year, solo, offers } = ctx;
+  const field = isAudience(niche) ? inAudienceWords(input, niche) : input;
   if (field.id === "tiers") {
     return {
       ...field,

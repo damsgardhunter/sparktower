@@ -26,6 +26,7 @@
  * with a sane default. `buildCustomMarket` cannot fail: it either returns a
  * playable market or it returns null, and null means "use one of the seven".
  */
+import { audienceModelFor, type AudienceModel } from "./creator";
 import type { City, IncumbentSeed, Niche, NicheVoice, Segment, IncumbentPosture } from "./types";
 import type { WorkKind } from "./workforce";
 import { ASSET_SLOTS } from "./assets";
@@ -788,7 +789,13 @@ export function buildCustomMarket(raw: unknown, fallbackId: string, options: Bui
    */
   const written = typeof (m.openShare) === "number" && (m.openShare as number) > 0 ? (m.openShare as number) : null;
   const openShare = options.fresh ? openShareFor({ segments, cities, baseUnitCost }) : (written ?? TRULY_OPEN_SHARE);
-  const priced = options.fresh ? pricedForABusiness({ segments, cities, baseUnitCost, openShare }) : segments;
+  /*
+   * An audience market earns from views, sponsors and members, not from
+   * subscribers paying — so its prices are membership prices, and lifting them
+   * until subscriptions pay the payroll would be solving the wrong business.
+   */
+  const audience = m.model === "audience";
+  const priced = options.fresh && !audience ? pricedForABusiness({ segments, cities, baseUnitCost, openShare }) : segments;
   return {
     id: slug(m.id ?? m.name, fallbackId),
     name: str(m.name, 80, "Your market"),
@@ -804,6 +811,9 @@ export function buildCustomMarket(raw: unknown, fallbackId: string, options: Bui
     workforce: staffable(cleanWorkforce(m.workforce), priced),
     assets: cleanAssets(m.assets),
     actions: cleanActions(m.actions),
+    ...(audience
+      ? { model: "audience" as const, audience: audienceModelFor({ segments: priced, audience: (m.audience ?? {}) as Partial<AudienceModel> }) }
+      : {}),
   };
 }
 

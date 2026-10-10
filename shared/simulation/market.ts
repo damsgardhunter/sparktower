@@ -47,6 +47,95 @@ export interface Offer {
 }
 
 /** Diminishing returns, bounded 0–1. Doubling spend never doubles effect — the second million buys less than the first. */
+/**
+ * What one customer costs to buy, in this market and this segment.
+ *
+ * Paying to acquire somebody and paying to be noticed are different things,
+ * and until now only the second was modelled: `performanceSpend` added points
+ * of *brand*, which is why money could not buy users. Measured with the purse
+ * held at £50m, twenty times the lever's own threshold bought 6% more
+ * subscribers — and nearly tripling its ceiling changed that by nothing,
+ * because brand saturates long before the ceiling binds.
+ *
+ * So a market now says what a customer costs, and money buys customers at that
+ * price. `niche.acquisitionCost` is the market's own figure where it has one
+ * (Nova is asked for it: a subscriber costs a few pounds, a clinic hundreds, a
+ * construction client a tender). Without one it falls back to a share of what
+ * the customer pays over a year, which is how every trade actually talks about
+ * this — "we pay about three months' revenue to land one".
+ *
+ * Deliberately a *multiple* of the customer's value and not a fraction: paid
+ * acquisition that paid for itself inside a period would be a money printer,
+ * and the reason real companies do it anyway is that the customer stays. So it
+ * costs more than a period's revenue and less than a year's, and the business
+ * case is retention — which this engine already models through loyalty.
+ */
+export const CAC_MONTHS = 4;
+
+export function costPerCustomer(
+  niche: Pick<Niche, "acquisitionCost">,
+  segment: Pick<Segment, "referencePrice">,
+  periods: number,
+): number {
+  const written = Number(niche.acquisitionCost);
+  if (Number.isFinite(written) && written > 0) return written;
+  /*
+   * `referencePrice` is what one customer pays **per period**, so a month of
+   * revenue is that scaled by how much of a year the period is.
+   *
+   * The first version had `referencePrice * (12 / periods) / 12`, which in a
+   * monthly season is a *twelfth* of a month's revenue — so a $5-a-month
+   * subscriber cost $1.67 to acquire and paid that back in ten days. Measured,
+   * it made paid acquisition the best lever in the game by a distance, which
+   * is how the error showed up: $51,456 bought 7,569 subscribers at $6.80 each
+   * against a $5 monthly price.
+   */
+  const aMonth = segment.referencePrice * (Math.max(1, periods) / 12);
+  return Math.max(1, aMonth * CAC_MONTHS);
+}
+
+/**
+ * How much of a segment paid acquisition may take in one period.
+ *
+ * Without a bound this is a button that buys the market: enough money and
+ * every customer in every segment changes hands in a period, which is not a
+ * market, it is an auction. A twentieth is roughly the share that is actually
+ * in play at any moment — the people shopping around — and it means buying
+ * share is a campaign over quarters rather than a transaction.
+ */
+export const CAN_BE_BOUGHT = 0.05;
+
+/**
+ * How many customers money may buy, against how many the company earned.
+ *
+ * The bound that makes paid acquisition an amplifier rather than a substitute,
+ * and it is here because leaving it out broke the promise the whole game rests
+ * on. `an-edge-is-needed` holds that being better beats being louder; with
+ * money able to buy customers at a market price and nothing tying it to the
+ * product, the advertising-only plan won **35,188** customers against the
+ * plan that got good at something on **12,700** — louder beat better by 2.8
+ * times, where before the mechanic the same test read 5,544 against 6,589.
+ *
+ * The owner's own words for how this should feel: "if they spend some money on
+ * advertising it is possible for them to gain users but not a lot."
+ *
+ * So you may buy at most a *share* of what you won on your own merits this
+ * period — three tenths, and that number was measured twice. Letting it double
+ * what was earned (1.0) restored "better beats louder" and then failed
+ * `balance`'s "a competent team is not wiped out by bots" in MMOs, because the
+ * bots earn a great deal organically and doubling it buried the player. Making
+ * acquisition dearer did not help — eight months of revenue per customer and
+ * twelve both failed the same way — which says the binding constraint is the
+ * multiple and not the price. At three tenths every guard is back.
+ * A company nobody is choosing cannot buy a market at any price; a company
+ * that is winning can double down on what is already working, which is what
+ * paid acquisition actually is. It also makes the retention finding structural
+ * rather than incidental — the measured gap between promotion against a weak
+ * product (7,689) and a good one (35,724) is now a rule rather than a
+ * side-effect of churn.
+ */
+export const BOUGHT_PER_EARNED = 0.3; // BISECT
+
 export const saturate = (value: number, half: number): number => (value <= 0 ? 0 : value / (value + half));
 
 /** 0–100 scores read as 0–1 without letting a bad input escape the range. */
@@ -567,7 +656,7 @@ export function allocate(
     const demand = segmentDemand(segment, year, economy, periods);
     const appeal: Record<string, number> = {};
     // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year, marketCeiling) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year, marketCeiling) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id) * (c.focusPush ?? 1) * (c.strongholds?.[segment.id] ?? 1);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -587,7 +676,24 @@ export function allocate(
      */
     shrank[segment.id] = {};
     const heldAtStart = companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
-    const shrinkRatio = heldAtStart > demand && heldAtStart > 0 ? demand / heldAtStart : 1;
+    /*
+     * How much this segment can hold before the extra is treated as the market
+     * shrinking — demand, plus whatever overlap the market allows.
+     *
+     * Without the overlap term this pass undid the feed's additive growth
+     * every period and told the player those people had *left the market*.
+     * Measured on podcasts over sixteen quarters: a segment's total held
+     * against demand never rose above 1.007 — the third of additive growth was
+     * being clawed back as fast as it arrived — while the company's
+     * `leftMarket` line ran from 450 to 9,400 a quarter, all of it people who
+     * had not gone anywhere.
+     *
+     * Read off the niche rather than a constant so a sales market is untouched:
+     * there, a customer belongs to one supplier and a total above demand really
+     * does mean the market got smaller.
+     */
+    const canHold = demand * (1 + (niche.overlap ?? 0));
+    const shrinkRatio = heldAtStart > canHold && heldAtStart > 0 ? canHold / heldAtStart : 1;
 
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
@@ -867,7 +973,15 @@ export function allocate(
       const within = segment.size * regionalReach(company, niche) * regionalFit(company, niche, segment.id);
       const already = held[id][segment.id] ?? 0;
       const room = Math.max(0, Math.round(within) - already);
-      const won = Math.min(Math.round(upForGrabs * share), room);
+      const intended = Math.round(upForGrabs * share);
+      const won = Math.min(intended, room);
+      /*
+       * And the record of who they were, trimmed to what was actually won.
+       * Uncapped, a company at the edge of its reach was credited with taking
+       * people it never held — a network with most of its market had the
+       * year's report claim 26,000 more listeners won than it ended up with.
+       */
+      const kept = intended > 0 ? won / intended : 0;
       held[id][segment.id] = already + won;
       /* What this company won by being chosen, which is what bounds the overflow it can absorb below. */
       (wonOnMerit[id] ??= {})[segment.id] = ((wonOnMerit[id] ?? {})[segment.id] ?? 0) + won;
@@ -881,13 +995,13 @@ export function allocate(
       let fromRivals = 0;
       for (const [from, left] of Object.entries(leaving)) {
         if (from === id || left <= 0) continue;
-        const taken = Math.round(left * share);
+        const taken = Math.round(left * share * kept);
         if (taken <= 0) continue;
         ((flows[segment.id][from] ??= {})[id] = taken);
         fromRivals += taken;
       }
       // Whatever is left of the win is new demand, or their own leavers won back.
-      const regained = Math.round((leaving[id] ?? 0) * share);
+      const regained = Math.round((leaving[id] ?? 0) * share * kept);
       fresh[segment.id][id] = Math.max(0, won - fromRivals - regained);
     }
   }

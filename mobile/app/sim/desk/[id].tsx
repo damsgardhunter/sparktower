@@ -907,7 +907,7 @@ export default function Desk() {
                     );
                   }
 
-                  if (field.kind === "actions") {
+                  if (field.kind === "hours") {
                     return (
                       <ActionsField
                         key={field.id}

@@ -28,7 +28,7 @@ import type { Company, Niche, NicheVoice, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { interlock, fixedCosts, sanitiseDecisions } from "./decisions";
 import { reachOf } from "./market";
-import { actionsForPeriods, foundersActions } from "./actions";
+import { HOURS_A_WEEK, foundersActions, type FounderAction } from "./actions";
 import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked, soloUnlocked } from "./responsibilities";
 import { SEVERANCE, payEffect } from "./people";
 import { featureCost } from "./product";
@@ -42,7 +42,7 @@ export interface LeverField {
   label: string;
   /** One line on what moving it actually does. */
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "actions";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "hours";
   min?: number;
   max?: number;
   step?: number;
@@ -51,13 +51,19 @@ export interface LeverField {
   choices?: { value: string; label: string; help: string }[];
   /** For "levels": the answer an option carries when nobody has chosen one. */
   defaultChoice?: string;
-  /** For "actions": how many of `options` may be chosen at once. */
-  pick?: number;
+  /** For "hours": the week the founders have to split across `options`. */
+  hours?: number;
   /**
    * The season year this lever first appears in, when it is not year one.
    * Set by the desk from `UNLOCKS`, so a screen can mark what is new.
    */
   unlocksIn?: number;
+  /**
+   * Only in a market that earns from an audience (`niche.model === "audience"`).
+   * Shown and filed there from the first period, on every schedule, and
+   * dropped everywhere else — so adding one moves no other season's levers.
+   */
+  audienceOnly?: boolean;
 }
 
 /**
@@ -113,6 +119,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "The share of the year's marketing aimed at each kind of customer. A segment pushed harder than its size is worth up to 25% more, one left short up to 25% less. A campaign aimed at everybody is aimed at nobody — and one aimed at a segment you have priced out of reach is money spent twice on the same mistake." },
     { id: "openNiche", label: "Go and find a niche", kind: "choice", options: [],
       help: "Pick a kind of customer and go looking inside it for the people who want what you are already good at. They pay a little more, they are harder to shift once they choose, and for a while nobody else is even describing them as a group. It costs a year of marketing to find them and you only own them while you are the only one who fits — the better you are at something in particular, the more of them there turn out to be." },
+    { id: "sponsorReads", label: "Sponsor reads per video", kind: "count", min: 0, max: 3, step: 1, audienceOnly: true,
+      help: "How many sponsors each video carries. Every read is paid by the thousand views — and every read past the first is a minute people came for something else, so they watch a little less and like you a little less. Nought turns the sponsors away altogether." },
     { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
       help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
@@ -250,7 +258,7 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
      * allowance is a rule of the game rather than a thing to be typed. See
      * `actions.ts`: one a month, two a quarter, three a year.
      */
-    { id: "founderActions", label: "What you'll do yourself", kind: "actions",
+    { id: "founderHours", label: "Where your own week goes", kind: "hours",
       help: "Your own time instead of your own money. Each one improves something — the product, the service, how well you are known — by a few points, free, and takes up part of the period. Worth most when there is nothing in the bank and almost nothing once there is." },
     { id: "positioning", label: "Who the company is for", kind: "segment",
       help: "Declaring a segment makes you meaningfully more appealing to those people and slightly less to everyone else. It is the decision the other four then have to live inside." },
@@ -352,6 +360,35 @@ export const LEVERS_FOR_A_TABLE: ReadonlySet<string> = new Set([
   "budget", "targets", "bonusPool", "overrule", "replaceSeat", "replaceBid", "holdBackSeat", "rehire",
 ]);
 
+/**
+ * How far one tap of a lever's arrow moves it, for the company actually playing.
+ *
+ * The lever list was written for a company with a board: a fifty-thousand step
+ * on marketing is a sensible nudge when the year's budget is millions. A solo
+ * founder opens with sixty thousand in the bank, so the same arrow spends most
+ * of the company in one tap, and the one below it takes the spend to nothing.
+ * There is no usable setting in between — the control has two positions.
+ *
+ * A cap rather than a division. Dividing every step by ten gives 2,500 and
+ * 5,000 and 50,000 — still arbitrary, still too coarse at the bottom, and it
+ * drags the steps that were already fine (a price moves in ones, headcount in
+ * ones, a percentage in fives) down into fractions. Capping leaves those
+ * untouched and brings everything bigger to the same round thousand, so every
+ * money arrow on a founder's desk moves by the same amount and they only have
+ * to learn it once.
+ *
+ * Presentation only: it sets the arrow and the number box's `step`, and
+ * nothing validates a filed figure against it — a founder who types 62,500
+ * files 62,500. Bots read `LEVER_FIELDS` directly and are unaffected, which is
+ * what we want, since a bot filling a seat at a full table is not a founder.
+ */
+export const FOUNDER_STEP_CAP = 1_000;
+
+export function stepFor(field: LeverField, solo: boolean): LeverField {
+  if (!solo || field.step == null || field.step <= FOUNDER_STEP_CAP) return field;
+  return { ...field, step: FOUNDER_STEP_CAP };
+}
+
 export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
   if (previous) {
     // What they did last year, minus the moves that should never repeat by default.
@@ -380,7 +417,7 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
      * every month for nothing and make the one lever that costs time the one
      * lever nobody has to choose.
      */
-    if (role === "ceo") carried.founderActions = [];
+    if (role === "ceo") carried.founderHours = {};
     // Rented room goes back at the end of the year; renting it again is a new decision.
     if (role === "coo") { carried.leaseCapacity = 0; carried.shiftCapacity = 0; }
     // A factoring run, a refinancing and a buyback are each this year's call.
@@ -393,7 +430,7 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
     case "cto": return standing(role, company, { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 });
     case "coo": return standing(role, company, { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 });
     case "cfo": return standing(role, company, { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 });
-    case "ceo": return standing(role, company, { focus: "growth", positioning: company.positioning ?? "", rehire: "", founderActions: [] });
+    case "ceo": return standing(role, company, { focus: "growth", positioning: company.positioning ?? "", rehire: "", founderHours: {} });
   }
 }
 
@@ -460,13 +497,19 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
     }
 
     /*
-     * A list of action ids. Which ids and how many are `cleanDecision`'s job
-     * (it knows the market's list and the allowance); here it only has to be
-     * a list. Without this branch it fell through to the number check below,
-     * and every filing that chose an action was refused with "Needs a number".
+     * Hours against action ids. Which ids, and the sixty-hour week, are
+     * `cleanDecision`'s job; here it only has to be a map of numbers. Without
+     * a branch of its own it fell through to the number check below, and every
+     * filing that spent an hour on anything was refused "Needs a number".
      */
-    if (field.kind === "actions") {
-      if (value !== undefined && value !== null && !Array.isArray(value)) errors[field.id] = "Pick from the list.";
+    if (field.kind === "hours") {
+      if (value === undefined || value === null) continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Put your hours against the list."; continue; }
+      const bad = Object.values(value as Record<string, unknown>).some((n) => {
+        const v = typeof n === "number" ? n : Number(n);
+        return !Number.isFinite(v) || v < 0;
+      });
+      if (bad) errors[field.id] = "Hours have to be numbers, and none of them negative.";
       continue;
     }
 
@@ -584,11 +627,20 @@ export function cleanDecision(
      * from `isUnlocked`.
      */
     soloTotal?: number;
+    /** A market that earns from an audience: its own levers are on from the start. */
+    audience?: boolean;
   } = {},
 ): Record<string, any> {
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
+    if (field.audienceOnly) {
+      /* Outside an audience market it does not exist; inside one, unset means "as you were". */
+      if (!context.audience || source[field.id] === undefined || source[field.id] === null || source[field.id] === "") continue;
+      const n = Number(source[field.id]);
+      if (Number.isFinite(n)) clean[field.id] = Math.max(field.min ?? 0, Math.min(field.max ?? Infinity, Math.round(n)));
+      continue;
+    }
     if (context.soloTotal !== undefined) {
       // A solo founder holds every desk, so the gate is the lever, not the role.
       if (context.year !== undefined && !soloUnlocked(field.id, context.year, context.soloTotal, context.periods ?? 1)) continue;
@@ -600,26 +652,54 @@ export function cleanDecision(
         // A segment, or nobody. An unset choice is a real answer here.
         clean[field.id] = raw === undefined || raw === null ? "" : String(raw);
         break;
-      case "actions": {
+      case "hours": {
         /*
-         * The founders' own work, which is a list of ids like a city list and
-         * is bounded by the period rather than by what exists.
+         * The founders' own week, as hours against action ids.
          *
-         * Cleaned here because the allowance is a rule of the game: a filing
-         * that names five things to do in a month takes the first one. Checked
-         * against `context.actionIds` so an id nobody offered cannot buy three
-         * points of quality for nothing.
+         * Cleaned here because the week is a rule of the game: a filing
+         * claiming ninety hours is scaled back in proportion rather than
+         * refused or honoured, and an id the market never offered buys
+         * nothing. `hoursTaken` in `actions.ts` is the one implementation —
+         * this only has to hand it the ids this market has.
          */
-        const offered = context.actionIds ?? [];
-        const allowed = actionsForPeriods(context.periods ?? 1);
-        const seen = new Set<string>();
-        clean[field.id] = Array.isArray(raw)
-          ? raw.map(String).filter((id) => {
-            if (seen.has(id) || !offered.includes(id)) return false;
-            seen.add(id);
-            return true;
-          }).slice(0, allowed)
-          : [];
+        const offered = new Set(context.actionIds ?? []);
+        const out: Record<string, number> = {};
+        let total = 0;
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+            if (!offered.has(id)) continue;
+            const n = typeof value === "number" ? value : Number(value);
+            if (!Number.isFinite(n) || n <= 0) continue;
+            out[id] = Math.round(n);
+            total += out[id];
+          }
+        }
+        if (total > HOURS_A_WEEK) {
+          /*
+           * Floored, then the remainder handed out one hour at a time to
+           * whoever was asked for most.
+           *
+           * Rounding each share on its own overshoots: nine actions asked for
+           * sixty hours each scale to 6.67, every one of them rounds to 7, and
+           * the week comes to 63 — which is the cleaner handing back a filing
+           * that breaks the rule it exists to enforce. Its own guard caught
+           * that.
+           */
+          const scale = HOURS_A_WEEK / total;
+          const ids = Object.keys(out).sort((a, b) => out[b] - out[a]);
+          let given = 0;
+          for (const id of ids) {
+            out[id] = Math.floor(out[id] * scale);
+            given += out[id];
+          }
+          for (const id of ids) {
+            if (given >= HOURS_A_WEEK) break;
+            out[id] += 1;
+            given += 1;
+          }
+          for (const id of ids) if (out[id] <= 0) delete out[id];
+        }
+        clean[field.id] = out;
         break;
       }
       case "cities":
@@ -1096,15 +1176,21 @@ export function offerActions(
   field: LeverField,
   niche: Pick<Niche, "id" | "voice" | "actions">,
   periods: number,
+  /**
+   * This period's make-it-yourself options, from the shelf — see
+   * `buildableActions`. The desk passes them because the shelf is the desk's
+   * to know about; the lever itself has no idea a marketplace exists.
+   */
+  builds: readonly FounderAction[] = [],
 ): LeverField {
-  if (field.kind !== "actions") return field;
-  const pick = actionsForPeriods(periods);
-  const period = periods >= 12 ? "month" : periods >= 4 ? "quarter" : "year";
+  if (field.kind !== "hours") return field;
+  const one = periods >= 12 ? "month" : periods >= 4 ? "quarter" : "year";
   return {
     ...field,
-    pick,
-    help: `${field.help} ${pick === 1 ? "One" : pick === 2 ? "Two" : "Three"} a ${period}.`,
-    options: foundersActions(niche).map((a) => ({ value: a.id, label: a.name, help: a.blurb })),
+    /** The week, so the control can total against it and stop at it. */
+    hours: HOURS_A_WEEK,
+    help: `${field.help} ${HOURS_A_WEEK} hours a week, yours to split however you like — and what you put in, you get out over the ${one}.`,
+    options: [...foundersActions(niche), ...builds].map((a) => ({ value: a.id, label: a.name, help: a.blurb })),
   };
 }
 

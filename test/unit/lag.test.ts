@@ -117,6 +117,62 @@ describe("capacity opens the year after it is built", () => {
   });
 });
 
+/**
+ * What the desk promises about the room, held against what the engine does.
+ *
+ * The capacity lever shows a path now — "open next month: X; all of it by
+ * month N" — because the bare figure disagreed with what a founder saw and the
+ * explanatory sentence lost that argument every time. The screen walks
+ * `capacityBuild` itself rather than reimplementing it (see `RoomPath` in
+ * client/src/pages/simulation-desk.tsx), so the two cannot drift apart in
+ * arithmetic. What they *can* drift apart in is the promise: the note says a
+ * year of building finishes the job, and nothing else in the suite says so.
+ */
+describe("the path the desk shows for new room", () => {
+  const walk = (from: number, target: number, periods: number) => {
+    const seen: number[] = [];
+    let company: { capacity: number; buildFrom?: number; buildTo?: number } = { capacity: from };
+    for (let i = 0; i < periods; i++) {
+      const built = capacityBuild(company, target, 1 / periods);
+      seen.push(built.next);
+      company = { capacity: built.next, buildFrom: built.buildFrom, buildTo: built.buildTo };
+    }
+    return seen;
+  };
+
+  it("finishes inside a year at every cadence, which is what the note claims", () => {
+    for (const periods of [1, 4, 12]) {
+      const seen = walk(5_000, 40_000, periods);
+      expect(seen[seen.length - 1], `${periods} periods`).toBe(40_000);
+    }
+  });
+
+  it("opens something in the very next period, so the note is never a flat no", () => {
+    /*
+     * The one thing a founder checks first: did typing a bigger number do
+     * anything at all. It has to, or the path reads as "nothing, then
+     * everything", which is the complaint all over again.
+     */
+    for (const periods of [1, 4, 12]) {
+      const seen = walk(5_000, 40_000, periods);
+      expect(seen[0], `${periods} periods`).toBeGreaterThan(5_000);
+    }
+  });
+
+  it("never shows a step backwards while the target is held", () => {
+    const seen = walk(5_000, 40_000, 12);
+    for (let i = 1; i < seen.length; i++) {
+      expect(seen[i], `period ${i + 1} went backwards`).toBeGreaterThanOrEqual(seen[i - 1]);
+    }
+  });
+
+  it("says nothing to build when the figure is at or below what is already there", () => {
+    expect(capacityBuild({ capacity: 40_000 }, 40_000, 1 / 12).next).toBe(40_000);
+    expect(capacityBuild({ capacity: 40_000, customers: { a: 1_000 } }, 1_000, 1 / 12).next)
+      .toBeLessThanOrEqual(40_000);
+  });
+});
+
 describe("a new hire is paid from day one and useful from year two", () => {
   it("counts only last year's staff as established", () => {
     const s = staffing({ staff: 3 }, 8);

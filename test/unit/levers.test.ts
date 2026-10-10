@@ -10,6 +10,7 @@
 import { describe, it, expect } from "vitest";
 import {
   LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, commitment, draftPreview, filedRoles,
+  stepFor, FOUNDER_STEP_CAP,
 } from "@shared/simulation/levers";
 import { startingCompany, economyFor } from "@shared/simulation/season";
 import { nicheById } from "@shared/simulation/niches";
@@ -349,5 +350,45 @@ describe("what the table has committed, including what it has bid", () => {
     const loud = draftPreview({ company: c, niche, decisions, economy, bids: quiet.commitment.available * 3 });
     expect(quiet.warnings.some((w) => /committed/.test(w)), "the baseline year should not warn").toBe(false);
     expect(loud.warnings.some((w) => /committed/.test(w)), "a year swamped by bids did not warn").toBe(true);
+  });
+});
+
+/**
+ * A founder's arrows.
+ *
+ * The lever list is written for a company with a board; a solo founder opens
+ * with sixty thousand, and the claim here is that no arrow on their desk moves
+ * more than a thousand while every lever that was already finer than that is
+ * left exactly as it was.
+ */
+describe("the step a founder's arrows move in", () => {
+  const every = ROLES.flatMap((r) => LEVER_FIELDS[r]);
+
+  it("caps a founder's steps at a thousand", () => {
+    const coarse = every.filter((f) => (f.step ?? 1) > FOUNDER_STEP_CAP);
+    expect(coarse.length, "no lever steps by more than a thousand, so this test proves nothing").toBeGreaterThan(0);
+    for (const field of coarse) {
+      expect(stepFor(field, true).step, `${field.id} still moves in ${field.step}`).toBe(FOUNDER_STEP_CAP);
+    }
+  });
+
+  it("leaves a full table alone", () => {
+    for (const field of every) {
+      expect(stepFor(field, false), `${field.id} was changed for a table that has a board`).toBe(field);
+    }
+  });
+
+  it("does not coarsen a lever that was already finer", () => {
+    // A price moves in ones and a percentage in fives; capping must not raise either.
+    for (const field of every.filter((f) => (f.step ?? 1) <= FOUNDER_STEP_CAP)) {
+      expect(stepFor(field, true).step, `${field.id} was dragged up to the cap`).toBe(field.step);
+    }
+  });
+
+  it("does not mutate the shared lever list", () => {
+    const field = every.find((f) => (f.step ?? 1) > FOUNDER_STEP_CAP)!;
+    const was = field.step;
+    stepFor(field, true);
+    expect(field.step, "stepFor wrote through to the module-level constant").toBe(was);
   });
 });

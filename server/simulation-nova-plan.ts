@@ -24,9 +24,10 @@ import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/c
 import { economyFor } from "@shared/simulation/season";
 import { projectYear } from "@shared/simulation/projection";
 import { optimise } from "@shared/simulation/optimiser";
-import { marketListings, biddableFunds } from "@shared/simulation/assets";
+import { marketListings, chooseBid } from "@shared/simulation/assets";
 import { dealsFor } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
+import { isAudience } from "@shared/simulation/creator";
 import { isUnlocked, soloSchedule } from "@shared/simulation/responsibilities";
 import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
 import { seatOf, draftFor } from "./simulation-desk-routes";
@@ -165,6 +166,7 @@ export function registerNovaPlanRoutes(app: Express): void {
       actionIds: foundersActions(niche).map((a) => a.id),
       /* Solo reads its own unlock schedule, so no lever arrives before its desk opens. */
       ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+      audience: isAudience(niche),
     });
 
     /*
@@ -229,35 +231,22 @@ export function registerNovaPlanRoutes(app: Express): void {
         /* A second copy of a patent it holds is not a second patent. */
         owned: (company.assets ?? []).map((a) => a.name),
       });
-      const purse = Math.max(0, Math.min((company.cash ?? 0) * 0.6, biddableFunds(company) * 0.33));
-      if (purse > 0 && shelf.length) {
-        /*
-         * What each one is worth here, in the company's own terms: a point of
-         * quality is worth more in a market that weighs quality, and a unit-cost
-         * cut is worth what it saves on the sales this company actually makes.
-         */
-        const weigh = (l: (typeof shelf)[number]) => {
-          const e = l.asset.effect ?? {};
-          const sold = Object.values(company.customers ?? {}).reduce((a, b) => a + Number(b), 0);
-          const perUnit = Math.max(0, (company.price ?? 0) - (company.unitCost ?? 0));
-          return (e.quality ?? 0) * 3 + (e.brand ?? 0) * 2 + (e.service ?? 0) * 2
-            + (e.capacity ?? 0) * perUnit * 0.0002
-            + (1 - (e.unitCost ?? 1)) * Math.max(sold, 1) * (company.unitCost ?? 0) * 0.002
-            /* Permanence is the whole point: an expiring deal is worth less than a patent. */
-            + (l.asset.expiresIn === undefined ? 12 : 0);
-        };
-        const best = [...shelf].sort((a, b) => weigh(b) - weigh(a))[0];
-        /* Just over the reserve: enough to win it uncontested, not a blank cheque. */
-        const amount = Math.round(Math.min(purse, best.reserve * 1.15));
-        if (best.reserve > 0 && amount >= best.reserve) {
-          await db.insert(simBids)
-            .values({ ventureId: venture.id, listingId: best.id, year, amount })
-            .onConflictDoUpdate({
-              target: [simBids.ventureId, simBids.listingId, simBids.year],
-              set: { amount, createdAt: new Date() },
-            });
-          bidsFiled.push({ listingId: best.id, amount, name: best.asset.name });
-        }
+      /*
+       * One implementation of what to buy, shared with the harness that
+       * measures whether buying it helps — see `chooseBid`. The purse it uses
+       * is a share of what the company can lay hands on, cash and credit
+       * together, because settlement books a bid beyond the bank as debt and
+       * that is the whole point of the mechanic for a company with no cash.
+       */
+      const pick = chooseBid(company, shelf);
+      if (pick) {
+        await db.insert(simBids)
+          .values({ ventureId: venture.id, listingId: pick.listingId, year, amount: pick.amount })
+          .onConflictDoUpdate({
+            target: [simBids.ventureId, simBids.listingId, simBids.year],
+            set: { amount: pick.amount, createdAt: new Date() },
+          });
+        bidsFiled.push({ listingId: pick.listingId, amount: pick.amount, name: pick.name });
       }
     } catch (err) {
       /* A bid is an extra, never the reason a filed year fails. */

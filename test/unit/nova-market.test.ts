@@ -186,9 +186,16 @@ describe("a market for a project that is not software", () => {
      * engine has to make valuable to keep the founder solvent.
      */
     const prompt = buildMarketPrompt({ project: { title: "X", subcategory: "channel" }, startup: true }).system;
-    expect(prompt).toMatch(/subscriber is worth/);
-    expect(prompt).toMatch(/single digits/);
     expect(prompt).toMatch(/hundreds of thousands/);
+    /*
+     * And played as an audience: subscribing is free, the price is a
+     * membership, and the market names the ad rates and the sponsors who
+     * compete for it. See shared/simulation/creator.ts.
+     */
+    expect(prompt).toMatch(/subscribing is free/);
+    expect(prompt).toMatch(/ONE MEMBER/);
+    expect(prompt).toMatch(/"model":"audience"/);
+    expect(prompt).toMatch(/sponsors:/);
   });
 
   /*

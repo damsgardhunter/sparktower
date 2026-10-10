@@ -668,44 +668,57 @@ export function ChoiceField({ field, value, error, onChange, disabled, emptyNote
  * expand once and wonder why every following year is tighter.
  */
 /**
- * The founders' own time, which is the one lever that costs none of the money.
+ * The founders' own week, split across what they could spend it on.
  *
- * A capped multi-select. The choices arrive on the field itself — the desk
- * route says them in the market's own words and sets `pick` from the cadence —
- * so this control holds no market knowledge, unlike `CitiesField` above it.
+ * A capped allocation rather than the pick-list this was. An allowance of one
+ * action a month taught "choose the one thing you will do", when the decision
+ * is how to carve up a week that is already full. The choices arrive on the
+ * field itself (the desk route says them in the market's own words and sets
+ * `hours`), so this control holds no market knowledge, unlike `CitiesField`.
  *
- * The count is in the header and not only implied by what is ticked, because
- * the cap changes with the season's cadence: one a month, two a quarter, three
- * a year. Somebody who plays a monthly season and then a yearly one should not
- * have to find that out by tapping.
+ * The hours left over sit in the header rather than being implied by the
+ * steppers, because running out is the thing somebody needs to see coming.
  */
 export function ActionsField({ field, value, error, onChange, disabled }: {
   field: LeverField;
   value: any;
   error?: string;
-  onChange: (next: string[]) => void;
+  onChange: (next: Record<string, number>) => void;
   disabled?: boolean;
 }) {
   const options = field.options ?? [];
-  const taken: string[] = Array.isArray(value) ? value.filter((v: unknown) => typeof v === "string") : [];
-  const pick = field.pick ?? 1;
+  const week = field.hours ?? 60;
+  const put: Record<string, number> = (value && typeof value === "object" && !Array.isArray(value)) ? value : {};
+  const spent = Object.values(put).reduce((n: number, h) => n + (Number(h) || 0), 0);
+  const left = Math.max(0, week - spent);
+  const STEP = 5;
+  const set = (id: string, hours: number) => {
+    const next = { ...put };
+    if (hours <= 0) delete next[id];
+    else next[id] = hours;
+    onChange(next);
+  };
 
   if (options.length === 0) {
     return (
       <View style={{ gap: 6 }}>
         <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
-          Nothing to take on yourself here.
+          Nothing here you could do yourself.
         </Text>
       </View>
     );
   }
 
   return (
-    <View style={{ gap: spacing.sm }} testID="desk-actions">
+    <View style={{ gap: spacing.sm }} testID="desk-hours">
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
-        <StatePill label={`${taken.length} of ${pick}`} icon="hand-left-outline" tone={taken.length > 0 ? "good" : "info"} />
+        <StatePill
+          label={left === 0 ? `all ${week}h spoken for` : `${left}h left`}
+          icon="time-outline"
+          tone={left === 0 ? "info" : "good"}
+        />
       </View>
 
       <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
@@ -714,21 +727,15 @@ export function ActionsField({ field, value, error, onChange, disabled }: {
 
       <View style={{ gap: spacing.xs }}>
         {options.map((option) => {
-          const selected = taken.includes(option.value);
+          const hours = Number(put[option.value]) || 0;
           return (
-            <Pressable
+            <View
               key={option.value}
-              testID={`desk-action-${option.value}`}
-              disabled={!!disabled}
-              /* Over the cap the oldest choice drops, as on the web desk: the
-                 person is changing their mind, not making a mistake. */
-              onPress={() => onChange(selected
-                ? taken.filter((id) => id !== option.value)
-                : [...taken, option.value].slice(-pick))}
+              testID={`desk-hours-${option.value}`}
               style={{
-                gap: 2, padding: spacing.md, borderRadius: radius.sm,
-                backgroundColor: selected ? tintSoft(colors.primary, 0.08) : colors.surface,
-                borderWidth: 1, borderColor: selected ? tintSoft(colors.primary, 0.4) : colors.border,
+                gap: 6, padding: spacing.md, borderRadius: radius.sm,
+                backgroundColor: hours > 0 ? tintSoft(colors.primary, 0.08) : colors.surface,
+                borderWidth: 1, borderColor: hours > 0 ? tintSoft(colors.primary, 0.4) : colors.border,
                 opacity: disabled ? 0.6 : 1,
               }}
             >
@@ -736,7 +743,26 @@ export function ActionsField({ field, value, error, onChange, disabled }: {
               <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
                 {option.help}
               </Text>
-            </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                <Pressable
+                  disabled={!!disabled || hours <= 0}
+                  onPress={() => set(option.value, Math.max(0, hours - STEP))}
+                  style={{ paddingVertical: 4, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, opacity: hours <= 0 ? 0.4 : 1 }}
+                >
+                  <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>−</Text>
+                </Pressable>
+                <Text style={{ minWidth: 44, textAlign: "center", color: colors.text, fontSize: font.sm, fontFamily: fontFamily.medium }}>
+                  {hours}h
+                </Text>
+                <Pressable
+                  disabled={!!disabled || left <= 0}
+                  onPress={() => set(option.value, hours + Math.min(STEP, left))}
+                  style={{ paddingVertical: 4, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, opacity: left <= 0 ? 0.4 : 1 }}
+                >
+                  <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>+</Text>
+                </Pressable>
+              </View>
+            </View>
           );
         })}
       </View>

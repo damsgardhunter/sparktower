@@ -41,7 +41,8 @@ import { useSurfaces } from "@/hooks/use-surfaces";
 import { Badge } from "@/components/ui/badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
-import { businessMoney } from "@shared/currency";
+import { businessMoney, symbolOf } from "@shared/currency";
+import { Input } from "@/components/ui/input";
 import { SIM_GAMES } from "@/pages/project-sim";
 import { PERIOD_NAME } from "@shared/simulation/cadence";
 
@@ -388,8 +389,8 @@ const CADENCE_CHOICES = [
  * they came for. See `shared/simulation/opening.ts`.
  */
 const OPENING_CHOICES = [
-  { id: "competitive", label: "Funded and level", note: "Money in the bank and a credit line, same as everyone. The fair contest, and the easier one to learn the levers on." },
-  { id: "actual", label: "Where you actually are", note: "The cash, credit and customers your work so far implies. Harder, and the only version that answers what would happen if we did this for real." },
+  { id: "competitive", label: "Funded and level", note: "A credit line and a level start against the rivals. The fair contest, and the easier one to learn the levers on." },
+  { id: "actual", label: "Where you actually are", note: "The credit, customers and room your work so far implies — with the money you say below. Harder, and the only version that answers what would happen if we did this for real." },
 ] as const;
 
 function FromThisProject({ projectId, onBuilt, replayable }: {
@@ -400,12 +401,25 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
   const [error, setError] = useState<string | null>(null);
   const [cadence, setCadence] = useState<string>("quarterly");
   const [opening, setOpening] = useState<string>("competitive");
+  /*
+   * What is in the bank on day one, asked rather than assumed. The opening
+   * used to decide it, and on somebody's own project it told them they had
+   * $1.21m when they had nothing like it. Whatever is typed here is exactly
+   * what the season opens with.
+   */
+  const [cash, setCash] = useState<string>("");
+  const { data: project } = useQuery<{ currency?: string | null }>({ queryKey: [`/api/projects/${projectId}`] });
+  const symbol = symbolOf(project?.currency ?? "USD");
+  const cashValue = cash.trim() === "" ? null : Number(cash.replace(/[^0-9.]/g, ""));
+  const cashOk = cashValue !== null && Number.isFinite(cashValue) && cashValue >= 0;
   /** Which market is being played again, so only that row shows a spinner. */
   const [replaying, setReplaying] = useState<string | null>(null);
 
   const build = useMutation({
     mutationFn: (fromSeasonId?: string) =>
-      apiRequest("POST", `/api/projects/${projectId}/simulation`, { cadence, opening, ...(fromSeasonId ? { fromSeasonId } : {}) }),
+      apiRequest("POST", `/api/projects/${projectId}/simulation`, {
+        cadence, opening, startingCash: cashValue, ...(fromSeasonId ? { fromSeasonId } : {}),
+      }),
     onSuccess: async (res: any) => {
       const body = await res.json() as BuiltMarket;
       onBuilt(body);
@@ -475,8 +489,9 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
                 </span>
                 <Button
                   size="sm" variant="outline"
-                  disabled={build.isPending}
                   onClick={() => { setReplaying(r.seasonId); build.mutate(r.seasonId); }}
+                  disabled={build.isPending || !cashOk}
+                  title={cashOk ? undefined : "Say how much money you are starting with first"}
                   data-testid={`button-replay-${r.seasonId}`}
                 >
                   {replaying === r.seasonId
@@ -533,9 +548,42 @@ function FromThisProject({ projectId, onBuilt, replayable }: {
             ))}
           </div>
         </div>
+        <div className="pt-1">
+          <label htmlFor="starting-cash" className="text-xs font-medium mb-1.5 block">How much money do you want to start with?</label>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-40">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">{symbol}</span>
+              <Input
+                id="starting-cash"
+                inputMode="decimal"
+                placeholder="0"
+                value={cash}
+                onChange={(e) => setCash(e.target.value)}
+                disabled={build.isPending}
+                className="pl-7"
+                data-testid="input-starting-cash"
+              />
+            </div>
+            {[0, 5_000, 25_000, 100_000].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setCash(String(n))}
+                disabled={build.isPending}
+                className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${cashValue === n ? "nova-ring bg-primary/5" : "hover:border-primary/40"}`}
+                data-testid={`starting-cash-${n}`}
+              >
+                {n === 0 ? "Nothing" : businessMoney(n, project?.currency ?? "USD")}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            What is actually in the bank for this. The season opens with exactly this — nothing is added to it.
+          </p>
+        </div>
         {error && <p className="text-sm text-destructive" data-testid="text-build-error">{error}</p>}
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button size="sm" className="nova-hover-glow" onClick={() => build.mutate(undefined)} disabled={build.isPending} data-testid="button-customize-season">
+          <Button size="sm" className="nova-hover-glow" onClick={() => build.mutate(undefined)} disabled={build.isPending || !cashOk} data-testid="button-customize-season">
             {build.isPending
               ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Nova is building your market…</>
               : <><Sparkles className="h-4 w-4 mr-1.5" /> Have Nova Customize my Season</>}

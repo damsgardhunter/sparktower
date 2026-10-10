@@ -95,9 +95,10 @@ import { forecastDemand } from "./forecast";
 import { resolveYear } from "./resolve";
 import { isUnlocked } from "./responsibilities";
 import { staffFor } from "./workforce";
-import { actionsForPeriods, foundersActions } from "./actions";
+import { HOURS_A_WEEK, buildableActions, foundersActions } from "./actions";
+import { marketListings } from "./assets";
 import { atScale, expectedPrice, snapPrice } from "./market";
-import { EXECUTIVE, officersOf } from "./decisions";
+import { EXECUTIVE, officerCost, officersOf } from "./decisions";
 import { announcedRegion, EXPANSION_DISCOUNT, firstYearReach } from "./world";
 import { LEVER_FIELDS, type LeverField } from "./levers";
 import { withOptions, type OfferView } from "./lever-options";
@@ -130,6 +131,21 @@ const SPEND_LEVERS: SpendLever[] = [
 
 /** How much of what it could lay hands on the optimiser will commit in one year. */
 export const OPTIMISER_COMMITS = 0.35;
+
+/**
+ * How much of the cash it is actually holding a plan may commit in one period.
+ *
+ * Separate from `OPTIMISER_COMMITS`, which paces *borrowing* and is right to:
+ * drawing a whole credit line in a month is how a company kills itself. Money
+ * in the bank is a different question — it is this period's budget, and pacing
+ * it at a fiftieth a month is how £51,119 of borrowed money sat untouched
+ * while the company lost £3,892 a month around it.
+ *
+ * A third, so a plan can move decisively and still cannot empty the account on
+ * one month's conviction. The solvency gate above still holds the reserve back
+ * on top of this.
+ */
+export const CASH_COMMITS = 1 / 3;
 
 /**
  * And what it will not spend, whatever the forecast says: a year of what the
@@ -170,6 +186,36 @@ export const ROLLOUT_YEARS = 3;
  * to own something worth money, not to be paid for holding it.
  */
 export const CASH_WEIGHT = 0.08;
+
+/**
+ * What a point of market share is worth, against owning the whole market.
+ *
+ * The objective was all money and no position, and money alone does not ask
+ * for growth: a company keeping its customers while the market adds more comes
+ * out level, so Nova would take a channel from 0.08% to 0.4% in a year and
+ * score it as a good plan with the marketing budget untouched. The owner's
+ * standard is 10–15% of a market by the end of a season, and an objective that
+ * cannot tell 0.4% from 4% will never find it.
+ *
+ * Expressed as a share of what the whole market would be worth at this
+ * company's own margin, so it is in the same units as everything else in the
+ * score and cannot be won by charging more (the price is anchored to the
+ * market's reference — see `PRICE_TRIES`).
+ */
+export const SHARE_PRIZE = 4;
+
+/**
+ * How much to try raising, as shares of what the company is worth.
+ *
+ * Keyed on its worth and not on its headroom, which was the first answer and
+ * is backwards for the only company that needs this: a startup with an
+ * exhausted credit line can lay hands on nothing, so shares of *that* are
+ * nothing, and the search could only raise money for companies that already
+ * had money. Somebody raising at this stage is selling a share of what the
+ * business might become, which is what `worth` is — and `resolve` prices the
+ * dilution off exactly the same figure.
+ */
+const RAISE_TRIES = [0.1, 0.2, 0.33];
 
 /** How much of the remaining credit line to try drawing on, as shares of it. */
 const BORROW_TRIES = [0.25, 0.5];
@@ -226,14 +272,23 @@ interface Shape {
   /** A region to open, if the table is putting one up this year. */
   region: string | null;
   /**
-   * What the founders will do themselves this period, by action id.
+   * Equity sold this period, in money.
+   *
+   * On the shape beside `borrow` because it is the other way to pay for a
+   * plan, and like borrowing it is tried against a finished plan rather than
+   * inside the budget: raising is only worth doing if there is something to
+   * spend it on.
+   */
+  raise?: number;
+  /**
+   * How the founders split their own week, as hours against action ids.
    *
    * On the shape rather than in the budget because it costs no money: every
-   * other lever in the ascent competes for a slice, and these compete for the
-   * period. Chosen after the money is allocated — see the greedy pass at the
-   * end of `optimise`.
+   * other lever in the ascent competes for a slice of the money, and this
+   * competes for the week. Chosen after the money is allocated — see the
+   * greedy pass at the end of `optimise`.
    */
-  actions?: string[];
+  hours?: Record<string, number>;
   /**
    * Every other lever the plan has an answer for, per desk: the chief
    * executive's focus and positioning, the feature bet, the programme, the
@@ -337,10 +392,10 @@ function draftOf(
      * for — and the engine bounds the draw at what the bank would actually
      * lend (see `drawdown`), so this cannot run away.
      */
-    cfo: { borrow: Math.max(0, Math.round(shape.borrow)), repay: 0, cashBuffer: 0, ...vote, ...shape.extras?.cfo },
+    cfo: { borrow: Math.max(0, Math.round(shape.borrow)), raiseAmount: Math.max(0, Math.round(shape.raise ?? 0)), repay: 0, cashBuffer: 0, ...vote, ...shape.extras?.cfo },
     // Growth, and an answer ready for whatever went wrong: silence recovers
     // far less of what a shock costs, and the forecast cannot see that either.
-    ceo: { focus: "growth", shockAnswer: "statement", founderActions: shape.actions ?? [], ...vote, ...shape.extras?.ceo } as TeamDecisions["ceo"],
+    ceo: { focus: "growth", shockAnswer: "statement", founderHours: shape.hours ?? {}, ...vote, ...shape.extras?.ceo } as TeamDecisions["ceo"],
   };
   for (const [role, filed] of Object.entries(shape.fixed ?? {})) {
     if (filed) (planned as any)[role] = filed;
@@ -430,7 +485,50 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
    * twelve times more per decision — including the company workshop seasons
    * that run monthly — for no measured gain.
    */
-  const affordable = headroom(company) * OPTIMISER_COMMITS * per;
+  /*
+   * How far ahead a candidate is played, in periods.
+   *
+   * `ROLLOUT_YEARS` is written as years — "one is blind to compounding, two
+   * sees a pipeline land, three sees whether the company that lands it is
+   * still growing" — and the loop below advances `year` by one, which in a
+   * monthly season is one *month*. So a monthly season looked three months
+   * ahead and a yearly one three years, and the constant's own reasoning only
+   * held for the yearly case.
+   *
+   * Three months cannot see brand or quality pay for themselves, because they
+   * do not: they pay over a year. So the search declined every lever on a real
+   * season — measured on one, every candidate scored below spending nothing,
+   * and Nova filed five desks of zeroes. Played out, that plan lost 45% of the
+   * subscribers a modest 2%-of-cash-a-month plan won and let quality rot from
+   * 38 to 27 while holding the money.
+   *
+   * A year at minimum, so the horizon is a span of time rather than a count of
+   * filings. Not `ROLLOUT_YEARS * periods` — three years of months is 36 runs
+   * of the engine per candidate against a hundred-odd candidates a decision,
+   * and this is already the expensive constant. A year is what it takes to see
+   * the levers pay; the yearly season keeps its three.
+   */
+  const rollout = Math.max(ROLLOUT_YEARS, periods);
+
+  /*
+   * And cash in hand is not rationed the way a credit line is.
+   *
+   * `headroom × OPTIMISER_COMMITS × per` is "a share of everything it could
+   * lay hands on, as a rate over the year", and as a rule for *borrowing* that
+   * is right: a company should not draw its whole facility in a month. Applied
+   * to money already in the bank it produced the thing the owner spotted —
+   * Nova drew £51,119 on day one, committed £3,750, and banked the rest, then
+   * went on committing about a fiftieth of its balance a month while losing
+   * money. Cash it already has is not a facility to be paced; it is this
+   * period's budget.
+   *
+   * So the cap is the pacing rule applied to what it could *borrow*, plus a
+   * real share of what it is actually holding. It can still only draw a slice
+   * of the credit line in a period, and it can now spend the money it drew.
+   */
+  const inHand = Math.max(0, company.cash);
+  const borrowable = Math.max(0, headroom(company) - inHand);
+  const affordable = (borrowable * OPTIMISER_COMMITS * per) + (inHand * CASH_COMMITS);
   const step = affordable / OPTIMISER_STEPS;
   const mine = (role: Role) => !input.desks || input.desks.includes(role);
   const levers = SPEND_LEVERS.filter((l) => mine(l.role) && isUnlocked(l.role, l.field, year, periods));
@@ -462,11 +560,34 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   const staffedFor = (room: number): number => {
     const officers = officersOf(company);
     const hired = staffFor(niche, Math.max(0, room), officers);
-    return Math.max(1, Math.round(officers + (Number.isFinite(hired) ? hired : 0)));
+    /*
+     * Staff only. `headcount` is the people *beyond* the founders — its own
+     * lever says so — and `staffFor` already takes the founders off. Adding
+     * them back, and flooring at one, had every plan Nova filed hire the
+     * founders again as employees: a solo founder was charged a salary for a
+     * person who was themselves.
+     */
+    return Math.max(0, Math.round(Number.isFinite(hired) ? hired : 0));
   };
 
   /** What the company costs to run before it does anything: the floor the plan has to clear. */
-  const fixedPerYear = officersOf(company) * EXECUTIVE * (company.scale ?? 1);
+  /*
+   * What the company costs to run before it does anything, from the one
+   * function that knows: `officerCost`.
+   *
+   * This was `officersOf(company) * EXECUTIVE * (company.scale ?? 1)` — its
+   * own arithmetic, and wrong twice over. It scaled by `scale` where the real
+   * bill scales by `payScale(scale)`, and it did not know about `officerPay`
+   * at all, so a season where the founders draw nothing — every solo season,
+   * and now every season built from a project — still had two years of five
+   * full salaries held back out of its spending.
+   *
+   * That reserve is a hard gate: a plan leaving cash below it scores minus
+   * infinity. So the money a startup made went unspent because the search was
+   * protecting a payroll that does not exist, which is what "why is it not
+   * spending any of the money it made" turned out to be.
+   */
+  const fixedPerYear = officerCost(company);
 
   const spend: Record<string, number> = {};
   for (const l of levers) spend[l.field] = 0;
@@ -515,14 +636,14 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
    */
   const priceTries = PRICE_TRIES.map((m) => Math.max(1, snapPrice(reference * m, reference)));
 
-  const measure = (trial: Record<string, number>, price: number, shape: Shape): { score: number; serves: number; room: number } => {
+  const measure = (trial: Record<string, number>, price: number, shape: Shape): { score: number; serves: number; room: number; revenue: number } => {
     /*
      * Room is chased to this year's forecast rather than chosen
      * independently. What is built this year opens next, so this is the plant
      * the plan is asking for.
      */
     const probe = forecastDemand({ world, companyId, year, economy, draft: draftOf(company, trial, price, company.capacity, staffedFor(company.capacity), shape) });
-    if (!probe) return { score: -Infinity, serves: 0, room: company.capacity };
+    if (!probe) return { score: -Infinity, serves: 0, room: company.capacity, revenue: 0 };
     /*
      * The plant is sized against the band, not the middle of it.
      *
@@ -550,6 +671,15 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      */
     const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + n, 0);
     const canFill = Math.max(held, company.capacity * 0.6);
+    /*
+     * Floored at the room it already has, and that floor was tested.
+     *
+     * Letting the plant shrink to what the company actually serves looked
+     * right — a channel opened at nothing built room for 4,590 while holding
+     * 715, and paid for it — and it is wrong. Measured, share over a year fell
+     * from 0.40% to 0.36%: the room is not waste, it is what the company grows
+     * into, and capping it at today's customers caps tomorrow's.
+     */
     const room = Math.max(company.capacity, Math.min(Math.round(probe.likely * 1.3), Math.round(canFill * 2)));
     const draft = draftOf(company, trial, price, room, staffedFor(room), shape);
 
@@ -560,10 +690,29 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      */
     let after;
     let valued = 0;
+    let earned = 0;
     try {
       let running = resolveYear({ ...world, year }, [draft], economy, { withoutEvent: true });
       after = running.world;
-      valued = running.reports.find((r) => r.companyId === companyId)?.value ?? 0;
+      /*
+       * The founders' share of it, not the whole company.
+       *
+       * This read `report.value` — what the company is worth — while the
+       * season ranks founders on `report.founderValue`, which is that times
+       * what they still own, plus what they have banked. The file's own notes
+       * have said for a while that "`valueOf` is what the season actually
+       * ranks founders on" and then read the unweighted figure beside it.
+       *
+       * It matters the moment anything in the plan can sell equity. Raising
+       * money is free against `value` — the cash arrives, the company grows,
+       * and the dilution costs the objective nothing — so a search allowed to
+       * raise would sell the company out from under the person pressing the
+       * button, and be scored well for it.
+       */
+      const mine = running.reports.find((r) => r.companyId === companyId);
+      valued = mine?.founderValue ?? mine?.value ?? 0;
+      /* Kept for pricing a raise: the same takings `resolve` will value it on. */
+      earned = (mine?.pnl?.revenue ?? 0);
       /*
        * And then the years after it, carried forward as a company that keeps
        * growing rather than one that files the same numbers for ever.
@@ -582,7 +731,7 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
        * costs one more run of the engine per candidate, which is the whole
        * reason this is three and not fourteen.
        */
-      for (let ahead = 1; ahead < ROLLOUT_YEARS; ahead++) {
+      for (let ahead = 1; ahead < rollout; ahead++) {
         const held = after.companies.find((c) => c.id === companyId);
         if (!held || held.bankruptSince) break;
         const heldNow = Object.values(held.customers ?? {}).reduce((sum, n) => sum + n, 0);
@@ -590,13 +739,14 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
         const carried: Record<string, number> = {};
         for (const [field, amount] of Object.entries(trial)) carried[field] = amount * grew;
         const plant = Math.max(held.capacity, Math.round(Math.max(heldNow, held.capacity * 0.6) * 1.4));
-        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0, actions: shape.actions, fixed: shape.fixed });
+        const onward = draftOf(held, carried, price, plant, staffedFor(plant), { region: null, borrow: 0, hours: shape.hours, fixed: shape.fixed });
         running = resolveYear({ ...after, year: year + ahead }, [onward], economy, { withoutEvent: true });
         after = running.world;
-        valued = running.reports.find((r) => r.companyId === companyId)?.value ?? valued;
+        const ours = running.reports.find((r) => r.companyId === companyId);
+        valued = ours?.founderValue ?? ours?.value ?? valued;
       }
     } catch {
-      return { score: -Infinity, serves: 0, room };
+      return { score: -Infinity, serves: 0, room, revenue: 0 };
     }
     const me = after.companies.find((c) => c.id === companyId);
     /*
@@ -614,10 +764,10 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * fixed costs finished it.
      */
     const reserve = fixedPerYear * OPTIMISER_RESERVE_YEARS * per;
-    if (!me || me.bankruptSince || me.cash < reserve) return { score: -Infinity, serves: 0, room };
+    if (!me || me.bankruptSince || me.cash < reserve) return { score: -Infinity, serves: 0, room, revenue: 0 };
 
     const ahead = forecastDemand({ world: after, companyId, year: year + ROLLOUT_YEARS, economy });
-    if (!ahead) return { score: -Infinity, serves: 0, room };
+    if (!ahead) return { score: -Infinity, serves: 0, room, revenue: 0 };
     /*
      * Believed only as far as the engine has already gone.
      *
@@ -742,12 +892,41 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
      * much as putting it to work.
      */
     const position = (serves * margin * per - fixedPerYear * per) * life;
-    return { score: valued + me.cash * CASH_WEIGHT + position * pending, serves, room };
+
+    /*
+     * And the share itself, because the owner asked for share and the
+     * objective was not asking for it.
+     *
+     * Everything above this line is money: what the founders' stake is worth,
+     * the cash beside it, and a multiple of the margin the position throws
+     * off. All three are absolute, and a market grows — so a company that
+     * holds its customers while the market adds more scores exactly as well as
+     * one that keeps pace, and a company that grows slower than the market
+     * reads as success. Measured, that is what it did: Nova would finish a
+     * year on 0.4% of a market it opened on 0.08% of and call it a good plan,
+     * while the money levers sat untouched because no single slice of them
+     * paid for itself inside the horizon.
+     *
+     * Share is priced as what the market would be worth to own: every customer
+     * in it, at what this company charges, for the years it has left. A point
+     * of share is then worth a point of that, which makes taking share from
+     * somebody comparable with the cash it costs to do it — and leaves the
+     * decision to the search rather than forcing it, because a plan that buys
+     * share by going bust still fails the solvency gate above.
+     */
+    const inTheMarket = niche.segments.reduce((sum, s) => sum + s.size, 0);
+    const share = inTheMarket > 0 ? serves / inTheMarket : 0;
+    const wholeMarket = inTheMarket * Math.max(0, margin) * life;
+
+    return {
+      score: valued + me.cash * CASH_WEIGHT + position * pending + share * wholeMarket * SHARE_PRIZE,
+      serves, room, revenue: earned,
+    };
   };
 
   /* Only the desks this plan is not for are held; a plan never overrides its own chair with a filing. */
   const fixed = Object.fromEntries(Object.entries(input.fixed ?? {}).filter(([role]) => !mine(role as Role)));
-  let shape: Shape = { region: null, borrow: 0, actions: [], fixed };
+  let shape: Shape = { region: null, borrow: 0, hours: {}, fixed };
   let price = Math.max(1, company.price);
   let best = measure(spend, price, shape);
 
@@ -878,6 +1057,118 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
     if (alternative.at.score > run.at.score) { shape = withRegion; run = alternative; }
   }
 
+  /*
+   * And whether to sell a slice of it.
+   *
+   * Two constraints, and both were put here after watching it go wrong without
+   * them. Measured on a real season — a company holding 36% of its market,
+   * $2.3m in the bank — the first version raised **$45 million a month** and
+   * took the founders to 5% in the first period, then went on raising, because:
+   *
+   *   - it tried shares of what the company was *worth*, and a year of
+   *     takings from 150,000 subscribers is a very large number next to a
+   *     plan that wanted to spend nothing; and
+   *   - `resolve` floors `founderShare` at 0.05, so once the founders are at
+   *     the floor further dilution costs the objective nothing at all. Scoring
+   *     `founderValue` instead of `value` is necessary and it is not enough:
+   *     below the floor the score stops noticing.
+   *
+   * So the amounts are shares of what the company could already lay hands on
+   * (`headroom`: its cash and its credit line), because a raise is for
+   * out-spending what you have rather than for its own sake; and no single
+   * raise may cost the founders more than half of what they still hold, which
+   * bounds it where the score cannot. `raised <= worth` is exactly that half,
+   * from `resolve`'s own dilution arithmetic.
+   *
+   * A founder may of course choose a bigger raise, and the lever lets them.
+   * This is a button pressed on their behalf, and handing over control of
+   * somebody's company in one filing is not a thing it should be able to do.
+   */
+  /*
+   * Priced the way `resolve` prices it, which is not what this used to do.
+   *
+   * It was `customers × price × periods × 1.2`, and in an audience market
+   * subscribers do not pay a price at all — the money comes from ads, sponsors
+   * and memberships. Measured on a channel: 3,970 subscribers × £36 × 12 came
+   * out at £1,715,040 of "takings" and a £2,006,929 valuation, against the
+   * channel's actual yearly revenue of **£5,038**. Four hundred times. So the
+   * search filed a £662,287 raise against a business earning £420 that month,
+   * and only the control bound below stopped it selling the lot.
+   *
+   * Measured rather than estimated now: `measure` has already played the
+   * period, so the report's own revenue is available and is the same figure
+   * `resolve` will use when it prices the dilution. A company whose revenue
+   * cannot be read yet falls back to the market-scaled floor, which is what
+   * `resolve` floors at too.
+   */
+  const aYearOfTakings = (best.revenue ?? 0) * periods;
+  const worthNow = Math.max(
+    atScale(500_000, company.scale ?? 1),
+    aYearOfTakings * 1.2 + (company.assets ?? []).reduce((sum, a) => sum + a.bookValue, 0) - (company.debt ?? 0),
+  );
+
+
+  /*
+   * And only when the money would actually be used.
+   *
+   * This is the constraint that matters and it took two wrong versions to
+   * find. Raising is *score-positive on its own*: the objective credits cash
+   * (`CASH_WEIGHT`) and, once `resolve` has floored `founderShare` at 0.05,
+   * further dilution costs the score nothing — so a search allowed to raise
+   * freely raises for ever. Shares of what the company is worth gave $45m a
+   * month on a real season; shares of its headroom gave $138m. Both took the
+   * founders to 5% in the first period and went on going.
+   *
+   * A raise is for out-spending what you have. If the ascent did not even
+   * commit what the company could already afford, more money changes nothing
+   * about the plan and the only thing it does is inflate the score — so there
+   * is nothing here to weigh and the pass does not run. That is also the
+   * honest reading of the decision: nobody sells a fifth of their company to
+   * leave it in the bank.
+   */
+  const committed = Object.values(run.spend).reduce((sum, n) => sum + n, 0);
+  const wantedItAll = committed >= affordable * 0.9;
+  if (process.env.OPT_TRACE) {
+    console.error(`[raise] committed ${Math.round(committed)} of affordable ${Math.round(affordable)} -> ${wantedItAll ? "trying" : "not trying"}; worth ${Math.round(worthNow)}, score ${Math.round(run.at.score)}`);
+  }
+  /*
+   * And never past the point where it is still their company.
+   *
+   * Capping each single raise at half the stake is not enough, because the cap
+   * is per period and the seasons are not. Measured on a channel opened at
+   * nothing, with the share term in the objective and the gate letting raises
+   * through: the founders went 100% → 39% → 8% → **5%** by month five, and the
+   * search kept raising after that — $782,208 in month two, $1.8m in month
+   * four, $5.4m in month ten, about $24m over the year. It reached 3.87% of
+   * the market, which looks like success until you notice it was bought by
+   * handing over nineteen twentieths of the company.
+   *
+   * The score cannot see it. `resolve` floors `founderShare` at 0.05, so once
+   * the founders are at the floor further dilution is free, and scoring
+   * `founderValue` — necessary as that is — stops discriminating exactly where
+   * it matters most.
+   *
+   * So the bound is control, and it is absolute rather than per period: this
+   * will not file a raise that leaves the founders with less than half. A
+   * founder may of course choose to sell more, and the lever is theirs. A
+   * button pressed on their behalf may not give their company away.
+   */
+  const KEEP_CONTROL = 0.5;
+  const stake = company.founderShare ?? 1;
+  const roomToSell = stake > KEEP_CONTROL ? worthNow * (stake / KEEP_CONTROL - 1) : 0;
+
+  for (const slice of wantedItAll && roomToSell > 0 ? RAISE_TRIES : []) {
+    /* Never more than half the founders' stake in one period, nor past control. */
+    const amount = Math.round(Math.min(worthNow * slice, worthNow, roomToSell));
+    if (amount <= 0) continue;
+    const withRaise: Shape = { ...shape, raise: amount };
+    const alternative = ascend(run.spend, run.price, withRaise);
+    if (process.env.OPT_TRACE) {
+      console.error(`[raise]   ${Math.round(amount)} -> score ${Math.round(alternative.at.score)} ${alternative.at.score > run.at.score ? "TAKEN" : "declined"}`);
+    }
+    if (alternative.at.score > run.at.score) { shape = withRaise; run = alternative; }
+  }
+
   for (const draw of BORROW_TRIES) {
     const amount = Math.round(Math.max(0, (company.creditLimit ?? 0) - (company.debt ?? 0)) * draw);
     if (amount <= 0) continue;
@@ -887,45 +1178,64 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   }
 
   /*
-   * And then the one lever that costs no money, which has to be chosen last.
+   * And then the week, which costs no money and so has to be chosen last.
    *
-   * Greedy and measured, not assumed. It is tempting to hard-code "always take
-   * the allowance" since the actions are free — but free is not the same as
-   * worth having, and which three are worth having depends entirely on the
-   * company: a business turning away customers wants the hours worked, one
-   * nobody has heard of wants the doors knocked, and one losing money on every
-   * sale wants the bills renegotiated. Scoring them is the only way the choice
-   * tracks the position.
+   * Greedy and measured, not assumed. It is tempting to hard-code "put the
+   * hours into the product" — but which hours are worth having depends
+   * entirely on the position: a business turning away customers wants the
+   * hours worked, one nobody has heard of wants the doors knocked, and one
+   * losing money on every sale wants the bills renegotiated. Scoring them is
+   * the only way the choice tracks the company.
    *
-   * One at a time, keeping whichever adds most, up to the allowance — so the
-   * second choice is made knowing the first, which matters because the axes
-   * interact (room is worth nothing without demand and the other way round).
-   * Bounded at nine plus eight plus seven runs in a yearly season and at nine
-   * in a monthly one, where the allowance is one.
+   * The week is split evenly across whatever it picks, one more at a time, so
+   * the second choice is made knowing the first — which matters, because the
+   * axes interact (room is worth nothing without demand, and the other way
+   * round). Even rather than optimised: searching the real simplex of sixty
+   * hours across nine actions is a different and far more expensive problem,
+   * and an even split across the two or three that score is most of the value
+   * for nine-plus-eight-plus-seven runs of the engine.
    *
-   * Nothing is taken that does not actually score better than taking nothing.
-   * A founder's fortnight is not free to *them*, and an action that moves the
-   * company backwards — more room it cannot fill, carrying fixed cost — should
-   * be declined.
+   * Nothing is taken that does not score better than leaving the hours where
+   * they were. A founder's week is not free to *them*, and an action that
+   * moves the company backwards — more room it cannot fill, carrying fixed
+   * cost — should be declined.
    */
-  const offered = foundersActions(niche);
-  const allowance = actionsForPeriods(periods);
-  if (offered.length && allowance > 0) {
+  /*
+   * The nine standing actions, plus anything on this period's shelf the
+   * founders could make instead of buying.
+   *
+   * Dealt from the same seed as the auction and the engine, so a build the
+   * search commits to is the lot the player was shown. A made one is free and
+   * takes weeks, a bought one is instant and costs money — which is a real
+   * trade and exactly the kind the search should be making rather than a
+   * person guessing.
+   */
+  const shelfNow = marketListings({
+    seasonId: world.seasonId, year, niche, periods,
+    owned: (company.assets ?? []).map((a) => a.name),
+  });
+  const offered = [...foundersActions(niche), ...buildableActions(shelfNow)];
+  const MOST_AT_ONCE = 3;
+  if (offered.length) {
     const chosen: string[] = [];
-    for (let slot = 0; slot < allowance; slot++) {
+    const split = (ids: string[]): Record<string, number> => {
+      const each = HOURS_A_WEEK / ids.length;
+      return Object.fromEntries(ids.map((id) => [id, each]));
+    };
+    for (let slot = 0; slot < MOST_AT_ONCE; slot++) {
       let tookId: string | null = null;
       let tookAt = run.at;
       for (const action of offered) {
         if (chosen.includes(action.id)) continue;
-        const withAction: Shape = { ...shape, actions: [...chosen, action.id] };
-        const got = measure(run.spend, run.price, withAction);
+        const withHours: Shape = { ...shape, hours: split([...chosen, action.id]) };
+        const got = measure(run.spend, run.price, withHours);
         if (got.score > tookAt.score) { tookAt = got; tookId = action.id; }
       }
       if (!tookId) break;
       chosen.push(tookId);
       run = { ...run, at: tookAt };
+      shape = { ...shape, hours: split(chosen) };
     }
-    shape = { ...shape, actions: chosen };
   }
 
   /*
@@ -950,8 +1260,30 @@ export function optimise(input: OptimiserInput): OptimisedPlan | null {
   best = run.at;
   for (const key of Object.keys(spend)) spend[key] = spendFinal[key] ?? 0;
 
+  /*
+   * Tidied to a round number, at this company's own order of magnitude.
+   *
+   * This was `Math.round(amount / 1000) * 1000` — a flat thousand, which is a
+   * sensible tidy-up for a company spending £4m a year and an eraser for one
+   * spending four hundred. Measured on a real monthly season: the whole
+   * affordable budget for the month was $1,728, every lever's slice came out
+   * between $100 and $500, and all of them rounded to **zero**. So the search
+   * would decide to fund brand, say so in the trace, and file a plan that
+   * committed nothing — which is what "Nova doesn't change any decisions"
+   * actually was, from the keyboard.
+   *
+   * Two orders of magnitude below the amount keeps the old behaviour where it
+   * was right (£37,655 still becomes £38,000) and stops it destroying
+   * everything a small business does.
+   */
+  const tidy = (amount: number): number => {
+    if (!(amount > 0)) return 0;
+    const grain = Math.max(1, Math.pow(10, Math.floor(Math.log10(amount)) - 1));
+    return Math.round(amount / grain) * grain;
+  };
+
   const rounded: Record<string, number> = {};
-  for (const [field, amount] of Object.entries(spend)) rounded[field] = Math.round(amount / 1000) * 1000;
+  for (const [field, amount] of Object.entries(spend)) rounded[field] = tidy(amount);
 
   const decisions = draftOf(company, rounded, price, best.room, staffedFor(best.room), shape);
   /*
@@ -993,13 +1325,43 @@ export const optimiserBudget = (company: Company, niche: Niche, per = 1): number
 const DECIDED_ELSEWHERE = new Set([
   "price", "brandSpend", "performanceSpend", "featureSpend", "reliabilitySpend", "techDebtPaydown",
   "supportSpend", "efficiencySpend", "capacityTarget", "headcount", "borrow", "expand", "expandVote",
-  "founderActions", "forecast", "targetCities", "dealVotes",
-  "raiseAmount", "buyback", "dividendPct", "replaceSeat", "replaceBid", "overrule", "holdBack", "holdBackSeat",
+  "founderHours", "forecast", "targetCities", "dealVotes",
+  /*
+   * `raiseAmount` was here, and it was not decided elsewhere — it was decided
+   * nowhere. The main ascent never emitted it and this list told the second
+   * pass to skip it, so in every season, for every company, Nova's only source
+   * of money beyond its own takings was the credit line. For a founder trying
+   * to go from nothing to a real share of a market, raising is the lever that
+   * does that, and the button never touched it. It has its own pass below,
+   * after the objective was fixed to charge for dilution.
+   */
+  "buyback", "dividendPct", "replaceSeat", "replaceBid", "overrule", "holdBack", "holdBackSeat",
   "budget", "repay", "cashBuffer", "refinance", "factorPct",
 ]);
 
 /** How many runs of the engine the pass below may spend, all levers together. */
-export const REST_BUDGET = 180;
+export const REST_BUDGET = 260;
+
+/*
+ * 260 rather than 180, and spread rather than spent front to back.
+ *
+ * Counted on dating apps in year five, the five desks between them want 37,
+ * 41, 47, 28 and 35 candidate runs — 188. At 180, spent in desk order, the
+ * budget ran out inside the operations desk and the loop returned: `sourcing`,
+ * `recruitingSpend` and `trainingSpend` were never tried in any season, by any
+ * company, and nothing said so. A silent cut-off is the worst shape for this,
+ * because the levers that go untried are always the same ones.
+ *
+ * So the budget is big enough for the ordinary case, and a guard in
+ * `test/unit/forecast-connection.test.ts` counts the candidates against it —
+ * so the next four levers somebody adds to one desk turn this red instead of
+ * silently un-trying the end of another desk.
+ *
+ * Walking the desks round-robin was tried as well and reverted: with a budget
+ * this size nothing is cut either way, so all it changed was the order, and
+ * this pass is greedy enough that the order moved a funded season's outcome by
+ * 7% and turned a balance guard red.
+ */
 
 /**
  * The values worth trying for one lever, from where it stands now.
@@ -1013,9 +1375,19 @@ export const REST_BUDGET = 180;
 export function candidatesFor(field: LeverField, company: Company, current: Record<string, any> | undefined, per = 1): unknown[] {
   const now = current?.[field.id];
   const scale = company.scale ?? 1;
+  /*
+   * Rounded to two figures of the amount itself, not to the desk's step.
+   *
+   * The steps in `LEVER_FIELDS` are written for a market spending millions —
+   * £50,000 of research, 10,000 units of room — and a company spending £1,700
+   * a month rounded every money candidate to nought (so the lever was never
+   * tried at all) and offered to lease ten thousand units to a business with
+   * forty. The same failure as the final rounding in `optimise`, one level in.
+   */
   const snap = (n: number) => {
-    const step = field.step ?? 1;
-    return Math.max(field.min ?? 0, Math.min(field.max ?? Infinity, Math.round(n / step) * step));
+    const mag = n > 0 ? Math.max(1, 10 ** (Math.floor(Math.log10(n)) - 1)) : 1;
+    const rounded = n >= 1 ? Math.round(n / mag) * mag : Math.round(n);
+    return Math.max(field.min ?? 0, Math.min(field.max ?? Infinity, rounded));
   };
   const opts = (field.options ?? []).map((o) => o.value);
   switch (field.kind) {
@@ -1027,9 +1399,8 @@ export function candidatesFor(field: LeverField, company: Company, current: Reco
       return [0.9, 1.1].map((m) => Math.max(1, Math.round((Number(now) || company.price) * m)));
     case "count": {
       const from = Number(now) || company.capacity || 1;
-      const step = field.step ?? 1;
-      /* Half as much again, and half; a market that counts in dozens still gets one step either way. */
-      return [...new Set([from * 1.5, from * 0.5, from + step].map(snap))].filter((v) => v > 0 && v !== now);
+      /* Half as much again, and half; and one more, for a market that counts in dozens. */
+      return [...new Set([from * 1.5, from * 0.5, from + 1].map(snap))].filter((v) => v > 0 && v !== now);
     }
     case "percent": {
       const lo = field.min ?? 0, hi = field.max ?? 100;
@@ -1038,8 +1409,9 @@ export function candidatesFor(field: LeverField, company: Company, current: Reco
     case "choice":
     case "segment":
       return opts.filter((v) => v !== (now ?? ""));
-    case "actions":
-      return opts.map((v) => [v]);
+    case "hours":
+      /* The whole week on each one in turn: the optimiser's own pass splits it. */
+      return opts.map((v) => ({ [v]: HOURS_A_WEEK }));
     case "cities": {
       /* Opening each region not yet open, one at a time. */
       const open = company.cities ?? [];
@@ -1086,31 +1458,53 @@ function decideTheRest(input: {
   let score = input.at.score;
   let runs = 0;
   const base = draftOf(company, {}, company.price, company.capacity, 0, shape) as Record<string, any>;
+
+  /*
+   * Every lever worth trying, in desk order.
+   *
+   * Walking them round-robin across the desks was tried, to make running out
+   * of budget cost each desk its last lever rather than one desk everything.
+   * With the budget large enough that nothing is cut it changes nothing about
+   * *which* levers are tried and only the order they are tried in — and this
+   * pass is greedy, so order is not free: it moved the funded opening 7% and
+   * put `from-nothing`'s "harder than the funded opening" guard red. Bisected
+   * to the ordering, with the budget held at both sizes.
+   *
+   * So the starvation is fixed where it actually lived — in `REST_BUDGET`,
+   * which was too small for the five desks and cut the operations seat off
+   * mid-way — and the order is left alone.
+   */
+  const queue: { role: Role; raw: LeverField }[] = [];
   for (const role of input.desks) {
     if (!company.seats?.includes(role)) continue;
     for (const raw of LEVER_FIELDS[role]) {
-      if (DECIDED_ELSEWHERE.has(raw.id) || !unlocked(role, raw.id)) continue;
-      const field = withOptions(raw, { company, niche, seasonId: world.seasonId, year, solo: false, offers, openedNiches: world.openedNiches });
-      const current = { ...(base[role] ?? {}), ...(shape.extras?.[role] ?? {}) };
-      let bestValue: unknown = undefined;
-      /*
-       * Never a public blame. Pinning a shock on a colleague wins back the most
-       * reputation and costs that person dearly, and it is not a thing a
-       * button should do to somebody on the chief executive's behalf.
-       */
-      const tries = candidatesFor(field, company, current, 1 / periods)
-        .filter((v) => !(raw.id === "shockAnswer" && typeof v === "string" && v.startsWith("blame_")));
-      for (const value of tries) {
-        if (runs >= REST_BUDGET) return shape;
-        runs += 1;
-        const trial: Shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: value } } };
-        const got = input.measure(trial).score;
-        /* Better by something, not by rounding: a tie leaves the lever as it was. */
-        if (got > score + Math.abs(score) * 1e-6) { score = got; bestValue = value; }
-      }
-      if (bestValue !== undefined) {
-        shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: bestValue } } };
-      }
+      /* A creator market's own levers are on from the start there, and do not exist anywhere else. */
+      if (raw.audienceOnly ? niche.model !== "audience" : (DECIDED_ELSEWHERE.has(raw.id) || !unlocked(role, raw.id))) continue;
+      queue.push({ role, raw });
+    }
+  }
+
+  for (const { role, raw } of queue) {
+  const field = withOptions(raw, { company, niche, seasonId: world.seasonId, year, solo: false, offers, openedNiches: world.openedNiches });
+    const current = { ...(base[role] ?? {}), ...(shape.extras?.[role] ?? {}) };
+    let bestValue: unknown = undefined;
+    /*
+     * Never a public blame. Pinning a shock on a colleague wins back the most
+     * reputation and costs that person dearly, and it is not a thing a
+     * button should do to somebody on the chief executive's behalf.
+     */
+    const tries = candidatesFor(field, company, current, 1 / periods)
+      .filter((v) => !(raw.id === "shockAnswer" && typeof v === "string" && v.startsWith("blame_")));
+    for (const value of tries) {
+      if (runs >= REST_BUDGET) return shape;
+      runs += 1;
+      const trial: Shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: value } } };
+      const got = input.measure(trial).score;
+      /* Better by something, not by rounding: a tie leaves the lever as it was. */
+      if (got > score + Math.abs(score) * 1e-6) { score = got; bestValue = value; }
+    }
+    if (bestValue !== undefined) {
+      shape = { ...shape, extras: { ...shape.extras, [role]: { ...(shape.extras?.[role] ?? {}), [raw.id]: bestValue } } };
     }
   }
   return shape;

@@ -37,7 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { DeskCurrency, DeskPeriod, useMoney, usePeriod } from "@/components/sim/desk-currency";
+import { DeskCurrency, DeskPeriod, periodTitle, useMoney, usePeriod } from "@/components/sim/desk-currency";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -57,6 +57,7 @@ import { useProjection } from "@/components/sim/projection-panel";
 import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import { NovaPlanCard } from "@/components/sim/nova-plan";
+import { CreatorJourney, type CreatorFigures, type DeskAudience } from "@/components/sim/creator-journey";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope, Search,
@@ -80,7 +81,7 @@ interface Desk {
    * quarter is called. Optional because a desk from before this existed has no
    * opinion, and "year" is what it always meant.
    */
-  period?: { one: string; many: string; of: string };
+  period?: { one: string; many: string; of: string; perYear?: number };
   cadence?: string;
   /** What this company counts its money in — the project's currency, or the default. */
   currency?: CurrencyCode;
@@ -200,7 +201,11 @@ interface Desk {
     auctions?: AuctionRow[];
     event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
     founderValue?: number; founderShare?: number;
+    /** In a market that earns from an audience. */
+    creator?: CreatorFigures;
   } | null;
+  /** A channel's milestones, thresholds and sponsors; null in a market that sells. */
+  audience?: DeskAudience | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
   /** Every company in the market, placed — for the map on the Past tab. */
   standing?: Standing[];
@@ -373,6 +378,7 @@ export default function SimulationDeskPage() {
    * that will actually be charged — and immediate, which is the only way it
    * changes anybody's mind.
    */
+
   const live = useMemo(() => {
     /*
      * Optional all the way down, because a desk before its season starts has
@@ -486,7 +492,7 @@ export default function SimulationDeskPage() {
     <DeskPeriod.Provider value={desk.period ?? { one: "year", many: "years", of: "this year" }}>
     <Shell
       title={desk.name ?? "Your company"}
-      subtitle={`${desk.niche.name} · ${period.one.charAt(0).toUpperCase() + period.one.slice(1)} ${desk.year} of ${desk.totalPeriods ?? desk.totalYears}`}
+      subtitle={`${desk.niche.name} · ${periodTitle(period)} ${desk.year} of ${desk.totalPeriods ?? desk.totalYears}`}
       nicheId={desk.niche.id}
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
@@ -535,11 +541,21 @@ export default function SimulationDeskPage() {
         {/* 1. What happened last year, before anyone is asked to decide this one. */}
         {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
           <Card><CardContent className="p-5">
-            <p className="text-sm font-medium">Year one</p>
+            <p className="text-sm font-medium">{periodTitle(period)} one</p>
             <p className="text-sm text-muted-foreground mt-1">
               {desk.niche.premise} Nobody has heard of you yet — that is the first problem to solve.
             </p>
           </CardContent></Card>
+        )}
+
+        {/* A channel's journey: subscribers against the next milestone, and which money has switched on. */}
+        {desk.audience && (
+          <CreatorJourney
+            audience={desk.audience}
+            last={desk.lastYear?.creator ?? null}
+            customers={v.customers}
+            periodName={period.one}
+          />
         )}
 
         {/* What happened to the market, which is the thing people talk about. */}
@@ -791,6 +807,12 @@ export default function SimulationDeskPage() {
                       cities={desk.cities}
                       isNew={field.unlocksIn === desk.year}
                       listPrice={field.kind === "tiers" ? Number(draft.price) : undefined}
+                      room={field.id === "capacityTarget" ? {
+                        have: desk.company?.capacity ?? 0,
+                        fromAssets: desk.company?.assetCapacity ?? 0,
+                        periods: desk.period?.perYear ?? 1,
+                        many: desk.niche?.voice?.customers ?? "customers",
+                      } : undefined}
                     />
                   ))}
                 </div>
@@ -1305,6 +1327,7 @@ function DeskTabs({ tab, onChange, ventureId, lastYear, year, filed, compact }: 
   tab: DeskTab; onChange: (t: DeskTab) => void; ventureId: string; lastYear: number | null;
   year: number; filed: boolean; compact: boolean;
 }) {
+  const period = usePeriod();
   const key = `sim-desk-seen-${ventureId}`;
   const [seen, setSeen] = useState<number>(() => {
     try { return Number(localStorage.getItem(key) ?? 0); } catch { return 0; }
@@ -1316,8 +1339,8 @@ function DeskTabs({ tab, onChange, ventureId, lastYear, year, filed, compact }: 
   }, [tab, lastYear, seen, key]);
   const fresh = lastYear !== null && seen < lastYear && tab !== "past";
   const items: { id: DeskTab; label: string; sub: string; Icon: typeof History }[] = [
-    { id: "past", label: "Past", sub: lastYear !== null ? `Year ${lastYear} results` : "Nothing yet", Icon: History },
-    { id: "decisions", label: "Decisions", sub: filed ? "Filed" : `Year ${year} to file`, Icon: SlidersHorizontal },
+    { id: "past", label: "Past", sub: lastYear !== null ? `${periodTitle(period)} ${lastYear} results` : "Nothing yet", Icon: History },
+    { id: "decisions", label: "Decisions", sub: filed ? "Filed" : `${periodTitle(period)} ${year} to file`, Icon: SlidersHorizontal },
     { id: "future", label: "Future", sub: "Projections", Icon: Telescope },
   ];
   return (
@@ -1501,13 +1524,14 @@ function WayRow({ label, value, when, warn }: { label: string; value: string; wh
 /** Last year, said plainly, with the engine's own explanation of why. */
 function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
   const { money, compact } = useMoney();
+  const period = usePeriod();
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
     <Card data-testid="card-last-year">
       <CardContent className="p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold" data-testid="text-last-year">Year {report.year}</h2>
+          <h2 className="font-semibold" data-testid="text-last-year">{periodTitle(period)} {report.year}</h2>
           <Badge variant={report.rank <= 3 ? "default" : "secondary"} data-testid="text-last-rank">#{report.rank} in the market</Badge>
         </div>
         {/*
@@ -1715,14 +1739,90 @@ function NumberBox({ id, value, min, max, step, onChange, testId }: {
   );
 }
 
-function Field({ field, role, value, error, onChange, cities, isNew, listPrice }: {
+/**
+ * When the room you are asking for actually opens, period by period.
+ *
+ * The complaint this answers: the projection has to match the number the
+ * person typed. It did not — asking for 40,000 from 5,000 in a monthly season
+ * showed about 7,900, because a build opens across a year, and the lever's
+ * explanatory sentence lost that argument every time it was read.
+ *
+ * Making the figure immediate was tried first and does not survive. Opening
+ * the room at once, or whole in one period instead of spread over twelve,
+ * breaks eight or nine balance guards between them: a competent plan stops
+ * beating the bots (first in 1 of 7 seasons instead of 4), both insolvency
+ * rescues stop working, and the frugal way of playing gets locked out of three
+ * markets. The year's lag is the brake the rest of the balance leans on.
+ *
+ * So the mechanic stays and the screen stops hiding it. You asked for 40,000:
+ * here is what opens next month, and the month it is all yours.
+ *
+ * **Walked with `capacityBuild` itself**, not with arithmetic written here to
+ * match it. That function has been wrong twice in ways that took measurement
+ * to find — once closing a share of the *remaining* gap each period so it
+ * approached its target without arriving (376, 532, 649, 737 on the way to
+ * 1,000) — and a second implementation on the screen would be a third chance
+ * to disagree with the engine while looking authoritative.
+ */
+function RoomPath({ target, room, compact }: {
+  target: number;
+  room: { have: number; fromAssets: number; periods: number; many: string };
+  compact: (n: number) => string;
+}) {
+  const wanted = Math.max(0, Math.round(Number(target) || 0));
+  const per = 1 / Math.max(1, room.periods);
+  const word = room.periods >= 12 ? "month" : room.periods >= 4 ? "quarter" : "year";
+
+  if (wanted <= room.have) {
+    return (
+      <p className="mt-1.5 text-xs text-muted-foreground" data-testid="text-room-path">
+        Room for {compact(room.have + room.fromAssets)} {room.many} already, and nothing to build.
+        {room.fromAssets > 0 ? ` ${compact(room.fromAssets)} of that is what you own.` : ""}
+      </p>
+    );
+  }
+
+  const steps: number[] = [];
+  let company: { capacity: number; buildFrom?: number; buildTo?: number } = { capacity: room.have };
+  for (let i = 0; i < Math.max(1, room.periods); i++) {
+    const built = capacityBuild(company, wanted, per);
+    steps.push(built.next);
+    company = { capacity: built.next, buildFrom: built.buildFrom, buildTo: built.buildTo };
+    if (built.next >= wanted) break;
+  }
+  const opensNext = steps[0] ?? room.have;
+  const done = steps.findIndex((n) => n >= wanted);
+
+  return (
+    <div className="mt-1.5 space-y-0.5" data-testid="text-room-path">
+      <p className="text-xs text-muted-foreground">
+        Open next {word}:{" "}
+        <span className="font-medium text-foreground tabular-nums">{compact(opensNext + room.fromAssets)}</span>{" "}
+        {room.many}{room.fromAssets > 0 ? `, ${compact(room.fromAssets)} of it from what you own` : ""}.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {done >= 0
+          ? `All ${compact(wanted + room.fromAssets)} by ${word} ${done + 1}.`
+          : `A year of building reaches ${compact((steps[steps.length - 1] ?? room.have) + room.fromAssets)}; the rest follows after that.`}
+      </p>
+    </div>
+  );
+}
+
+function Field({ field, role, value, error, onChange, cities, isNew, listPrice, room }: {
   field: LeverField; role: Role | null; value: any; error?: string; onChange: (v: any) => void;
   cities?: Desk["cities"];
+  /**
+   * What the company has to serve people with, for the capacity lever's own
+   * note. Only that lever reads it.
+   */
+  room?: { have: number; fromAssets: number; periods: number; many: string };
   /** Arrived this year (see UNLOCKS in shared/simulation/responsibilities.ts). */
   isNew?: boolean;
   /** For price tiers: what a segment with no tier pays. */
   listPrice?: number;
 }) {
+  const period = usePeriod();
   const { money, compact } = useMoney();
   const badge = isNew ? <Badge variant="secondary" className="ml-2 text-[10px] align-middle" data-testid={`badge-new-${field.id}`}>New this year</Badge> : null;
 
@@ -1845,59 +1945,86 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
   }
 
   /*
-   * The founders' own time: a short list, a hard cap, and no prices.
+   * The founders' own week, split across the things they could do with it.
    *
-   * Its own control rather than the city checkboxes it started as, which read
-   * the `cities` array and so showed London and Manchester under "What you'll
-   * do yourself". Here the choices come from the field (`speak`/`offerActions`
-   * fill them in the market's own words) and `field.pick` is how many may be
-   * ticked at once.
+   * Not a pick-list, which is what this was: an allowance of one action a
+   * month taught "choose the one thing you will do", when the decision is how
+   * to carve up a week that is already full. Sixty hours, a stepper against
+   * each action, and the hours left over always on screen — because a control
+   * that silently refuses the next click is the thing people report as broken.
    *
-   * At the cap the unticked ones go quiet rather than disappearing, and the
-   * count is always on screen — a control that silently refuses the next tick
-   * is the thing people file bug reports about.
+   * Over-allocating is allowed here and scaled back in proportion by the
+   * engine (`hoursTaken`), but the control does not let it happen: each
+   * stepper stops at whatever is still unspent.
    */
-  if (field.kind === "actions") {
-    const taken: string[] = Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
-    const pick = field.pick ?? 1;
-    const full = taken.length >= pick;
+  if (field.kind === "hours") {
+    const week = field.hours ?? 60;
+    const put: Record<string, number> = (value && typeof value === "object" && !Array.isArray(value)) ? value : {};
+    const spent = Object.values(put).reduce((n: number, h) => n + (Number(h) || 0), 0);
+    const left = Math.max(0, week - spent);
+    const set = (id: string, hours: number) => {
+      const next = { ...put };
+      if (hours <= 0) delete next[id];
+      else next[id] = hours;
+      onChange(next as any);
+    };
+    const STEP = 5;
     return (
       <div>
         <div className="flex items-baseline justify-between gap-2">
           <Label className="text-sm font-medium">{field.label}{badge}</Label>
-          <span className="text-xs text-muted-foreground shrink-0 tabular-nums" data-testid="text-actions-taken">
-            {taken.length} of {pick}
+          <span
+            className={`text-xs shrink-0 tabular-nums ${left === 0 ? "text-muted-foreground" : "text-primary font-medium"}`}
+            data-testid="text-hours-left"
+          >
+            {left === 0 ? `all ${week} hours spoken for` : `${left} of ${week} hours left`}
           </span>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
         <Trade outcome={leverOutcome(role, field.id)} />
         <div className="space-y-1.5">
           {(field.options ?? []).map((option) => {
-            const selected = taken.includes(option.value);
+            const hours = Number(put[option.value]) || 0;
+            const share = week > 0 ? hours / week : 0;
             return (
-              <button
+              <div
                 key={option.value}
-                type="button"
-                /*
-                 * Choosing a tenth thing when three are allowed drops the
-                 * oldest rather than refusing: the cap is a rule about the
-                 * period, and the person is plainly changing their mind.
-                 */
-                onClick={() => onChange(selected
-                  ? taken.filter((id) => id !== option.value)
-                  : [...taken, option.value].slice(-pick))}
-                className={`w-full text-left rounded-lg border p-2.5 transition ${selected ? "border-primary bg-primary/5" : `border-border hover:border-muted-foreground/40 ${full ? "opacity-60" : ""}`}`}
-                data-testid={`action-${option.value}`}
-                aria-pressed={selected}
+                className={`rounded-lg border p-2.5 transition ${hours > 0 ? "border-primary bg-primary/5" : "border-border"}`}
+                data-testid={`hours-${option.value}`}
               >
-                <span className="text-sm font-medium">{option.label}</span>
-                <p className="text-[11px] text-muted-foreground mt-0.5">{option.help}</p>
-              </button>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium">{option.label}</span>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{option.help}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button
+                      type="button" variant="outline" size="icon" className="h-7 w-7"
+                      disabled={hours <= 0}
+                      onClick={() => set(option.value, Math.max(0, hours - STEP))}
+                      aria-label={`Fewer hours on ${option.label}`}
+                    >−</Button>
+                    <span className="w-12 text-center text-sm tabular-nums">{hours}h</span>
+                    <Button
+                      type="button" variant="outline" size="icon" className="h-7 w-7"
+                      disabled={left <= 0}
+                      onClick={() => set(option.value, hours + Math.min(STEP, left))}
+                      aria-label={`More hours on ${option.label}`}
+                    >+</Button>
+                  </div>
+                </div>
+                {/* What this slice of the week is, at a glance. */}
+                {hours > 0 && (
+                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, share * 100)}%` }} />
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
         {(field.options?.length ?? 0) === 0 && (
-          <p className="text-xs text-muted-foreground">Nothing to take on this {field.pick === 1 ? "month" : "period"}.</p>
+          <p className="text-xs text-muted-foreground">Nothing here you could do yourself.</p>
         )}
         {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
       </div>
@@ -1932,7 +2059,10 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium">{city.name}</span>
                   <span className="text-xs text-muted-foreground shrink-0">
-                    {city.open ? "already open" : `${compact(city.entryCost)} to open`} · {Math.round(city.weight * 100)}% of the market
+                    {city.open
+                      ? "already open"
+                      /* What this market costs to enter, in the gradient; the share beside it is description, not price. */
+                      : <><span className="nova-number tabular-nums">{compact(city.entryCost)}</span> to open</>} · {Math.round(city.weight * 100)}% of the market
                   </span>
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-0.5">{city.note}</p>
@@ -1997,9 +2127,15 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
     <div>
       <div className="flex items-baseline justify-between gap-3">
         <Label className="text-sm font-medium" htmlFor={`field-${field.id}`}>{field.label}{badge}</Label>
+        {/*
+          * The lever's own value, in the gradient: the number that answers
+          * "how much am I putting in". tabular-nums stays — these digits
+          * change under the cursor as the slider moves, and proportional
+          * figures would shift the row's width on every step.
+          */}
         {field.kind === "percent"
-          ? <span className="text-xs text-muted-foreground tabular-nums">{n}%</span>
-          : field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
+          ? <span className="nova-number text-xs tabular-nums">{n}%</span>
+          : field.kind !== "count" && <span className="nova-number text-xs tabular-nums">{compact(n)}</span>}
       </div>
       <p className="text-xs text-muted-foreground mt-0.5">{field.help}</p>
         <Trade outcome={leverOutcome(role, field.id)} />
@@ -2016,6 +2152,8 @@ function Field({ field, role, value, error, onChange, cities, isNew, listPrice }
         />
         <Button type="button" variant="outline" size="sm" onClick={() => nudge(step)} data-testid={`button-${field.id}-up`}>+</Button>
       </div>
+      {/* The capacity lever's own answer to "what does this number get me, and when". */}
+      {room ? <RoomPath target={n} room={room} compact={compact} /> : null}
       {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
     </div>
   );

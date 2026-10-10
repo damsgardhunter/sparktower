@@ -395,6 +395,33 @@ describe("playing a market again, and filling the table", () => {
    * in an empty room for colleagues who did not exist. Built now means
    * seated, running, and handed the desk.
    */
+  /*
+   * The founder's own money, not the market's purse. A solo season built on
+   * somebody's project said "You start with $1.21m in the bank" to a founder
+   * who had nothing like it; it now asks, and opens on exactly the answer.
+   */
+  it("opens on the money the founder says they have, exactly", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const project = await aProject(owner.id);
+    const { season } = await seasonWithMarket(owner.id, project.id);
+
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`)
+      .send({ fromSeasonId: season.id, opening: "actual", startingCash: 12_500 });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    expect(made.body.openingCash, "the panel says what they typed").toBe(12_500);
+
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.status).toBe("running");
+    const me = (built.world as any).companies.find((c: any) => c.id === made.body.ventureId);
+    expect(me.cash, "and the bank holds exactly that on day one").toBe(12_500);
+
+    const refused = await owner.agent.post(`/api/projects/${project.id}/simulation`)
+      .send({ fromSeasonId: season.id, startingCash: -5 });
+    expect(refused.status).toBe(400);
+    expect(refused.body.field).toBe("startingCash");
+  }, 60_000);
+
   it("starts a one-person project's season on the spot, flag or no flag", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Owner");

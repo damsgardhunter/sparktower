@@ -25,6 +25,7 @@ import { db, pool } from "./db";
 import { surfaceEnabled } from "./surfaces";
 import { schemaMatchesBuild } from "./migration-state";
 import {
+  companies,
   simSeasons, simVentures, simSeats, simDecisions, simReports,
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
@@ -313,6 +314,15 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     .from(simSeasons)
     .where(eq(simSeasons.id, seasonId));
   const currency = await currencyForSeason(ahead?.companyId);
+  /*
+   * A season built from somebody's own project: its founders are the people
+   * actually building the thing, and none of them chose to draw an executive
+   * salary from it. See `foundersPaid` below.
+   */
+  const [owner] = ahead?.companyId
+    ? await db.select({ projectId: companies.projectId }).from(companies).where(eq(companies.id, ahead.companyId))
+    : [];
+  const fromAProject = !!owner?.projectId;
 
   const result = await db.transaction(async (tx): Promise<{ outcome: StartOutcome; world?: World; niche?: NonNullable<ReturnType<typeof nicheById>> }> => {
     const [peek] = await tx.select({ nicheId: simSeasons.nicheId, companyId: simSeasons.companyId })
@@ -414,6 +424,18 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
           name: v.name ?? "Unnamed",
           seats: soloSeat ? [...ROLES] : held,
           officers: soloSeat ? 1 : undefined,
+          /*
+           * And draws nothing. A founder on their own was charged a full
+           * executive salary every period — $2,000 a month out of $5,000, for
+           * a person who does not exist and does no work beyond what they
+           * already do. Salaries start when somebody is hired.
+           *
+           * The same for any table built from a project, five seats or one:
+           * the founders are the people building it and never chose to pay
+           * themselves. A catalogue season and a company's training season
+           * keep their executive salaries — there the chairs are jobs.
+           */
+          foundersPaid: soloSeat || fromAProject ? false : undefined,
           botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
           /*
            * Where this company actually is, for a season that asked to open
@@ -421,7 +443,18 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
            * one project's — a season with several ventures and an "actual"
            * opening would want one each, and nothing creates that yet.
            */
-          standing: (season as { openingStanding?: { progress: number; people: number } | null }).openingStanding ?? undefined,
+          ...(() => {
+            /*
+             * The snapshot can carry the founder's own opening balance as well
+             * as (or instead of) where the project stands. A standing is only
+             * one when it has progress in it.
+             */
+            const snap = (season as { openingStanding?: { progress?: number; people?: number; cash?: number } | null }).openingStanding;
+            return {
+              standing: snap && typeof snap.progress === "number" ? { progress: snap.progress, people: snap.people ?? 1 } : undefined,
+              cash: typeof snap?.cash === "number" ? snap.cash : undefined,
+            };
+          })(),
         };
       }),
     });

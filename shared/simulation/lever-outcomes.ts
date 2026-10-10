@@ -96,6 +96,10 @@ export const LEVER_OUTCOMES: Record<string, Outcome> = {
     up: ["A gentler way to win the same people"],
     down: ["Everybody pays a little less, all year"],
   },
+  "cmo.sponsorReads": {
+    up: ["Every read is paid by the thousand views", "Sponsors are where a channel's money is, once it is big enough to be chosen"],
+    down: ["Each read past the first is a minute nobody came for: fewer views, and a little less goodwill"],
+  },
   "cmo.winbackSpend": {
     up: ["About a third of a year's takings each — far cheaper than finding new people"],
     down: ["Only works if what drove them off was fixed", "A fifth of the effect if nothing changed"],
@@ -325,13 +329,14 @@ export const LEVER_OUTCOMES: Record<string, Outcome> = {
    * either way, and the whole thing fades as the company hires — a founder who
    * plans to keep improving the product this way is planning not to grow.
    */
-  "ceo.founderActions": {
+  "ceo.founderHours": {
     up: [
       "A category better for nothing — the only lever that works on an empty balance sheet",
       "Yours to do now, with no budget, no hire and nobody to brief",
+      "Sixty hours, split how you like: all of it on one thing, or a little on three",
     ],
     down: [
-      "The month goes on this and not on the next thing",
+      "Every hour here is an hour not on something else — the week does not stretch",
       "Worth less every time you hire: a rounding error once there is a real team",
     ],
   },

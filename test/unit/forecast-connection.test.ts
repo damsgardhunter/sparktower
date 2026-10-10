@@ -7,12 +7,14 @@
  * saved the screen could no longer say what it had done.
  */
 import { describe, it, expect } from "vitest";
+import { withOptions } from "@shared/simulation/lever-options";
+import { isUnlocked } from "@shared/simulation/responsibilities";
 import { projectYear } from "@shared/simulation/projection";
 import { buildWorld, economyFor } from "@shared/simulation/season";
-import { nicheById } from "@shared/simulation/niches";
+import { nicheById, nicheById } from "@shared/simulation/niches";
 import { ROLES, type Role } from "@shared/simulation/types";
-import { optimise, candidatesFor } from "@shared/simulation/optimiser";
-import { LEVER_FIELDS } from "@shared/simulation/levers";
+import { optimise, candidatesFor, REST_BUDGET } from "@shared/simulation/optimiser";
+import { LEVER_FIELDS, LEVER_FIELDS } from "@shared/simulation/levers";
 
 const niche = nicheById("dating_apps")!;
 const fresh = () => buildWorld({ seasonId: "conn", niche, teams: [{ id: "t", name: "T", seats: [...ROLES] as Role[] }] });
@@ -79,7 +81,7 @@ describe("Nova planning one chair at a table", () => {
     const world = { ...fresh(), year: 2 };
     const plan = optimise({ world, companyId: "t", year: 2, economy: economyFor("conn", 2), desks: ["ceo"], fixed: filed })!;
     const ceo = plan.decisions.ceo as Record<string, unknown>;
-    const decided = Object.keys(ceo).filter((k) => !["focus", "shockAnswer", "founderActions"].includes(k));
+    const decided = Object.keys(ceo).filter((k) => !["focus", "shockAnswer", "founderHours"].includes(k));
     expect(decided.length + (ceo.focus !== "growth" ? 1 : 0), "something beyond the old default").toBeGreaterThan(0);
   });
 
@@ -93,6 +95,50 @@ describe("Nova planning one chair at a table", () => {
     };
     const plan = optimise({ world: shocked, companyId: "t", year: 3, economy: economyFor("conn", 3) })!;
     expect(String((plan.decisions.ceo as any)?.shockAnswer ?? "")).not.toMatch(/^blame_/);
+  });
+});
+
+/**
+ * The budget for "everything else" has to reach every desk.
+ *
+ * `decideTheRest` tries each remaining lever's candidates against the score and
+ * stops dead when it has spent `REST_BUDGET` runs of the engine. Walked in desk
+ * order, that cut-off always fell in the same place: counted on dating apps in
+ * year five the five desks want 37, 41, 47, 28 and 35 candidate runs — 188 —
+ * against a budget of 180, so the operations seat's last levers (`sourcing`,
+ * `recruitingSpend`, `trainingSpend`) were never tried in any season by any
+ * company, and nothing anywhere said so.
+ *
+ * The fix is this: the budget covers the ordinary case. (Walking the desks
+ * round-robin was tried too, so that running out would cost each desk its
+ * least-reachable lever rather than one desk everything, and reverted — with a
+ * big enough budget it changes only the order, and this pass is greedy enough
+ * that the order moved a funded season by 7% and turned a balance guard red.)
+ *
+ * The point of the test is the next lever somebody adds. Four more levers on
+ * one desk and this goes red, which is the moment to think about the budget
+ * rather than three years later when a lever turns out never to have been
+ * tried.
+ */
+describe("the budget for everything else", () => {
+  const niche = nicheById("dating_apps")!;
+
+  it("covers every candidate on every desk in a full year", () => {
+    const world = buildWorld({ seasonId: "budget", niche, teams: [{ id: "us", name: "Us", seats: [...ROLES] }] });
+    const company = world.companies.find((c) => c.id === "us")!;
+    let needed = 0;
+    for (const role of ROLES) {
+      for (const raw of LEVER_FIELDS[role]) {
+        if (!isUnlocked(role, raw.id, 5, 1)) continue;
+        const field = withOptions(raw, {
+          company, niche, seasonId: "budget", year: 5, solo: false,
+          offers: [], openedNiches: world.openedNiches,
+        });
+        needed += candidatesFor(field, company, {}, 1).length;
+      }
+    }
+    expect(needed, `the five desks want ${needed} runs and the budget is ${REST_BUDGET}`)
+      .toBeLessThanOrEqual(REST_BUDGET);
   });
 });
 

@@ -75,6 +75,17 @@ export function lastsFor(n: number, period: PeriodWords): string {
 export const DeskPeriod = createContext<PeriodWords>({ one: "year", many: "years", of: "this year" });
 
 /** `words` overrides the context, for the desk page — see `useMoney`. */
+/**
+ * The period as a heading: "Month", "Quarter", "Year".
+ *
+ * Here rather than written out at each call site because it was written out at
+ * each call site — `period.one.charAt(0).toUpperCase() + period.one.slice(1)`
+ * appears in the desk's subtitle, and every screen that *didn't* do it said
+ * "Year" to a table deciding every month.
+ */
+export const periodTitle = (words: PeriodWords): string =>
+  words.one.charAt(0).toUpperCase() + words.one.slice(1);
+
 export function usePeriod(words?: PeriodWords): PeriodWords {
   const inherited = useContext(DeskPeriod);
   return words ?? inherited;

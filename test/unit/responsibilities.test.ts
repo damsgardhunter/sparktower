@@ -363,7 +363,12 @@ describe("the schedule one person plays on", () => {
   /** Every lever a founder alone can ever be shown, deduped as the desk dedupes them. */
   const soloLevers = () => {
     const ids = new Set<string>();
-    for (const role of ROLES) for (const f of LEVER_FIELDS[role]) if (!LEVERS_FOR_A_TABLE.has(f.id)) ids.add(f.id);
+    /*
+     * Not a creator market's own levers (`audienceOnly`): those are on from the
+     * first period in an audience market, on every schedule, and absent
+     * everywhere else — so they are deliberately not in the solo order.
+     */
+    for (const role of ROLES) for (const f of LEVER_FIELDS[role]) if (!LEVERS_FOR_A_TABLE.has(f.id) && !f.audienceOnly) ids.add(f.id);
     return ids;
   };
 
@@ -396,7 +401,7 @@ describe("the schedule one person plays on", () => {
        * the others do: somebody playing alone with £60,000 has no other way to
        * get better at anything in their first month.
        */
-      "founderActions",
+      "founderHours",
     ]));
   });
 

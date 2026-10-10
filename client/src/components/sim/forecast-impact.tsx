@@ -19,7 +19,7 @@
  */
 import { ArrowDown, ArrowUp, Minus, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useMoney } from "@/components/sim/desk-currency";
+import { useMoney, periodTitle, usePeriod } from "@/components/sim/desk-currency";
 
 export interface YearAhead {
   year: number; revenue: number; profit: number; customers: number; cashEnd: number;
@@ -120,6 +120,7 @@ export function SeatImpactCard({ impact, yourRole, solo }: { impact: SeatImpact[
  * unsaved draft on this screen does to it.
  */
 export function NextYearCard({ p, f }: { p: YearAhead | null; f: YearAhead | null }) {
+  const period = usePeriod();
   const { compact } = useMoney();
   if (!p) return null;
   const rows: { label: string; value: string; delta: number; format: (n: number) => string; invert?: boolean }[] = [
@@ -132,7 +133,7 @@ export function NextYearCard({ p, f }: { p: YearAhead | null; f: YearAhead | nul
   ];
   return (
     <div className="rounded-xl border bg-card p-4" data-testid="card-next-year">
-      <h4 className="text-sm font-semibold">Year {p.year}, if you hold this course</h4>
+      <h4 className="text-sm font-semibold">{periodTitle(period)} {p.year}, if you hold this course</h4>
       <p className="mt-0.5 text-xs text-muted-foreground">
         Where research, hiring, training, efficiency and programmes pay off. Decisions made once — a bet, an offer, a loan — are not repeated.
       </p>

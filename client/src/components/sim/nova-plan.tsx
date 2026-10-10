@@ -32,7 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { NOVA_PLAN_ACTIONS } from "@shared/plans";
 import { Loader2, Sparkles, Wand2 } from "lucide-react";
-import { useMoney } from "@/components/sim/desk-currency";
+import { useMoney, periodTitle, usePeriod } from "@/components/sim/desk-currency";
 
 export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
   ventureId: string;
@@ -42,6 +42,7 @@ export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
   /** Whether this seat has already filed, which changes the verb and nothing else. */
   filed: boolean;
 }) {
+  const period = usePeriod();
   const { toast } = useToast();
   const { creditsRemaining, isUnlimited } = useEntitlements();
   const { compact } = useMoney();
@@ -77,7 +78,7 @@ export function NovaPlanCard({ ventureId, year, soloSeason, filed }: {
         Math.abs(c.customers ?? 0) >= 1 && `${c.customers > 0 ? "+" : ""}${Math.round(c.customers).toLocaleString()} customers`,
       ].filter(Boolean) : [];
       toast({
-        title: chairs > 1 ? `Year ${year} filed, all ${chairs} desks` : `Year ${year} filed`,
+        title: chairs > 1 ? `${periodTitle(period)} ${year} filed, all ${chairs} desks` : `${periodTitle(period)} ${year} filed`,
         description: `${moved.length
           ? `Nova's plan moves the forecast: ${moved.join(", ")}.`
           : "Nova's plan matches what was already filed — nothing better was found."} See what each desk is doing under the forecast. Change anything you disagree with until the year turns.`,
