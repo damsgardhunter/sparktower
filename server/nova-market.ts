@@ -29,6 +29,7 @@
  * writing of the season live in the route, where the entitlement is.
  */
 import { parseModelJson } from "./ai-json";
+import { winnabilityOf } from "@shared/simulation/winnable";
 import { buildCustomMarket, MIN_SEGMENT_SIZE, MAX_SEGMENT_SIZE, MIN_SEGMENTS, MAX_SEGMENTS, MIN_REGIONS, MAX_REGIONS, MIN_INCUMBENTS, MAX_INCUMBENTS, RIVALS_IN_A_CUSTOM_SEASON } from "@shared/simulation/custom-market";
 import type { Niche } from "@shared/simulation/types";
 
@@ -36,8 +37,86 @@ const str = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
 /** What Nova is told about the business, and the shape it has to answer in. */
+/**
+ * What a "customer" and a "price" mean in the trades that are not software.
+ *
+ * The prompt below is written for a business that sells a thing to a buyer for a
+ * price, because for five of the eight project types that is exactly what
+ * happens. Three of them are new and one of those three breaks the assumption
+ * outright: a YouTube channel's audience does not pay it. Asked for "what this
+ * segment considers a normal price" about a viewer, a model either invents a
+ * subscription nobody charges or writes a per-view figure of $0.004 that the
+ * market's own floor rounds to a dollar — a market where one viewer is worth as
+ * much as one enterprise licence.
+ *
+ * So each of these says what the four quantities are *in that trade*, in the
+ * terms the model is being asked for. Software types get nothing extra: the
+ * general prompt is already theirs.
+ *
+ * See `PROJECT_SUBCATEGORIES.ship_mvp` in shared/goals.ts, which is where these
+ * ids come from.
+ */
+const SHAPE_NOTES: Record<string, string[]> = {
+  channel: [
+    "THIS TRADE: a channel. The audience does not buy anything: subscribing is free, and a channel",
+    "earns from three places — ads on its views, sponsors who pay per thousand views of a read,",
+    "and the few subscribers who pay for a membership. Write it in these terms and say so in the voice:",
+    "  A customer is a subscriber — a person who comes back for the next one. Segments are kinds",
+    "  of viewer who want different things from the same channel. Price does not decide who",
+    "  subscribes; rewatchability and recognition do.",
+    "  referencePrice is what ONE MEMBER pays a year for the membership, Patreon or merch — the",
+    "  superfan's price, not every viewer's: about 24 to 180 a year, highest for the most devoted",
+    "  segment. Most subscribers never pay it; the engine knows that.",
+    "  SIZE, for this trade only: ignore the beachhead range above and write the audience as the",
+    "  hundreds of thousands it really is — 50,000 to 400,000 a segment.",
+    "  priceSensitivity is how readily they drift away when the channel asks more of them: more ads,",
+    "  more sponsor reads, a longer wait between uploads.",
+    "  Capacity is what the channel can actually make and keep up — the cadence and the editing,",
+    "  not a door. Nobody is turned away; an audience bigger than the output just sees less of it.",
+    "  The incumbents are the channels and shows already holding this attention, including the big",
+    "  generalist nobody can out-produce and the adjacent format that is really a different medium.",
+    "  Regions can be languages or territories where the audience and the advertising rate differ.",
+    "AUDIENCE: add \"model\":\"audience\" and an \"audience\" object (see the JSON shape):",
+    "  rpm: for each segment id, what a thousand views earn in ads after the platform's cut —",
+    "    1 to 3 for kids, comedy and broad entertainment, 4 to 8 for hobbies, 8 to 15 for gear,",
+    "    money, software and business. Say what is true of these viewers.",
+    "  sponsors: four to six brands that would actually buy this audience — the ball, the betting",
+    "    app, the apparel, the energy drink — as plausible invented names, never a real trademark.",
+    "    For each: what it sells, the segment id it is buying, its budget (what it spends a year",
+    "    across every channel in this market: tens of thousands for a niche brand, low millions",
+    "    for a category leader) and cpm (what it pays per thousand views of one read, 15 to 50).",
+    "  uploadsPerYear: the trade's ordinary pace (a weekly show is 52, twice a week is 104).",
+    "  viewShare: the share of subscribers who watch a typical upload, 0.1 to 0.4.",
+  ],
+  food: [
+    "THIS TRADE: food or drink. Buyers do pay, so the prices are ordinary — but write them as what",
+    "one order or one cover costs, not a monthly fee. Capacity is what the kitchen or the line can",
+    "actually produce in a period, and unit cost is ingredients and packaging, which is a real",
+    "fraction of the price rather than the near-nothing of software. Regions are neighbourhoods,",
+    "cities or the shelf in somebody else's shop.",
+  ],
+  physical: [
+    "THIS TRADE: a physical product. Prices are per unit sold. Unit cost is the landed cost of",
+    "making and shipping one — a large share of the price, which is the whole difficulty of the",
+    "trade and must not be written as though it were software. Capacity is units a period, bounded",
+    "by whoever manufactures. Regions can be territories or routes to market, and selling direct",
+    "and selling through a retailer are different places with different entry costs.",
+  ],
+};
+
 export function buildMarketPrompt(input: {
-  project: { title?: string | null; description?: string | null; goal?: string | null; category?: string | null };
+  project: {
+    title?: string | null; description?: string | null; goal?: string | null; category?: string | null;
+    /**
+     * Which of the path's project types this is — `app`, `saas`, `game`,
+     * `website`, `physical`, `food`, `channel`, `other`.
+     *
+     * It was never passed, so a market was written for "a YouTube channel"
+     * from the description alone and against a prompt that assumes the audience
+     * pays. See `SHAPE_NOTES`.
+     */
+    subcategory?: string | null;
+  };
   company?: { name?: string | null; industry?: string | null; description?: string | null } | null;
   /** Where the project has actually got to, in whatever words the app has. */
   progress?: string | null;
@@ -142,6 +221,13 @@ export function buildMarketPrompt(input: {
       "VOICE: what this trade calls a customer, a sale, capacity and a region. A vet practice has",
       "clinics and licences, not users and units.",
       "",
+      /*
+       * The shape of this particular trade, where it is not the one the prompt
+       * above assumes. Placed after VOICE on purpose: the note tells the model
+       * what a customer and a price *are* here, and the voice is where it says so.
+       */
+      ...(SHAPE_NOTES[String(input.project.subcategory ?? "")] ?? []),
+      "",
       "WORKFORCE: two to four kinds of people this business employs beneath the five founders —",
       "the ones who do the work. A kitchen has chefs and front of house; a studio has engineers",
       "and game masters; a practice has vets and receptionists. For each:",
@@ -149,18 +235,52 @@ export function buildMarketPrompt(input: {
       "    is what the thing is like, \"service\" is what happens around it. Nothing buys brand.",
       "  pay: what one costs against an ordinary salary. 0.6 is low-paid, 1.8 is a senior engineer.",
       "  share: roughly what fraction of the payroll they are. They should sum to about 1.",
+      "  serves: for \"room\" kinds only — how many customers ONE of them looks after. A vet nurse",
+      "    might cover 400 clients, a dispatcher 2,000 deliveries, a community manager 35,000",
+      "    viewers, a consultant 8 clients. This is the number that decides what a company here",
+      "    costs to run, so answer it from the trade rather than leaving it at zero: get it wrong",
+      "    by a factor of ten and the business is either absurdly profitable or cannot pay anyone.",
+      "    Omit it on \"product\" and \"service\" kinds, where it means nothing.",
       "Be specific to the trade. \"Staff\" is not an answer; \"dispatchers\" is.",
       "",
       "",
-      "ASSETS — nine things this market lets a company buy, in this exact order and kind:",
+      "ASSETS — ten things this market lets a company buy, in this exact order and kind:",
       "  1 distribution, 2 distribution, 3 celebrity, 4 patent, 5 patent,",
-      "  6 facility, 7 facility, 8 brand_licence, 9 brand_licence.",
+      "  6 facility, 7 facility, 8 brand_licence, 9 brand_licence, 10 celebrity.",
+      "The tenth is a COLLABORATION, and it is a different thing from the third. Three is hiring a",
+      "face — an ambassador, on a contract, lending standing the company has not earned. Ten is a",
+      "peer: another channel, another studio, another firm doing the same work for the same people,",
+      "for one season. It brings their audience rather than their reputation, it is cheap, and it is",
+      "over quickly. Name it as this trade would: a guest swap, a crossover, a joint venture on one",
+      "job, an integration partnership, a residency.",
       "Name each one as this trade would name it, and say in one line what it buys.",
       "The shapes are fixed and the words are yours: a \"facility\" is whatever lets this",
       "business serve more people at once — another region of cloud capacity for software,",
       "a second kitchen for a restaurant, a bonded warehouse for a distributor. A",
       "\"distribution\" deal is somebody else's route to customers. Do not answer with retail",
       "shelves unless this business actually has shelves.",
+      "",
+      "",
+      "ACTION ITEMS — nine things the FOUNDERS can do themselves, with their own time and",
+      "no money at all, in this exact order and axis:",
+      "  1 quality, 2 quality, 3 quality, 4 service, 5 service, 6 brand, 7 brand,",
+      "  8 efficiency, 9 reach.",
+      "Return \"moves\" on each, exactly as listed — an entry whose axis does not match its",
+      "position is thrown away and the generic wording used instead.",
+      "What each position means, and it matters that you keep them distinct:",
+      "  1 building the next piece of the product themselves, instead of paying somebody.",
+      "  2 fixing the part they already know is bad and every customer mentions.",
+      "  3 watching ten customers use it and saying nothing.",
+      "  4 handling every customer themselves — no queue, no script.",
+      "  5 going back to the ones who left and asking why.",
+      "  6 telling people in person, free, however this trade actually does that.",
+      "  7 being written about somewhere this market's customers really read, earned not bought.",
+      "  8 going through every bill and supplier themselves to get the cost of serving down.",
+      "  9 working the hours — opening earlier, taking the jobs nobody else will — to serve more.",
+      "These are the alternative to spending: the lever for a founder with an empty bank. So",
+      "write them as somebody's actual fortnight in THIS trade, not as advice. \"Get written",
+      "about\" is advice; \"get reviewed by somebody people in this city actually read\" is a week.",
+      "Never write one that costs money, hires anyone, or could not be done by two people.",
       "",
       "",
       "baseUnitCost is what serving ONE customer for one period actually costs you —",
@@ -175,8 +295,24 @@ export function buildMarketPrompt(input: {
       '{"name":"","premise":"one or two sentences","baseUnitCost":0,"innovationPace":1,',
       '"voice":{"customer":"","customers":"","unit":"","per":"","capacity":"","place":"","places":"","quality":"","brand":""},',
       '"segments":[{"id":"","name":"","description":"","size":0,"growth":0.05,"priceSensitivity":0.5,"qualityFocus":0.5,"brandFocus":0.4,"serviceFocus":0.4,"loyalty":0.4,"referencePrice":0}],',
-      '"workforce":[{"id":"","name":"","one":"","does":"room","pay":1,"share":0.5}],',
+      /*
+       * `serves` is what decides whether a company here can afford its own
+       * payroll, and it was missing from this line. `servesPerHead` prefers
+       * what the market says and guesses when it does not — one worker per
+       * fifty customers — which is roughly right in a market of cheap
+       * customers and absurd in one where a customer pays six figures. A
+       * written consultancy turning over £62.9m was staffed with five people.
+       *
+       * Asked for only on the kinds that serve customers, and asked for in the
+       * terms the answer is actually known in: nobody thinks "customers per
+       * head per year", everybody knows how many clients one of their people
+       * can look after.
+       */
+      '"workforce":[{"id":"","name":"","one":"","does":"room","pay":1,"share":0.5,"serves":0}],',
       '"assets":[{"kind":"distribution","name":"","blurb":""}],',
+      '"actions":[{"moves":"quality","name":"","blurb":""}],',
+      /* Only for a market whose audience does not pay — see the channel note. Leave it out otherwise. */
+      '"model":"sales","audience":{"viewShare":0.25,"uploadsPerYear":104,"rpm":{"segment_id":4},"sponsors":[{"name":"","sells":"","segment":"","budget":0,"cpm":25}]},',
       '"regions":[{"id":"","name":"","weight":0.25,"entryCost":0,"note":"","segmentMix":{}}],',
       '"incumbents":[{"id":"","name":"","posture":"fortress","startingShare":0.3,"quality":60,"brand":70,"service":50,"priceIndex":1.1,',
       '  "persona":{"tagline":"","boss":"","character":"","known":"","knock":"","voice":""}}]}',
@@ -185,6 +321,7 @@ export function buildMarketPrompt(input: {
       `WHAT THEY ARE BUILDING\n${str(input.project.title, 200)}`,
       input.project.description ? `${str(input.project.description, 2500)}` : "",
       input.project.category ? `Category: ${str(input.project.category, 80)}` : "",
+      input.project.subcategory ? `Project type: ${str(input.project.subcategory, 40)}` : "",
       input.project.goal ? `Their goal: ${str(input.project.goal, 200)}` : "",
       "",
       input.company?.name ? `COMPANY\n${str(input.company.name, 120)}` : "",
@@ -202,7 +339,27 @@ export function buildMarketPrompt(input: {
  * is an answer rather than an exception thrown at somebody who pressed a
  * button.
  */
-export function parseMarket(raw: string, fallbackId: string): Niche | null {
+export function parseMarket(
+  raw: string,
+  fallbackId: string,
+  opts: {
+    /**
+     * Whether to refuse a market a business cannot be built in.
+     *
+     * True when Nova has just written one, which is the only moment refusing is
+     * useful — the route falls back to the catalogue and the player is told the
+     * market is not theirs.
+     *
+     * **False when replaying a market a project already owns.** A stored market
+     * that failed this check would come back as "nothing to replay", which is a
+     * worse outcome than the one being prevented: it is a season somebody has
+     * already played being declared not to exist. If an old market is unwinnable
+     * that is worth knowing, and it is not worth taking their season away to say
+     * so.
+     */
+    check?: boolean;
+  } = {},
+): Niche | null {
   let parsed: unknown;
   try {
     parsed = parseModelJson(raw, "market");
@@ -210,5 +367,41 @@ export function parseMarket(raw: string, fallbackId: string): Niche | null {
     return null;
   }
   /* Nova has just written it, so this is the one moment the market may be changed. */
-  return buildCustomMarket(parsed, fallbackId, { fresh: true });
+  const written = buildCustomMarket(parsed, fallbackId, { fresh: true });
+  if (!written) return null;
+
+  /*
+   * And the one moment it can still be refused.
+   *
+   * `buildCustomMarket` checks the market's *shape* — every number clamped to a
+   * range the engine survives, the shares normalised rather than rejected — and
+   * says nothing about whether a business can be built in it. Three faults have
+   * produced markets nobody could play (rivals seated across the whole of a
+   * segment, the same arriving through the economy, an opening plant whose idle
+   * cost bankrupted the founder), and each was found by sweeping the catalogue
+   * rather than by anybody reporting it. They would not have been reported: a
+   * season that cannot be won is not a bug, it is a fortnight somebody spends
+   * losing and concludes they are bad at it.
+   *
+   * So a market that cannot be won is treated as a market that did not come back.
+   * Returning null is already the documented answer for an unreadable one and the
+   * route already handles it — it falls back to the nearest of the seven and tells
+   * the player the market is not theirs — which is a far better outcome than a
+   * bespoke market they cannot play. 57ms, against a model call of several
+   * seconds.
+   *
+   * Logged with what was wrong, because this is the only trace left: the fallback
+   * is silent by design, so without this nobody could tell a model writing bad
+   * markets from a guard that had become too strict.
+   */
+  if (opts.check === false) return written;
+  const verdict = winnabilityOf(written);
+  if (!verdict.ok) {
+    console.warn(
+      `[nova-market] refused an unwinnable market (${written.id}): ${verdict.problems.join("; ")} ` +
+      `— checked ${verdict.checked.periods} periods on seed(s) ${verdict.checked.seeds.join(", ")}. Falling back to the catalogue.`,
+    );
+    return null;
+  }
+  return written;
 }

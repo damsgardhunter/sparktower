@@ -22,6 +22,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
+import { sharesWhereSold } from "@shared/simulation/market";
 import { marketOf } from "./simulation-scope";
 import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { currencyForSeason } from "./simulation-desk-routes";
@@ -825,6 +826,20 @@ const BID_IS_THE_CEOS = {
 
     const niche = marketOf(season);
 
+    /*
+     * The second share, read against each company's own footprint.
+     *
+     * Asked of the shared function rather than worked out here, so the table and
+     * the year's report can never disagree about what a company's share is —
+     * which is the kind of difference nobody notices until a player screenshots
+     * both. `customers` is already keyed by segment, which is the shape it
+     * wants. See `sharesWhereSold`.
+     */
+    const whereSold = niche
+      ? sharesWhereSold(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])), world.companies, niche)
+      : {};
+    const table = rows.map((row) => ({ ...row, shareWhereYouSell: whereSold[row.id] ?? row.share }));
+
     res.json({
       year: season.year,
       /* Years, kept for anything that still wants them. */
@@ -834,16 +849,30 @@ const BID_IS_THE_CEOS = {
       period: PERIOD_NAME[(season.cadence ?? "yearly") as Cadence],
       status: season.status,
       /*
+       * When this period resolves, as the desk route sends it.
+       *
+       * Here so a client can poll this screen on the shape of the thing it is
+       * waiting for rather than on a flat interval. The table changes once a
+       * period and at a known moment, so "ask often near the tick and rarely
+       * otherwise" is strictly better than any single rate — and without this
+       * field the only options were a fast poll that is wasted for the whole
+       * period (the phone's was 23× the browser's) or a slow one that is slow at
+       * the one moment somebody is watching.
+       */
+      resolvesAt: season.nextTickAt,
+      /*
        * The market's own vocabulary, so a league table of restaurants counts
        * covers and one of podcasts counts listeners. The engine calls them all
        * customers because the arithmetic is the same; nobody reading this
        * should be able to tell.
        */
       niche: niche ? { id: niche.id, name: niche.name, voice: niche.voice } : null,
-      rows,
+      rows: table,
       history: history.map((h) => ({
         year: h.year,
         share: (h.report as any).marketShare,
+        /* Absent on a report written before this existed, which is most of them. */
+        shareWhereYouSell: (h.report as any).shareWhereYouSell ?? null,
         customers: (h.report as any).customers,
         profit: (h.report as any).profit,
         rank: (h.report as any).rank,

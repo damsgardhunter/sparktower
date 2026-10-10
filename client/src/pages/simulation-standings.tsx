@@ -30,9 +30,47 @@ import { CompanyProfile } from "@/components/sim/company-profile";
 import { Loader2, Trophy, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
 
+/**
+ * The share worth leading with, and the world reading if it differs.
+ *
+ * Kept next to the only two places that print a share so they cannot drift
+ * apart. Mirrors `shareReading` in the phone's `standings.ts`; the comparison is
+ * on the rendered strings rather than the numbers, because 23.14% and 23.02%
+ * both print "23%" and "23% of the market · 23% worldwide" is worse than saying
+ * nothing at all.
+ */
+function sharePhrase(row: { share: number; shareWhereYouSell?: number | null }, subject: "you" | "it"): string {
+  const { headline, world } = shareReading(row);
+  /*
+   * "42% of the market" for a company selling everywhere, where the two readings
+   * are one number and naming the footprint would be a distinction without a
+   * difference. Only a company that has not finished expanding gets the longer
+   * form, which is the only company for which it says anything.
+   */
+  if (!world) return `${headline} of the market`;
+  return `${headline} of where ${subject === "you" ? "you sell" : "it sells"} · ${world} of the whole market`;
+}
+
+function shareReading(row: { share: number; shareWhereYouSell?: number | null }): { headline: string; world: string | null } {
+  const where = Number.isFinite(Number(row.shareWhereYouSell)) && Number(row.shareWhereYouSell) > 0
+    ? Number(row.shareWhereYouSell)
+    : row.share;
+  const headline = `${(where * 100).toFixed(1)}%`;
+  const world = `${(row.share * 100).toFixed(1)}%`;
+  return { headline, world: world === headline ? null : world };
+}
+
 interface Row {
   id: string; name: string; kind: "player" | "incumbent";
   customers: number; share: number; revenue: number; reputation: number; price: number;
+  /**
+   * Share of the regions this side actually sells in, 0–1.
+   *
+   * The market is global and a young company is in one corner of it, so `share`
+   * alone said "0.2%" to a team winning everywhere it trades. Optional: absent
+   * from a payload written before it existed, and the fallback is `share`.
+   */
+  shareWhereYouSell?: number | null;
   isYou: boolean; distress: string | null; rank: number;
   /** What this side's owners actually hold. The table is ordered by it. */
   founderValue: number;
@@ -40,10 +78,24 @@ interface Row {
 }
 interface Standings {
   year: number; totalYears: number; status: string;
+  /*
+   * `year` counts *periods*, and the route has always sent the words and the
+   * period count to say so — this page just never read them, so a table
+   * deciding every month was told "Year 7 of 4". Optional because a season
+   * saved before the fields existed still has to render.
+   */
+  totalPeriods?: number;
+  period?: { one: string; many: string; of: string };
   niche: { id: string; name: string; voice: Record<string, string> } | null;
   rows: Row[];
-  history: { year: number; share: number; customers: number; profit: number; rank: number; founderValue: number | null }[];
+  history: { year: number; share: number; shareWhereYouSell?: number | null; customers: number; profit: number; rank: number; founderValue: number | null }[];
 }
+
+/** The period as a heading, from whatever the route sent. */
+const word = (data: Standings): string => {
+  const one = data.period?.one ?? "year";
+  return one.charAt(0).toUpperCase() + one.slice(1);
+};
 
 const compact = (n: number) =>
   n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
@@ -86,14 +138,14 @@ export default function SimulationStandingsPage() {
         <p className="text-sm text-muted-foreground mt-1">
           {data.status === "finished"
             ? `The season is over. Fourteen years, and this is where it ended.`
-            : `Year ${data.year} of ${data.totalYears}. Everyone in this market, including the companies that were here first.`}
+            : `${word(data)} ${data.year} of ${data.totalPeriods ?? data.totalYears}. Everyone in this market, including the companies that were here first.`}
         </p>
         {you && (
           <>
             <p className="text-sm mt-3" data-testid="text-your-rank">
               <span className="text-muted-foreground">You are </span>
               <span className="font-semibold">#{you.rank} of {data.rows.length}</span>
-              <span className="text-muted-foreground">, holding {(you.share * 100).toFixed(1)}% of the market.</span>
+              <span className="text-muted-foreground">, holding {sharePhrase(you, "you")}.</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               The table is ordered by what each side's owners hold — {compact(you.founderValue)} of yours.
@@ -152,7 +204,7 @@ export default function SimulationStandingsPage() {
                     */}
                   <p className="font-semibold tabular-nums" data-testid={`text-value-${row.rank}`}>{compact(row.founderValue)}</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    {(row.share * 100).toFixed(1)}% share
+                    {sharePhrase(row, "it")}
                     {row.founderShare < 1 && ` · owns ${Math.round(row.founderShare * 100)}%`}
                   </p>
                 </div>
@@ -177,7 +229,7 @@ export default function SimulationStandingsPage() {
                 const down = previous && seriesOf(h) < seriesOf(previous);
                 return (
                   <div key={h.year} className="flex items-center gap-3" data-testid={`row-history-${h.year}`}>
-                    <span className="w-14 text-xs text-muted-foreground shrink-0">Year {h.year}</span>
+                    <span className="w-14 text-xs text-muted-foreground shrink-0">{word(data)} {h.year}</span>
                     <div className="flex-1 h-5 rounded bg-muted overflow-hidden">
                       <div
                         className="h-full bg-primary/70"

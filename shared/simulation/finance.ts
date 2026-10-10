@@ -25,6 +25,7 @@
  * Pure: the engine calls these at settlement, the desk calls them to show
  * what the year will cost before it is filed.
  */
+import { symbolOf, type CurrencyCode } from "../currency";
 import type { Company } from "./types";
 import { BOND_DISCOUNT } from "./responsibilities";
 
@@ -240,15 +241,24 @@ export function reviewInvestors(
   investors: Investors,
   revenue: number,
   year: number,
-  /** Paid a dividend worth having this year: a missed target is not held against the company. */
-  options: { patient?: boolean } = {},
+  options: {
+    /** Paid a dividend worth having this year: a missed target is not held against the company. */
+    patient?: boolean;
+    /**
+     * The money this business counts in. Absent is GBP, for the reason written
+     * on `World.currency`: these sentences carried a hardcoded pound sign, so a
+     * season built around a dollar business was told its investors wanted
+     * "£4,200,000".
+     */
+    currency?: CurrencyCode;
+  } = {},
 ): Review {
   if (investors.targetYear !== year) {
     return { investors, note: null, removed: false, reinstated: false };
   }
 
   const next = Math.round(revenue * (1 + INVESTOR_GROWTH));
-  const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
+  const money = (n: number) => `${symbolOf(options.currency ?? "GBP")}${Math.round(n).toLocaleString()}`;
 
   if (revenue >= investors.target) {
     const reinstated = investors.inCharge;

@@ -13,6 +13,7 @@ import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -28,7 +29,7 @@ test("an admin finds a locked-out member by their address and gets them back in"
   const email = `e2e-lost-phone-${stamp()}@example.test`;
   const me = await (await member.post("/api/auth/register", { data: { email, password, firstName: "Lake", lastName: "Phone" } })).json();
   await verifyEmail(member, email);
-  expect((await member.post("/api/profile/complete-onboarding", { data: { displayName: "Lake Phone", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(member, { displayName: "Lake Phone", headline: "x", bio: "y" });
   await passMfa(member);
 
   // Without the phone, signing in stops at the code.
@@ -45,7 +46,7 @@ test("an admin finds a locked-out member by their address and gets them back in"
   const adminEmail = `e2e-operator-${stamp()}@example.test`;
   const admin = await (await adminApi.post("/api/auth/register", { data: { email: adminEmail, password, firstName: "Opal", lastName: "Operator" } })).json();
   await verifyEmail(adminApi, adminEmail);
-  expect((await adminApi.post("/api/profile/complete-onboarding", { data: { displayName: "Opal Operator", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(adminApi, { displayName: "Opal Operator", headline: "x", bio: "y" });
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [admin.id]); } finally { await db.end(); }

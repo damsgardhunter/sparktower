@@ -15,6 +15,7 @@
 import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
+import { finishOnboarding } from "./onboarding";
 
 /*
  * A per-spec address, so registrations here don't share the sign-in budget.
@@ -59,9 +60,7 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   })).ok()).toBeTruthy();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Olive Owner", headline: "Shipping weekly", bio: "Here for the loop." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Olive Owner", headline: "Shipping weekly", bio: "Here for the loop." });
   // The owner's dashboard needs 2FA on the session.
   await passMfa(page.request);
   const created = await pat.post("/api/projects", {

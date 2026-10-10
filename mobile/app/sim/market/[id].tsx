@@ -170,7 +170,7 @@ export default function Market() {
       <Stack.Screen options={{ title: "The market" }} />
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
-          <MarketBanner year={data.year} funds={data.funds} outstanding={outstanding} />
+          <MarketBanner year={data.year} funds={data.funds} outstanding={outstanding} period={data.period} />
 
           {/* When "the tick" actually is. "Settles on the tick" is not a time
               anybody can plan around. Recomputed on each poll, which is close
@@ -215,6 +215,15 @@ export default function Market() {
                 <ListingCard
                   key={listing.id}
                   listing={listing}
+                  /*
+                   * Where this company stands, and what a decision is called
+                   * here. All three were on the payload and read by nothing, so
+                   * this screen printed "+6 quality" and called a quarterly
+                   * season's three-year licence "12 years".
+                   */
+                  you={data.you}
+                  period={data.period}
+                  periods={data.periods}
                   open={open}
                   draft={open ? amount : ""}
                   check={check}
@@ -257,6 +266,9 @@ export default function Market() {
               const check = validateReserve({ reserve: open ? reserve : holding.willingSale, willingSale: holding.willingSale });
               return (
                 <HoldingCard
+                  you={data.you}
+                  period={data.period}
+                  periods={data.periods}
                   key={holding.id}
                   holding={holding}
                   canSell={selling}

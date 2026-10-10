@@ -193,6 +193,9 @@ export default function Offers() {
           <OffersBanner
             year={data.year}
             totalYears={data.totalYears}
+            /* `year` counts periods; this is the denominator it belongs over. */
+            totalPeriods={data.totalPeriods}
+            period={data.period}
             reach={data.reach}
             you={data.you}
             pendingIn={pending.length}

@@ -16,6 +16,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { companies, companyMembers, notifications, projects } from "@shared/schema";
 import { notifyScouts, notifyWatchersOfNewProject } from "../../server/scouting-alerts";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -29,6 +30,8 @@ async function person(app: any, first: string) {
     .send({ email, password: "a-good-passphrase-here", firstName: first });
   expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 300)}`).toBe(201);
   await verifyEmail(app, email, ip);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

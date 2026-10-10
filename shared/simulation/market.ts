@@ -47,6 +47,95 @@ export interface Offer {
 }
 
 /** Diminishing returns, bounded 0–1. Doubling spend never doubles effect — the second million buys less than the first. */
+/**
+ * What one customer costs to buy, in this market and this segment.
+ *
+ * Paying to acquire somebody and paying to be noticed are different things,
+ * and until now only the second was modelled: `performanceSpend` added points
+ * of *brand*, which is why money could not buy users. Measured with the purse
+ * held at £50m, twenty times the lever's own threshold bought 6% more
+ * subscribers — and nearly tripling its ceiling changed that by nothing,
+ * because brand saturates long before the ceiling binds.
+ *
+ * So a market now says what a customer costs, and money buys customers at that
+ * price. `niche.acquisitionCost` is the market's own figure where it has one
+ * (Nova is asked for it: a subscriber costs a few pounds, a clinic hundreds, a
+ * construction client a tender). Without one it falls back to a share of what
+ * the customer pays over a year, which is how every trade actually talks about
+ * this — "we pay about three months' revenue to land one".
+ *
+ * Deliberately a *multiple* of the customer's value and not a fraction: paid
+ * acquisition that paid for itself inside a period would be a money printer,
+ * and the reason real companies do it anyway is that the customer stays. So it
+ * costs more than a period's revenue and less than a year's, and the business
+ * case is retention — which this engine already models through loyalty.
+ */
+export const CAC_MONTHS = 4;
+
+export function costPerCustomer(
+  niche: Pick<Niche, "acquisitionCost">,
+  segment: Pick<Segment, "referencePrice">,
+  periods: number,
+): number {
+  const written = Number(niche.acquisitionCost);
+  if (Number.isFinite(written) && written > 0) return written;
+  /*
+   * `referencePrice` is what one customer pays **per period**, so a month of
+   * revenue is that scaled by how much of a year the period is.
+   *
+   * The first version had `referencePrice * (12 / periods) / 12`, which in a
+   * monthly season is a *twelfth* of a month's revenue — so a $5-a-month
+   * subscriber cost $1.67 to acquire and paid that back in ten days. Measured,
+   * it made paid acquisition the best lever in the game by a distance, which
+   * is how the error showed up: $51,456 bought 7,569 subscribers at $6.80 each
+   * against a $5 monthly price.
+   */
+  const aMonth = segment.referencePrice * (Math.max(1, periods) / 12);
+  return Math.max(1, aMonth * CAC_MONTHS);
+}
+
+/**
+ * How much of a segment paid acquisition may take in one period.
+ *
+ * Without a bound this is a button that buys the market: enough money and
+ * every customer in every segment changes hands in a period, which is not a
+ * market, it is an auction. A twentieth is roughly the share that is actually
+ * in play at any moment — the people shopping around — and it means buying
+ * share is a campaign over quarters rather than a transaction.
+ */
+export const CAN_BE_BOUGHT = 0.05;
+
+/**
+ * How many customers money may buy, against how many the company earned.
+ *
+ * The bound that makes paid acquisition an amplifier rather than a substitute,
+ * and it is here because leaving it out broke the promise the whole game rests
+ * on. `an-edge-is-needed` holds that being better beats being louder; with
+ * money able to buy customers at a market price and nothing tying it to the
+ * product, the advertising-only plan won **35,188** customers against the
+ * plan that got good at something on **12,700** — louder beat better by 2.8
+ * times, where before the mechanic the same test read 5,544 against 6,589.
+ *
+ * The owner's own words for how this should feel: "if they spend some money on
+ * advertising it is possible for them to gain users but not a lot."
+ *
+ * So you may buy at most a *share* of what you won on your own merits this
+ * period — three tenths, and that number was measured twice. Letting it double
+ * what was earned (1.0) restored "better beats louder" and then failed
+ * `balance`'s "a competent team is not wiped out by bots" in MMOs, because the
+ * bots earn a great deal organically and doubling it buried the player. Making
+ * acquisition dearer did not help — eight months of revenue per customer and
+ * twelve both failed the same way — which says the binding constraint is the
+ * multiple and not the price. At three tenths every guard is back.
+ * A company nobody is choosing cannot buy a market at any price; a company
+ * that is winning can double down on what is already working, which is what
+ * paid acquisition actually is. It also makes the retention finding structural
+ * rather than incidental — the measured gap between promotion against a weak
+ * product (7,689) and a good one (35,724) is now a rule rather than a
+ * side-effect of churn.
+ */
+export const BOUGHT_PER_EARNED = 0.3; // BISECT
+
 export const saturate = (value: number, half: number): number => (value <= 0 ? 0 : value / (value + half));
 
 /** 0–100 scores read as 0–1 without letting a bad input escape the range. */
@@ -103,6 +192,72 @@ export function headStartAgainst(segment: Segment, company: Company, year?: numb
 export const PRICE_LICENCE_MAX = 0.09;
 
 /**
+ * How fast what a buyer considers a normal price drifts upwards.
+ *
+ * The same rate input costs drift at, and that is the point. `economyFor` in
+ * `season.ts` moves `costIndex` up by this much a year and never back down,
+ * with a comment saying it is "what stops year one's price holding for
+ * fourteen years" — and it could not do that, because nothing moved prices.
+ * Unit costs inflated (`resolve.ts`, the costIndex step), salaries inflated
+ * (`decisions.ts`), and `referencePrice` sat still for the whole season.
+ *
+ * Measured over fourteen years of the optimiser filing every decision: costs
+ * rose about 18% and the price it charged did not move at all — £180 for
+ * thirteen straight years in vet software, £21 for fourteen in a roastery. A
+ * frozen price was not a failure of the search. It was the right answer to a
+ * world where the only thing that ever changed was the bill.
+ *
+ * So the expectation drifts with the bill. A company that holds its nominal
+ * price becomes genuinely cheaper each year, which is what inflation does — it
+ * wins a little volume and loses a little margin — and one that wants to hold
+ * its position has to reprice, which is the decision this was always supposed
+ * to provoke.
+ *
+ * Only the structural drift, deliberately. `costIndex` also carries the
+ * business cycle (`max(0, wave) * 0.02`), and a cycle is not inflation: a boom
+ * does not permanently raise what anybody thinks a thing is worth, and feeding
+ * it in here would have expectations fall again when the cycle turned.
+ */
+export const PRICE_DRIFT_PER_YEAR = 0.012;
+
+/**
+ * What this segment thinks the ordinary thing costs, in this year's money.
+ *
+ * Year one is exactly `referencePrice`, so every market opens where it was
+ * written and nothing about a first year changes.
+ */
+export function expectedPrice(segment: Pick<Segment, "referencePrice">, year?: number): number {
+  return segment.referencePrice * (1 + PRICE_DRIFT_PER_YEAR * Math.max(0, (year ?? 1) - 1));
+}
+
+/**
+ * The smallest price difference worth expressing in this market.
+ *
+ * The `price` lever is declared `step: 1` — whole pounds — which is right for a
+ * market where the ordinary thing costs £180 and useless where it costs £2. At
+ * a £2 reference, a year of drift is two pence, so every candidate price
+ * rounded to the same pound and a channel held £3 for fourteen years while its
+ * costs climbed. Only `min` is enforced by `validateDecision`, never `step`, so
+ * a price finer than a pound was always legal — nothing had asked for one.
+ *
+ * About a tenth of a per cent of the going rate, snapped to a power of ten so
+ * the numbers stay ones a person would say: a penny in a £2 market, ten pence
+ * at £180, £10 at £18,000, £100 at £150,000.
+ */
+export function priceStep(reference: number): number {
+  if (!(reference > 0)) return 1;
+  const tenth = reference / 1000;
+  return Math.max(0.01, Math.pow(10, Math.floor(Math.log10(Math.max(tenth, 0.01)))));
+}
+
+/** A price snapped to this market's own granularity. */
+export function snapPrice(price: number, reference: number): number {
+  const step = priceStep(reference);
+  /* Rounded to the step, then to the penny, so floating point cannot produce £2.9300000000000004. */
+  return Math.round(Math.round(price / step) * step * 100) / 100;
+}
+
+/**
  * What this company has earned the right to charge.
  *
  * A segment's `referencePrice` is what it expects to pay *for the ordinary
@@ -135,7 +290,7 @@ export function appealFor(company: Company, segment: Segment, year?: number, mar
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
   // Each segment judges the price it is offered: its own tier, where there is one.
-  const priceRatio = priceFor(company, segment.id) / (segment.referencePrice * priceLicence(company, segment));
+  const priceRatio = priceFor(company, segment.id) / (expectedPrice(segment, year) * priceLicence(company, segment));
   /*
    * Cheaper helps, and only so much. Uncapped, this rewarded undercutting
    * without limit: a company charging a quarter of what a premium segment
@@ -416,8 +571,52 @@ export function reachOf(company: Company, niche: Niche): number {
  * product, more appealing to the people it was built for and slightly less to
  * everybody else.
  */
+export const POSITIONING_FOR_THEM = 1.18;
+export const POSITIONING_FOR_OTHERS = 0.92;
+
 export const positioningFor = (company: Company, segmentId: string): number =>
-  !company.positioning ? 1 : company.positioning === segmentId ? 1.18 : 0.92;
+  !company.positioning ? 1 : company.positioning === segmentId ? POSITIONING_FOR_THEM : POSITIONING_FOR_OTHERS;
+
+/**
+ * How much of your business has to be in a segment before declaring for it pays.
+ *
+ * Positioning is a trade, not a bonus, and it is easy to read it as a bonus:
+ * 1.18 to the people you chose and 0.92 to everybody else. Declare for a segment
+ * holding a tenth of your customers and you have bought eighteen per cent more
+ * appeal to a tenth of the market by giving up eight per cent of the other nine
+ * tenths, which is a worse company.
+ *
+ * Break-even falls out of those two numbers and is not tuned: with a fraction s
+ * of demand in the chosen segment, appeal moves by
+ * `0.92 + (1.18 - 0.92) * s`, which clears 1 at `0.08 / 0.26`. So a little under
+ * a third.
+ *
+ *     restaurant chain  lunch 60%  ·  delivery 25%  ·  families 15%
+ *     construction      homeowners 86%  ·  developers 12%  ·  public 2%
+ *
+ * Which is to say: in construction there is one segment worth declaring for and
+ * in a restaurant chain there is one, and a company that declares for either of
+ * the others has made itself worse. `bestSegment` in `bot-play.ts` weighs fit,
+ * size and loyalty but not this penalty, so on its own it will happily choose a
+ * small segment that suits the company and cost it the market.
+ */
+export const POSITIONING_BREAK_EVEN =
+  (1 - POSITIONING_FOR_OTHERS) / (POSITIONING_FOR_THEM - POSITIONING_FOR_OTHERS);
+
+/**
+ * The share of this company's demand that sits in one segment.
+ *
+ * Its own customers once it has any, and the segment's share of the market
+ * before that — a company in year one has nobody, and "nobody" is not evidence
+ * that a segment is small.
+ */
+export function demandShareOf(company: Pick<Company, "customers">, niche: Niche, segmentId: string): number {
+  const mine = company.customers ?? {};
+  const held = Object.values(mine).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  if (held > 0) return (Number(mine[segmentId]) || 0) / held;
+  const total = niche.segments.reduce((sum, g) => sum + g.size, 0);
+  return total > 0 ? (niche.segments.find((g) => g.id === segmentId)?.size ?? 0) / total : 0;
+}
 
 export function allocate(
   companies: Company[],
@@ -457,7 +656,7 @@ export function allocate(
     const demand = segmentDemand(segment, year, economy, periods);
     const appeal: Record<string, number> = {};
     // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year, marketCeiling) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year, marketCeiling) * headStartAgainst(segment, c, year, periods) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id) * (c.focusPush ?? 1) * (c.strongholds?.[segment.id] ?? 1);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -477,7 +676,24 @@ export function allocate(
      */
     shrank[segment.id] = {};
     const heldAtStart = companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
-    const shrinkRatio = heldAtStart > demand && heldAtStart > 0 ? demand / heldAtStart : 1;
+    /*
+     * How much this segment can hold before the extra is treated as the market
+     * shrinking — demand, plus whatever overlap the market allows.
+     *
+     * Without the overlap term this pass undid the feed's additive growth
+     * every period and told the player those people had *left the market*.
+     * Measured on podcasts over sixteen quarters: a segment's total held
+     * against demand never rose above 1.007 — the third of additive growth was
+     * being clawed back as fast as it arrived — while the company's
+     * `leftMarket` line ran from 450 to 9,400 a quarter, all of it people who
+     * had not gone anywhere.
+     *
+     * Read off the niche rather than a constant so a sales market is untouched:
+     * there, a customer belongs to one supplier and a total above demand really
+     * does mean the market got smaller.
+     */
+    const canHold = demand * (1 + (niche.overlap ?? 0));
+    const shrinkRatio = heldAtStart > canHold && heldAtStart > 0 ? canHold / heldAtStart : 1;
 
     const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
@@ -757,7 +973,15 @@ export function allocate(
       const within = segment.size * regionalReach(company, niche) * regionalFit(company, niche, segment.id);
       const already = held[id][segment.id] ?? 0;
       const room = Math.max(0, Math.round(within) - already);
-      const won = Math.min(Math.round(upForGrabs * share), room);
+      const intended = Math.round(upForGrabs * share);
+      const won = Math.min(intended, room);
+      /*
+       * And the record of who they were, trimmed to what was actually won.
+       * Uncapped, a company at the edge of its reach was credited with taking
+       * people it never held — a network with most of its market had the
+       * year's report claim 26,000 more listeners won than it ended up with.
+       */
+      const kept = intended > 0 ? won / intended : 0;
       held[id][segment.id] = already + won;
       /* What this company won by being chosen, which is what bounds the overflow it can absorb below. */
       (wonOnMerit[id] ??= {})[segment.id] = ((wonOnMerit[id] ?? {})[segment.id] ?? 0) + won;
@@ -771,13 +995,13 @@ export function allocate(
       let fromRivals = 0;
       for (const [from, left] of Object.entries(leaving)) {
         if (from === id || left <= 0) continue;
-        const taken = Math.round(left * share);
+        const taken = Math.round(left * share * kept);
         if (taken <= 0) continue;
         ((flows[segment.id][from] ??= {})[id] = taken);
         fromRivals += taken;
       }
       // Whatever is left of the win is new demand, or their own leavers won back.
-      const regained = Math.round((leaving[id] ?? 0) * share);
+      const regained = Math.round((leaving[id] ?? 0) * share * kept);
       fresh[segment.id][id] = Math.max(0, won - fromRivals - regained);
     }
   }
@@ -977,5 +1201,98 @@ export function marketShares(held: Record<string, Record<string, number>>): Reco
  * the market is worth and get the same effect you would in any other market.
  * The seven are scale one, so nothing about them changes at all.
  */
+/*
+ * ## Making the levers cheaper does not make them worth buying
+ *
+ * A `LEVER_POTENCY` divisor was added here and swept at 1, 2 and 4 — halving
+ * and quartering every threshold in the engine. Margins moved from 54.5% to
+ * 49.0% to 54.7% in the market most affected and were flat in the other six;
+ * idle years were unchanged or worse.
+ *
+ * The threshold is not the binding constraint. `lift` caps the points a year
+ * can buy — sixteen of brand, nine of performance — so once a slice is past
+ * the threshold, cheapening it buys nothing: the slice was already saturated.
+ * `OPT_TRACE=1` shows the real shape, a £5,874 slice moving the objective by
+ * +888 while `CASH_WEIGHT` charges 470 for the cash, in every market at every
+ * potency.
+ *
+ * What would change it is raising the *caps*, which is a decision about how
+ * much a single year may change a company rather than about what a point
+ * costs.
+ */
 export const atScale = (amount: number, scale = 1): number =>
   amount * Math.max(0.001, scale);
+
+/**
+ * The pace this company gets better at its work, which is its customers' pace.
+ *
+ * `niche.innovationPace` is one number for a whole market, and that is right
+ * wherever the trade is the trade. Where a market's segments are different
+ * businesses wearing one name — fitting out houses and tendering for public
+ * infrastructure are both "construction" — the pace belongs to the segment the
+ * company declared itself for. See `Segment.innovationPace`.
+ *
+ * Falls back to the market's own pace, so a company that has declared no
+ * positioning, or declared one for a segment that does not override it, gets
+ * exactly what it got before.
+ */
+export const paceFor = (
+  company: Pick<Company, "positioning">,
+  niche: Pick<Niche, "innovationPace" | "segments">,
+): number => {
+  const aimed = company.positioning
+    ? niche.segments.find((s) => s.id === company.positioning)
+    : undefined;
+  return aimed?.innovationPace ?? niche.innovationPace;
+};
+
+/**
+ * Everyone's share of the regions they actually sell in, 0–1.
+ *
+ * `marketShares` answers "how much of this market is yours", and on a world map
+ * that question has an honest answer nobody can use: a company trading well in
+ * Leeds and nowhere else holds about two tenths of one per cent of a global
+ * market, and the standings said so. A team winning its own continent read as a
+ * rounding error, so the number everybody looks at first was the number least
+ * worth looking at.
+ *
+ * This is the other reading, and both belong on the table — one says how big a
+ * business it is, the other says how well it is being run.
+ *
+ * The denominator is the market inside the company's own footprint: everybody's
+ * customers, scaled by how far this company reaches. That is an approximation —
+ * it assumes the regions a company trades in hold their weighted share of the
+ * market's customers, because `allocate` reports who was won per segment and
+ * not per region — and it has the property that matters: at full reach it is
+ * `reachOf` of one, so this is *exactly* `marketShares` for any company selling
+ * everywhere, and the two columns agree the moment a company has finished
+ * expanding. It is only ever the local reading that differs, which is the only
+ * place the old number was misleading.
+ */
+export function sharesWhereSold(
+  held: Record<string, Record<string, number>>,
+  companies: Company[],
+  niche: Niche,
+): Record<string, number> {
+  const totals: Record<string, number> = {};
+  let everyone = 0;
+  for (const [companyId, bySegment] of Object.entries(held)) {
+    const mine = Object.values(bySegment).reduce((sum, n) => sum + n, 0);
+    totals[companyId] = mine;
+    everyone += mine;
+  }
+  const out: Record<string, number> = {};
+  for (const id of Object.keys(totals)) {
+    const company = companies.find((c) => c.id === id);
+    /*
+     * A floor on the footprint rather than a guard against dividing by zero: a
+     * company part-way through opening its first region has a `ramp` well under
+     * one, and without this its share of "the market it sells in" climbs towards
+     * infinity as the denominator vanishes.
+     */
+    const footprint = company ? Math.max(0.01, reachOf(company, niche)) : 1;
+    const within = everyone * footprint;
+    out[id] = within > 0 ? Math.min(1, totals[id] / within) : 0;
+  }
+  return out;
+}

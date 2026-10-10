@@ -131,6 +131,13 @@ export const REACHES_OTHERS: RegExp[] = [
   /^\/api\/artifacts\/[^/]+\/publish$/,
   /^\/api\/documents\/[^/]+\/publish$/,
   /*
+   * And publishing a simulation to the marketplace, which is the same act with
+   * a price on it: it goes into a list strangers browse, under this account's
+   * name, and somebody can pay for it. Drafting and editing a listing stay
+   * open — those are the seller's own work and reach nobody until this call.
+   */
+  /^\/api\/sim-market\/listings\/[^/]+\/publish$/,
+  /*
    * Company accounts. Approaching somebody about a job, inviting staff into a
    * training season and handing out a team link all put a company's name in
    * front of a person; posting a challenge puts it in front of everyone, and
@@ -145,6 +152,19 @@ export const REACHES_OTHERS: RegExp[] = [
   // Posting as a company is a feed post under a company's name: the same gate as /api/feed.
   /^\/api\/companies\/[^/]+\/posts$/,
   /^\/api\/challenges\/[^/]+\/enter$/,
+  /*
+   * Minting a link that sends a simulation to somebody.
+   *
+   * The same gate as publishing, and for the same reason by a quieter route. A
+   * share link puts the author's title, summary and description on a page open
+   * to anyone holding the URL, and it works on a *draft* — so without this, the
+   * one way to put a listing in front of strangers that is not `publish` would
+   * be the one way that is not gated.
+   *
+   * Redeeming is deliberately not here: that is the recipient starting a game
+   * of their own, which reaches nobody.
+   */
+  /^\/api\/sim-market\/listings\/[^/]+\/shares$/,
 ];
 
 /**

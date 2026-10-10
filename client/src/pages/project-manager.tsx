@@ -1393,6 +1393,67 @@ function DeleteProjectCard({ project }: { project: Project }) {
   );
 }
 
+/**
+ * One of the project's own URLs, editable after the fact.
+ *
+ * Saved on blur rather than on every keystroke, because a PATCH per character
+ * is a PATCH per character — and cleared deliberately: emptying the box and
+ * leaving it is how you say "this is not deployed any more", which wants to
+ * work as plainly as setting it.
+ *
+ * The value is held locally while being typed. Driving the input straight from
+ * the prop means the field fights the person the moment a save is in flight,
+ * and the cursor jumps when the refetch lands.
+ */
+function ProjectUrlField({ label, hint, icon: Icon, value, onSave, testId }: {
+  label: string; hint: string; icon: typeof Globe;
+  value: string; onSave: (value: string) => void; testId: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+  /* Follows the project when it changes underneath — another tab, or Nova. */
+  useEffect(() => { setDraft(value); }, [value]);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next === (value ?? "").trim()) { setError(null); return; }
+    /*
+     * Cleared is allowed and is not an error. Anything else has to be a URL
+     * this server would actually fetch: the audit probe takes the live one and
+     * requests it, so "sparktower.app" with no scheme is not a smaller problem
+     * than a typo, it is a probe that never runs.
+     */
+    if (next && !/^https?:\/\/[^\s.]+\.[^\s]{2,}$/i.test(next)) {
+      setError("Needs to be a full address, starting with https://");
+      return;
+    }
+    setError(null);
+    onSave(next);
+  };
+
+  return (
+    <div data-testid={`field-${testId}`}>
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <label className="text-sm font-medium" htmlFor={`input-${testId}`}>{label}</label>
+      </div>
+      <Input
+        id={`input-${testId}`}
+        value={draft}
+        onChange={(e) => { setDraft(e.target.value); if (error) setError(null); }}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        placeholder="https://…"
+        className="mt-1 h-8 text-xs"
+        data-testid={`input-${testId}`}
+      />
+      <p className={`mt-1 text-xs ${error ? "text-destructive" : "text-muted-foreground"}`} data-testid={`hint-${testId}`}>
+        {error ?? hint}
+      </p>
+    </div>
+  );
+}
+
 function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUpdateProject, onCreateLink, onDeleteLink, aiSummary, aiGaps }: {
   project: Project; isOwner: boolean; links: ProjectLink[];
   isUploadingPlan: boolean; onUploadPlan: (file: File) => void;
@@ -1448,10 +1509,22 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
   /*
    * The repo and live URLs captured on the project-creation page live on the
    * project itself, not in the project_links table, so the Links Hub never
-   * showed them. Surface them here as first-class entries. They're edited on
-   * the project's own fields rather than deleted like a normal link, so they
-   * render with an Edit affordance pointing at the brief instead of a trash
-   * can — dropping one means clearing the field.
+   * showed them. Surface them here as first-class entries.
+   *
+   * They are also *editable* here, which they were not anywhere. The creation
+   * form was the only screen in the product that could set either of them, so
+   * a URL you did not have on the day you made the project could never be
+   * added — and a live URL is a thing that becomes true later by definition:
+   * you deploy after you create the project, not before.
+   *
+   * It read worse than it sounds, because the list below filters out empty
+   * ones: the row carrying the Edit affordance only appeared once the value
+   * already existed. The way to set it showed up after it was set.
+   *
+   * The code audit is what made it matter. Its runtime probe is built on
+   * `liveUrl` — it fetches the site, its `/_health` and its surfaces — so for
+   * every project whose owner had not guessed the URL on day one, the audit
+   * reported nothing deployed, correctly and permanently.
    */
   const integrationLinks = [
     { key: "repoUrl", label: "Repository", url: project.repoUrl, icon: GitBranch },
@@ -1636,6 +1709,32 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
                 <SelectContent>{LINK_CATEGORIES.map(c => <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>)}</SelectContent>
               </Select>
               <Button size="sm" disabled={!newLink.label.trim() || !newLink.url.trim()} onClick={() => { onCreateLink(newLink); setNewLink({ label: "", url: "", category: "other" }); setShowLinkForm(false); }} data-testid="button-save-link">Save Link</Button>
+            </div>
+          )}
+          {/*
+            * Always here, filled or not. These two are the project's own
+            * fields rather than rows in the links table, and they are the only
+            * two anything else reads: the audit probes the live URL, the
+            * codebase tab reads the repo.
+            */}
+          {isOwner && (
+            <div className="space-y-2 rounded-md border border-border/60 p-3">
+              <ProjectUrlField
+                label="Live URL"
+                hint="Where it runs. The code audit checks this one."
+                icon={Globe}
+                value={project.liveUrl ?? ""}
+                onSave={(v) => onUpdateProject({ liveUrl: v })}
+                testId="live-url"
+              />
+              <ProjectUrlField
+                label="Repository"
+                hint="Where the code is."
+                icon={GitBranch}
+                value={project.repoUrl ?? ""}
+                onSave={(v) => onUpdateProject({ repoUrl: v })}
+                testId="repo-url"
+              />
             </div>
           )}
           {integrationLinks.map(link => {

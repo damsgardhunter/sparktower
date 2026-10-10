@@ -15,6 +15,7 @@ import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 /* Relative, not "@shared/…": Playwright compiles these specs itself and does not read the root tsconfig's paths. */
 import { EDITOR_BRIDGE_READY } from "../shared/not-ready";
+import { finishOnboarding } from "./onboarding";
 
 /*
  * A per-spec address, so registrations here don't share the sign-in budget.
@@ -37,9 +38,7 @@ async function projectFor(page: Page): Promise<string> {
   expect((await page.request.post("/api/auth/register", { data: { email, password, firstName: "Casey", lastName: "Builder" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Casey Builder", headline: "Shipping weekly", bio: "Here for the loop." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Casey Builder", headline: "Shipping weekly", bio: "Here for the loop." });
 
   const created = await page.request.post("/api/projects", {
     data: {

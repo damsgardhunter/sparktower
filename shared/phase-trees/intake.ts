@@ -54,7 +54,37 @@ export function renderIntake(questions: IntakeQuestion[], answers: IntakeAnswers
   }).join("\n");
 }
 
-const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+/**
+ * A field cut to length, at a word and said out loud.
+ *
+ * This was `.slice(0, max)`, which cuts wherever the character count lands —
+ * and a plan is read as prose, so the result was sentences ending mid-word:
+ * "pending proof and el". Nothing is wrong with the plan; the field it was
+ * stored in simply stopped. A reader cannot tell that from a model that lost
+ * its thread, which is the damage.
+ *
+ * Two changes. The cut moves back to the last space, so a word survives or goes
+ * whole; and an ellipsis marks it, so a short field reads as shortened rather
+ * than as all there was. A single token longer than the limit — a URL, a long
+ * identifier — still gets cut where it must, because the alternative is dropping
+ * it entirely.
+ *
+ * The 60% floor stops the word-boundary rule from throwing away most of the
+ * field: a limit of 60 landing inside a long first word would otherwise clip
+ * back to almost nothing.
+ */
+const clip = (v: unknown, max: number): string => {
+  const text = String(v ?? "").trim();
+  if (text.length <= max) return text;
+  const room = Math.max(1, max - 1);
+  const cut = text.slice(0, room);
+  const lastSpace = cut.lastIndexOf(" ");
+  const body = lastSpace > room * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return `${body.replace(/[\s,;:.\-]+$/, "")}\u2026`;
+};
+
+/* Kept as the name every field below uses; the behaviour is `clip`'s. */
+const str = (v: unknown, max: number) => clip(v, max);
 const list = <T>(v: unknown, max: number, map: (x: any) => T | null): T[] =>
   (Array.isArray(v) ? v : []).slice(0, max).map(map).filter((x): x is T => x != null);
 
@@ -88,11 +118,14 @@ export function sanitizePlan(parsed: any): PlanPayload {
 
 /** A plan as the milestone's written answer: what later steps read, compact. */
 export function renderPlanAnswer(plan: PlanPayload): string {
-  return [
+  const joined = [
     plan.summary,
     plan.figures.length ? `Figures: ${plan.figures.map((f) => `${f.label} ${f.value}`).join("; ")}` : "",
     plan.gaps.length ? `Gaps: ${plan.gaps.join("; ")}` : "",
     plan.actions.length ? `Actions: ${plan.actions.map((a) => `${a.when ? `[${a.when}] ` : ""}${a.title}`).join("; ")}` : "",
     plan.assumptions.length ? `Assumed: ${plan.assumptions.join("; ")}` : "",
-  ].filter(Boolean).join("\n").slice(0, 4000);
+    /* Same rule as the fields above: a written answer that later steps read
+       should end at a word, and say that it was cut. */
+  ].filter(Boolean).join("\n");
+  return clip(joined, 4000);
 }

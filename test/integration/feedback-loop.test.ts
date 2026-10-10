@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -18,6 +19,8 @@ async function signUp(app: any, name: string) {
     .send({ email: `fb-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: name });
   expect(res.status, JSON.stringify(res.body).slice(0, 200)).toBeLessThan(300);
   await verifyEmail(app, res.body.email, `203.0.114.${address++}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return agent;
 }
 

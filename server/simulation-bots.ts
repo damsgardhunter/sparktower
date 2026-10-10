@@ -24,6 +24,7 @@ import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { pick } from "@shared/simulation/random";
 import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded, type BotSkill } from "@shared/simulation/bots";
 import { cleanDecision } from "@shared/simulation/levers";
+import { foundersActions } from "@shared/simulation/actions";
 import { dealsFor } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
 import { isUnlocked } from "@shared/simulation/responsibilities";
@@ -36,8 +37,19 @@ import type { Company, Niche, Role } from "@shared/simulation/types";
  *
  * Returns how many were seated. Zero is the ordinary answer: the room is full,
  * or nobody is in it, or it has only just opened.
+ *
+ * ## `force`
+ *
+ * Somebody in the room asked for it, now. That skips the two guards that exist
+ * to protect people who did *not* ask — the minute of waiting, and the
+ * `botFill` flag a buyer sets when they are holding seats for colleagues — and
+ * skips neither of the two that are about the game being coherent: a room that
+ * has stopped gathering, and a table of one, which has no empty chair to fill.
+ *
+ * The caller is responsible for establishing that the person asking is in the
+ * room. See `POST /api/sim/ventures/:id/fill`.
  */
-export async function fillVentureWithBots(ventureId: string): Promise<number> {
+export async function fillVentureWithBots(ventureId: string, opts: { force?: boolean } = {}): Promise<number> {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
   // Only a room still gathering people. Once seats are being claimed, adding a
   // player would change the game under the people already arguing about roles.
@@ -56,7 +68,15 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
     .select({ seatCount: simSeasons.seatCount, botFill: simSeasons.botFill })
     .from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
   const lobbySize = season?.seatCount ?? LOBBY_SIZE;
-  if (season && (!season.botFill || lobbySize <= 1)) return 0;
+  /*
+   * A solo table is refused either way: there is no empty chair, and `force`
+   * cannot conjure one. `botFill` is only consulted when nobody asked —
+   * holding seats for colleagues is a default, not a prohibition, and the
+   * person who set it is allowed to change their mind when the colleagues
+   * do not turn up.
+   */
+  if (lobbySize <= 1) return 0;
+  if (season && !season.botFill && !opts.force) return 0;
 
   const seats = await db
     .select({ userId: simSeats.userId, joinedAt: simSeats.joinedAt, isBot: users.isBot })
@@ -104,7 +124,8 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
     .from(simSeats)
     .innerJoin(users, eq(users.id, simSeats.userId))
     .where(and(eq(simSeats.ventureId, ventureId), eq(users.isBot, false)));
-  if (!waited?.ok) return 0;
+  /* Asked for explicitly, so the room does not have to have stalled first. */
+  if (!waited?.ok && !opts.force) return 0;
 
   /*
    * The whole cast is drawn, not just the missing few: a room part-filled by
@@ -235,8 +256,14 @@ export function botCompanyName(seed: string): string {
   return `${first}${second}`;
 }
 
-/** Every venture still gathering players, so the sweep doesn't need a caller. */
-export async function fillWaitingLobbies(): Promise<number> {
+/**
+ * Every venture still gathering players, so the sweep doesn't need a caller.
+ *
+ * Returns the rooms it seated anybody into, because a room that has just been
+ * filled is a room that is ready to move and nothing else will notice. The
+ * caller advances them — see the note in `pass` in simulation-tick.ts.
+ */
+export async function fillWaitingLobbies(): Promise<{ seated: number; filled: string[] }> {
   const waiting = await db
     .select({ id: simVentures.id })
     .from(simVentures)
@@ -254,14 +281,17 @@ export async function fillWaitingLobbies(): Promise<number> {
     .limit(100);
 
   let seated = 0;
+  const filled: string[] = [];
   for (const v of waiting) {
     try {
-      seated += await fillVentureWithBots(v.id);
+      const took = await fillVentureWithBots(v.id);
+      seated += took;
+      if (took > 0) filled.push(v.id);
     } catch (err) {
       console.error(`[sim] filling lobby ${v.id} failed:`, err);
     }
   }
-  return seated;
+  return { seated, filled };
 }
 
 /**
@@ -366,7 +396,7 @@ export async function fileBotDecisions(input: {
         year,
         // The same cleaning a person's submission goes through, so there is one
         // definition of what a seat may file and no second path that can drift.
-        payload: cleanDecision(role, decision, cityIds, { year, periods: world?.periodsPerYear ?? 1, segmentIds: niche.segments.map((s) => s.id) }),
+        payload: cleanDecision(role, decision, cityIds, { year, periods: world?.periodsPerYear ?? 1, segmentIds: niche.segments.map((s) => s.id), actionIds: foundersActions(niche).map((a) => a.id) }),
         // Passed, not defaulted: the column's DEFAULT now() is the session's clock, not UTC.
         submittedAt: new Date(),
       })

@@ -292,6 +292,37 @@ export const NICHES: Niche[] = [
     penetration: { north_america: 1.4, europe: 1.1, asia: 0.7, africa: 0.5 },
     name: "Podcasts",
     premise: "Free to start, free to listen, and the same twenty shows have sat at the top of the chart for five years. Listeners don't pay you; advertisers pay you to talk about mattresses.",
+    /*
+     * The premise was always this, and the engine never played it: listeners
+     * were customers paying £14 a year each, and a network that outgrew its
+     * editors turned listeners away. Now they listen for nothing, and the money
+     * is downloads sold to an ad network, sponsors buying host reads, and the
+     * superfans' bonus feed. See shared/simulation/creator.ts.
+     */
+    model: "audience",
+    audience: {
+      viewShare: 0.55,
+      /* A network, not a show: three weekly shows' worth of episodes. */
+      uploadsPerYear: 156,
+      rpm: { chart_hoppers: 6, commuters: 11, superfans: 14 },
+      partnerAt: 2_000,
+      sponsorsFrom: 10_000,
+      memberRate: 0.03,
+      words: { views: "downloads", upload: "episode", uploads: "episodes", members: "supporters", read: "host read" },
+      milestones: [
+        { at: 2_000, name: "On an ad network", means: "Dynamic ads start paying on every download." },
+        { at: 10_000, name: "Worth a host read", means: "Sponsors start buying reads." },
+        { at: 100_000, name: "In the chart", means: "The category leaders take your calls." },
+        { at: 1_000_000, name: "A household show", means: "The kind people say they listen to at dinner." },
+      ],
+      sponsors: [
+        { id: "mattress", name: "Dreamwell", sells: "mattresses, delivered in a box", segment: "chart_hoppers", budget: 10_000_000, cpm: 18 },
+        { id: "vpn", name: "TunnelGuard", sells: "a VPN", segment: "chart_hoppers", budget: 6_000_000, cpm: 20 },
+        { id: "mealkit", name: "Hearth & Box", sells: "meal kits", segment: "commuters", budget: 8_000_000, cpm: 22 },
+        { id: "therapy", name: "Steady", sells: "online therapy", segment: "commuters", budget: 5_000_000, cpm: 25 },
+        { id: "audio", name: "Fieldnote Audio", sells: "studio headphones", segment: "superfans", budget: 2_000_000, cpm: 35 },
+      ],
+    },
     baseUnitCost: 2,
     innovationPace: 1.35,
         workforce: [
@@ -305,13 +336,13 @@ export const NICHES: Niche[] = [
       unit: "a thousand downloads sold to an advertiser",
       per: "a thousand downloads",
       capacity: "how many shows you can make properly at once, before the good ones start sounding rushed",
-      capacityShort: "listeners you can serve",
+      capacityShort: "listeners your shows can keep up with",
       place: "market",
       places: "markets",
       quality: "whether people finish the episode",
       brand: "whether you are in the chart people actually look at",
       service: "how you treat hosts, guests, and the brands paying for the ad reads",
-      turnedAway: "advertisers you had nothing left to sell",
+      turnedAway: "listeners who found less of you than they wanted",
       market: "the podcast business",
       rivals: "the other networks",
     },
@@ -524,7 +555,16 @@ export const NICHES: Niche[] = [
       rivals: "the other firms",
     },
     segments: [
-      { id: "homeowners", name: "Homeowners", description: "A kitchen, an extension, a fence. Get three quotes, pick the cheapest, and tell the whole street how it went.", size: 210_000, growth: 0.03, priceSensitivity: 0.85, qualityFocus: 0.55, brandFocus: 0.35, serviceFocus: 0.6, loyalty: 0.15, referencePrice: 900 },
+      { id: "homeowners", name: "Homeowners", description: "A kitchen, an extension, a fence. Get three quotes, pick the cheapest, and tell the whole street how it went.", size: 210_000, growth: 0.03, priceSensitivity: 0.85, qualityFocus: 0.55, brandFocus: 0.35, serviceFocus: 0.6, loyalty: 0.15, referencePrice: 900,
+        /*
+         * Domestic work is quick to get good at — the market's pace is 0.45,
+         * set by public infrastructure, and holding a kitchen fitter to it was
+         * what made residential construction unplayable. See
+         * `Segment.innovationPace`. The two commercial segments below override
+         * nothing and stay at the market's pace, which is the point: this is a
+         * cheap trade to enter and a hard one to become commercial in.
+         */
+        innovationPace: 1.0 },
       { id: "developers", name: "Developers", description: "Ten jobs a year to whoever finished the last one on time. Slow to win, and they'll bring you along for the next decade.", size: 29_000, growth: 0.06, priceSensitivity: 0.5, qualityFocus: 0.8, brandFocus: 0.4, serviceFocus: 0.75, loyalty: 0.82, referencePrice: 3_800 },
       { id: "public", name: "Public sector", description: "Schools, roads, a hospital wing. A tender process longer than the build, and a blacklist that never expires.", size: 6_000, growth: 0.04, priceSensitivity: 0.45, qualityFocus: 0.85, brandFocus: 0.55, serviceFocus: 0.8, loyalty: 0.92, referencePrice: 14_000 },
     ],

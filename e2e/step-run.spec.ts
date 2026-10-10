@@ -16,6 +16,7 @@
  */
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -49,9 +50,7 @@ for (const path of PATHS) {
       data: { email: `e2e-run-${stamp()}@example.test`, password, firstName: "Ren", lastName: "Run" },
     })).ok()).toBeTruthy();
     await verifyEmail(page.request);
-    expect((await page.request.post("/api/profile/complete-onboarding", {
-      data: { displayName: "Ren Run", headline: "Building something", bio: "Here for the path." },
-    })).ok()).toBeTruthy();
+    await finishOnboarding(page.request, { displayName: "Ren Run", headline: "Building something", bio: "Here for the path." });
 
     const project = await (await page.request.post("/api/projects", {
       data: {

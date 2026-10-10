@@ -16,6 +16,7 @@ import { db } from "./db";
 import {
   contentReports, users, userProfiles, projectComments,
   feedPosts, feedComments, directMessages, projects, pathArtifacts, rateLimitHits, moderationLog,
+  simulationListings,
 } from "@shared/schema";
 import { createHash } from "node:crypto";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -909,6 +910,25 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
       const [r] = await db.select().from(projects).where(eq(projects.id, targetId));
       return r ? { text: trim(`${r.title}\n\n${r.description}`), ownerId: r.ownerId, projectId: r.id }
                : { text: null, ownerId: null, projectId: null };
+    }
+    if (targetType === "simulation_listing") {
+      /*
+       * What a reviewer is actually being asked about: the words the author
+       * published, not the market behind them. A report on a listing is
+       * almost always about the claim — copied from somebody, describes
+       * something it is not, should not be sold — and all of that lives in the
+       * title, summary and description.
+       *
+       * Without this case the function fell through to the user-profile branch
+       * below and read the listing's id as a user id, so a reviewer opening
+       * the report saw an empty profile and no way to tell what had been
+       * reported. Every target needs a case here; the fallback is a person,
+       * and anything that is not a person reaches it by mistake.
+       */
+      const [r] = await db.select().from(simulationListings).where(eq(simulationListings.id, targetId));
+      return r
+        ? { text: trim([r.title, r.summary, r.description].filter(Boolean).join("\n\n")), ownerId: r.authorId, projectId: r.projectId }
+        : { text: null, ownerId: null, projectId: null };
     }
     const [r] = await db.select().from(userProfiles).where(eq(userProfiles.userId, targetId));
     return r ? { text: trim(`${r.displayName ?? ""}\n${r.headline ?? ""}\n${r.bio ?? ""}`), ownerId: targetId, projectId: null }

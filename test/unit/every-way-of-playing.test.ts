@@ -100,6 +100,56 @@ const resultOf = (niche: Niche, way: string) => {
   return atEffort.reduce((best, r) => (r.worth > best.worth ? r : best));
 };
 
+/**
+ * Is any one way of playing simply the best way, nearly everywhere?
+ *
+ * `balance.test.ts` guards against a dominant plan already — "has no strategy that
+ * wins every market" — but it asks the question of four hand-written strategies
+ * and passes as soon as **two** different ones win something. That is a test
+ * against a plan winning *all seven*, and it cannot see concentration: measured
+ * across the seven ways of playing here, `undercut` is the best in **five of the
+ * seven markets**, with `premium` taking construction and `grower` taking MMOs,
+ * and the existing guard reads that as three distinct winners and passes
+ * comfortably.
+ *
+ * Whether five of seven is too many is a judgement about the product rather than
+ * a bug, and this does not assert a stricter standard than the product has
+ * chosen. What it does is stop it getting worse: the figure is pinned where it is
+ * so that a change which makes one approach best in six or seven markets fails
+ * here, with the count in the message.
+ *
+ * The companion claim — that nobody is *locked out* — is the per-market block
+ * below, and it holds: every way of playing reaches between 29% and 100% of the
+ * best, in every market.
+ */
+describe("whether one way of playing is best nearly everywhere", () => {
+  it("has no approach that is the best in more than five of the seven markets", () => {
+    const winners = NICHES.map((niche) => {
+      const scored = Object.keys(WAYS).map((w) => ({ way: w, worth: resultOf(niche, w).worth }));
+      return scored.sort((a, b) => b.worth - a.worth)[0].way;
+    });
+    const counts = new Map<string, number>();
+    for (const w of winners) counts.set(w, (counts.get(w) ?? 0) + 1);
+    const [best, times] = [...counts].sort((a, b) => b[1] - a[1])[0];
+    expect(times, `${best} is the best way to play in ${times} of ${NICHES.length} markets: ${winners.join(", ")}`)
+      .toBeLessThanOrEqual(5);
+  }, 600_000);
+
+  it("has at least three different approaches winning something", () => {
+    /*
+     * The other end of the same measurement, and stronger than the "more than
+     * one" it is standing next to: three distinct winners is what the markets
+     * currently produce, so three is what a change must not take away.
+     */
+    const winners = NICHES.map((niche) => {
+      const scored = Object.keys(WAYS).map((w) => ({ way: w, worth: resultOf(niche, w).worth }));
+      return scored.sort((a, b) => b.worth - a.worth)[0].way;
+    });
+    expect(new Set(winners).size, `only ${new Set(winners).size} approaches win anything: ${winners.join(", ")}`)
+      .toBeGreaterThanOrEqual(3);
+  }, 600_000);
+});
+
 describe("every way of playing has a route", () => {
   for (const niche of NICHES) {
     describe(niche.id, () => {

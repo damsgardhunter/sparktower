@@ -97,3 +97,138 @@ describe("injected tasks", () => {
     expect(admitted.map((a) => a.estimateHours)).toEqual([8, 1]);
   });
 });
+
+/*
+ * One note must not become the plan.
+ *
+ * The reported failure: a standing project note — "remove the weekly check-ins,
+ * make the web path first" — turned up as the content of six different
+ * milestones. It was in the MVP plan, the bottleneck ranking, the gap list, the
+ * money roadmap, a contractor job post and "what is costing you most".
+ *
+ * Nothing was broken in the sense of throwing. Every one of those admissions was
+ * legal: the note is a real artifact so the grounding rule passed, and each phase
+ * was under its own cap of three. The cap was simply on the wrong axis — it could
+ * only ever see one phase, and the repetition was across phases.
+ */
+describe("injected tasks, across the whole board", () => {
+  const artifacts = [
+    { label: "update:1", kind: "update" as const, text: "Drop the weekly check-ins, make the web path first" },
+    { label: "milestone:SHIP.M1.2", kind: "milestone" as const, text: "The loop" },
+  ];
+
+  it("refuses work the project already has, wherever it was added", () => {
+    const already = [{ title: "Remove the weekly check-ins", artifact: "update:1", phaseId: "week-1" }];
+    const { admitted, dropped } = admitInjections(
+      [{ title: "Remove the weekly check-ins", description: "", artifact: "update:1" }],
+      artifacts, 0, already, "week-4",
+    );
+    expect(admitted).toHaveLength(0);
+    expect(dropped[0].reason).toBe("already on the board");
+  });
+
+  it("sees through a rephrasing, which is how it got in six times", () => {
+    /*
+     * A model asked the same thing in six phases does not write it identically.
+     * Matching on the exact string would have caught none of them.
+     */
+    const already = [{ title: "Remove the weekly check-ins and make the web path first", artifact: "update:1" }];
+    for (const title of [
+      "Remove weekly check-ins, make web path first",
+      "Make the web path first and remove weekly check-ins".split(" and ").reverse().join(" and "),
+      "remove the weekly check ins and make the web path first",
+    ]) {
+      const { admitted } = admitInjections([{ title, description: "", artifact: "update:1" }], artifacts, 0, already);
+      expect(admitted, `"${title}" got in again`).toHaveLength(0);
+    }
+  });
+
+  it("still admits a genuinely different task that shares a word", () => {
+    /*
+     * The other half, and the one that makes this worth testing: a rule loose
+     * enough to stop a rephrasing can easily start refusing real work.
+     */
+    const already = [{ title: "Remove the weekly check-ins", artifact: "update:1" }];
+    const { admitted } = admitInjections(
+      [{ title: "Add a weekly digest email", description: "", artifact: "update:1" }],
+      artifacts, 0, already,
+    );
+    expect(admitted.map((a) => a.title)).toEqual(["Add a weekly digest email"]);
+  });
+
+  it("stops one artifact following the project from phase to phase", () => {
+    /*
+     * The shape of the bug: the same note seeding section after section. Two
+     * phases is a decision whose consequence landed later; by the third it has
+     * become the plan.
+     */
+    const already = [
+      { title: "Drop the check-ins", artifact: "update:1", phaseId: "week-1" },
+      { title: "Reorder the web path", artifact: "update:1", phaseId: "week-2" },
+    ];
+    const { admitted, dropped } = admitInjections(
+      [{ title: "Write the contractor post about the web path", description: "", artifact: "update:1" }],
+      artifacts, 0, already, "week-3",
+    );
+    expect(admitted).toHaveLength(0);
+    expect(dropped[0].reason).toBe("that artifact has already set work in enough phases");
+  });
+
+  it("still lets one artifact work a topic through inside its own phase", () => {
+    /*
+     * The half that must not break, and the documented behaviour: a rich update
+     * describing three problems can set three tasks in the phase it belongs to.
+     * That is one topic being worked through, not a note spreading — the first
+     * version of this rule capped tasks instead of phases and broke it.
+     */
+    const already = [{ title: "Drop the check-ins", artifact: "update:1", phaseId: "week-1" }];
+    const { admitted } = admitInjections([
+      { title: "Reorder the web path", description: "", artifact: "update:1" },
+      { title: "Retire the check-in email", description: "", artifact: "update:1" },
+    ], artifacts, 1, already, "week-1");
+    expect(admitted).toHaveLength(2);
+  });
+
+  it("lets a different artifact through while one has spread as far as it may", () => {
+    const already = [
+      { title: "Drop the check-ins", artifact: "update:1", phaseId: "week-1" },
+      { title: "Reorder the web path", artifact: "update:1", phaseId: "week-2" },
+    ];
+    const { admitted } = admitInjections([
+      { title: "Write the contractor post", description: "", artifact: "update:1" },
+      { title: "Instrument the loop", description: "", artifact: "milestone:SHIP.M1.2" },
+    ], artifacts, 0, already, "week-3");
+    expect(admitted.map((a) => a.title)).toEqual(["Instrument the loop"]);
+  });
+
+  it("does not repeat itself inside one call", () => {
+    /* Six proposals in one go is the same failure arriving faster. */
+    const same = Array.from({ length: 6 }, () => ({
+      title: "Remove the weekly check-ins", description: "", artifact: "update:1",
+    }));
+    expect(admitInjections(same, artifacts, 0).admitted).toHaveLength(1);
+  });
+
+  it("says a repeat is a repeat, even when the phase is also full", () => {
+    /*
+     * Order matters for the message. A repeat arriving at a full phase reported
+     * as "phase is at its cap" would send somebody to raise the cap, which is
+     * not the problem.
+     */
+    const already = [{ title: "Remove the weekly check-ins", artifact: "update:1" }];
+    const { dropped } = admitInjections(
+      [{ title: "Remove the weekly check-ins", description: "", artifact: "update:1" }],
+      artifacts, INJECT_CAP_PER_PHASE, already,
+    );
+    expect(dropped[0].reason).toBe("already on the board");
+  });
+
+  it("behaves as it always did for a caller with no board to hand it", () => {
+    /* The argument is optional, so every existing caller keeps its old answer. */
+    const { admitted } = admitInjections(
+      [{ title: "Add rate limiting", description: "", artifact: "milestone:SHIP.M1.2" }],
+      artifacts, 0,
+    );
+    expect(admitted).toHaveLength(1);
+  });
+});

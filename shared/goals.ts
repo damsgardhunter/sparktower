@@ -120,17 +120,52 @@ export function sectionOfTask(tags: string[] | null | undefined, primary: Projec
  * checked as a (goal, subcategory) pair, never by id alone.
  */
 export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; label: string }[]> = {
+  /*
+   * Five of these are software and three are not, which is the point.
+   *
+   * The path was written for software and the list said so: app, SaaS, game,
+   * website. Somebody making a hot sauce, a hardware product or a YouTube
+   * channel has a first version to get in front of real people exactly like
+   * everybody else — the four-week spine fits them — and the only thing in
+   * their way was a list of options that did not include them, and then a
+   * roadmap talking about repos and deploys.
+   *
+   * `physical`, `food` and `channel` have variants on every milestone where
+   * the software framing is wrong, and `skipFor` on the handful that do not
+   * apply at all. See shared/phase-trees/ship.ts.
+   */
   ship_mvp: [
     { id: "app", label: "App" },
     { id: "saas", label: "SaaS" },
     { id: "game", label: "Game" },
     { id: "website", label: "Website" },
+    { id: "physical", label: "Physical product" },
+    { id: "food", label: "Food or drink" },
+    { id: "channel", label: "YouTube channel" },
     { id: "other", label: "Other" },
   ],
+  /*
+   * Three of these are not premises with staff, which is what the list
+   * assumed. "Make it run without you" is just as true of a channel whose
+   * owner is the only person who can edit, a kitchen-table business where
+   * every order goes through one phone, and a web business that nobody but
+   * its founder can deploy — and the backbone already fits them: time
+   * capture, SOPs, metrics, a handoff, an absence test. What did not fit was
+   * a list offering Restaurant, Service business and Retail.
+   *
+   * `channel` is the same id as the one on `ship_mvp`, deliberately, the way
+   * `restaurant` is shared with `run_company`: somebody who shipped a channel
+   * and now wants it to run without them is the same person, and a second id
+   * for it would make the pair read as two different things. Validity is
+   * always the (goal, subcategory) pair, and the variants live in each tree.
+   */
   systemize_business: [
     { id: "restaurant", label: "Restaurant" },
     { id: "service", label: "Service business" },
     { id: "retail", label: "Retail" },
+    { id: "channel", label: "Creator or channel" },
+    { id: "home", label: "Home business" },
+    { id: "online", label: "Online or web business" },
     { id: "other", label: "Other" },
   ],
   run_company: [
@@ -144,6 +179,27 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
 };
 
 export const subcategoriesFor = (goal: ProjectGoal) => PROJECT_SUBCATEGORIES[goal];
+
+/**
+ * Why a (goal, subcategory) pair was refused, naming what this build accepts.
+ *
+ * The refusal used to be `"channel" is not a kind of "systemize_business"
+ * project.` — true, and no help at all to somebody who had just picked it off
+ * a list. The list they picked from comes from the client bundle, which Vite
+ * hot-reloads; the validation runs in the server process, which `npm run dev`
+ * does not restart on a file change. So the first time a new subcategory is
+ * added, the picker offers it and the server rejects it, and the message gives
+ * no clue that the two are running different code.
+ *
+ * Naming the accepted ids makes that one glance: a list missing the thing you
+ * just chose means a stale process, and a list containing something close
+ * means a typo. Cheap, and it is the only sentence anybody reads.
+ */
+export function subcategoryMismatch(goal: string, sub: string): string {
+  const known = (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal];
+  if (!known) return `"${goal}" isn't one of the paths.`;
+  return `"${sub}" isn't a kind of "${goal}" project. This build accepts: ${known.map((s) => s.id).join(", ")}.`;
+}
 
 export const isValidSubcategory = (goal: string | null | undefined, sub: string | null | undefined): boolean =>
   !!goal && !!sub && (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal]?.some((s) => s.id === sub) === true;

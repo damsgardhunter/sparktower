@@ -74,7 +74,7 @@ export function ExpansionVote({ data, seats }: { data: ExpansionVoteData; seats:
         <p className="text-sm text-muted-foreground mt-3">
           {data.proposed ? (
             <>
-              Operations has put it to the table at {money(data.cost)} now, opening next year.{" "}
+              Operations has put it to the table at <span className="nova-number tabular-nums">{money(data.cost)}</span> now, opening next year.{" "}
               {data.yes} for and {data.no} against so far —{" "}
               {data.carried
                 ? "as it stands, it opens."
@@ -82,7 +82,7 @@ export function ExpansionVote({ data, seats }: { data: ExpansionVoteData; seats:
             </>
           ) : (
             <>
-              Announced for next year at {money(data.cost)}. Operations has not put it up, so nothing is
+              Announced for next year at <span className="nova-number tabular-nums">{money(data.cost)}</span>. Operations has not put it up, so nothing is
               being decided and no vote counts yet.
             </>
           )}

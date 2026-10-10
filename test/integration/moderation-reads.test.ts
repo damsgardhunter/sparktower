@@ -37,6 +37,7 @@ import { companies, companyMembers, users } from "@shared/schema";
 import { publicArtifactPages, publicProfilePages, publicProjectPages } from "../../server/sitemap";
 import { artifactPageMeta } from "../../server/artifact-routes";
 import { injectPageMeta } from "@shared/path-artifacts";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -53,6 +54,8 @@ async function person(app: any, first: string) {
     .send({ email, password, firstName: first, lastName: "Read" });
   expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 300)}`).toBe(201);
   await verifyEmail(app, email, addr);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email };
 }
 

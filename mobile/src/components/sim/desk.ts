@@ -25,6 +25,9 @@
  * because it is the same failure the feature exists to prevent, wearing the
  * badge of the thing that was meant to prevent it. Hence desk.test.ts.
  */
+import type { LastFiled, Standing } from "./past";
+import type { Forecast } from "./future";
+
 
 // --- What the desk sends -------------------------------------------------
 // Mirrors the response of GET /api/sim/ventures/:id/desk in
@@ -41,7 +44,7 @@ export interface LeverField {
   id: string;
   label: string;
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels" | "hours";
   min?: number;
   max?: number;
   step?: number;
@@ -52,6 +55,8 @@ export interface LeverField {
   choices?: { value: string; label: string; help: string }[];
   /** For "levels": the answer an option carries when nobody has chosen one. */
   defaultChoice?: string;
+  /** For "hours": the week the founders have to split across `options`. */
+  hours?: number;
 }
 
 /** Mirrors UnitPrices in shared/simulation/levers.ts: what one of each thing costs in this market. */
@@ -90,6 +95,18 @@ export interface Commitment {
    * permission to have some.
    */
   openingCost: number;
+  /**
+   * Of which, sealed bids already standing at auction.
+   *
+   * On the chief executive's line, because bidding is their lever, and broken out
+   * here because it is the one part of this total nobody on this screen filed: it
+   * arrives from the market screen and moves without a lever being touched. An
+   * exposure rather than a certainty — most bids lose — but promised money either
+   * way, and the meter exists to say what the five of them have promised.
+   *
+   * Mirrors `bidsOutstanding` in shared/simulation/levers.ts.
+   */
+  bidsOutstanding: number;
 }
 
 /** Mirrors DraftPreview in shared/simulation/levers.ts. */
@@ -135,6 +152,16 @@ export interface DeskCompany {
    * bought. Mirrors `pipeline` in shared/simulation/types.ts.
    */
   pipeline?: number;
+  /**
+   * Research already paid for, landing the year after next. Mirrors
+   * `pipelineLater` in shared/simulation/types.ts.
+   */
+  pipelineLater?: number;
+  /**
+   * The half of this year's campaign that has not landed yet — brand builds, it
+   * does not switch on. Mirrors `brandPipeline` in shared/simulation/types.ts.
+   */
+  brandPipeline?: number;
   /** The segment the company has declared itself for, or null for everybody. */
   positioning?: string | null;
   /**
@@ -197,6 +224,100 @@ export interface DeskSegment {
   /** Customers of this segment you currently hold. */
   yours: number;
 }
+
+/**
+ * Whether this seat can be reminded that the table is waiting on it.
+ *
+ * The server refuses four cases with four different messages
+ * (`simulation-profile-routes.ts`), and a button that offers itself and then
+ * fails is worse than no button, so the same four are read here: you cannot
+ * nudge yourself, a seat that has already filed, a stand-in that files every year
+ * without being asked, or an empty chair.
+ *
+ * Nudging was web-only. A phone player could *receive* one — `sim_nudge` has had
+ * an icon in the notifications tab all along — and had no way to send one, which
+ * is the wrong way round for the client somebody actually has in their pocket
+ * when a year is closing.
+ */
+export const canNudge = (seat: Pick<DeskTableSeat, "filed" | "isBot" | "isYou" | "role">): boolean =>
+  !seat.isYou && !seat.isBot && !seat.filed && !!seat.role;
+
+/**
+ * Why year one has not started yet, in the words to say it in.
+ *
+ * The phone said "The table is still filling" whatever was true, and most of the
+ * time it was not: a season starts only once *every* room in it has left the
+ * lobby, so the common case by far is a table that is finished waiting on other
+ * people's tables. Telling five people who have done everything asked of them
+ * that they are the hold-up is the wrong way round, and at two hundred players
+ * the wait it describes is around six minutes (measured — see
+ * `docs/simulation-backlog.md`), which is a long time to read the wrong reason.
+ *
+ * Three cases, because three different things are true, and the web desk has
+ * distinguished them for a while:
+ *
+ *   - a solo founder has no empty seats and nobody coming;
+ *   - every room is in, so it is a matter of the next tick;
+ *   - some rooms are still choosing, and saying how many gives the wait a shape.
+ */
+export function notStartedReason(view: {
+  solo?: boolean;
+  roomsStillChoosing?: number;
+  yourRoomReady?: boolean;
+}): string {
+  if (view.solo) {
+    return "Your company is set up. Year one starts in a few seconds — this screen will move on by itself.";
+  }
+  const waiting = view.roomsStillChoosing ?? 0;
+  if (waiting === 0) {
+    return "Every room in this market has its seats. Year one starts within the minute — this screen will move on by itself.";
+  }
+  const rooms = waiting === 1 ? "one room" : `${waiting} rooms`;
+  const have = waiting === 1 ? "has" : "have";
+  /*
+   * Said differently when the person's own table is done, because the two
+   * situations feel nothing alike: one is "we are late", the other is "we are
+   * waiting on strangers", and only the second is usually true.
+   */
+  return view.yourRoomReady
+    ? `Your table is ready. Year one begins once the ${rooms} still choosing seats ${have} finished — usually a minute or two, and never more than twenty.`
+    : `Year one begins once the ${rooms} still choosing seats ${have} finished — usually a minute or two, and never more than twenty.`;
+}
+
+/**
+ * A region on the table, mirroring what the desk route sends.
+ *
+ * `proposed` is the part that is easy to misread: the region is *announced* to
+ * everybody every year, and nobody's vote counts until the operations seat has
+ * actually put it up. Until then this is a notice, not a decision.
+ */
+export interface DeskExpansion {
+  region: { id: string; name: string; note: string };
+  cost: number;
+  proposed: boolean;
+  votes: Record<string, "yes" | "no">;
+  carried: boolean;
+  yes: number;
+  no: number;
+}
+
+/** Where a region stands, in the words the card says it in. */
+export const expansionOutcome = (e: Pick<DeskExpansion, "proposed" | "carried">): string =>
+  !e.proposed ? "Not put up" : e.carried ? "Carried" : "Not carried";
+
+/**
+ * What one seat has said, or that it has not said anything.
+ *
+ * Nothing counts before operations puts the region up, so an unproposed region
+ * shows every seat as having no view rather than as having voted against — the
+ * difference between "they said no" and "there is nothing to say yes to".
+ */
+export const voteOf = (
+  e: Pick<DeskExpansion, "proposed" | "votes">, role: string | null,
+): "yes" | "no" | null => (e.proposed && role ? e.votes[role] ?? null : null);
+
+export const voteLabel = (vote: "yes" | "no" | null, proposed: boolean): string =>
+  !proposed ? "—" : vote === "yes" ? "For" : vote === "no" ? "Against" : "Not voted";
 
 export interface DeskTableSeat {
   userId: string;
@@ -329,7 +450,18 @@ export interface DeskView {
   ventureId: string;
   name: string | null;
   product?: string | null;
-  niche?: { id: string; name: string; premise: string };
+  niche?: {
+    id: string;
+    name: string;
+    premise: string;
+    /**
+     * The market's own vocabulary, so a league table of restaurants counts
+     * covers and one of podcasts counts listeners. Sent since the voices
+     * existed and left off this type, so every phone screen said "customers"
+     * whatever the business was. Mirrors `Niche.voice`.
+     */
+    voice?: Record<string, string>;
+  };
   year?: number;
   totalYears?: number;
   /** ISO timestamp this year resolves at, or null once the season has finished. */
@@ -370,11 +502,86 @@ export interface DeskView {
   dissolvedSeats?: string[];
   segments?: DeskSegment[];
   economy?: DeskEconomy;
+  /**
+   * The region announced for next year, and what the table has said about it.
+   *
+   * The server has always sent this; the phone did not read it, so a phone
+   * player could cast the vote — `expandVote` is a `levels` lever and
+   * `LevelsField` draws it — without seeing who else had voted or whether it
+   * carried. Voting blind on the one decision whose whole point is what your
+   * colleagues think.
+   */
+  /*
+   * What a season that has not started is waiting on, which the phone did not
+   * read. The server has sent all three since the wait was given a shape.
+   */
+  roomsStillChoosing?: number;
+  yourRoomReady?: boolean;
+  solo?: boolean;
+  expansion?: DeskExpansion | null;
   table?: DeskTableSeat[];
   filed?: FiledDecisions;
+  /**
+   * Sealed bids this table has standing at auction, totalled.
+   *
+   * Sent so the commitment meter can count them. The market screen warns whoever
+   * is placing them; this is how the other four find out.
+   */
+  bidsOutstanding?: number;
   preview?: DraftPreview;
   lastYear?: CompanyReport | null;
+  /**
+   * What the table filed last year, and who filed it.
+   *
+   * Sent since the Past tab was built and never read here, so the phone could
+   * say what happened to the company and never what the five of them did to
+   * cause it. See `past.ts`.
+   */
+  lastFiled?: LastFiled | null;
+  /**
+   * Every company in the market, placed — price, quality, service, brand, and a
+   * credit grade for the teams. The web draws it as a scatter chart; the phone
+   * reads it as rows. See `marketRows` in `past.ts`.
+   */
+  standing?: Standing[];
+  /**
+   * How many customers are coming, at the price on the table.
+   *
+   * Sent all along and never read on the phone, which left a phone operations
+   * seat sizing capacity against nothing while a web player had the range, the
+   * room and the cost of being wrong in either direction. See `future.ts`.
+   */
+  forecast?: Forecast | null;
+  /** What a year of room nobody used costs, per unit, in this market. */
+  idleCostPerUnit?: number;
   rivals?: DeskRival[];
+  /**
+   * The niche this table went and found, if they have one.
+   *
+   * A table can spend a year's research opening a group of customers nobody was
+   * serving as a group. The lever is filable on the phone — `openNiche` is a
+   * `choice` field and `ChoiceField` draws it — and until now the phone showed
+   * nothing afterwards: not what was bought, not how long the head start lasts,
+   * not that a rival went looking in the same place and found the same people.
+   * Mirrors the `ours` block in server/simulation-desk-routes.ts.
+   */
+  ours?: DeskNiche | null;
+  /**
+   * The research report the marketing seat paid for, if it bought one.
+   *
+   * Read by neither client until now, which made `research` the one lever in the
+   * game that took money and produced nothing a player could see. Mirrors
+   * `researchFor` in server/simulation-desk-routes.ts.
+   */
+  research?: DeskResearch | null;
+  /**
+   * How good the staff are at looking after people, 0–100.
+   *
+   * Sent and read by neither client. It is what `staffLeverage` multiplies the
+   * support budget by, so a table that trains its people gets more service for
+   * the same money and had no way to know it was working.
+   */
+  staffQuality?: number;
   /** This seat's own objective for the year, or null before one is set. */
   challenge?: Challenge | null;
   /** How last year's went. Null in year one. */
@@ -382,6 +589,35 @@ export interface DeskView {
   /** How much trouble the company is in, and what can be done about it. */
   distress?: DeskDistress;
 }
+
+/** A niche this table opened. Mirrors the `ours` block on the desk payload. */
+export interface DeskNiche {
+  id: string;
+  name: string;
+  foundInYear: number;
+  /** The segment these people were carved out of, by name. */
+  from: string;
+  people: number;
+  /** What they pay against the segment they came from, as a percentage. */
+  premium: number;
+  /** Years before everybody else has noticed. Zero means they have. */
+  headStartLeft: number;
+  /** Anybody else who went looking in the same place and found the same people. */
+  sharedWith: string[];
+  /** How many of these people are yours. */
+  held: number;
+}
+
+/**
+ * What a research report says. A tagged union, because the two reports answer
+ * different questions and a screen that flattened them would have to guess.
+ */
+export type DeskResearch =
+  | {
+      kind: "expectations";
+      segments: { id: string; name: string; floors: { axis: string; atLeast: number }[]; priceCeiling: number }[];
+    }
+  | { kind: "rivals"; rivals: { id: string; name: string; priceNow: number; priceNext: number }[] };
 
 /** What POST /api/sim/ventures/:id/decisions answers with. */
 export interface FileDecisionResult {
@@ -481,6 +717,14 @@ export function commitment(input: {
   decisions: FiledDecisions;
   costIndex: number;
   /**
+   * Sealed bids standing at auction, totalled — `bidsOutstanding` on the desk.
+   *
+   * Passed in rather than read off the decisions, because a bid is not a
+   * decision: it lives in its own table, is placed and withdrawn from the market
+   * screen between filings, and settles on the tick.
+   */
+  bids?: number;
+  /**
    * How much of the market the company is open in, 0-1 — `reachOf(cities)`.
    * Defaults to the whole market, which is what a company from before cities
    * existed is treated as, and what an incumbent is.
@@ -506,6 +750,7 @@ export function commitment(input: {
   const cfo = decisions.cfo ?? {};
   const ceo = decisions.ceo ?? {};
 
+  const bids = Math.max(0, num(input.bids));
   const bySeat: { role: DeskRole; spend: number }[] = [
     // Including the moves that are one price or nothing: a report, a campaign to win people back.
     { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) + num(cmo.prSpend) + num(cmo.referralSpend)
@@ -542,9 +787,14 @@ export function commitment(input: {
         + Math.max(0, num(coo.leaseCapacity)) * prices.lease
       : 0) },
     { role: "cfo", spend: Math.max(0, num(cfo.repay)) },
-    // The bonus pot, and firing somebody: the bid plus half a year's salary in severance.
+    /*
+     * The bonus pot, and firing somebody: the bid plus half a year's salary in
+     * severance. Plus anything standing at auction, which rides on this line
+     * because bidding is the chief executive's lever.
+     */
     { role: "ceo", spend: num(ceo.bonusPool) + (ceo.replaceSeat ? num(ceo.replaceBid) + SEVERANCE : 0)
-      + (ceo.shockAnswer === "statement" ? num(prices?.statement) : 0) },
+      + (ceo.shockAnswer === "statement" ? num(prices?.statement) : 0)
+      + bids },
   ];
 
   /*
@@ -580,6 +830,7 @@ export function commitment(input: {
     ratio: available > 0 ? (spend + fixed) / available : Infinity,
     bySeat,
     openingCost: opening,
+    bidsOutstanding: bids,
   };
 }
 

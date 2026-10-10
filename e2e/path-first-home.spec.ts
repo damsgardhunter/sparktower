@@ -13,6 +13,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -23,9 +24,7 @@ async function signedInBuilder(page: any, first: string) {
     data: { email: `e2e-first-${stamp()}@example.test`, password, firstName: first, lastName: "Home" },
   })).ok()).toBeTruthy();
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Home`, headline: "Building something", bio: "Here for the path." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: `${first} Home`, headline: "Building something", bio: "Here for the path." });
 }
 
 test("the signed-in home screen leads with the path and keeps the feed below it", async ({ page }) => {

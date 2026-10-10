@@ -62,6 +62,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the people who care most about whether a dating app is safe." },
     { kind: "brand_licence", name: "Agony-aunt podcast sponsorship",
       blurb: "A quieter voice than a celebrity, and she does not date on camera." },
+    { kind: "celebrity", name: "A podcast crossover",
+      blurb: "Two hosts people already listen to, spending an episode on you. A spike of sign-ups in a fortnight, and they are not all the sort who stay." },
   ],
 
   drone_delivery: [
@@ -83,6 +85,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the people most worried about things flying over their gardens." },
     { kind: "brand_licence", name: "Local council green-transport badge",
       blurb: "A quieter endorsement than a celebrity, printed on every parcel." },
+    { kind: "celebrity", name: "A joint route with another operator",
+      blurb: "Somebody else\'s drones on your worst corridor and yours on theirs. More deliveries than either of you could promise alone, while the arrangement lasts." },
   ],
 
   podcasts: [
@@ -104,6 +108,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the listeners who care most about quality." },
     { kind: "brand_licence", name: "Newspaper partnership",
       blurb: "A quieter name than a celebrity, and it does not have opinions in public." },
+    { kind: "celebrity", name: "A guest swap with a bigger show",
+      blurb: "An hour on their feed and an hour on yours. Their listeners find you in a week, and about a third of them stay." },
   ],
 
   restaurant_chain: [
@@ -125,6 +131,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with fifty thousand hungry people every other Saturday." },
     { kind: "brand_licence", name: "Food critic column partnership",
       blurb: "A quieter name than a celebrity, and a better-written one." },
+    { kind: "celebrity", name: "A residency with a known chef",
+      blurb: "Their name on your menu for a season. The bookings arrive immediately — and so do people expecting what they got at the other place." },
   ],
 
   construction: [
@@ -146,6 +154,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the clients most afraid of cowboys." },
     { kind: "brand_licence", name: "Trade-press partnership",
       blurb: "A quieter name than a celebrity, read by the people who hire you." },
+    { kind: "celebrity", name: "A joint venture on one development",
+      blurb: "Another firm\'s plant and crews on a job neither of you could have taken alone. Good work, shared thinly, and over when the site closes." },
   ],
 
   project_saas: [
@@ -167,6 +177,8 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the buyers whose first question is about their data." },
     { kind: "brand_licence", name: "Business-school partnership",
       blurb: "A quieter name than a celebrity, taught to next year's managers." },
+    { kind: "celebrity", name: "An integration partnership",
+      blurb: "Your product inside theirs, and a listing on their marketplace. Their customers arrive already half sold, for as long as the deal runs." },
   ],
 
   mmos: [
@@ -188,5 +200,7 @@ export const CATALOGUES: Record<string, CatalogueEntry[]> = {
       blurb: "Borrowed credibility with the players who care most about the world being real." },
     { kind: "brand_licence", name: "Esports league partnership",
       blurb: "A quieter name than a celebrity, on screen every weekend." },
+    { kind: "celebrity", name: "A crossover event with another studio",
+      blurb: "Their characters in your world for a season. Their players turn up to see it, and the servers had better hold." },
   ],
 };

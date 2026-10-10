@@ -27,6 +27,8 @@ export interface Commitment {
   fixed: number;
   available: number;
   openingCost: number;
+  /** Of which, sealed bids already standing at auction. */
+  bidsOutstanding?: number;
   bySeat: { role: string; spend: number }[];
 }
 
@@ -124,6 +126,16 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
             {live.openingCost > 0 && (
               <p className="flex justify-between text-[11px] text-amber-600" data-testid="text-opening-cost">
                 <span>opening new places</span><span className="tabular-nums">{compact(live.openingCost)}</span>
+              </p>
+            )}
+            {/*
+              * Named on its own line, like opening a city is, because it is the
+              * one part of this total that nobody filed: it arrives from the
+              * market screen and moves without anybody touching a lever here.
+              */}
+            {(live.bidsOutstanding ?? 0) > 0 && (
+              <p className="flex justify-between text-[11px] text-amber-600" data-testid="text-bids-outstanding">
+                <span>bid at auction, not yet settled</span><span className="tabular-nums">{compact(live.bidsOutstanding ?? 0)}</span>
               </p>
             )}
             {live.bySeat.filter((b) => b.spend > 0).map((b) => (

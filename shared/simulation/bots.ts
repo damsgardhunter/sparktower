@@ -34,6 +34,7 @@ import { isUnlocked, buildCostPerUnit } from "./responsibilities";
 import { EXECUTIVE, officersOf, yearOfCostsFor } from "./decisions";
 import { researchCost } from "./world";
 import { bestPrice, bestSegment, regionsWorthKeeping } from "./bot-play";
+import { POSITIONING_BREAK_EVEN, demandShareOf } from "./market";
 import { automationCost, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "./factory";
 import type { Role } from "./types";
 
@@ -344,7 +345,14 @@ export function botDecision(input: {
   const perPeriod = 1 / Math.max(1, Math.round(periods));
   const base = defaultDraft(role, company, previous);
   const draft: Record<string, any> = { ...base };
-  const fields = LEVER_FIELDS[role] ?? [];
+  /*
+   * Not a creator market's own levers. Left in, one extra field moved every
+   * seeded draw after it in every market; and in an audience market a nudge
+   * "within bounds" put a bot on nought sponsor reads as often as three, so a
+   * random half of bot channels turned every sponsor away. A bot runs the
+   * market's default of one read a video (`readsFor`).
+   */
+  const fields = (LEVER_FIELDS[role] ?? []).filter((f) => !f.audienceOnly);
 
   /*
    * What this bot is willing to spend on running the company this year.
@@ -689,6 +697,78 @@ export function botDecision(input: {
     if (field.id === "terms") {
       const flush = (Number(company.cash) || 0) > turnoverOf(company) * 0.5;
       draft[field.id] = call(seed, flush ? "30" : "0", ["0", "30", "60", "90"]);
+      continue;
+    }
+    /*
+     * Who the company is for — the chief executive's positioning.
+     *
+     * Never filed at all until 2 Oct 2026, and not by anyone's decision: the
+     * lever's kind is `segment`, the loop below has a branch for `choice` and
+     * none for this, and its default is a string, so it fell through the
+     * `typeof value === "number"` catch at the bottom and nothing was ever
+     * written. Every bot company in the game played with no position — a flat 1
+     * from `positioningFor` where a player who chooses gets 1.18 on their own
+     * people and 0.92 on everybody else.
+     *
+     * It mattered most where it was least visible. `scripts/balance-report.mjs`
+     * is the instrument this project judges markets by and it runs bots, so it
+     * was measuring a strategy no competent table plays — and a market whose
+     * difficulty turns on positioning read as harder than it is. Construction
+     * was the case that exposed it: a segment pace that only reaches a company
+     * which has declared itself moved the report by exactly nothing, 48 seasons
+     * in 7 markets, because nothing in the report had ever declared itself.
+     *
+     * Sticky, for the reason the `choice` branch is sticky: a company that
+     * picks different customers every year has not picked any. Varied, because
+     * eight bots filing the same considered answer would empty every segment
+     * but one — so half take the segment that actually suits them and half back
+     * a hunch, which is also what a room full of people does.
+     */
+    if (field.id === "positioning") {
+      /*
+       * Left as it stands rather than deleted when there is nothing to choose
+       * between: `cleanDecision` always emits a `segment` field, as "" if it has
+       * no better answer, so a bot that deletes this one files a decision whose
+       * shape does not survive its own validator. `simulation-bots.test.ts`
+       * checks exactly that round trip.
+       */
+      if (!niche || niche.segments.length < 2) continue;
+      /* `chosen`, not `held` — that name is taken by this company's customers, above. */
+      const chosen = typeof value === "string" && niche.segments.some((g) => g.id === value) ? value : null;
+      if (chosen && between(`${seed}:rethink`, 0, 1) > RETHINK_ODDS) { draft[field.id] = chosen; continue; }
+      /*
+       * And it is a trade rather than a bonus, so the answer is often "nobody".
+       *
+       * 1.18 to the people you chose, 0.92 to everybody else, which only pays
+       * once about a third of your business is in that segment
+       * (`POSITIONING_BREAK_EVEN`). `bestSegment` weighs fit, size and loyalty
+       * and not that penalty, so taking its answer unconditionally made bots
+       * *worse* in the markets whose best-fitting segment is small: measured, it
+       * put `balance.test.ts`'s "pays a survivor better than a filler" below 1.0
+       * in restaurant chain, where the margin has to be 1.15 — a competent bot
+       * losing to a careless one, which is the clearest possible sign the
+       * decision was being made badly rather than merely differently.
+       *
+       * So a survivor declares only when the sum works, and declares for nobody
+       * when it does not — which is the right answer and was, by accident, the
+       * only answer any bot gave for the whole history of the game.
+       *
+       * Only a survivor decides this at all. A warm body in a seat nobody took
+       * does not do segment analysis, and leaving the filler undeclared keeps
+       * the one thing that separates the skills honest.
+       */
+      if (skill !== "survivor") continue;
+      const aim = bestSegment(company, niche);
+      const worth = aim && demandShareOf(company, niche, aim.id) > POSITIONING_BREAK_EVEN;
+      /*
+       * Half the time the considered answer, half the time a hunch among the
+       * segments that would also pay — a room full of people does both, and
+       * eight bots filing one answer would empty every segment but one.
+       */
+      const alsoWorth = niche.segments
+        .filter((g) => demandShareOf(company, niche, g.id) > POSITIONING_BREAK_EVEN)
+        .map((g) => g.id);
+      draft[field.id] = worth && aim ? call(seed, aim.id, alsoWorth.length ? alsoWorth : [aim.id]) : "";
       continue;
     }
     /*

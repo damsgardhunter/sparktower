@@ -54,23 +54,25 @@ export interface MarketingDecision {
   targetCities: string[];
   /** Customers the seat expects to end the year with. Everybody else plans on it. From year two. */
   forecast?: number;
-  /** A price per segment; one left out pays `price`, and nought is a free tier. From year three. */
+  /** A price per segment; one left out pays `price`, and nought is a free tier. From year two. */
   tiers?: Record<string, number>;
   /** PR and influencers: cheap brand when it lands, which is a little better than half the time. From year three. */
   prSpend?: number;
-  /** A referral programme: customers bringing customers, if the product is worth it. From year four. */
+  /** A referral programme: customers bringing customers, if the product is worth it. From year three. */
   referralSpend?: number;
-  /** A promotion: a free first month, or a January sale. From year five. */
+  /** A promotion: a free first month, or a January sale. From year four. */
   promo?: "none" | "free_month" | "january";
-  /** Spent bringing back last year's leavers. From year six. */
+  /** Spent bringing back last year's leavers. From year four. */
   winbackSpend?: number;
-  /** A research report: next year's expectations, or what the incumbents will charge. From year six. */
+  /** Sponsor reads per video, 0–3, in a market that earns from an audience. See `creator.ts`. */
+  sponsorReads?: number;
+  /** A research report: next year's expectations, or what the incumbents will charge. From year four. */
   research?: "none" | "expectations" | "rivals";
-  /** How the year's marketing attention is split across the regions you sell in. From year seven. */
+  /** How the year's marketing attention is split across the regions you sell in. From year four. */
   regionFocus?: Record<string, number>;
-  /** And across the segments you sell to. From year eight. */
+  /** And across the segments you sell to. From year four. */
   segmentFocus?: Record<string, number>;
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -101,29 +103,29 @@ export interface FinanceDecision {
   raiseAmount?: number;
   /** Held back rather than spent. Dull, and the reason a bad year isn't a fatal one. */
   cashBuffer: number;
-  /** "short" draws on the credit line; "long" issues a fixed-rate loan with a covenant. From year three. */
+  /** "short" draws on the credit line; "long" issues a fixed-rate loan with a covenant. From year two. */
   borrowTerm?: "short" | "long";
-  /** Percentage, up to 20, held back from what a seat (or everyone) committed. From year four. */
+  /** Percentage, up to 20, held back from what a seat (or everyone) committed. From year three. */
   holdBack?: number;
   /** Whose spending the hold-back applies to: a seat, or "all". */
   holdBackSeat?: string;
-  /** Discount, up to 30%, for paying a year up front. From year four. */
+  /** Discount, up to 30%, for paying a year up front. From year three. */
   annualDiscount?: number;
-  /** Overhead cut this year, up to 20%. Service and morale find out next year. From year five. */
+  /** Overhead cut this year, up to 20%. Service and morale find out next year. From year four. */
   costReview?: number;
-  /** What to insure against. From year six. */
+  /** What to insure against. From year four. */
   insurance?: "none" | "breach" | "lawsuit" | "poaching" | "all";
-  /** Share of profit paid out, 0–100. From year six. */
+  /** Share of profit paid out, 0–100. From year four. */
   dividendPct?: number;
-  /** Days customers get to pay: 0, 30, 60 or 90. From year seven. */
+  /** Days customers get to pay: 0, 30, 60 or 90. From year five. */
   terms?: number;
-  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year eight. */
+  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year five. */
   factorPct?: number;
-  /** Credit-line debt to move onto fixed terms this year. From year eight. */
+  /** Credit-line debt to move onto fixed terms this year. From year five. */
   refinance?: number;
-  /** Cash spent buying a stake back from investors. From year nine. */
+  /** Cash spent buying a stake back from investors. From year six. */
   buyback?: number;
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -146,17 +148,17 @@ export interface TechDecision {
    * real product organisation actually argues about.
    */
   researchSpend?: number;
-  /** Engineering pay as a percentage of the market, 80–130. From year three. */
+  /** Engineering pay as a percentage of the market, 80–130. From year two. */
   engineerPay?: number;
   /** Security: lowers the odds and the size of a breach. Builds up. From year two. */
   securitySpend?: number;
   /** Analytics: a gift to the other seats. Builds up. From year three. */
   dataSpend?: number;
-  /** One feature from this year's menu, by id, or "" for none. From year four. */
+  /** One feature from this year's menu, by id, or "" for none. From year three. */
   featureBet?: string;
   /** Build it (a year, full effect, might flop) or copy a rival's (now, half effect). */
   featureMode?: "build" | "copy";
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -174,23 +176,23 @@ export interface OpsDecision {
   headcount: number;
   /** Room rented for this year only: immediate, and 40% dearer than building. From year two. */
   leaseCapacity?: number;
-  /** Spent on who the year's hires are. Lands when they arrive, next year. From year four. */
+  /** Spent on who the year's hires are. Lands when they arrive, next year. From year three. */
   recruitingSpend?: number;
-  /** Spent making the staff already here better. Lands next year. From year four. */
+  /** Spent making the staff already here better. Lands next year. From year three. */
   trainingSpend?: number;
   /** One improvement programme to start this year. From year three. */
   programme?: "" | "process" | "vendor" | "quality" | "green" | "benchmarking";
-  /** Open the region announced for next year: its city id, or "". From year five. */
+  /** Open the region announced for next year: its city id, or "". From year four. */
   expand?: string;
-  /** How automated the plant should be next year, 0–100. From year seven. */
+  /** How automated the plant should be next year, 0–100. From year five. */
   automationTarget?: number;
-  /** Units of a second shift to run this year, capped at half the room built. From year seven. */
+  /** Units of a second shift to run this year, capped at half the room built. From year five. */
   shiftCapacity?: number;
-  /** Units of stock to hold for next year. From year eight. */
+  /** Units of stock to hold for next year. From year five. */
   stockTarget?: number;
-  /** Do the work in house, or buy it in. From year eight. */
+  /** Do the work in house, or buy it in. From year five. */
   sourcing?: "in_house" | "outsourced";
-  /** A vote on each deal the chief executive sent to the table. From year five. */
+  /** A vote on each deal the chief executive sent to the table. From year three. */
   dealVotes?: Record<string, "yes" | "no">;
 }
 
@@ -198,9 +200,45 @@ export interface OpsDecision {
 export interface ExecutiveDecision {
   /** Where the company says its effort goes. Concentrating beats hedging in a market this contested. */
   focus: "growth" | "margin" | "quality" | "survival";
-  /** Seats to close, folding their levers into whoever is left. Saves salary and costs judgement. */
+  /**
+   * How the founders carve up their own week, as hours against action ids.
+   *
+   * The only lever on this desk that spends time instead of money — see
+   * `actions.ts` for what each one does. Sixty hours a week, and `hoursTaken`
+   * scales a filing back in proportion if it claims more, so neither a
+   * hand-written filing nor a bot can work a hundred-hour week.
+   *
+   * This replaced `founderActions?: string[]`, an allowance of one action a
+   * month, two a quarter, three a year. The allowance taught the wrong thing:
+   * it asked "which single thing will you do", when the decision a founder
+   * really makes is how to split a week that is already full.
+   */
+  founderHours?: Record<string, number>;
+  /**
+   * Seats to close, folding their levers into whoever is left.
+   *
+   * **Nothing reads this.** `resolveYear` has never looked at it, it is not in
+   * `LEVER_FIELDS`, and neither client can set it — so a reader of this type
+   * would have found a feature that does not exist. `types.ts` records the
+   * decision ("those come back to this list when they come back to
+   * `resolveYear`, and not before"); this is the same note where somebody would
+   * actually meet the field.
+   *
+   * Closing a seat is real and arrives another way: `RecoveryKind
+   * "dissolve_seat"` in `recovery.ts`, offered to a company in trouble and filed
+   * through its own route. Kept rather than deleted so the one-shot reset in
+   * `defaultDraft` keeps clearing a stale value out of a carried draft, and so
+   * the history is legible to whoever wires it up.
+   */
   dissolveSeats?: Role[];
-  /** An offer to another company in the niche. */
+  /**
+   * An offer to another company in the niche.
+   *
+   * **Nothing reads this either**, and `targetCompanyId` appears nowhere else in
+   * the repository. Buying another team's company is live and has its own home:
+   * `canOffer`, `assessOffer` and `applyAcquisition` in `mergers.ts`, driven from
+   * `simulation-market-routes.ts` and settled by the tick.
+   */
   offer?: { targetCompanyId: string; kind: "buy_asset" | "acquire" | "merge"; assetId?: string; amount: number };
   /**
    * Who the company is for.
@@ -217,18 +255,18 @@ export interface ExecutiveDecision {
   rehire?: Role[] | Role | "";
   /** Percentages of what the company can spend, per spending seat. From year two. */
   budget?: Partial<Record<"cmo" | "cto" | "coo", number>>;
-  /** How hard each other seat's next objective is pushed. From year three. */
+  /** How hard each other seat's next objective is pushed. From year two. */
   targets?: Partial<Record<Role, "easy" | "fair" | "aggressive">>;
-  /** Paid, shared equally, to the seats that meet this year's objective. From year three. */
+  /** Paid, shared equally, to the seats that meet this year's objective. From year two. */
   bonusPool?: number;
-  /** One seat whose decision this year is reversed to last year's. From year five. */
+  /** One seat whose decision this year is reversed to last year's. From year four. */
   overrule?: Role | "";
-  /** One seat to fire, and what to bid for their replacement. From year six. */
+  /** One seat to fire, and what to bid for their replacement. From year five. */
   replaceSeat?: Role | "";
   replaceBid?: number;
-  /** "ship" it, "balanced", or get it "right". From year four. */
+  /** "ship" it, "balanced", or get it "right". From year three. */
   pace?: "ship" | "balanced" | "right";
-  /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year five. */
+  /** Each of this year's offers: accept, decline, or send it to the table for a vote. From year three. */
   deals?: Record<string, "accept" | "decline" | "vote">;
   /** Vote on the region operations put to the table, keyed by its id. From year four. */
   expandVote?: Record<string, "yes" | "no">;
@@ -344,6 +382,8 @@ export function interlock(company: Company, d: TeamDecisions, niche: Niche): Int
 export function lift(spend: number, half: number, ceiling: number): number {
   return saturate(Math.max(0, spend), half) * ceiling;
 }
+
+
 
 /** What the company pays every year before it does anything at all. */
 /**
@@ -537,6 +577,45 @@ export const FOCUS_EFFECTS = {
   survival: { marketing: 0.7, quality: 0.75, cost: 0.9, fixed: 0.78, decay: 1.15 },
 } as const;
 
+/**
+ * What a focus does on its own, before anybody spends anything.
+ *
+ * The multipliers above are a thumb on everyone else's scale, and a thumb on
+ * nothing is nothing: a founder spending a few hundred a month saw growth
+ * make eighteen per cent of almost no marketing go further, and read the most
+ * important decision on the desk as decoration. So each focus also does a
+ * thing of its own, in flat points a year — like the founders' own hours,
+ * decisive when the company is small and a detail once it is not.
+ *
+ *   - growth: the whole company talking about itself — brand, every year
+ *   - margin: the customers already here paying properly — revenue
+ *   - quality: everyone's attention on the product — quality, every year
+ *   - survival: nothing of its own; its whole point is the cuts above
+ */
+/*
+ * `appeal` is felt this period: how hard the company goes after people who
+ * are not yet its customers. Growth chases them; margin and survival stop
+ * chasing to look after what is already here. It is what makes the choice
+ * show on the forecast the moment it is made, rather than as two points of
+ * brand a year from now.
+ */
+export const FOCUS_DIRECT = {
+  growth: { brand: 5, quality: 0, revenue: 1, appeal: 1.2 },
+  margin: { brand: 0, quality: 0, revenue: 1.12, appeal: 0.92 },
+  quality: { brand: 0, quality: 5, revenue: 1, appeal: 0.96 },
+  survival: { brand: 0, quality: 0, revenue: 1, appeal: 0.88 },
+} as const;
+
+/*
+ * Only in a market that earns from an audience, for now. The six that sell
+ * were balanced with focus as a thumb on the scale and nothing more, and the
+ * direct effects move a dozen of their guards — so they get these when they
+ * are re-tuned for them, not by accident.
+ */
+const NO_FOCUS = { brand: 0, quality: 0, revenue: 1, appeal: 1 } as const;
+export const focusDirect = (focus?: string, niche?: { model?: string }) =>
+  niche?.model === "audience" ? (FOCUS_DIRECT[(focus ?? "") as keyof typeof FOCUS_DIRECT] ?? NO_FOCUS) : NO_FOCUS;
+
 export type Focus = keyof typeof FOCUS_EFFECTS;
 
 /**
@@ -557,9 +636,9 @@ export const focusEffects = (focus?: string) =>
 
 /** What the focus did, in the words the team will read afterwards. */
 export const FOCUS_NOTES: Record<Focus, string> = {
-  growth: "The year was run for growth: marketing went further than it otherwise would, and everything cost a little more to do.",
-  margin: "The year was run for margin: each unit cost less to make and to serve, and the marketing did not reach as far.",
-  quality: "The year was run for quality: the product moved faster than the spending alone would explain, and fewer people heard about it.",
+  growth: "The year was run for growth: the whole company talked about itself, marketing went further than it otherwise would, and everything cost a little more to do.",
+  margin: "The year was run for margin: the customers already here paid properly, each unit cost less to make and to serve, and the marketing did not reach as far.",
+  quality: "The year was run for quality: everybody's attention was on the product, it moved faster than the spending alone would explain, and fewer people heard about it.",
   survival: "The year was run for survival: a hiring freeze and deferred everything. Much cheaper, and the company comes out of it behind where it would otherwise be.",
 };
 
@@ -676,8 +755,9 @@ export const payScale = (scale?: number): number =>
  * built for two and a half times the payroll it actually paid. Both now ask
  * here.
  */
-export const officerCost = (company: { seats?: Role[]; officers?: number; scale?: number }): number =>
-  officersOf(company) * EXECUTIVE * payScale(company.scale);
+export const officerCost = (company: { seats?: Role[]; officers?: number; scale?: number; officerPay?: number }): number =>
+  /* `officerPay` is what founders actually draw — absent means a full salary. See `opening.ts`. */
+  officersOf(company) * EXECUTIVE * payScale(company.scale) * Math.max(0, company.officerPay ?? 1);
 
 /**
  * What technical debt does while you carry it.
@@ -781,8 +861,170 @@ export function nextTechDebt(input: {
  *     flattening everybody.
  *   - The guard tests re-set against the new economics *afterwards*, never to
  *     make a red suite green.
+ *
+ * ## Wired in at zero, and swept — 1 Oct 2026
+ *
+ * It is called now, from its own line in `resolve.ts` beside the idle-capacity
+ * cost, so turning it on is this constant and nothing else. It was dead code
+ * before: written, measured in some other working copy, and never invoked, which
+ * is a four-line change waiting to be made differently by each person who tries.
+ * Putting it inside `fixedCosts` is the wrong one of those four lines — that
+ * function is salaries and executives, and three tests assert on what it
+ * returns.
+ *
+ * Swept against the repaired skill guard (150 seasons, all seven markets) and
+ * the winnability guards:
+ *
+ *   PLANT_OVERHEAD   deaths/20   skill guard   principle guards
+ *       0.0             2.9         holds        all pass
+ *       0.05            —           holds        2 construction failures
+ *       0.1             3.9         holds        1 construction failure
+ *       0.2             4.9         holds        3 failures
+ *       0.3             6.9         holds        —
+ *
+ * So the target death rate is reachable at about 0.25, and the skill guard is
+ * not what stops it — that holds at every setting tried, in all seven markets.
+ * **Construction is what stops it, and it stops it immediately.** At 0.05 the
+ * self-funding archetype there reaches 18% of the best way to play against a
+ * floor of 25%: a plan that will not raise capital cannot absorb a new fixed
+ * cost, and construction is already the market with the most deaths in it.
+ *
+ * Which reverses the plan above. The second half was to make the *soft* markets
+ * harder; the blocker is the *hardest* market breaking first. Construction wants
+ * easing or exempting before the cost base can come up anywhere, and that is a
+ * market-content decision rather than a constant.
  */
 export const PLANT_OVERHEAD = 0.0;
+
+/**
+ * The cost of being a company at all, as a share of what it takes.
+ *
+ * Premises, insurance, accountancy, software, the phone, the van's MOT, the
+ * person who does the invoicing. None of it is a decision and all of it grows
+ * with the business, which is exactly the shape of cost this engine was
+ * missing: salaries are a step function in the number of officers, unit costs
+ * are per sale, and between them nothing scaled with size. So gross profit
+ * arrived at the bottom line almost untouched — 38-74% net across fourteen
+ * markets, against 5-25% in the trades being modelled.
+ *
+ * ## Why a share of revenue rather than of the plant
+ *
+ * `PLANT_OVERHEAD` above is the other candidate and was swept: at 0.25 it is
+ * the strongest margin instrument in the engine, taking a veterinary software
+ * business from 54.5% net to 21.3%. It also breaks five winnability guards
+ * across four markets, because it charges per unit of *capacity* at a quarter
+ * of the unit gross margin — which is ruinous in a high-volume market like
+ * drone delivery and cannot be eased without re-pricing the market itself.
+ *
+ * A share of revenue cannot do that. It is zero for a company with no
+ * revenue, so it cannot bankrupt a business for being new or small — the
+ * failure mode that stopped every previous attempt at raising the cost base —
+ * and it is largest exactly where the problem is, on the companies turning
+ * over tens of millions at a 70% margin.
+ *
+ * Fifteen per cent is the middle of what a real small business spends on
+ * running itself, and `script/simulation-report.ts` is how the figure was
+ * chosen rather than guessed.
+ */
+/**
+ * What running the company costs, as a share of what it takes — and the share
+ * grows with the company.
+ *
+ * A flat share was tried first and it is the wrong instrument. It charges the
+ * one-van operation and the £450m consultancy the same proportion, so the
+ * ceiling is set by the smallest business in the game: at 0.12 a one-town
+ * domestic builder loses £211,655 across fourteen years and the guard that
+ * asks for a business worth having fails, while the markets actually sitting
+ * at sixty per cent margins were barely touched.
+ *
+ * Which is backwards, because this is the one cost that really does rise with
+ * size. A builder with a van and a phone has almost no administration. A
+ * company turning over a third of its market has finance, HR, legal, premises,
+ * procurement and a floor of people who never meet a customer — and every one
+ * of them is paid out of the same revenue. Real general-and-administrative
+ * spend runs around five to eight per cent of revenue in a small firm and
+ * twenty to twenty-five in a large one.
+ *
+ * So the share is interpolated on how much of its own market the company has
+ * taken. `SMALL` applies to somebody with a rounding error of it, `LARGE` to
+ * somebody holding `OVERHEAD_AT_SHARE` of it or more. It leaves the bottom of
+ * the game alone and takes the top of it apart, which is where the 38-74% net
+ * margins were.
+ */
+/*
+ * ## The two rates, and why they are where they are
+ *
+ * Swept against every balance guard there is — `balance`, `every-market-winnable`,
+ * `known-imbalances`, `every-way-of-playing`, `responsibilities`, `depth`,
+ * `forecast` and `mobile-mirror`, 252 of them. Twice I swept a subset, reported
+ * a ceiling, and found it wrong when the rest ran; this is the number that
+ * survives all of them.
+ *
+ * 0.25 at the top is the ceiling. At 0.30 one guard fails and it is a lever
+ * promise rather than a balance figure: renting room stops paying for itself
+ * when a company is turning people away, because a quarter of the revenue the
+ * extra room wins goes straight back out as overhead. A lever that does not
+ * pay when it should is worse than a fat margin.
+ *
+ * It got this far only because the rate is progressive. A flat share is capped
+ * by the smallest business in the game — it charges the van and the £450m
+ * consultancy alike, so the ceiling was 0.10 and above it a one-town builder
+ * failed while the sixty-per-cent margins were barely touched.
+ */
+export const OVERHEAD_SMALL = 0.05;
+export const OVERHEAD_LARGE = 0.25;
+/**
+ * The turnover between which the share climbs, in a market of scale one.
+ *
+ * Keyed on what the company actually turns over and not on its share of the
+ * market, which was the first attempt and let the worst case through: a launch
+ * business taking £684m a year holds 6.7% of a £10.2bn market, so a
+ * share-keyed rate charged it 10.6% and left it on a 62.7% net margin — the
+ * fattest in the game, untouched. Administration does not care what fraction
+ * of a market you hold. It cares how many people you employ and how many
+ * offices they sit in, and those track turnover.
+ *
+ * Scaled by the market, like every other absolute figure in this engine, so a
+ * £1m market reaches the full rate at its own version of £50m rather than
+ * never.
+ */
+export const OVERHEAD_FROM = 1_000_000;
+export const OVERHEAD_TO = 50_000_000;
+
+/**
+ * The share of revenue this company spends on running itself.
+ *
+ * `scale` is the market's own size against the catalogue's, so the thresholds
+ * above mean the same thing in a £1m market as in a £400m one.
+ */
+export function overheadShare(revenue: number, scale = 1): number {
+  if (!(revenue > 0)) return 0;
+  const at = Math.max(0.001, scale);
+  const from = OVERHEAD_FROM * at;
+  const to = OVERHEAD_TO * at;
+  /*
+   * Nothing at all below the floor, and that is the part that took three
+   * attempts to get right.
+   *
+   * The floor used to charge `OVERHEAD_SMALL` — five per cent — to everybody,
+   * and five per cent is enough to break construction. Its self-funding way of
+   * playing ("out of revenue", in `every-way-of-playing.test.ts`) has no margin
+   * to give: at a flat 5% it never has a single profitable quarter in fourteen
+   * years and reaches 22% of the best play against a floor of 25%. Measured at
+   * 0.05, 0.08, 0.12, 0.2, 0.25 and 0.35 — it fails at every one of them, and
+   * passes the moment the share is zero.
+   *
+   * Which is also the truer shape. A sole trader's overhead is already inside
+   * their unit costs and whatever they pay themselves; there is no separate
+   * administration to account for. The explicit line appears when there are
+   * premises to heat, people to pay who never meet a customer, and somebody
+   * doing the invoicing — and that is exactly what being above the floor means.
+   */
+  if (revenue <= from) return 0;
+  if (revenue >= to) return OVERHEAD_LARGE;
+  const along = (revenue - from) / (to - from);
+  return OVERHEAD_SMALL + (OVERHEAD_LARGE - OVERHEAD_SMALL) * along;
+}
 
 export function plantOverhead(capacity: number, niche: Niche): number {
   const opening = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
@@ -813,6 +1055,58 @@ export function plantOverhead(capacity: number, niche: Niche): number {
  * every way of playing intact and still makes a bad year a bad year.
  */
 
+/**
+ * How far a staff salary follows the market's own scale.
+ *
+ * Nothing scaled them at all to begin with, while every executive salary
+ * beside them went through `payScale`: on a market whose scale is 0.009 that
+ * came out as one employee costing $95,200 a year against $5,177 for all five
+ * founders put together, in a company holding $1,184. Hiring anybody was
+ * insolvency, so no small company hired, so it could never serve what it won.
+ *
+ * Scaling them the whole way (an exponent of 1) fixes that and costs the one
+ * advantage capital has: `from-nothing`'s "rewards capital" went red with
+ * £500,000 finishing behind £60,000, because staff cheap enough for a founder
+ * to hire are cheap enough that having money stops mattering. That was
+ * bisected twice — once by neutering the line here, once from a clean tree.
+ *
+ * A fractional power keeps most of the real-world weight of a wage while still
+ * bringing it into the market's own units. The exponent was measured rather
+ * than chosen: on a 0.009-scale market a head costs $95,200 a year unscaled,
+ * $18,300 at the square root, $42,000 at a quarter and about $58,000 here.
+ *
+ * ## This is not the dial for capital's advantage, and that was measured
+ *
+ * It looked like it was. Dearer staff ought to reward capital, because hiring
+ * sooner is what money buys, and `from-nothing`'s "rewards capital" guard did
+ * go green when the exponent came down from 1 to 0.5. It does not survive
+ * contact with the numbers. Swept on a settled tree, with the gap being
+ * £500,000's finish less £60,000's:
+ *
+ *     exponent 0 (no scaling at all)   -564,771   (-2.3%)
+ *     exponent 0.08                    -298,273   (-1.2%)
+ *     exponent 0.15                    -240,430   (-1.0%)
+ *
+ * Every one of them red, and **reverting this change entirely makes the gap
+ * wider, not narrower** — so the guard is not failing because of this line,
+ * and turning it further is turning a dial that is not connected to the thing
+ * it appeared to control. 0.15 is kept because it is the best of the three and
+ * because the inconsistency it fixes is real on its own terms: nothing scaled
+ * a staff wage while every executive salary beside it went through `payScale`,
+ * which had one employee costing eighteen times all five founders put
+ * together.
+ *
+ * What the sweep actually says is that capital's edge in this engine was
+ * partly an artefact of small companies being overcharged. Three correct bug
+ * fixes landed around this measurement — phantom wins credited in reports,
+ * founders drawing salaries they never chose, and founders being counted again
+ * as hired staff — and all three take costs off the *unfunded* company, which
+ * is the side of the comparison that was already winning. Making money matter
+ * is a question about what money can buy that effort cannot, and it belongs
+ * wherever that is decided, not here.
+ */
+export const SALARY_SCALING = 0.15;
+
 export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1, niche?: Pick<Niche, "workforce">): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
   /*
@@ -822,7 +1116,40 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
    * is a different question in each. See `workforce.ts`.
    */
   const perHead = niche ? salaryIn(niche) : SALARY;
-  const salaries = headcount * perHead * economy.costIndex;
+  /*
+   * At this market's scale, exactly as `officerCost` below already does it.
+   *
+   * `salaryIn` is an absolute figure — £95,200 a head in a podcast network —
+   * and nothing scaled it, while every executive salary beside it goes through
+   * `payScale`. On a market whose whole scale is 0.009 that came out as **one
+   * employee costing eighteen times all five founders put together**: $95,200
+   * a year a head against $5,177 for the entire founding team, in a company
+   * holding $1,184. Hiring anybody was instant insolvency, so no small company
+   * ever hired, so it could never serve anyone it won.
+   *
+   * It is the same mismatch the player sees everywhere money meets a small
+   * market: the thresholds and the executive pay are scaled to the market and
+   * this one line was not, so the costs and the takings were in different
+   * currencies. Scaled, a head here costs $3,521 a year, which is a decision
+   * rather than a death sentence.
+   */
+  /*
+   * Part of the way to the market's scale, not all of it.
+   *
+   * Full `payScale` — what executives get — was measured and it does fix the
+   * thing it was aimed at, but it also flattens the one advantage capital has:
+   * `from-nothing`'s "rewards capital" guard went red, £500,000 finishing
+   * behind £60,000, because staff cheap enough for a founder to hire are cheap
+   * enough that having money stops mattering. Neutering the line put that
+   * guard straight back to green, which is how it was attributed.
+   *
+   * The square root sits between the two: on the season this was found on it
+   * takes a head from $95,200 a year to about $18,000, so hiring is a decision
+   * a small company can make and still a serious one — and a funded company
+   * can still hire more people sooner, which is the advantage that is supposed
+   * to be there.
+   */
+  const salaries = headcount * perHead * payScale(company.scale) ** SALARY_SCALING * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
   // `officersOf` rather than `seats.length`, because one founder holding five

@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SimulationPortfolio } from "@/components/simulation-portfolio";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, UserCheck, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart, Activity } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -50,7 +51,7 @@ type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
  * this viewer doesn't get would select a tab that isn't there and leave the
  * page looking broken.
  */
-const PRESELECTABLE_TABS = ["editor", "projects"] as const;
+const PRESELECTABLE_TABS = ["editor", "projects", "simulations"] as const;
 
 export default function Profile() {
   const { id } = useParams<{ id?: string }>();
@@ -797,6 +798,14 @@ export default function Profile() {
           <TabsTrigger value="projects" data-testid="tab-projects">
             Projects {displayProjects.length > 0 && `(${displayProjects.length})`}
           </TabsTrigger>
+          {/*
+            * Beside projects, because a simulation somebody wrote is the same
+            * kind of claim about what they have made — and only on their own
+            * profile, because the tab carries what they bought and earned.
+            */}
+          {isOwnProfile && (
+            <TabsTrigger value="simulations" data-testid="tab-simulations">Simulations</TabsTrigger>
+          )}
           {isOwnProfile && (
             <TabsTrigger value="connections" data-testid="tab-connections">
               Connections {myConnections && myConnections.length > 0 && `(${myConnections.length})`}
@@ -1033,6 +1042,10 @@ export default function Profile() {
               )}
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="simulations">
+          <SimulationPortfolio isOwnProfile={!!isOwnProfile} />
         </TabsContent>
 
         <TabsContent value="projects">

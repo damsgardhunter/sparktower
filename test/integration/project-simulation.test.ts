@@ -17,9 +17,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companies, companyMembers, projects, simSeasons, simVentures, users } from "@shared/schema";
-import { startReadySeasons } from "../../server/simulation-tick";
-import { advanceVenture } from "../../server/simulation-routes";
+import { companies, companyMembers, projectMembers, projects, simSeasons, simVentures, users } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -249,6 +247,110 @@ describe("playing a market again, and filling the table", () => {
   }, 60_000);
 
   /*
+   * The seat the build grants is the builder's, and now actually held for them.
+   *
+   * It used to be a seat *count* rather than a reservation. `seatCensus`
+   * counted every non-bot in the season against `paid` with nothing in it that
+   * knew who built the market, so with the one granted seat the first human
+   * through the door took it: invite a colleague, let them click first, and the
+   * person who paid for a market written around their own project was refused
+   * at their own table — the exact complaint the comment in
+   * server/project-simulation-routes.ts says was fixed. The 402 made it worse,
+   * being worded for somebody holding a forwarded link ("whoever set it up
+   * needs to add one. They'll know") and read by the person who set it up.
+   *
+   * Found by driving the running app with two accounts and both dev bypasses
+   * off: the invitee joined on the code and got the seat, and the builder got
+   * `seats_required`, `people: 2, paid: 1`.
+   *
+   * `seatCensus` now holds one seat back for the builder of a project's season
+   * while they are not yet sitting at it. The other half of that decision is
+   * the test below: a colleague cannot join a one-seat season at all until
+   * somebody buys a second seat. That is what this product says it sells — the
+   * table is free and the second person at it is the thing that costs.
+   */
+  it("lets the builder sit at the table they paid for, even if the invitee clicked first", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const colleague = await person(app, "Colleague");
+    const project = await aProject(owner.id);
+    // A project with a team, so the build makes a table rather than starting a founder alone.
+    await db.insert(projectMembers).values({ projectId: project.id, userId: colleague.id, role: "member" });
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
+
+    // The build's grant: one seat, for the person who built it.
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id, cadence: "quarterly" });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    await db.insert(companyMembers).values({ companyId: company.id, userId: colleague.id, role: "member", joinedAt: new Date() });
+
+    /*
+     * The code the build handed back, not whichever season a `where(companyId)`
+     * happens to return first. There are two by now — the fixture's and the one
+     * just built — and the fixture's stands in for a market rather than being a
+     * real join link, so picking it turned every assertion below into a 404 on
+     * an unrecognised code. An unordered select for a row there are two of is
+     * a coin flip, and this one had been landing heads.
+     */
+    const code = made.body.inviteCode as string;
+
+    /*
+     * The invitee goes first, which is the whole point: before the
+     * reservation they took the seat and the builder was turned away. Now the
+     * held seat is not theirs to take, so they are told there is nowhere to put
+     * them yet — and the 402's wording ("whoever set it up needs to add one")
+     * is finally being read by somebody it is true for.
+     */
+    const theirs = await colleague.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(theirs.status, "the one seat is not the invitee's to take").toBe(402);
+    expect(theirs.body.code).toBe("seats_required");
+
+    const mine = await owner.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(mine.status, `the builder is not locked out of their own market: ${JSON.stringify(mine.body)}`).toBe(200);
+
+    // And with a second seat bought, the colleague has somewhere to sit.
+    await db.update(companies).set({ simQuarterlySeatsPaid: 2 }).where(eq(companies.id, company.id));
+    const again = await colleague.agent.post("/api/sim/join-code").set("x-forwarded-for", ip()).send({ code });
+    expect(again.status, `a bought seat seats them: ${JSON.stringify(again.body)}`).toBe(200);
+    expect(again.body.ventureId, "and at the builder's table, not a second one").toBe(mine.body.ventureId);
+  }, 60_000);
+
+  /*
+   * The builder's seat is held, and only the builder's.
+   *
+   * A company that bought five seats for five named people has reserved
+   * nothing: every one of those seats was paid for by somebody who meant it to
+   * be used, and holding one back would be this product inventing a seat
+   * shortage out of a seat it had already sold. So the reservation is tied to
+   * the one place a seat is *granted* rather than bought — a company standing in
+   * for a project — and this is the test that stops it leaking everywhere else.
+   */
+  it("holds nothing back in a season whose seats were bought", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const colleague = await person(app, "Colleague");
+    const project = await aProject(owner.id);
+    // A project with a team, so the build makes a table rather than starting a founder alone.
+    await db.insert(projectMembers).values({ projectId: project.id, userId: colleague.id, role: "member" });
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
+
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id, cadence: "quarterly" });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    await db.insert(companyMembers).values({ companyId: company.id, userId: colleague.id, role: "member", joinedAt: new Date() });
+    /*
+     * Seats bought, and the company no longer standing in for a project — which
+     * is what a company that signed up on its own account looks like. Nothing
+     * is held for anybody, so whoever clicks first sits down.
+     */
+    await db.update(companies)
+      .set({ simQuarterlySeatsPaid: 2, projectId: null })
+      .where(eq(companies.id, company.id));
+
+    const theirs = await colleague.agent.post("/api/sim/join-code")
+      .set("x-forwarded-for", ip()).send({ code: made.body.inviteCode as string });
+    expect(theirs.status, `a bought seat is anybody's: ${JSON.stringify(theirs.body)}`).toBe(200);
+  }, 60_000);
+
+  /*
    * A solo project is one chair.
    *
    * `soloMode` existed and meant the opposite of this: it only changed the
@@ -271,6 +373,11 @@ describe("playing a market again, and filling the table", () => {
 
     const team = await person(app, "Team");
     const shared = await aProject(team.id);
+    const partner = await person(app, "Partner");
+    await db.insert(projectMembers).values([
+      { projectId: shared.id, userId: team.id, role: "owner" },
+      { projectId: shared.id, userId: partner.id, role: "member" },
+    ]);
     const pair = await seasonWithMarket(team.id, shared.id);
     const five = await team.agent.post(`/api/projects/${shared.id}/simulation`).send({ fromSeasonId: pair.season.id });
     expect(five.status, JSON.stringify(five.body)).toBe(201);
@@ -279,39 +386,66 @@ describe("playing a market again, and filling the table", () => {
   }, 60_000);
 
   /*
-   * A solo season starts itself.
+   * A founder on their own is started, not shown a lobby.
    *
-   * `startReadySeasons` only ever looked at seasons with no company, because
-   * a company's season is started by its organiser — who knows when the room
-   * is full, which the clock does not. Every project season has a company, so
-   * nothing in the product would start one: the founder took their chair,
-   * watched the lobby say it was ready, opened the desk and sat on "Waiting
-   * for year one" indefinitely. There is nobody for a table of one to wait
-   * for, which is the whole of why it is safe to start it.
+   * Two ways this left somebody waiting for ever. A solo season used to sit
+   * on "Waiting for year one" because nothing started a company's season;
+   * and a one-person project without the `soloMode` flag — most of them —
+   * was given five chairs with Nova's fill switched off, so its founder sat
+   * in an empty room for colleagues who did not exist. Built now means
+   * seated, running, and handed the desk.
    */
-  it("starts a solo season by itself, with the founder's own company name", async () => {
+  /*
+   * The founder's own money, not the market's purse. A solo season built on
+   * somebody's project said "You start with $1.21m in the bank" to a founder
+   * who had nothing like it; it now asks, and opens on exactly the answer.
+   */
+  it("opens on the money the founder says they have, exactly", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Owner");
-    const solo = await aProject(owner.id, { soloMode: true });
-    const { season, company } = await seasonWithMarket(owner.id, solo.id);
+    const project = await aProject(owner.id);
+    const { season } = await seasonWithMarket(owner.id, project.id);
 
-    const made = await owner.agent.post(`/api/projects/${solo.id}/simulation`).send({ fromSeasonId: season.id });
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`)
+      .send({ fromSeasonId: season.id, opening: "actual", startingCash: 12_500 });
     expect(made.status, JSON.stringify(made.body)).toBe(201);
-    const seasonId = made.body.seasonId as string;
+    expect(made.body.openingCash, "the panel says what they typed").toBe(12_500);
 
-    // The founder takes their chair. One chair is the whole table, so the
-    // room needs nothing else to be ready.
-    const joined = await owner.agent.post("/api/sim/join-code").send({ code: made.body.inviteCode });
-    expect(joined.status, JSON.stringify(joined.body)).toBe(200);
-    await advanceVenture(joined.body.ventureId);
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.status).toBe("running");
+    const me = (built.world as any).companies.find((c: any) => c.id === made.body.ventureId);
+    expect(me.cash, "and the bank holds exactly that on day one").toBe(12_500);
 
-    const [room] = await db.select().from(simVentures).where(eq(simVentures.id, joined.body.ventureId));
+    const refused = await owner.agent.post(`/api/projects/${project.id}/simulation`)
+      .send({ fromSeasonId: season.id, startingCash: -5 });
+    expect(refused.status).toBe(400);
+    expect(refused.body.field).toBe("startingCash");
+  }, 60_000);
+
+  it("starts a one-person project's season on the spot, flag or no flag", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Owner");
+    const project = await aProject(owner.id);
+    await db.insert(projectMembers).values({ projectId: project.id, userId: owner.id, role: "owner" });
+    const { season, company } = await seasonWithMarket(owner.id, project.id);
+
+    const made = await owner.agent.post(`/api/projects/${project.id}/simulation`).send({ fromSeasonId: season.id });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    expect(made.body.solo, "nobody else on the project").toBe(true);
+    expect(made.body.deskPath).toBe(`/simulation/${made.body.ventureId}`);
+
+    const [built] = await db.select().from(simSeasons).where(eq(simSeasons.id, made.body.seasonId));
+    expect(built.seatCount, "one founder, one chair").toBe(1);
+    expect(built.status, "nobody is coming, so nothing is waited for").toBe("running");
+
+    const [room] = await db.select().from(simVentures).where(eq(simVentures.id, made.body.ventureId));
     expect(room.phase, "one chair, nothing to claim and nothing to name").toBe("running");
     expect(room.name, "their own company, not an invented one").toBe(company.name);
 
-    expect(await startReadySeasons(), "nobody is coming, so nothing is waited for").toContain(seasonId);
-    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
-    expect(started.status).toBe("running");
+    // Following the join link afterwards returns them to the same desk, not a second room.
+    const again = await owner.agent.post("/api/sim/join-code").send({ code: made.body.inviteCode });
+    expect([200, 409]).toContain(again.status);
+    if (again.status === 200) expect(again.body.ventureId).toBe(made.body.ventureId);
   }, 60_000);
 
   /*

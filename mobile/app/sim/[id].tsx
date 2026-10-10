@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, Text, TextInput, View } from "react-native";
+import { Alert, KeyboardAvoidingView, Platform, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
@@ -81,6 +81,56 @@ export default function Room() {
     },
   });
 
+  /*
+   * Leaving, which a phone player could not do at all.
+   *
+   * `release` above gives up a seat you have not started playing; this is the
+   * other thing entirely, and the phone only had the first. Once a season was
+   * running a phone-only player was in it until it ended — no way out of a
+   * company, a market or a table, on the client most of them play on.
+   *
+   * Two different acts behind one button, and the confirm has to say which.
+   * Before a season starts the seat simply goes back and the room may close
+   * behind you; once it is running your chair is handed to a stand-in that files
+   * an ordinary decision every year, it cannot be taken back, and you cannot
+   * rejoin that company. Those are not the same decision and must not share
+   * wording — see the server's own route for both paths.
+   */
+  const leave = useMutation({
+    mutationFn: () => api<{ left: boolean; handedOver?: boolean }>(`/api/sim/ventures/${id}/leave`, { method: "POST" }),
+    onSuccess: (body) => {
+      qc.invalidateQueries({ queryKey: ["sim-ventures"] });
+      /*
+       * Out of the room at once, because the screen polls: staying put would
+       * re-fetch a venture this person is no longer seated in and show them a
+       * room they have just left.
+       */
+      router.replace("/sim");
+      /*
+       * `Alert` rather than this screen's own notice banner, and for a plain
+       * reason: the banner is rendered by the room, and the room has just been
+       * replaced — so a notice shown here would unmount in the same frame and
+       * nobody would read it. An alert is a native modal and outlives the screen
+       * that raised it.
+       *
+       * It is worth saying at all because of the case where the two disagree: the
+       * confirm promised a stand-in, and if the server could not seat one it
+       * deleted the chair instead, which leaves the company running a seat on the
+       * caretaker rules. A player who was told one thing should be told when the
+       * other happened.
+       */
+      Alert.alert(
+        "You're out",
+        body?.handedOver
+          ? "Your chair went to a stand-in, and the company plays on without you."
+          : started
+            ? "Your chair could not be passed to a stand-in, so it is empty: the company runs that seat on the caretaker rules until somebody takes it."
+            : "You can join another market whenever you like.",
+      );
+    },
+    onError: (err) => show({ tone: "error", text: errText(err, "Couldn't leave just now. Try again in a moment.") }),
+  });
+
   const release = useMutation({
     mutationFn: () => api(`/api/sim/ventures/${id}/release`, { method: "POST" }),
     onSuccess: () => { void refresh(); },
@@ -90,6 +140,39 @@ export default function Room() {
       void refresh();
     },
   });
+
+  /*
+   * Whether the season is actually under way, which decides both the wording and
+   * what leaving does. The server makes the same call from the venture's phase.
+   */
+  const started = venture?.phase === "running";
+
+  /*
+   * Asked before done, with the two outcomes spelled out.
+   *
+   * `Alert.alert` with a `destructive` style is how the rest of the app asks
+   * before something irreversible (see `BlockAction`). Mid-season leaving is
+   * genuinely irreversible — the chair is handed to a stand-in and the company
+   * cannot be rejoined — so the confirm says that in those words rather than
+   * asking "are you sure", which tells somebody nothing about what they are
+   * agreeing to.
+   */
+  const confirmLeave = () => {
+    Alert.alert(
+      started ? `Leave ${venture?.name ?? "this company"}?` : "Leave this room?",
+      started
+        ? "The season carries on without you: your chair goes to a stand-in, who files an ordinary decision every year. You can't take it back, and you won't be able to rejoin this company."
+        : "Your seat goes back, and you can pick a different market. If you're the last one here, the room closes.",
+      [
+        { text: "Stay", style: "cancel" },
+        {
+          text: started ? "Leave the company" : "Leave",
+          style: "destructive",
+          onPress: () => leave.mutate(),
+        },
+      ],
+    );
+  };
 
   const [name, setName] = useState("");
   const [product, setProduct] = useState("");
@@ -288,6 +371,14 @@ export default function Room() {
               <SeasonProgress
                 year={standings?.year ?? venture.year ?? 1}
                 totalYears={standings?.totalYears ?? venture.totalYears ?? 14}
+                /*
+                 * The standings route sends the derived fields; the room route
+                 * sends the cadence. Both are offered so this reads right
+                 * whichever arrived first — see `seasonSpan`.
+                 */
+                totalPeriods={standings?.totalPeriods}
+                period={standings?.period}
+                cadence={venture.cadence}
                 standing={standingLine(standings?.rows)}
                 movement={movementRead(standings?.history)}
               />
@@ -325,6 +416,23 @@ export default function Room() {
                 action={venture.seasonOver ? "Start a new company" : "Pick a market"} onAction={() => router.replace("/sim")} />
             </Card>
           )}
+
+          {/*
+            * The way out, last and quiet. Never on a retired room: there is
+            * nothing left to leave, and offering it would be offering to undo
+            * something that already happened.
+            */}
+          {venture.phase !== "retired" ? (
+            <Btn
+              label={started ? "Leave this company" : "Leave this room"}
+              icon="exit-outline"
+              variant="ghost"
+              small
+              loading={leave.isPending}
+              onPress={confirmLeave}
+              testID="sim-leave"
+            />
+          ) : null}
 
           {live && (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, justifyContent: "center", paddingTop: spacing.xs }}>

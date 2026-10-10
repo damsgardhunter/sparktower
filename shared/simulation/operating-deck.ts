@@ -63,7 +63,7 @@ export const OPERATING_OPTIONS: SpendOption[] = [
     id: "another-site", label: "Another site", group: "Places and kit",
     detail: "A second (or third) location: the lease, the fit-out, the opening stock.",
     consequence: "The biggest number on this page and the one that most often takes the business with it. Nothing else here can lose you the company; this can.",
-    step: 10_000, minimumUseful: 40_000,
+    step: 1_000, minimumUseful: 40_000,
   },
   {
     id: "fix-the-place", label: "Fixing the place you have", group: "Places and kit",
@@ -170,7 +170,7 @@ export const SOFTWARE_OPTIONS: SpendOption[] = [
     id: "next-thing", label: "Building the next thing", group: "The product",
     detail: "A second product, or a version large enough to sell to people who say no to this one.",
     consequence: "The biggest number on this page and the one most often funded out of boredom with the thing that works. Nothing else here can cost you the business; a year spent on the wrong second product can.",
-    step: 10_000, minimumUseful: 40_000,
+    step: 1_000, minimumUseful: 40_000,
   },
   {
     id: "reliability", label: "Making it stop breaking", group: "The product",

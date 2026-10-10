@@ -11,6 +11,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 /*
  * A per-spec address, so registrations here don't share the sign-in budget.
@@ -36,9 +37,7 @@ test("a return shows what's new since you looked, continues exploring, and actin
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(bea);
   const beaId = (await beaUser.json()).id as string;
-  expect((await bea.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(bea, { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." });
   const created = await bea.post("/api/projects", {
     data: { title: "Plant Swap", description: "A small app for swapping cuttings with neighbours nearby.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
   });
@@ -49,9 +48,7 @@ test("a return shows what's new since you looked, continues exploring, and actin
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ari2-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." });
 
   // Ari looks at Bea's profile. That's what makes news from her count.
   await page.goto(`/profile/${beaId}`);

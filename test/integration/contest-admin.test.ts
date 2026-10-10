@@ -24,6 +24,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { passMfa } from "../helpers/mfa";
 import { db } from "../../server/db";
 import { contestParticipants, users } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -39,6 +40,8 @@ async function person(app: any, first: string) {
     .send({ email, password: "Testpass123!", firstName: first, lastName: "Admin" });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await verifyEmail(app, email, ip());
+  /* Entering a contest needs a finished profile. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id, { displayName: `${first} Admin` });
   return { agent, email, userId: res.body.id as string };
 }
 

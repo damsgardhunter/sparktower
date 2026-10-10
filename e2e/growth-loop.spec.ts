@@ -7,6 +7,7 @@
  */
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -18,7 +19,7 @@ async function personIn(browser: Browser, ip: string, first: string) {
   expect((await api.post("/api/auth/register", { data: { email: `e2e-growth-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Growth" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: `${first} Growth`, headline: "Building in public", bio: "Here for the loop." } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Growth`, headline: "Building in public", bio: "Here for the loop." });
   return { context, api };
 }
 
@@ -114,14 +115,20 @@ test("a published step brings a stranger in, and they publish their own", async 
   await stranger.getByTestId("input-signup-confirm").fill(password);
   await stranger.getByTestId("button-submit-signup").click();
   /*
-   * Longer than the 5s default, like the other redirects in this file.
+   * Signup lands on the feed now, not on the form.
    *
-   * Registering hashes a password, writes the account and sends the
-   * confirmation mail before the client is told to move; on a loaded CI runner
-   * that had been creeping past five seconds, and the failure looked like
-   * "signup is broken" rather than "the wait was too short".
+   * It used to redirect to /onboarding, and this waited for that. Letting
+   * people look around first removed the redirect, so the arrival is the
+   * banner — which is also the thing that has to work: it is the only route
+   * from a half-finished account to the form.
+   *
+   * Longer than the 5s default, like the other waits in this file. Registering
+   * hashes a password, writes the account and sends the confirmation mail
+   * before the client is told anything; on a loaded CI runner that had been
+   * creeping past five seconds, and the failure looked like "signup is broken"
+   * rather than "the wait was too short".
    */
-  await expect(stranger).toHaveURL(/\/onboarding/, { timeout: 15_000 });
+  await expect(stranger.getByTestId("onboarding-banner")).toBeVisible({ timeout: 15_000 });
 
   /*
    * The newcomer confirms their address, as they would from their inbox.
@@ -147,11 +154,45 @@ test("a published step brings a stranger in, and they publish their own", async 
    * the project lands on its path; they write their first step themselves and
    * publish it — the same loop that brought them in.
    */
+  await stranger.getByTestId("button-finish-onboarding").click();
+  await expect(stranger).toHaveURL(/\/onboarding/, { timeout: 15_000 });
+
+  // Basic Info. Name is required; the rest of this step is not.
   await stranger.getByTestId("input-display-name").fill("Newcomer Growth");
   await stranger.getByTestId("input-headline").fill("New here");
   await stranger.getByTestId("input-bio").fill("Came from an artifact.");
   await stranger.getByTestId("input-location").fill("Lisbon");
-  for (let i = 0; i < 7; i++) await stranger.getByTestId("button-next").click();
+  await stranger.getByTestId("button-next").click();
+
+  /*
+   * Skills, and then the three questions about how they work.
+   *
+   * Filled rather than stepped past, because these are what `requireOnboarded`
+   * reads (shared/onboarding.ts) and this account goes on to publish a step at
+   * the end of the test — a write that reaches other people, and refused for a
+   * profile without them. Clicking through with `button-next` submitted a
+   * profile that looked finished and was not, and the refusal landed four
+   * screens later on a dialog that never advanced.
+   */
+  await stranger.getByTestId("input-custom-skill").fill("Trip planning");
+  await stranger.getByTestId("input-custom-skill").press("Enter");
+  await stranger.getByTestId("button-next").click();
+
+  // Interests and Experience are optional, and each says so before it is skipped.
+  for (let i = 0; i < 2; i++) {
+    await expect(stranger.getByTestId("step-requirement")).toHaveText(/Optional/, { timeout: 10_000 });
+    await stranger.getByTestId("button-skip-step").click();
+  }
+
+  await expect(stranger.getByTestId("step-requirement")).toHaveText(/Needed to post/);
+  await stranger.getByTestId("input-hours-per-week").fill("20");
+  await stranger.getByTestId("radio-risk-moderate").click();
+  await stranger.getByTestId("radio-schedule-flexible").click();
+
+  // Résumé and Links are optional too; the Review step is where it ends.
+  await stranger.getByTestId("button-next").click();
+  await stranger.getByTestId("button-skip-step").click();
+  await stranger.getByTestId("button-skip-step").click();
   await stranger.getByTestId("button-submit-onboarding").click();
   await expect(stranger).toHaveURL(/\/projects\/new\/create\?step=setup$/, { timeout: 15_000 });
 

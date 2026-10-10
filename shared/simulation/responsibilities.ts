@@ -196,7 +196,18 @@ export const isUnlocked = (role: Role, field: string, period: number, periods = 
  */
 export const SOLO_ORDER: readonly string[] = [
   // ── The first period: what a business cannot open without. ──
-  "focus", "positioning", "price", "capacityTarget",
+  /*
+   * `founderHours` opens the season, and it is the one entry here that is not
+   * about money at all.
+   *
+   * It belongs in the first period precisely because of who plays alone: the
+   * founder who has been sent a season and has £60,000 and no staff. Every
+   * other lever on this line asks them to spend something; this one asks what
+   * they will do with the month. Handing it over in period six, after the ramp
+   * has got through the spending levers, would withhold the only lever that
+   * works on an empty balance sheet from the only person who needs it.
+   */
+  "focus", "positioning", "founderHours", "price", "capacityTarget",
   "brandSpend", "performanceSpend", "featureSpend", "supportSpend",
   "headcount", "borrow", "cashBuffer",
   // ── The rest of what a table holds on day one. ──
@@ -219,8 +230,16 @@ export const SOLO_ORDER: readonly string[] = [
   "buyback",
 ];
 
-/** How many open the season, before anything is spread. */
-const SOLO_OPENING = 11;
+/**
+ * How many open the season, before anything is spread.
+ *
+ * Twelve rather than eleven since `founderHours` joined the first line: the
+ * count is a deliberate ceiling on how much a first period asks of somebody,
+ * and leaving it at eleven would have pushed `cashBuffer` out of the opening
+ * to make room — taking away a decision a business really does make on day one
+ * to pay for one that costs nothing.
+ */
+const SOLO_OPENING = 12;
 
 /**
  * How much of the season is spent learning.
@@ -318,7 +337,16 @@ export const LEASE_PREMIUM = 1.4;
 /** Capacity sold back fetches this share of what it cost to build. */
 export const SELL_BACK = 0.3;
 
-export const buildCostPerUnit = (niche: Niche): number => marketPriceOf(niche) * BUILD_RATE;
+/**
+ * In an audience market the price is a membership most of the audience never
+ * pays, so a unit of production — the output that keeps one more subscriber
+ * fed — is priced at a share of it. Priced at the full membership it cost a
+ * podcast network more to make a show for a listener than that listener would
+ * ever bring in.
+ */
+export const AUDIENCE_PRODUCTION_SHARE = 0.1;
+export const buildCostPerUnit = (niche: Niche): number =>
+  marketPriceOf(niche) * BUILD_RATE * (niche.model === "audience" ? AUDIENCE_PRODUCTION_SHARE : 1);
 export const leaseCostPerUnit = (niche: Niche): number => buildCostPerUnit(niche) * LEASE_PREMIUM;
 
 export interface CapacityMoney {

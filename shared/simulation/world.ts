@@ -12,6 +12,7 @@
  * As everywhere else, every chance is seeded from the season, the year and
  * the company, so a year replays exactly.
  */
+import { audienceValue } from "./creator";
 import type { Company, Niche, Role, Segment } from "./types";
 import { marketPriceOf } from "./decisions";
 import { rng } from "./random";
@@ -72,8 +73,11 @@ export function marketScale(niche: Pick<Niche, "segments">): number {
   return Math.max(MARKET_SCALE_MIN, Math.min(1, scale));
 }
 
-export const marketPotential = (niche: Pick<Niche, "segments">): number =>
-  marketPriceOf(niche as Niche) * niche.segments.reduce((sum, s) => sum + s.size, 0);
+export const marketPotential = (niche: Pick<Niche, "segments"> & Partial<Pick<Niche, "model" | "audience">>): number =>
+  /* An audience is worth its views, sponsors and members, not a membership each. See `audienceValue`. */
+  niche.model === "audience"
+    ? audienceValue(niche)
+    : marketPriceOf(niche as Niche) * niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
@@ -396,6 +400,35 @@ export function announcedRegion(input: { niche: Niche; seasonId: string; year: n
   if (!closed.length) return null;
   return closed[Math.floor(rng(`${input.seasonId}:${input.year}:region`)() * closed.length)];
 }
+
+/**
+ * What it costs this company to open somewhere new — nothing, in an audience
+ * market.
+ *
+ * A shop in another city is a lease, a fit-out and a licence. An audience in
+ * another country is a setting: you upload the same video and some of them
+ * watch it. Charging a channel a six-figure entry fee to be watched in Canada
+ * was the sales model's logic applied to a business it does not describe.
+ *
+ * One helper rather than a zero in the market data, because `entryCost` is
+ * load-bearing elsewhere: `cleanRegions` prices generated regions against the
+ * market's value, and the catalogue markets' cities feed the `marketScale`
+ * paths — so zeroing the data would quietly move every audience market's
+ * scale and every threshold derived from it. The *charge* is what should be
+ * nothing, and this is every place that charges.
+ *
+ * Being free does not make spreading out free of consequence: a channel in
+ * four places reaches less of each (see `creator.ts`). The cost of breadth is
+ * attention, not money, which is the honest trade for this kind of business.
+ *
+ * Reads `niche.model` directly rather than calling `isAudience` from
+ * `creator.ts`: creator imports world, so importing it back would close a
+ * cycle for the sake of one equality test.
+ */
+export const entryCostOf = (
+  city: Pick<Niche["cities"][number], "entryCost">,
+  niche: Pick<Niche, "model">,
+): number => (niche.model === "audience" ? 0 : city.entryCost);
 
 export const EXPANSION_DISCOUNT = 0.7;
 

@@ -10,6 +10,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { resolveTree, mainLineMilestones, PATH_TREES } from "@shared/phase-trees";
 import { normaliseGoal, goalOfBackboneId, sectionOfTask } from "@shared/goals";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -18,6 +19,8 @@ async function owner(app: any) {
   const agent = request.agent(app);
   const res = await agent.post("/api/auth/register").send({ email: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password });
   await verifyEmail(app, res.body.email);
+  /* Posting an update needs a finished profile now. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id, { displayName: "Path Owner" });
   return agent;
 }
 const create = (agent: any, goal: string, subcategory: string, title = "Tree Test") =>

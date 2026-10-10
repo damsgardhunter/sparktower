@@ -18,6 +18,7 @@ import { db } from "../../server/db";
 import { users, moderationLog, contentReports } from "@shared/schema";
 import { RATE_LIMITS } from "@shared/moderation";
 import { passMfa } from "../helpers/mfa";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -30,6 +31,8 @@ async function signedIn(app: any, first: string) {
   const res = await agent.post("/api/auth/register").send({ email, password, firstName: first, lastName: "Drill" });
   expect(res.status).toBe(201);
   await verifyEmail(app, email);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, email, userId: res.body.id as string };
 }
 

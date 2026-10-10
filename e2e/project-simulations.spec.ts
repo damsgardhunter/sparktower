@@ -38,6 +38,7 @@ import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -58,9 +59,7 @@ async function ownerIn(browser: Browser, ip: string, first: string) {
   });
   expect(res.ok(), await res.text()).toBeTruthy();
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", {
-    data: { displayName: `${first} Sim`, headline: "Running the numbers", bio: "Here for the simulations." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: `${first} Sim`, headline: "Running the numbers", bio: "Here for the simulations." });
   const id = (await res.json()).id as string;
   /* Running a decision costs $3, bought once per project. */
   await sql("UPDATE users SET balance_cents = 20000 WHERE id = $1", [id]);

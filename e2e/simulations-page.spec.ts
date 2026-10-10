@@ -13,6 +13,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -24,7 +25,7 @@ async function member(browser: any, ip: string, name: string) {
   const email = `e2e-sim-${stamp()}@example.test`;
   const me = await (await api.post("/api/auth/register", { data: { email, password, firstName: name } })).json();
   await verifyEmail(api, email);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: name, headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: name, headline: "x", bio: "y" });
   return { ctx, api, email, id: me.id as string };
 }
 

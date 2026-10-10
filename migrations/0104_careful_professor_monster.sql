@@ -1,0 +1,1 @@
+ALTER TABLE "simulation_purchases" ADD COLUMN "unclaimed_cents" integer DEFAULT 0 NOT NULL;

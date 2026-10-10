@@ -9,7 +9,7 @@
  * What each one does with which tables is in server/account-data.ts.
  */
 import type { Express } from "express";
-import bcrypt from "bcryptjs";
+import { verifyPassword } from "./password-hash";
 import { pledgeRefunded } from "./backing-notices";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
@@ -20,6 +20,7 @@ import { deleteAccount, exportAccount, projectsLeavingWith } from "./account-dat
 import { checkSecondFactor, mfaCodeAccepted, limitMfaAttempts, mfaEnabledFor } from "./mfa";
 import { getUncachableStripeClient } from "./stripeClient";
 import { reconcileBackerBadge } from "./backer-badges";
+import { refundOpenSeatsOnSellerClose } from "./simulation-market-compliance";
 
 /** Subscription states Stripe will never bill again. */
 const FINISHED = new Set(["canceled", "incomplete_expired"]);
@@ -173,7 +174,7 @@ export function registerAccountRoutes(app: Express) {
       // Proof it's them, not a borrowed tab. An account with no password (Google only) is asked to type the phrase instead.
       if (user.passwordHash) {
         const password = String(req.body?.password ?? "");
-        if (!password || !(await bcrypt.compare(password, user.passwordHash))) {
+        if (!password || !(await verifyPassword(password, user.passwordHash))) {
           return res.status(401).json({ message: "That password isn't right.", code: "bad_password", field: "password" });
         }
       } else if (String(req.body?.confirm ?? "").trim().toLowerCase() !== "delete my account") {
@@ -221,7 +222,27 @@ export function registerAccountRoutes(app: Express) {
         });
       }
 
-      const outcome = { ...(await deleteAccount(userId, { keepPosts: req.body?.keepPosts === true })), billingCancelled, pledgesRefunded };
+      /*
+       * And the marketplace, on the same terms: a seat is a licence to run a
+       * simulation its author stands behind, and nobody will be standing behind
+       * it. Fail closed again — leaving somebody holding seats on a seller who
+       * no longer exists is the state this is here to prevent.
+       */
+      let seatsRefunded = 0;
+      try {
+        seatsRefunded = await refundOpenSeatsOnSellerClose(userId);
+      } catch (err) {
+        console.error("[account] couldn't refund open simulation seats before deleting", userId, err);
+        return res.status(502).json({
+          message: "We couldn't refund the unused seats people bought from you just now, so your account wasn't deleted. Try again in a minute.",
+          code: "seat_refund_failed",
+        });
+      }
+
+      const outcome = {
+        ...(await deleteAccount(userId, { keepPosts: req.body?.keepPosts === true })),
+        billingCancelled, pledgesRefunded, seatsRefunded,
+      };
 
       // The session this came in on is already gone from the store; clear the cookie too.
       req.logout?.(() => {

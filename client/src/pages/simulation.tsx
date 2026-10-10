@@ -10,10 +10,16 @@
  * ## The room is live, and this is a polled screen
  *
  * Five people are looking at this at once while it changes. It refreshes every
- * two seconds and the countdown ticks locally in between — polling once a
- * second to move a number is a lot of requests to animate something the client
- * can work out for itself. The server advances the phase when it is read, so
- * polling is also what keeps the clock honest for everyone.
+ * two seconds *while the room is still gathering* and the countdown ticks
+ * locally in between — polling once a second to move a number is a lot of
+ * requests to animate something the client can work out for itself. The server
+ * advances the phase when it is read, so polling is also what keeps the clock
+ * honest for everyone.
+ *
+ * Once the season is running the rate drops to thirty seconds, and a retired
+ * room stops being asked about at all: see `roomPollMs`. The two-second figure
+ * is a lobby's, and leaving it on for the whole season made this the largest
+ * single source of requests in the product at two hundred players.
  *
  * ## Claiming is a race, so nothing here is optimistic
  *
@@ -41,7 +47,7 @@ import {
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
-import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown } from "lucide-react";
+import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown, Store, Link2, Check, Share2 } from "lucide-react";
 import { lookOf } from "@/components/sim/market-look";
 import { SeasonStanding } from "@/components/sim/season-standing";
 
@@ -63,6 +69,8 @@ interface Room {
   seasonOver?: boolean;
   /** While filling: when the empty seats go to bots if nobody else arrives. Null when there's nothing to fill. */
   botsInSeconds?: number | null;
+  /** The code to send somebody, while there is still a seat for them. Null once the room is past gathering. */
+  inviteCode?: string | null;
   name: string | null;
   product: string | null;
   niche: { id: string; name?: string } | null;
@@ -96,6 +104,15 @@ export default function SimulationPage() {
    * same room — the server is careful about that — but nobody would think to,
    * because the screen had already told them they were nowhere.
    */
+  /*
+   * `?pick=1` is "show me the markets", from a button that says "Join another
+   * market". Without it the effect below reopens your latest room, so the
+   * button took you back to the market you were trying to leave.
+   */
+  const [picking] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("pick") === "1"; } catch { return false; }
+  });
+
   const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string; seasonStatus?: string }[] }>({
     queryKey: ["/api/sim/ventures"],
     /*
@@ -117,7 +134,7 @@ export default function SimulationPage() {
   const left = useRef(new Set<string>());
 
   useEffect(() => {
-    if (ventureId || !mine?.ventures?.length) return;
+    if (picking || ventureId || !mine?.ventures?.length) return;
     /*
      * The most recent room still being played, and not one walked out of.
      * The server orders them.
@@ -134,7 +151,7 @@ export default function SimulationPage() {
       && v.seasonStatus !== "finished" && v.seasonStatus !== "abandoned"
       && !left.current.has(v.id));
     if (open) setVentureId(open.id);
-  }, [mine, ventureId]);
+  }, [mine, ventureId, picking]);
 
   const leave = () => {
     if (ventureId) left.current.add(ventureId);
@@ -159,6 +176,7 @@ export default function SimulationPage() {
 /* ── Choosing a market ─────────────────────────────────────────────────── */
 
 function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data, isLoading } = useQuery<{ niches: NicheView[]; roles: RoleView[]; lobbySize: number }>({
     queryKey: ["/api/sim/niches"],
@@ -269,6 +287,39 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
         );
       })}
 
+      {/*
+        * The marketplace, under the markets this platform wrote.
+        *
+        * Below rather than beside them, and deliberately a strip rather than a
+        * grid: the seven above are the thing somebody came here to play, and a
+        * second grid of equal weight would make the page a choice between two
+        * products instead of one product with more of it underneath.
+        */}
+      <Card className="nova-ring-soft border-0 overflow-hidden">
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Store className="h-4 w-4 text-primary" />
+                <h3 className="font-semibold">Simulations other people wrote</h3>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Markets built for a real business, published by the person who built them. Play one with your
+                team, or write your own and sell seats.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="outline" onClick={() => setLocation("/simulations/market")} data-testid="button-browse-marketplace">
+                Browse
+              </Button>
+              <Button onClick={() => setLocation("/simulations/market/new")} data-testid="button-publish-from-sims">
+                Publish yours
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {data?.roles && (
         <Card>
           <CardContent className="p-5">
@@ -295,15 +346,115 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
 
 /* ── The room ──────────────────────────────────────────────────────────── */
 
+/**
+ * How often the room screen asks the server about itself, by phase.
+ *
+ * Exported and separate from the component so it can be asserted on: the
+ * interval is a load decision as much as a interface one, and the reasoning
+ * behind it lives in the comment at the call site.
+ */
+export function roomPollMs(phase: string | undefined): number | false {
+  // Nothing about a retired room will ever change again.
+  if (phase === "retired") return false;
+  // Running: the countdown is over and only `seasonOver` can still turn over.
+  if (phase === "running") return 30_000;
+  // Still gathering — people are arriving, seats are going, a clock is running.
+  return 2000;
+}
+
+/**
+ * Bring somebody into the room before it fills itself.
+ *
+ * The lobby told you four more people were needed and that players we run
+ * would take the chairs in a minute, and offered nothing to do about it. This
+ * is the thing that changes the outcome: a link, and a way to hand it over.
+ *
+ * `navigator.share` where the device has it — which is where most people are
+ * when they are trying to get a friend into something — and the clipboard
+ * otherwise, with the link shown in full underneath for the case where both
+ * are blocked. A share sheet the browser refuses must not leave somebody with
+ * nothing to send.
+ */
+function InviteToRoom({ code, seatsLeft }: { code: string; seatsLeft: number }) {
+  const [copied, setCopied] = useState(false);
+  const link = `${window.location.origin}/join-season/${code}`;
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  const hand = async () => {
+    const said = {
+      title: "Run a company with me",
+      text: `There's a seat for you — we need ${seatsLeft} more ${seatsLeft === 1 ? "person" : "people"} before this starts.`,
+      url: link,
+    };
+    try {
+      if (canShare) { await navigator.share(said); return; }
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      /*
+       * Cancelled, or refused. Neither is an error worth a message: the link
+       * is on screen below and can be selected by hand.
+       */
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border p-3" data-testid="invite-to-room">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm">
+          <span className="font-medium">Know someone who'd play?</span>{" "}
+          <span className="text-muted-foreground">
+            {seatsLeft === 1 ? "There's one seat left." : `There are ${seatsLeft} seats left.`} Anyone with the link can take one.
+          </span>
+        </p>
+        <Button size="sm" className="shrink-0" onClick={hand} data-testid="button-invite-to-room">
+          {copied
+            ? <><Check className="mr-1.5 h-3.5 w-3.5" /> Link copied</>
+            : canShare
+              ? <><Share2 className="mr-1.5 h-3.5 w-3.5" /> Invite someone</>
+              : <><Link2 className="mr-1.5 h-3.5 w-3.5" /> Copy invite link</>}
+        </Button>
+      </div>
+      {/* Shown in full, so a blocked clipboard and a refused share sheet both still leave something to send. */}
+      <code className="mt-2 block select-all break-all text-xs text-tertiary" data-testid="text-invite-link">{link}</code>
+    </div>
+  );
+}
+
 function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
   const { data: room, isLoading } = useQuery<Room>({
     queryKey: [`/api/sim/ventures/${ventureId}`],
-    // Two seconds: enough to feel live, few enough requests that five people
-    // watching one room is not a load problem. The clock below fills the gaps.
-    refetchInterval: 2000,
+    /*
+     * Two seconds while the room is still gathering, and then much less often.
+     *
+     * Two seconds is right for a lobby: people are arriving, seats are being
+     * taken, a clock is running down, and the original note here — "five people
+     * watching one room is not a load problem" — is true of a lobby and was
+     * never meant to cover the rest of the season.
+     *
+     * It did cover it, though. The interval was a flat constant for every
+     * phase, so anybody who joined and left this tab open kept asking every two
+     * seconds for the whole season. A 200-person load run
+     * (`scripts/sim-load.ts`) made this the largest single bucket of requests in
+     * the product — about 100 a second, each one running `advanceVenture` and a
+     * three-way join over the seats — and almost all of it was asking a
+     * question whose answer had stopped changing.
+     *
+     * Once the season is running there is nothing on this screen that moves at
+     * that rate: the countdown is over, the standings card fetches its own
+     * figures on its own schedule, and the only field left that can change is
+     * `seasonOver`, once, at the end of the season. Thirty seconds is plenty to
+     * notice that.
+     *
+     * A retired room stops entirely. Nothing about it will ever change again,
+     * and polling it for the rest of the session is asking the server to keep
+     * confirming that something is still over.
+     */
+    refetchInterval: (q) => roomPollMs(q.state.data?.phase),
   });
   const { data: meta } = useQuery<{ roles: RoleView[] }>({ queryKey: ["/api/sim/niches"] });
 
@@ -320,6 +471,39 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
   }, []);
   const secondsLeft = Math.max(0, (room?.secondsLeft ?? 0) - ticked);
   const botsIn = room?.botsInSeconds == null ? null : Math.max(0, room.botsInSeconds - ticked);
+
+  /*
+   * Stop waiting, one way or the other.
+   *
+   * `true` fills the empty chairs now; `false` keeps them for people and stops
+   * the minute's countdown. The room was making this decision for everybody
+   * and offering no say in it, and the "keep them" half was worse than the
+   * other: a lobby that never fills retires itself and the seat is spent
+   * regardless.
+   */
+  const fill = useMutation({
+    mutationFn: (bots: boolean) =>
+      apiRequest("POST", `/api/sim/ventures/${ventureId}/fill`, { bots }).then((r) => r.json()),
+    onSuccess: (body: { bots?: boolean; seated?: number }) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
+      toast(body?.bots
+        ? {
+          title: body.seated ? "Starting" : "Nothing to fill",
+          description: body.seated
+            ? `${body.seated} ${body.seated === 1 ? "player" : "players"} we run took the empty seats.`
+            : "The room was already full.",
+        }
+        : {
+          title: "Holding the seats",
+          description: "Nobody we run will take them. Send the link to whoever is joining you.",
+        });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't do that",
+      description: errorText(e, "Try again."),
+      variant: "destructive",
+    }),
+  });
 
   const claim = useMutation({
     mutationFn: (role: Role) => apiRequest("POST", `/api/sim/ventures/${ventureId}/claim`, { role }),
@@ -426,7 +610,14 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
               </div>
             )}
           </div>
-          {room.phase === "filling" && botsIn != null && (
+          {/*
+            * Everything below is about empty chairs, so none of it belongs on a
+            * table of one. A season built for a solo founder has `lobbySize` 1
+            * (the season's own `seatCount`): it was being shown "waiting for 4
+            * more", a countdown to bots filling seats that do not exist, and an
+            * invite link offering four of them.
+            */}
+          {room.phase === "filling" && room.lobbySize > 1 && botsIn != null && (
             /*
              * The minute the room waits for people, on screen. The big clock
              * is the fifteen-minute one; without this, bots arriving at 14:00
@@ -438,6 +629,47 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
                 ? <span>Waiting for people. Bots take the empty seats in <span className="font-semibold tabular-nums">{countdown(botsIn)}</span> unless someone joins.</span>
                 : <span>Nobody new arrived, so bots are taking the empty seats…</span>}
             </p>
+          )}
+          {room.phase === "filling" && room.lobbySize > 1 && (
+            /*
+             * Two decisions the room used to make for you.
+             *
+             * Bots arrive a minute after the last person, which is right for
+             * somebody sitting alone and wrong for somebody holding seats for
+             * colleagues — and the flag that turns it off left them waiting for
+             * people who might not be coming, in a lobby that eventually
+             * retires itself and spends the seat anyway. Both directions are
+             * now a button.
+             */
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+              <Button
+                size="sm"
+                onClick={() => fill.mutate(true)}
+                disabled={fill.isPending}
+                data-testid="button-fill-now"
+              >
+                {fill.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Users className="mr-1.5 h-3.5 w-3.5" />}
+                Start now with players we run
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => fill.mutate(false)}
+                disabled={fill.isPending}
+                data-testid="button-keep-waiting"
+              >
+                Keep the seats for people
+              </Button>
+            </div>
+          )}
+          {room.phase === "filling" && room.lobbySize > 1 && room.inviteCode && room.seats.length < room.lobbySize && (
+            /*
+             * The one thing that changes the outcome the clock above is
+             * counting down to. Put here rather than further down the page
+             * because it answers the sentence directly above it: four more
+             * people are needed, and this is how you get one.
+             */
+            <InviteToRoom code={room.inviteCode} seatsLeft={room.lobbySize - room.seats.length} />
           )}
           {copy.deadline && <p className="text-xs text-muted-foreground mt-3 border-t border-border pt-3">{copy.deadline}</p>}
         </div>

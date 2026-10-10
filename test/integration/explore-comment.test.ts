@@ -12,6 +12,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { activityEvents } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -21,6 +22,8 @@ async function person(app: any, first: string) {
     .send({ email: `xc-${first}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `203.0.114.${address++}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   const auth = (res.headers["set-cookie"] as unknown as string[]).map((c) => c.split(";")[0]).filter((c) => !/^st_(vid|sid)=/.test(c)).join("; ");
   return { id: res.body.id as string, auth };
 }

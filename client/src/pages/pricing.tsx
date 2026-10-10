@@ -13,6 +13,7 @@ import {
 } from "@shared/plans";
 import { cn } from "@/lib/utils";
 import { Check, Clock, Loader2, Wallet as WalletIcon } from "lucide-react";
+import { AddCardForm, SavedCardList } from "@/components/saved-cards";
 
 /**
  * What it costs.
@@ -34,6 +35,7 @@ export default function Pricing() {
   const { data: wallet } = useWallet(!!user);
   const [amountCents, setAmountCents] = useState<number>(TOP_UP_DEFAULTS[1] ?? 1000);
   const [showAll, setShowAll] = useState(false);
+  const [addingCard, setAddingCard] = useState(false);
 
   const topUp = useMutation({
     mutationFn: async (cents: number) => (await apiRequest("POST", "/api/nova/top-up", {
@@ -112,6 +114,27 @@ export default function Pricing() {
               </Button>
               <p className="text-xs text-muted-foreground">
                 It never expires and it works on anything. There's no plan, so there's nothing to cancel.
+              </p>
+            </div>
+
+            {/*
+              * The cards on file.
+              *
+              * Here rather than on a settings page because this is the screen
+              * somebody is on when they think about paying, and a card saved
+              * anywhere else is a card they have to go and find a page for.
+              * Nothing on this card number passes through this product — see
+              * the note in components/saved-cards.tsx.
+              */}
+            <div className="space-y-2 border-t pt-4">
+              <p className="text-sm font-medium">Cards on file</p>
+              {addingCard ? (
+                <AddCardForm onSaved={() => setAddingCard(false)} onCancel={() => setAddingCard(false)} />
+              ) : (
+                <SavedCardList onAdd={() => setAddingCard(true)} />
+              )}
+              <p className="text-xs text-muted-foreground">
+                A saved card makes the next top-up a single tap. The number is held by Stripe, never by SparkTower.
               </p>
             </div>
           </CardContent>

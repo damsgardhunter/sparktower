@@ -29,12 +29,20 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "saas", label: "SaaS" },
     { id: "game", label: "Game" },
     { id: "website", label: "Website" },
+    /* Not software, and the path adapts to them — see shared/goals.ts. */
+    { id: "physical", label: "Physical product" },
+    { id: "food", label: "Food or drink" },
+    { id: "channel", label: "YouTube channel" },
     { id: "other", label: "Other" },
   ],
   systemize_business: [
     { id: "restaurant", label: "Restaurant" },
     { id: "service", label: "Service business" },
     { id: "retail", label: "Retail" },
+    /* Not premises with staff, and the path adapts — see shared/goals.ts. */
+    { id: "channel", label: "Creator or channel" },
+    { id: "home", label: "Home business" },
+    { id: "online", label: "Online or web business" },
     { id: "other", label: "Other" },
   ],
   run_company: [

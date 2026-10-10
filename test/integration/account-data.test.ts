@@ -21,6 +21,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db, pool } from "../../server/db";
 import { users } from "@shared/schema";
 import { MINE, CHOICE, KEPT } from "../../server/account-data";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -35,6 +36,8 @@ async function person(app: any, first: string) {
   expect(res.status).toBe(201);
   await verifyEmail(app, email, ip());
   await agent.post("/api/profile/complete-onboarding").send({ displayName: `${first} Data`, headline: "Here", bio: "Testing data rights." });
+  /* The form only sets the flag; the rule wants the five fields. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email };
 }
 

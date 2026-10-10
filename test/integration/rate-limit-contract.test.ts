@@ -18,6 +18,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { feedComments, feedPosts, rateLimitHits, users } from "@shared/schema";
 import { RATE_LIMITS, RATE_LIMITED, DUPLICATE_RULES, DUPLICATE_CONTENT, type RateLimitAction } from "@shared/moderation";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 afterEach(() => { vi.restoreAllMocks(); delete process.env.RATE_LIMIT_EXEMPT_EMAILS; });
@@ -31,6 +32,8 @@ async function person(app: any) {
   expect(res.status).toBe(201);
   // Confirmed, so the writes below reach the rate limiter rather than the verification gate.
   await verifyEmail(app, email, `198.51.104.${120 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string, email };
 }
 

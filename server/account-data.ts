@@ -43,14 +43,64 @@ export const MINE: Owned[] = [
   { table: "direct_messages", column: "sender_id" },
   { table: "user_task_stats", column: "user_id" },
   /*
-   * A game somebody paid to play. Listed as theirs rather than kept, because
-   * that is what the database actually does with it: `user_id` is `not null`
-   * and `on delete cascade`, so the row goes when the account does whatever
-   * this list says. Calling it kept would have been a promise the schema
-   * breaks — so it is exported with the rest of their things first, which is
-   * the half we do control.
+   * The adverts somebody ordered: the brief they wrote, the script and plan
+   * that came back, and the file it rendered to.
+   *
+   * Theirs because of what it is, not because of what the database would do
+   * with it — the reasoning that used to be on this line, and on two others
+   * near it, was that `on delete cascade` would take these rows anyway, and
+   * that was simply untrue. Closing an account writes a tombstone rather than
+   * deleting the `users` row (see `deleteAccount`), so no cascade ever fires.
+   *
+   * This one is still theirs on the merits. It is generated creative work, and
+   * the money evidence behind it is somewhere else and kept: `nova_ledger` has
+   * what was charged and `ai_image_runs` has what each image cost. The project
+   * these hang off is deleted with its last owner in any case, so keeping them
+   * would leave renders pointing at a project nobody can open.
    */
-  { table: "game_play_purchases", column: "user_id" },
+  { table: "ad_renders", column: "requested_by" },
+  /*
+   * Which seasons somebody started from a listing. Theirs, by the same
+   * reasoning: `started_by` is `not null` and cascades.
+   *
+   * The season itself is not deleted with it, and should not be — other people
+   * are sitting in it. What goes is this person's record of having started it.
+   */
+  { table: "simulation_season_starts", column: "started_by" },
+  /*
+   * That this person has played a listing, once per listing.
+   *
+   * Theirs, like the start above and for the same reason — it is a record of
+   * something they did, and nobody else has a claim on it.
+   *
+   * The listing's `players` counter is deliberately *not* decremented when this
+   * goes. "Eleven people have played this" stays true after one of them closes
+   * their account; they did play it. The only cost is that somebody who leaves
+   * and comes back can be counted twice, which is a better error than a
+   * popularity figure that walks backwards.
+   */
+  { table: "simulation_listing_players", column: "user_id" },
+  /*
+   * Links somebody minted to send one of their simulations to a person.
+   *
+   * Theirs by the same reasoning — `created_by` is `not null` and cascades —
+   * and theirs by meaning too: a link is an act of sending, not a record of a
+   * transaction, and nobody else has an interest in one. The listing goes with
+   * the account anyway, and its links go with the listing.
+   */
+  { table: "simulation_share_links", column: "created_by" },
+  /*
+   * Which shared simulations somebody opened. Theirs, and the same shape as
+   * `simulation_season_starts` above: the season stays, because it is a game
+   * they or somebody else may still be playing; what goes is this person's
+   * record of having opened the link.
+   *
+   * Note what this means for the author, who loses their "did they play it
+   * yet" against that one recipient. That is the right way round — the
+   * recipient's visit is a fact about the recipient — and it is not a payment
+   * record, so nothing anybody is owed depends on it.
+   */
+  { table: "simulation_share_uses", column: "claimed_by" },
   { table: "health_finding_feedback", column: "user_id" },
   { table: "project_storyboards", column: "user_id" },
   { table: "investor_artifacts", column: "user_id" },
@@ -165,6 +215,49 @@ export const KEPT: Owned[] = [
   // Money: kept for accounting and refunds, pointing at the tombstone.
   { table: "project_backings", column: "backer_id" },
   /*
+   * A sale in the simulation marketplace: both sides of it, and the listing it
+   * was a sale *of*.
+   *
+   * ## Why these moved out of MINE
+   *
+   * They were listed as the person's own on the grounds that "every one of
+   * these columns is `not null` and `on delete cascade`, so the database
+   * removes them with the account whatever this list says". That premise was
+   * false. Closing an account does not delete the `users` row — it writes a
+   * tombstone (see `deleteAccount`) — so the cascade never fires, and
+   * `nova_ledger` has sat in this list with a cascading key for exactly that
+   * reason. The rows were not being taken by the database; they were being
+   * taken by the DELETE this list drives.
+   *
+   * ## What that cost
+   *
+   * A sale is a record of money moving between two people, and each of them
+   * needs it. A buyer closing their account destroyed the seller's record of
+   * that sale — and if the fourteen-day hold had not elapsed,
+   * `releaseDueEarnings` never saw the row again and the seller was never paid
+   * for something they had delivered. A seller closing destroyed every buyer's
+   * record of every sale, because `simulation_purchases.listing_id` cascades
+   * from the listing, so deleting the listing took all of them with it. That is
+   * why the listing is here too: it is also *what a buyer bought*, and a
+   * purchase record that cannot say what it was for is not a record.
+   *
+   * The seller's listings are taken off sale when they go — see
+   * `unlistOnAccountClose` — which is the part that actually needed doing.
+   */
+  { table: "simulation_listings", column: "author_id" },
+  { table: "simulation_purchases", column: "buyer_id" },
+  { table: "simulation_purchases", column: "seller_id" },
+  /*
+   * Accepting the seller terms, with the version and the time.
+   *
+   * Here for the reason its own comment gave while it was in MINE: the accepted
+   * address is stored because "that is what a dispute asks for", and a record
+   * kept for disputes that one side can delete by closing their account cannot
+   * answer one. The sales it underwrites are kept, so the consent behind them
+   * is kept with them.
+   */
+  { table: "seller_agreements", column: "user_id" },
+  /*
    * The pay-per-use money, which arrived (migrations 0051–0053) without ever
    * being listed here — so an export left it out and closing an account left
    * every dollar movement behind, keyed to a user nobody had accounted for.
@@ -175,6 +268,17 @@ export const KEPT: Owned[] = [
    * record is, and exported so somebody leaving can see what they paid.
    */
   { table: "nova_ledger", column: "user_id" },
+  /*
+   * Plays of the Ten Years game somebody bought, at a dollar each.
+   *
+   * Money, with a `stripe_session_id` on the row — which is the thing a
+   * chargeback or a "you charged me twice" is argued from, and the one record
+   * that can answer it. It sat in MINE on the same false premise as the rest:
+   * that the database would cascade it away regardless. It would not, and
+   * deleting the receipt for a card payment because the payer closed their
+   * account is the opposite of what a payment record is for.
+   */
+  { table: "game_play_purchases", column: "user_id" },
   { table: "nova_build_passes", column: "user_id" },
   { table: "ai_image_runs", column: "user_id" },
   // A build is a project's work, like an audit run two lines down.
@@ -193,6 +297,14 @@ export const KEPT: Owned[] = [
   { table: "backer_reward_fulfilments", column: "delivered_by" },
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
+  /*
+   * Who took a marketplace listing down. The same shape and the same reason as
+   * the two lines below: `on delete set null`, so a moderator closing their
+   * account takes their name off the takedown and leaves the takedown. A
+   * removal that disappeared with the person who made it is a removal somebody
+   * can undo by leaving.
+   */
+  { table: "simulation_listings", column: "taken_down_by" },
   { table: "moderation_log", column: "target_user_id" },
   /*
    * "This screen is broken", and who dealt with it.

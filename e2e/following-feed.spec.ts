@@ -8,6 +8,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 
@@ -30,17 +31,13 @@ test("following a builder fills the Following feed, immediately and for good", a
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(bea);
   const beaId = (await beaUser.json()).id as string;
-  expect((await bea.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(bea, { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." });
 
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ari3-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", {
-    data: { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." },
-  })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." });
 
   // Bea has news — but Ari follows nobody, so the Following feed doesn't carry
   // it: it says how to fix that. (Showing everyone's posts here would fail this.)

@@ -41,6 +41,58 @@ import { reviewInvestors } from "./finance";
 import { ageAssets, assetEffects, servingCapacity } from "./assets";
 import type { TeamDecisions } from "./decisions";
 import type { Company, Economy, Role, World } from "./types";
+import { ROLES } from "./types";
+import { personOf, SEVERANCE } from "./people";
+
+/**
+ * Next year, if the company holds this course.
+ *
+ * Half the levers on the desk pay later than they cost: research, recruiting,
+ * training, efficiency, a programme, a feature bet, a cost review. Shown only
+ * this year, every one of them reads as money lost — the forecast moved, but
+ * only the wrong way, and the seat that chose it could not see why. So the
+ * year after is played too, with the same plan held (less the decisions that
+ * are made once), and every lever's payoff has somewhere to appear.
+ */
+export interface YearAhead {
+  year: number;
+  revenue: number;
+  profit: number;
+  customers: number;
+  cashEnd: number;
+  /** What one unit costs to deliver: where efficiency, automation and programmes land. */
+  unitCost: number;
+  brand: number;
+  quality: number;
+  service: number;
+  reputation: number;
+}
+
+/** One seat at the table, and how loyal they will be once the year is over. */
+export interface SeatMood {
+  role: Role;
+  loyaltyNow: number;
+  loyaltyNext: number;
+  /** How hard next year's objective is pushed — the chief executive's targets. */
+  stretch: "easy" | "fair" | "aggressive";
+}
+
+/**
+ * What one seat's saved decisions did to the forecast.
+ *
+ * Measured against the same year with that seat left on last year's plan —
+ * which is exactly what the year does with a seat that never files — so every
+ * seat, and every teammate, can see what each person's choices are worth.
+ */
+export interface SeatImpact {
+  role: Role;
+  revenue: number;
+  profit: number;
+  cashEnd: number;
+  customers: number;
+  /** And a year on: the part of a decision that only lands later. */
+  next: { revenue: number; profit: number; customers: number; unitCost: number; quality: number; brand: number; service: number } | null;
+}
 
 export interface Projection {
   year: number;
@@ -71,6 +123,15 @@ export interface Projection {
   target: { amount: number; projected: number; met: boolean; strikes: number; wouldRemove: boolean } | null;
   bankrupt: boolean;
 
+  /** What one unit costs to deliver this year. */
+  unitCost: number;
+  /** How much of the company the founders own once the year is over: raising sells it, a buyback wins it back. */
+  founderShare: number;
+  /** The year after, holding this course. Null when the company does not survive this one. */
+  nextYear: YearAhead | null;
+  /** Each colleague's loyalty now and after the year — targets, overrules, pay, a profitable year. */
+  team: SeatMood[];
+
   /**
    * Next year's demand, for the capacity decision. Capacity ordered now opens
    * next year, so this — not this year's demand — is the number to size it to.
@@ -96,6 +157,28 @@ export interface ProjectionPair {
    * what the draft is.
    */
   demand: Forecast | null;
+  /** What each seat's saved decisions moved, against leaving that seat on last year's plan. */
+  impact: SeatImpact[];
+}
+
+/**
+ * Decisions that are made once, and must not be made again when the year
+ * after is played as "the same course".
+ */
+const ONE_SHOT = new Set([
+  "deals", "dealVotes", "expand", "expandVote", "featureBet", "featureMode", "programme", "openNiche",
+  "research", "shockAnswer", "overrule", "replaceSeat", "replaceBid", "rehire", "raiseAmount", "buyback",
+  "refinance", "borrow", "repay", "bonusPool", "forecast", "celebritySpend",
+]);
+
+function holdCourse(decisions: TeamDecisions): TeamDecisions {
+  const held: any = { companyId: decisions.companyId, steered: decisions.steered };
+  for (const role of ROLES) {
+    const d = (decisions as any)[role];
+    if (!d) continue;
+    held[role] = Object.fromEntries(Object.entries(d).filter(([k]) => !ONE_SHOT.has(k)));
+  }
+  return held;
 }
 
 function run(input: {
@@ -121,7 +204,7 @@ function run(input: {
   let target: Projection["target"] = null;
   const inv = company.investors;
   if (inv && inv.targetYear === world.year) {
-    const review = reviewInvestors(inv, report.revenue, world.year);
+    const review = reviewInvestors(inv, report.revenue, world.year, { currency: world.currency });
     target = {
       amount: inv.target,
       projected: report.revenue,
@@ -137,6 +220,59 @@ function run(input: {
     year: world.year + 1,
     economy: result.world.economy,
   });
+
+  /*
+   * The chief executive's people decisions, which are settled after the year
+   * is marked rather than inside it (`closeYear` in people.ts) — so the engine
+   * run above cannot see them, and a bonus pot or a replacement used to move
+   * nothing on this screen at all. Shown as what they would cost: the pot in
+   * full, because it is paid to every seat that meets its objective and the
+   * plan is to meet them; a replacement at its bid plus severance.
+   */
+  const peopleLines: { label: string; amount: number }[] = [];
+  const pot = Math.max(0, Number(decisions.ceo?.bonusPool) || 0);
+  if (pot > 0) peopleLines.push({ label: "Bonus pot, if every seat meets its objective", amount: -pot });
+  if (decisions.ceo?.replaceSeat) {
+    peopleLines.push({ label: "Replacing a seat: the bid and severance", amount: -(Math.max(0, Number(decisions.ceo?.replaceBid) || 0) + SEVERANCE) });
+  }
+  const peopleCost = peopleLines.reduce((sum, l) => sum + l.amount, 0);
+
+  let nextYear: YearAhead | null = null;
+  if (!report.bankrupt && !next.bankruptSince) {
+    try {
+      const ahead = resolveYear(
+        { ...result.world, year: world.year + 1 },
+        [{ ...holdCourse(decisions), companyId: company.id }],
+        result.world.economy ?? economy,
+        { withoutEvent: true },
+      );
+      const r = ahead.reports.find((x) => x.companyId === company.id) as CompanyReport | undefined;
+      const c = ahead.world.companies.find((x) => x.id === company.id);
+      if (r && c) {
+        nextYear = {
+          year: world.year + 1,
+          revenue: r.revenue, profit: r.profit, customers: r.customers,
+          cashEnd: r.cash + peopleCost,
+          unitCost: c.unitCost, brand: r.brand, quality: r.quality, service: r.service, reputation: r.reputation,
+        };
+      }
+    } catch {
+      /* The year after is a view of where this course leads, never a reason the screen fails. */
+    }
+  }
+
+  const team: SeatMood[] = company.kind === "player"
+    ? (company.seats ?? []).filter((r) => r !== "ceo").map((role) => {
+        const before = personOf(company, role);
+        const after = personOf(next, role);
+        return {
+          role,
+          loyaltyNow: Math.round(before.loyalty),
+          loyaltyNext: Math.round(after.loyalty),
+          stretch: ((decisions.ceo?.targets as any)?.[role] ?? after.stretch ?? "fair") as SeatMood["stretch"],
+        };
+      })
+    : [];
 
   const emergencyDrawn = report.cashBridge?.lines
     .filter((l) => /emergency|drawn on credit/i.test(l.label))
@@ -162,8 +298,8 @@ function run(input: {
       revenue: report.revenue,
       profit: report.profit,
       cashStart: report.cashBridge?.opening ?? company.cash,
-      cashEnd: report.cash,
-      lines: report.cashBridge?.lines ?? [],
+      cashEnd: report.cash + peopleCost,
+      lines: [...(report.cashBridge?.lines ?? []), ...peopleLines],
       stats: {
         brand: { now: report.brand, coming: next.brandPipeline ?? 0 },
         quality: { now: report.quality, coming: next.pipeline ?? 0 },
@@ -179,6 +315,10 @@ function run(input: {
       target,
       bankrupt: report.bankrupt,
       nextYearDemand,
+      unitCost: next.unitCost,
+      founderShare: next.founderShare ?? 1,
+      nextYear,
+      team,
     },
   };
 }
@@ -245,5 +385,38 @@ export function projectYear(input: {
     draft: drafted.decisions,
   });
 
-  return { filed: asFiled.projection, drafted: drafted.projection, absent: drafted.absent, demand };
+  /*
+   * Each saved seat, taken out in turn.
+   *
+   * Without it the screen could say what the viewer's *unsaved* change would
+   * do and nothing at all about what had been saved — so once a desk was
+   * filed, by a teammate or by Nova, its effect vanished from view. This is
+   * the year with that seat's filing removed (it then runs on last year's
+   * plan, as an unfiled seat does), compared with the year as filed.
+   */
+  const impact: SeatImpact[] = [];
+  for (const role of ROLES) {
+    if (!(filed as any)[role] || asFiled.absent.includes(role)) continue;
+    const { [role]: _left, ...without } = filed as any;
+    const off = run({ world, company, submitted: without, previous, economy }).projection;
+    const on = asFiled.projection;
+    impact.push({
+      role,
+      revenue: on.revenue - off.revenue,
+      profit: on.profit - off.profit,
+      cashEnd: on.cashEnd - off.cashEnd,
+      customers: on.customers - off.customers,
+      next: on.nextYear && off.nextYear ? {
+        revenue: on.nextYear.revenue - off.nextYear.revenue,
+        profit: on.nextYear.profit - off.nextYear.profit,
+        customers: on.nextYear.customers - off.nextYear.customers,
+        unitCost: on.nextYear.unitCost - off.nextYear.unitCost,
+        quality: on.nextYear.quality - off.nextYear.quality,
+        brand: on.nextYear.brand - off.nextYear.brand,
+        service: on.nextYear.service - off.nextYear.service,
+      } : null,
+    });
+  }
+
+  return { filed: asFiled.projection, drafted: drafted.projection, absent: drafted.absent, demand, impact };
 }

@@ -3281,14 +3281,56 @@ export class DatabaseStorage implements IStorage {
     return rep;
   }
 
+  /**
+   * The public builder-index ranking.
+   *
+   * ## Who is on it
+   *
+   * Only people. This used to read `user_reputation_scores` and join each row's
+   * account afterwards with no conditions at all, so three kinds of row that
+   * are excluded from every other listing in this file were on the leaderboard:
+   *
+   *   - **Bots.** `is_bot` is filtered in name search, Discover and the
+   *     co-founder match pool — "bots are not people to find" — and a bot
+   *     carries an ordinary name on purpose. A league table is exactly where
+   *     that convention breaks: an account nobody is behind, ranked above real
+   *     builders, reads as a person who out-built them.
+   *   - **Suspended accounts.** Taken off every other surface the moment they
+   *     are suspended, and left at the top of this one.
+   *   - **Closed accounts.** Deletion anonymises the row rather than removing
+   *     it, so the tombstone kept its score and its place.
+   *
+   * ## The join
+   *
+   * One query instead of two per row. The old shape read `limit * 2` scores and
+   * then two queries for each — an unbounded, uncached, public endpoint doing
+   * 1 + 2N round trips.
+   *
+   * It also dropped a guard that could never fire. `if (!user) continue` was
+   * reading a score whose account had gone, and `user_reputation_scores.user_id`
+   * references `users` with no cascade, so the database will not allow that row
+   * to exist: the account cannot be deleted while the score is there. The join
+   * is here to filter on the account's columns, not to catch an orphan.
+   *
+   * `limit * 2` is still read, because the solo/team filter below rejects rows
+   * after the fact and the ranking has to be able to fill up.
+   */
   async getReputationLeaderboard(limit: number, filter?: "solo" | "team" | "all"): Promise<(UserReputation & { user: User; profile?: UserProfile })[]> {
-    const reps = await db.select().from(userReputationScores).orderBy(desc(userReputationScores.builderIndex)).limit(limit * 2);
-    
+    const reps = await db
+      .select({ rep: userReputationScores, user: users, profile: userProfiles })
+      .from(userReputationScores)
+      .innerJoin(users, eq(users.id, userReputationScores.userId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, userReputationScores.userId))
+      .where(and(
+        eq(users.isBot, false),
+        isNull(users.suspendedAt),
+        isNull(users.deletedAt),
+      ))
+      .orderBy(desc(userReputationScores.builderIndex))
+      .limit(limit * 2);
+
     const results: (UserReputation & { user: User; profile?: UserProfile })[] = [];
-    for (const rep of reps) {
-      const [user] = await db.select().from(users).where(eq(users.id, rep.userId));
-      if (!user) continue;
-      
+    for (const { rep, user, profile } of reps) {
       if (filter === "solo" || filter === "team") {
         const userProjects = await db.select().from(projects).where(eq(projects.ownerId, rep.userId));
         const hasSolo = userProjects.some(p => p.soloMode === true);
@@ -3296,8 +3338,7 @@ export class DatabaseStorage implements IStorage {
         if (filter === "solo" && !hasSolo) continue;
         if (filter === "team" && !hasTeam) continue;
       }
-      
-      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, rep.userId));
+
       results.push({ ...rep, user, profile: profile || undefined });
       if (results.length >= limit) break;
     }

@@ -56,15 +56,31 @@ const small = buildCustomMarket({
   innovationPace: 0.6,
 }, "vets")!;
 
+/*
+ * The six that sell. Podcasts is the seventh, and is an audience market: its
+ * listeners pay nothing, so it is priced by what its views, sponsors and
+ * supporters bring in (`audienceValue`) — a smaller business than the £6m one
+ * it was when every listener counted as a £14-a-year customer.
+ */
+const SELLING = NICHES.filter((n) => n.model !== "audience");
+
 describe("the seven markets written by hand", () => {
   it("are all at full scale, so nothing about them changes", () => {
-    for (const niche of NICHES) {
+    for (const niche of SELLING) {
       expect(marketScale(niche), `${niche.name} should be scale 1`).toBe(1);
     }
   });
 
+  it("prices Podcasts by what an audience earns, not as a membership each", () => {
+    const podcasts = NICHES.find((n) => n.id === "podcasts")!;
+    expect(podcasts.model).toBe("audience");
+    const scale = marketScale(podcasts);
+    expect(scale, "a real business, not a rounding error").toBeGreaterThan(0.05);
+    expect(scale, "and not the £6m one every listener paying would make it").toBeLessThan(0.5);
+  });
+
   it("open with the cash and the salaries they always did", () => {
-    for (const niche of NICHES) {
+    for (const niche of SELLING) {
       const c = open(niche);
       expect(c.cash, `${niche.name}'s bank`).toBe(STARTING_CASH);
       expect(c.scale).toBe(1);

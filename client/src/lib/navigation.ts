@@ -9,7 +9,7 @@
 export interface NavItem {
   title: string;
   url: string;
-  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "Gamepad2" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard" | "Banknote";
+  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "Gamepad2" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard" | "Banknote" | "Store";
   /** The surface whose flag hides this item. None for pages that aren't feature areas. */
   surface?: string;
 }
@@ -52,6 +52,16 @@ export const SECONDARY_NAV: NavItem[] = [
    * fortnight. The URL stays `/sprints` because links to it exist.
    */
   { title: "Simulations", url: "/sprints", icon: "Gamepad2", surface: "sprints" },
+  /*
+   * The marketplace, on its own flag.
+   *
+   * It needs its own entry because it is its own surface — `simMarket`, split
+   * out so the money path can be stopped without ending anybody's season — and
+   * the alternative is a destination that only exists if you already know the
+   * address. Separate from "Simulations" above for the same reason the flags
+   * are separate: one is playing, the other is buying and selling.
+   */
+  { title: "Simulation marketplace", url: "/simulations/market", icon: "Store", surface: "simMarket" },
   { title: "Messages", url: "/messages", icon: "MessageSquare", surface: "messages" },
   { title: "Contests and Communities", url: "/contests", icon: "Medal", surface: "contests" },
   // For existing businesses: training seasons, recruiting, challenges they sponsor, startups they follow.

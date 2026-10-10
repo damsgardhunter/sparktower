@@ -265,7 +265,23 @@ describe("telling people what happened to their money", () => {
     expect(await notices(project.ownerId), "the creator hears the decision").toContain("campaign_decision");
     expect(posted(null, "pledge_refunding"), "and by email, for whoever isn't coming back today").toBe(true);
 
-    // And again when the refund actually lands, so the statement entry has a name.
+    /*
+     * And again when the refund actually lands, so the statement entry has a name.
+     *
+     * The sweep is driven here rather than waited for. Rejecting fires one and
+     * does not wait (`void runRefundSweep()` in backing-routes.ts), and the
+     * sweep takes a `pg_try_advisory_lock` — so a sweep that starts while
+     * another is still running returns null and does nothing at all. The test
+     * above this one rejects a campaign too, and its fire-and-forget sweep was
+     * sometimes still holding the lock when this one's started: no refund, no
+     * second notice, and a ten-second poll that expired for a reason nothing in
+     * the failure mentioned. It passed locally and failed on a loaded runner,
+     * which is the signature of a race rather than a slow machine.
+     *
+     * Polled until the sweep actually gets the lock. Finding nothing due is a
+     * fine outcome — it means the route's own sweep got there first.
+     */
+    await expect.poll(async () => (await runRefundSweep()) !== null, { timeout: 15_000 }).toBe(true);
     await expect.poll(() => notices(pledge.backerId), { timeout: 10_000 }).toContain("pledge_refunded");
   });
 

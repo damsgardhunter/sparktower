@@ -17,6 +17,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db, pool } from "../../server/db";
 import { feedPosts } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -28,9 +29,12 @@ async function person(app: any, first: string) {
   n += 1;
   const agent = request.agent(app);
   const email = `postdel-${first.toLowerCase()}-${Date.now()}-${n}@example.test`;
-  expect((await agent.post("/api/auth/register").set("x-forwarded-for", ip()).send({ email, password, firstName: first })).status).toBe(201);
+  const made = await agent.post("/api/auth/register").set("x-forwarded-for", ip()).send({ email, password, firstName: first });
+  expect(made.status).toBe(201);
   await verifyEmail(app, email, ip());
   await agent.post("/api/profile/complete-onboarding").send({ displayName: `${first} Poster`, headline: "Here", bio: "Posting." });
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(made.body.id);
   return { agent, email };
 }
 

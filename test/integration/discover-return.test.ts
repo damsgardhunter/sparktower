@@ -22,6 +22,7 @@ import { recordActivity } from "../../server/analytics";
 import { db } from "../../server/db";
 import { activityEvents, exploreSeen, feedPosts, projects } from "@shared/schema";
 import { passMfa } from "../helpers/mfa";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -33,6 +34,8 @@ async function person(app: any) {
     .send({ email: `ret-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: `R${n}` });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.104.${180 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

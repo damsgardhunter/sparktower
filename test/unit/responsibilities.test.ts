@@ -363,7 +363,12 @@ describe("the schedule one person plays on", () => {
   /** Every lever a founder alone can ever be shown, deduped as the desk dedupes them. */
   const soloLevers = () => {
     const ids = new Set<string>();
-    for (const role of ROLES) for (const f of LEVER_FIELDS[role]) if (!LEVERS_FOR_A_TABLE.has(f.id)) ids.add(f.id);
+    /*
+     * Not a creator market's own levers (`audienceOnly`): those are on from the
+     * first period in an audience market, on every schedule, and absent
+     * everywhere else — so they are deliberately not in the solo order.
+     */
+    for (const role of ROLES) for (const f of LEVER_FIELDS[role]) if (!LEVERS_FOR_A_TABLE.has(f.id) && !f.audienceOnly) ids.add(f.id);
     return ids;
   };
 
@@ -380,9 +385,9 @@ describe("the schedule one person plays on", () => {
     expect(new Set(SOLO_ORDER).size).toBe(SOLO_ORDER.length);
   });
 
-  it("opens a season with eleven decisions rather than nineteen", () => {
+  it("opens a season with twelve decisions rather than nineteen", () => {
     const open = [...soloSchedule(16, 4)].filter(([, at]) => at === 1).map(([id]) => id);
-    expect(open).toHaveLength(11);
+    expect(open).toHaveLength(12);
     /*
      * Everything the desk's own integration tests file in a solo first period.
      * They are the contract: a ramp that took any of these away would be
@@ -391,6 +396,12 @@ describe("the schedule one person plays on", () => {
     expect(open).toEqual(expect.arrayContaining([
       "focus", "positioning", "price", "capacityTarget", "brandSpend",
       "featureSpend", "supportSpend", "headcount", "borrow", "cashBuffer",
+      /*
+       * And the founders' own time, which opens the season for the same reason
+       * the others do: somebody playing alone with £60,000 has no other way to
+       * get better at anything in their first month.
+       */
+      "founderHours",
     ]));
   });
 

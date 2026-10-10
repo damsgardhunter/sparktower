@@ -129,6 +129,24 @@ export const requireOwner: RequestHandler = (req: any, res, next) => {
   next();
 };
 
+/**
+ * Gate for the admin console and anything else only an operator should see.
+ *
+ * Lives here beside the other two rather than privately inside
+ * `admin-console-routes.ts`, where it was — the marketplace revenue report
+ * needs the same gate, and two definitions of "admin with a proved second
+ * factor" is one of them being updated alone.
+ */
+export const requireAdmin: RequestHandler = (req: any, res, next) => {
+  if (!req.user) return res.status(401).json({ message: "Not signed in" });
+  if (!atLeast(req.user.platformRole, "admin")) {
+    /* 404, like the two below: don't confirm this exists to somebody probing. */
+    return res.status(404).json({ message: "Not found" });
+  }
+  if (!mfaGate(req, res)) return;
+  next();
+};
+
 /** Gate for anything that moves money that isn't the caller's. */
 export const requireReviewer: RequestHandler = (req: any, res, next) => {
   if (!req.user) return res.status(401).json({ message: "Not signed in" });

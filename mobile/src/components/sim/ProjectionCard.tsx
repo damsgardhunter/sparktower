@@ -18,6 +18,7 @@ import { api } from "../../api/client";
 import { colors, font, fontFamily, isDark, radius, spacing } from "../../theme";
 import { Card, Icon } from "../ui";
 import { SimSectionTitle } from "./SimKit";
+import { NextYearSection, SeatImpactSection, TeamSection, type SeatImpact, type SeatMood, type YearAhead } from "./ForecastImpact";
 
 const VIZ = isDark
   ? { in: "#3987e5", out: "#d95926", total: "#898781", now: "#3987e5", coming: "#1c5cab", track: "#0d366b", grid: "#2c2c2a", good: "#0ca30c", bad: "#e66767" }
@@ -40,6 +41,9 @@ interface Projection {
   target: { amount: number; projected: number; met: boolean; strikes: number; wouldRemove: boolean } | null;
   bankrupt: boolean;
   nextYearDemand: { likely: number; low: number; high: number } | null;
+  /** The year after, holding this course. Absent from a server older than this screen. */
+  nextYear?: YearAhead | null;
+  team?: SeatMood[];
 }
 
 /**
@@ -208,7 +212,10 @@ export function ProjectionCard({ ventureId, draft, filedStamp, currency }: {
 
   const { data, isFetching } = useQuery({
     queryKey: ["sim-projection", ventureId, key, filedStamp],
-    queryFn: () => api<{ year: number; filed: Projection; drafted: Projection; absent: string[] }>(
+    queryFn: () => api<{
+      year: number; filed: Projection; drafted: Projection; absent: string[];
+      yourRole?: string | null; solo?: boolean; impact?: SeatImpact[];
+    }>(
       `/api/sim/ventures/${ventureId}/projection${key ? `?draft=${encodeURIComponent(key)}` : ""}`,
     ),
     // Hold the last answer while the next is worked out — no flash.
@@ -322,6 +329,11 @@ export function ProjectionCard({ ventureId, draft, filedStamp, currency }: {
             </View>
           ) : null}
         </View>
+
+        {/* What every saved decision is doing — this year, next year, and to the people. See ForecastImpact. */}
+        <SeatImpactSection impact={data.impact ?? []} yourRole={data.yourRole ?? null} solo={data.solo} money={(n) => amount(n, sym)} />
+        <NextYearSection p={p.nextYear} f={f.nextYear} money={(n) => amount(n, sym)} />
+        {!data.solo ? <TeamSection team={p.team} /> : null}
 
         {data.absent.length > 0 ? (
           <Text style={label}>Not filed yet: {data.absent.join(", ")} — running on last year's plan.</Text>

@@ -33,7 +33,7 @@
 import crypto from "node:crypto";
 import type { Express } from "express";
 import { and, eq, isNull, ne, gt } from "drizzle-orm";
-import bcrypt from "bcryptjs";
+import { hashPassword } from "./password-hash";
 import { db } from "./db";
 import { passwordResetTokens, users, mobileRefreshTokens, rateLimitHits } from "@shared/schema";
 import { sql } from "drizzle-orm";
@@ -149,7 +149,7 @@ export async function resetPassword(
   if (weak) return { ok: false, reason: "invalid_input", message: weak.message };
   if (await isBreached(newPassword)) return { ok: false, reason: "breached_password", message: BREACHED_MESSAGE };
 
-  const passwordHash = await bcrypt.hash(newPassword, 12);
+  const passwordHash = await hashPassword(newPassword);
   const now = new Date();
 
   return db.transaction(async (tx) => {

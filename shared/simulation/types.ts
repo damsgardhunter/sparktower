@@ -99,6 +99,27 @@ export interface Segment {
   /** What this segment considers a normal price, in whole currency units. */
   referencePrice: number;
   /**
+   * How fast a company working for *these* customers gets better at the work,
+   * overriding the market's `innovationPace` for whoever is positioned here.
+   *
+   * Absent on almost every segment, and absent means "the market's pace", so
+   * nothing balanced against the seven catalogue markets moves unless a segment
+   * opts in.
+   *
+   * It exists because one pace for a whole market is wrong wherever the hard
+   * part is *which customers you serve* rather than the trade itself.
+   * Construction is the clear case: the market's pace is 0.45, the lowest of
+   * the seven, and quality is the axis its customers weigh most — so quality
+   * decayed by three a year and was bought back at forty-five per cent, and a
+   * firm doing kitchens was held to the learning curve of public infrastructure
+   * work. Measured: a one-region residential firm stuck at quality 43 and
+   * under seven per cent of its own town, against incumbents at 51–83.
+   *
+   * Fitting out a house is not slow to learn. Becoming a company a developer or
+   * a council will hire is, and that is a different thing wearing the same word.
+   */
+  innovationPace?: number;
+  /**
    * Who went and found these people, for a segment that was not in the market
    * to begin with. See `niche-openings.ts`.
    *
@@ -188,6 +209,26 @@ export interface Niche {
    */
   penetration?: Partial<Record<ContinentId, number>>;
   /** What it costs to make one unit, before anyone improves anything. */
+  /**
+   * What it costs to acquire one customer here, in this market's money.
+   *
+   * Written by the market rather than derived, because it is the number every
+   * trade knows about itself and nobody can work out from the outside: a
+   * subscriber costs a few pounds, a clinic costs hundreds, a construction
+   * client costs a tender. Absent falls back to a few periods of what the
+   * customer pays — see `costPerCustomer`.
+   */
+  /**
+   * How much more than a segment's demand its companies may hold between them,
+   * as a share — nought in a market where a customer belongs to one supplier.
+   *
+   * An audience does not work that way: somebody can follow two channels, so a
+   * segment's subscriptions can exceed its people. Only `audienceMarket` sets
+   * it, on the copy of the niche it shapes for allocation, and only the shrink
+   * pass in `allocate` reads it. See `OVERLAP`.
+   */
+  overlap?: number;
+  acquisitionCost?: number;
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
   innovationPace: number;
@@ -218,6 +259,20 @@ export interface Niche {
    * than the generic name it replaced.
    */
   assets?: { kind: string; name: string; blurb: string }[];
+  /**
+   * What the founders can do with a period of their own time, in this market's
+   * words. Nine, matched to `ACTION_SLOTS` by position — see `actions.ts`.
+   */
+  actions?: { name: string; blurb?: string }[];
+  /**
+   * How the business earns. Unset is "sales": customers pay a price and
+   * capacity caps how many can be served. "audience" is a channel or a show:
+   * subscribing is free, capacity is production, and the money is ads,
+   * sponsors and memberships. See `creator.ts`.
+   */
+  model?: "sales" | "audience";
+  /** The audience market's rates, sponsors and milestones. Read through `audienceModelFor`. */
+  audience?: Partial<import("./creator").AudienceModel>;
 }
 
 /**
@@ -378,6 +433,21 @@ export interface Company {
 
   /** 0–100. Slow to build, quick to lose, and the thing that makes everything else cheaper. */
   reputation: number;
+  /**
+   * What the officers draw, against a full executive salary each. Absent is a
+   * full salary, which is every company in a funded season.
+   *
+   * Set by `atStanding` for a company opened where it actually is: a founder
+   * paying themselves a market rate before they have a customer is not a
+   * founder, and the bill was killing the opening. See `opening.ts`.
+   */
+  officerPay?: number;
+  /**
+   * This period's push from the chief executive's focus, on appeal. Set on
+   * the copy of the market the year is decided on and never stored. See
+   * `FOCUS_DIRECT`.
+   */
+  focusPush?: number;
   /** 0–100. What the product is actually like. */
   quality: number;
   /** 0–100. How many people have heard of it and think well of it. */
@@ -602,6 +672,27 @@ export interface Company {
    * find on day fourteen that it won a market it owns a third of.
    */
   founderShare: number;
+  /**
+   * Work in progress on things the founders are making themselves rather than
+   * buying: weeks put in, against each marketplace listing's id.
+   *
+   * Carried between periods because a build is not a period's decision — a
+   * second kitchen line at twenty-five hours a week is a month's work at full
+   * commitment and three months at a third of it, and the whole point of
+   * putting fewer hours in is that it takes longer. See `buildProgress`.
+   */
+  builds?: Record<string, number>;
+  /**
+   * A per-segment appeal multiplier an incumbent gets where it is strongest,
+   * by segment id.
+   *
+   * Only set inside `audienceMarket`, and only for incumbents: an audience
+   * market has no regional holdings to be strong *in*, so this is how "the
+   * big channel in Texas already owns Texas" is expressed at all. Nothing
+   * reads it outside the appeal chain and nothing stores it between periods —
+   * it is derived, not state.
+   */
+  strongholds?: Record<string, number>;
 }
 
 /** Something a company owns that another company might want. */
@@ -682,6 +773,22 @@ export function repairCompany(c: Company): Company {
 export interface World {
   seasonId: string;
   niche: Niche;
+  /**
+   * The money this business counts in, for the sentences the engine writes.
+   *
+   * Every figure the engine puts in prose used to carry a hardcoded `£`, so a
+   * season built around a business banking in dollars was told its investors
+   * wanted "£4,200,000" — the same error `shared/currency.ts` exists to prevent,
+   * made inside the engine where that module could not reach it.
+   *
+   * Optional, and absent means GBP rather than the product's default of USD.
+   * That is a compatibility choice and not a claim: a world written before this
+   * existed produced pound signs, and quietly turning every one of them into a
+   * dollar sign would rewrite the prose of every season already in flight. The
+   * tick passes the real one (`currencyForSeason`), so the fallback only reaches
+   * callers that have no season behind them — tests, probes and projections.
+   */
+  currency?: import("../currency").CurrencyCode;
   /** 1-based. Year 1 is the first day of the season. */
   year: number;
   companies: Company[];

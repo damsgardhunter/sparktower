@@ -7,6 +7,7 @@
  */
 import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
+import { finishOnboarding } from "./onboarding";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -19,7 +20,7 @@ test("commenting on a followed builder's progress comes back round when they rep
   const beaUser = await (await bea.post("/api/auth/register", { data: { email: `e2e-bea-xc-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } })).json();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(bea);
-  await bea.post("/api/profile/complete-onboarding", { data: { displayName: "Bea Builder", headline: "Shipping a meal planner", bio: "Building in public." } });
+  await finishOnboarding(bea, { displayName: "Bea Builder", headline: "Shipping a meal planner", bio: "Building in public." });
   const update = `Shipped fridge scanning ${stamp()}`;
   const post = await (await bea.post("/api/feed", { data: { postType: "project_update", content: update } })).json();
 
@@ -27,7 +28,7 @@ test("commenting on a followed builder's progress comes back round when they rep
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ari-xc-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } })).ok()).toBeTruthy();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(page.request);
-  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Ari Explorer", headline: "Looking for builders", bio: "Here for the loop." } })).ok()).toBeTruthy();
+  await finishOnboarding(page.request, { displayName: "Ari Explorer", headline: "Looking for builders", bio: "Here for the loop." });
   expect((await page.request.post(`/api/users/${beaUser.id}/follow`, { data: { following: true } })).ok()).toBeTruthy();
 
   // Her progress is in Following; Ari answers it.

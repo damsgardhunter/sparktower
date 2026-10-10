@@ -20,6 +20,7 @@ import request from "supertest";
 import Stripe from "stripe";
 import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
 import { makeVerifiedCompany, proveDomain, freshDomain } from "../helpers/company";
+import { finishOnboarding } from "../helpers/onboarding";
 
 const WEBHOOK_SECRET = fakeWebhookSecret("pay-per-use");
 const signer = new Stripe(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
@@ -92,6 +93,8 @@ async function builder(app: any, opts: { balanceCents?: number } = {}) {
   const reg = await agent.post("/api/auth/register").set("x-forwarded-for", ip).send({ email, password: "a-good-passphrase-here", firstName: "Pat" });
   expect(reg.status, JSON.stringify(reg.body)).toBe(201);
   await verifyEmail(app, email, ip);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(reg.body.id);
   process.env.RATE_LIMIT_EXEMPT_EMAILS = [process.env.RATE_LIMIT_EXEMPT_EMAILS, email].filter(Boolean).join(",");
   if (opts.balanceCents) await db.update(users).set({ balanceCents: opts.balanceCents }).where(eq(users.id, reg.body.id));
   const project = await agent.post("/api/projects").send({

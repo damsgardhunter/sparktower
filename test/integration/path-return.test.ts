@@ -12,6 +12,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { notify } from "../../server/notifications";
 import { db } from "../../server/db";
 import { projectMembers, projects, notifications, pathPace, projectKanbanTasks } from "@shared/schema";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -23,6 +24,8 @@ async function person(app: any, first: string) {
     .send({ email: `return-${first}-${Date.now()}-${n}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.104.${10 + (n % 200)}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 const settle = () => new Promise((r) => setTimeout(r, 500));

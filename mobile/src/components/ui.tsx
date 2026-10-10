@@ -103,22 +103,31 @@ export function Screen({
 }
 
 export function Card({
-  children, style, onPress, accent,
+  children, style, onPress, accent, testID,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
   /** Left edge highlight, for severity or category. */
   accent?: string;
+  /**
+   * So a card can be found by name.
+   *
+   * Everything else in the app tags an inner `View` instead, which works and
+   * means the handle is on a box inside the card rather than on the card — and
+   * on a pressable card, not on the thing that takes the press. Forwarded to
+   * the outermost element either way.
+   */
+  testID?: string;
 }) {
   const body = (
-    <View style={[s.card, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null, style]}>
+    <View style={[s.card, accent ? { borderLeftWidth: 3, borderLeftColor: accent } : null, style]} testID={onPress ? undefined : testID}>
       {children}
     </View>
   );
   if (!onPress) return body;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => pressed && s.pressed}>
+    <Pressable onPress={onPress} style={({ pressed }) => pressed && s.pressed} testID={testID}>
       {body}
     </Pressable>
   );

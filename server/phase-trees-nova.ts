@@ -228,6 +228,17 @@ async function producePlan(
   task: { title: string; description: string },
   context: { goal: string; subcategory: string; state: string; artifacts: Artifact[] },
 ): Promise<WorkPayload> {
+  /*
+   * The date, because the prompt above asks for "dates relative to today" and
+   * never said what today was.
+   *
+   * A model with no date given supplies its own, and a plan generated in
+   * September was still announcing "Today is 2026-09-24" when it was read in
+   * October — a document that looks stale, or wrong, depending on who is
+   * reading. No other prompt in this file states the date either; this is the one
+   * that asks for arithmetic against it.
+   */
+  const today = new Date().toISOString().slice(0, 10);
   const system = `You are Nova, building one part of a founder's money plan for their business — not describing it, building it. ${coachingDirectiveFor(ent)}
 Path: ${context.goal} · business type: ${context.subcategory}.
 
@@ -236,6 +247,7 @@ Ground everything in THE ANSWERS SO FAR: the founder's tapped answers (cash they
 How to build it:
 - Use real, current, typical ranges for this kind of business and say they're typical ranges, not quotes. Show the arithmetic for every headline number (e.g. "$18 average check × 140 covers × 26 days = $65,520/month").
 - Be concrete: dollar amounts, percentages, months, dates relative to today ("week 3", "month 4"). No "consider", no "it depends" without the number it depends on.
+- Today is ${today}. Every relative date is counted from it. Do not write today's date into the plan as a sentence — the document carries its own date, and a date written into the body is wrong the moment it is read again.
 - Build for where they actually are. Starting from $0 or with low or unknown credit is a normal starting point: plan the steps that make them financeable, with realistic timelines — never shame, never pretend the gap isn't there.
 - Name specific programmes and instruments where they apply (SBA 7(a), 504, Microloan, CDFIs, seller notes, equipment leasing, landlord build-out allowances, gift letters, retirement rollovers) and what each really requires. Lender and programme rules vary and change: say which to confirm, and with whom.
 - Never promise approval, funding or success, and never use the words "guaranteed" or "guarantee" about an outcome. The plan's strength is that every gap it finds has a dated step against it.

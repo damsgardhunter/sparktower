@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { contests, contestParticipants } from "@shared/schema";
+import { contests, contestParticipants, userProfiles } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -29,9 +29,21 @@ async function person(app: any, first: string) {
   n += 1;
   const agent = request.agent(app);
   const email = `contest-${first.toLowerCase()}-${Date.now()}-${n}@example.test`;
-  expect((await agent.post("/api/auth/register").set("x-forwarded-for", ip()).send({ email, password: "Testpass123!", firstName: first })).status).toBe(201);
+  const made = await agent.post("/api/auth/register").set("x-forwarded-for", ip()).send({ email, password: "Testpass123!", firstName: first });
+  expect(made.status).toBe(201);
   await verifyEmail(app, email, ip());
-  return { agent, email };
+  /*
+   * Finished, because entering a contest needs a finished profile — a contest
+   * is judged against other people, and an entrant nobody can see is not one.
+   * Registration leaves a profile row with nothing in it (the shape a Google
+   * sign-in arrives in), so without this every entrant here is refused with
+   * `onboarding_required`. See shared/onboarding.ts.
+   */
+  await db.update(userProfiles).set({
+    displayName: `${first} Entrant`, skills: ["Shipping"], hoursPerWeek: 20,
+    riskTolerance: "moderate", scheduleStyle: "flexible",
+  } as any).where(eq(userProfiles.userId, made.body.id));
+  return { agent, email, id: made.body.id as string };
 }
 
 async function contest(fields: Partial<typeof contests.$inferInsert> = {}) {

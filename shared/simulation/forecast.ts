@@ -41,7 +41,8 @@ import { sanitiseDecisions } from "./decisions";
 import type { Company, Economy, World } from "./types";
 import { allocate, atScale } from "./market";
 import { incumbentYear } from "./incumbents";
-import { lift } from "./decisions";
+import { audienceMarket, isAudience, readsFor } from "./creator";
+import { focusDirect, lift } from "./decisions";
 import { brandLanding, staffing } from "./lag";
 import type { TeamDecisions } from "./decisions";
 
@@ -60,7 +61,7 @@ export interface Forecast {
 }
 
 /** What the drafted spending does to the company before the market sees it. A sketch of the engine, not the engine. */
-function projected(company: Company, d: TeamDecisions | undefined, innovationPace: number, per = 1): Company {
+function projected(company: Company, d: TeamDecisions | undefined, innovationPace: number, per = 1, niche?: { model?: string }): Company {
   /*
    * With the same lags the year itself applies (see `lag.ts`), or the forecast
    * would count brand and quality this year that will not arrive until next —
@@ -73,9 +74,11 @@ function projected(company: Company, d: TeamDecisions | undefined, innovationPac
   const brandGain = brand.now + lift(d?.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per);
   const qualityGain = Math.max(0, company.pipeline ?? 0) * per;
   const staff = staffing(company, d?.coo?.headcount ?? 0, per);
+  /* At the market's scale, as `resolveYear` now reads it — a forecast on the old
+     bare threshold would promise a small market's table service it will not get. */
   const serviceGain = lift(
     (d?.coo?.supportSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
-    150_000 * per, 15 * per,
+    atScale(150_000, company.scale) * per, 15 * per,
   );
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
   return {
@@ -98,6 +101,8 @@ function projected(company: Company, d: TeamDecisions | undefined, innovationPac
       ? Array.from(new Set([...company.cities, ...(d?.cmo?.targetCities ?? [])]))
       : company.cities,
     capacity: Number.MAX_SAFE_INTEGER,
+    /* The focus being drafted, felt the way the engine will feel it. */
+    focusPush: focusDirect(d?.ceo?.focus ?? undefined, niche).appeal,
   };
 }
 
@@ -125,9 +130,13 @@ function withIncumbentMoves(world: World, me: Company, economy: Economy): Compan
   });
 }
 
-function demandAt(world: World, me: Company, year: number, economy: Economy): { total: number; bySegment: Record<string, number> } {
-  const companies = withIncumbentMoves(world, me, economy);
-  const { held } = allocate(companies, world.niche, year, economy, Math.max(1, Math.round(world.periodsPerYear ?? 1)));
+function demandAt(world: World, me: Company, year: number, economy: Economy, reads?: number): { total: number; bySegment: Record<string, number> } {
+  const moved = withIncumbentMoves(world, me, economy);
+  /* A channel's audience is won on a free, unlimited market — the same view the engine takes. */
+  const market = isAudience(world.niche)
+    ? audienceMarket(moved, world.niche, (c) => readsFor(c, c.id === me.id ? reads : undefined))
+    : { companies: moved, niche: world.niche };
+  const { held } = allocate(market.companies, market.niche, year, economy, Math.max(1, Math.round(world.periodsPerYear ?? 1)));
   const mine = held[me.id] ?? {};
   return { total: Object.values(mine).reduce((sum, n) => sum + n, 0), bySegment: mine };
 }
@@ -151,8 +160,8 @@ export function forecastDemand(input: {
    * marketing it was never going to be able to buy.
    */
   const funded = draft && company.kind === "player" ? sanitiseAndFund(company, draft, world.niche, economy) : draft;
-  const me = projected(company, funded, world.niche.innovationPace, 1 / Math.max(1, Math.round(world.periodsPerYear ?? 1)));
-  const at = demandAt(world, me, year, economy);
+  const me = projected(company, funded, world.niche.innovationPace, 1 / Math.max(1, Math.round(world.periodsPerYear ?? 1)), world.niche);
+  const at = demandAt(world, me, year, economy, funded?.cmo?.sponsorReads);
   /*
    * And capped by the people the draft is willing to employ.
    *
@@ -175,7 +184,7 @@ export function forecastDemand(input: {
 
   const curve = [0.8, 0.9, 1, 1.1, 1.2].map((m) => {
     const price = Math.max(1, Math.round(me.price * m));
-    return { price, likely: m === 1 ? at.total : demandAt(world, { ...me, price }, year, economy).total };
+    return { price, likely: m === 1 ? at.total : demandAt(world, { ...me, price }, year, economy, funded?.cmo?.sponsorReads).total };
   });
 
   /*

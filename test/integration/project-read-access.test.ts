@@ -15,6 +15,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { projects, projectKanbanTasks } from "@shared/schema";
 import { verifyEmail } from "../helpers/verify-email";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -26,6 +27,8 @@ async function person(app: any, first: string) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.113.${10 + n}`).send({ email, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
   await verifyEmail(app, email, `198.51.114.${10 + n}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 

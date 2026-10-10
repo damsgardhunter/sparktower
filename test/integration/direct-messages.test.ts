@@ -22,6 +22,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -38,6 +39,8 @@ async function webPerson(app: any, first: string) {
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await verifyEmail(app, email, `198.51.121.${10 + (n % 200)}`);
   await agent.post("/api/profile/complete-onboarding").send({ displayName: first });
+  /* Messaging needs a finished profile now; the form only sets the flag. */
+  await finishOnboarding(res.body.id, { displayName: first });
   return { agent, id: res.body.id as string, email };
 }
 

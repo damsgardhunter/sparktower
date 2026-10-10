@@ -27,6 +27,7 @@ import { registerPushRoutes } from "./push-routes";
 import { standingsFor } from "./contest-standings";
 import { downloadName, extensionFor } from "./download-name";
 import { registerBackerFulfilmentRoutes, registerMyRewardRoutes } from "./backer-fulfilment-routes";
+import { registerPaymentMethodRoutes } from "./payment-methods";
 import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
@@ -52,6 +53,11 @@ import { recordExploreAction } from "./explore-actions";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { registerProjectVisualRoutes } from "./project-visuals";
 import { registerBrandKitRoutes } from "./brand-kit";
+import { registerAdBrandRoutes } from "./ad-brand-routes";
+import { registerAdRenderRoutes } from "./ad-render-routes";
+import { registerNovaPlanRoutes } from "./simulation-nova-plan";
+import { registerSimulationMarketplaceRoutes } from "./simulation-market-listings";
+import { registerSimulationComplianceRoutes } from "./simulation-market-compliance";
 import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
@@ -118,7 +124,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
-import { isValidSubcategory, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
+import { isValidSubcategory, subcategoryMismatch, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
@@ -153,6 +159,7 @@ import { notifyWatchersOfNewProject } from "./scouting-alerts";
 import { PROSE_STYLE_RULE, tidyProse } from "./prose-style";
 import { connectFailure } from "./stripe-connect-errors";
 import { addStandingNote } from "@shared/standing-notes";
+import { requireOnboarded } from "./require-onboarded";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -467,6 +474,7 @@ export async function registerRoutes(
   registerPushRoutes(app);
   registerBackerFulfilmentRoutes(app);
   registerMyRewardRoutes(app);
+  registerPaymentMethodRoutes(app);
   registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);
@@ -524,6 +532,11 @@ export async function registerRoutes(
   registerBackingRoutes(app);
   registerProjectVisualRoutes(app);
   registerBrandKitRoutes(app);
+  registerAdBrandRoutes(app);
+  registerAdRenderRoutes(app);
+  registerNovaPlanRoutes(app);
+  registerSimulationMarketplaceRoutes(app);
+  registerSimulationComplianceRoutes(app);
   registerPostImageRoutes(app);
 
   // User Profile
@@ -3244,7 +3257,7 @@ ${projectContext}`;
       const goal = normaliseGoal(req.body?.goal);
       const subcategory = String(req.body?.subcategory ?? "");
       if (!goal) return res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" });
-      if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch", field: "subcategory" });
+      if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: subcategoryMismatch(goal, subcategory), code: "subcategory_mismatch", field: "subcategory" });
       const result = await startTrack(req.params.id, goal, subcategory);
       void recordActivity({
         name: "track.started", userId: (req.user as any).id, visitorId: req.visitorId ?? "unknown", sessionId: req.sessionId ?? "unknown",
@@ -3906,7 +3919,7 @@ ${projectContext}`;
       const goal = String(req.body?.goal ?? "");
       const subcategory = String(req.body?.subcategory ?? "other");
       if (!PROJECT_GOALS.some((g) => g.id === goal)) return res.status(400).json({ message: "Pick one of the three paths.", code: "invalid_input", field: "goal" });
-      if (!isValidSubcategory(goal as any, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch" });
+      if (!isValidSubcategory(goal as any, subcategory)) return res.status(400).json({ message: subcategoryMismatch(String(goal), subcategory), code: "subcategory_mismatch" });
       if (goal === project.goal && subcategory === project.subcategory) return res.status(400).json({ message: "The project is already on that path.", code: "same_path" });
       const result = await switchPath(req.params.id, goal as any, subcategory);
       void recordActivity({
@@ -6677,7 +6690,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
+  app.post("/api/contests/:id/join", isAuthenticated, requireOnboarded("enter a contest"), rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -6705,7 +6718,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/contests/:id/submit", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
+  app.post("/api/contests/:id/submit", isAuthenticated, requireOnboarded("file a contest entry"), rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -6777,7 +6790,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // Connections
-  app.post("/api/connections/request", isAuthenticated, rateLimit("connect"), async (req: any, res) => {
+  app.post("/api/connections/request", isAuthenticated, requireOnboarded("connect with somebody"), rateLimit("connect"), async (req: any, res) => {
     try {
       const requesterId = (req.user as any).id;
       const { userId: receiverId } = req.body;
@@ -6997,7 +7010,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/messages/:userId", isAuthenticated, rateLimit("message"), async (req: any, res) => {
+  app.post("/api/messages/:userId", isAuthenticated, requireOnboarded("send a message"), rateLimit("message"), async (req: any, res) => {
     try {
       const senderId = (req.user as any).id;
       const receiverId = req.params.userId;

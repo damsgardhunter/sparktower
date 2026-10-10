@@ -23,7 +23,7 @@ import type { Express } from "express";
 import { PERIOD_NAME, periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles, companies, projects } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, simBids, users, userProfiles, companies, projects } from "@shared/schema";
 import { currencyOf, DEFAULT_CURRENCY, type CurrencyCode } from "@shared/currency";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, rateLimit } from "./moderation";
@@ -33,7 +33,8 @@ import { canEnter, continentOf, regionById } from "@shared/simulation/geography"
 import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, ROLES, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
+import { LEVERS_FOR_A_TABLE, LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, offerActions, speak, stepFor } from "@shared/simulation/levers";
+import { buildableActions, foundersActions } from "@shared/simulation/actions";
 import { economyFor } from "@shared/simulation/season";
 import { debtDrag, IDLE_RATE, marketPriceOf, officersOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
@@ -51,7 +52,9 @@ import {
 } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
 import { incumbentYear } from "@shared/simulation/incumbents";
-import { assetEffects } from "@shared/simulation/assets";
+import { assetEffects, marketListings } from "@shared/simulation/assets";
+import { withOptions } from "@shared/simulation/lever-options";
+import { audienceModelFor, isAudience, wordsOf } from "@shared/simulation/creator";
 import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
@@ -96,14 +99,14 @@ export async function currencyForSeason(companyId: string | null | undefined): P
   return currencyOf(row?.currency);
 }
 
-async function seatOf(ventureId: string, userId: string) {
+export async function seatOf(ventureId: string, userId: string) {
   const [seat] = await db.select().from(simSeats)
     .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, userId)));
   return seat ?? null;
 }
 
 /** Everything filed for a venture in a given year, as the engine's shape. */
-async function draftFor(ventureId: string, year: number): Promise<{ decisions: TeamDecisions; filedBy: Record<string, string> }> {
+export async function draftFor(ventureId: string, year: number): Promise<{ decisions: TeamDecisions; filedBy: Record<string, string> }> {
   const rows = await db
     .select({ role: simDecisions.role, payload: simDecisions.payload, userId: simDecisions.userId })
     .from(simDecisions)
@@ -116,6 +119,33 @@ async function draftFor(ventureId: string, year: number): Promise<{ decisions: T
     filedBy[r.role] = r.userId;
   }
   return { decisions, filedBy };
+}
+
+/**
+ * This period's shelf, as things the founders' week could go into.
+ *
+ * Dealt from the season and the period exactly as the auction and
+ * `resolveYear` deal it — same seed, same hand — so the lot somebody puts
+ * hours into is the lot they were shown and the lot the engine will resolve.
+ * Only what `byHand` says is work comes back (see `buildableActions`), because
+ * an ambassador is not a thing anybody builds.
+ *
+ * One function rather than three copies: the desk, the projection and the
+ * filing all have to agree about what was on offer, and the filing is checked
+ * against it.
+ */
+function buildableNow(
+  seasonId: string,
+  niche: Niche,
+  year: number,
+  periods: number,
+  company: Company | undefined,
+) {
+  if (!company) return [];
+  return buildableActions(marketListings({
+    seasonId, year, niche, periods,
+    owned: (company.assets ?? []).map((a) => a.name),
+  }));
 }
 
 export function registerSimulationDeskRoutes(app: Express): void {
@@ -206,6 +236,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
+
+    const buildable = buildableNow(season.id, niche, year, periods, company);
     /*
      * The whole season's length, which the solo schedule needs: it spreads one
      * person's levers across the season rather than handing them five desks'
@@ -251,7 +283,24 @@ export function registerSimulationDeskRoutes(app: Express): void {
       .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
       .where(eq(simSeats.ventureId, venture.id));
 
-    const preview = draftPreview({ company, niche, decisions, economy });
+    /*
+     * Sealed bids the chief executive has standing this year, totalled.
+     *
+     * On the desk because the commitment meter is the only place the five of them
+     * see what they have promised between them, and a bid is promised money the
+     * meter could not see: the market screen warns the one person placing them,
+     * and had no way to tell the other four, who were filing a year against a
+     * total that looked comfortable. The seal is not broken by this — it is this
+     * company's own bids, shown to this company's own table, and the amounts of
+     * everybody else's stay where they were.
+     */
+    const bidRows = await db
+      .select({ amount: simBids.amount })
+      .from(simBids)
+      .where(and(eq(simBids.ventureId, company.id), eq(simBids.year, season.year)));
+    const bidsOutstanding = bidRows.reduce((sum, row) => sum + Math.max(0, Number(row.amount) || 0), 0);
+
+    const preview = draftPreview({ company, niche, decisions, economy, bids: bidsOutstanding });
 
     const [mine] = seat.role
       ? await db.select().from(simChallenges).where(and(
@@ -414,9 +463,11 @@ export function registerSimulationDeskRoutes(app: Express): void {
          * on one screen is nineteen decisions before the first one is made, so
          * theirs arrive a few a period across the season. See `soloSchedule`.
          */
-        .filter((base) => solo
+        /* A creator market's own levers: there from the start, and nowhere else. */
+        .filter((base) => !base.audienceOnly || isAudience(niche))
+        .filter((base) => base.audienceOnly || (solo
           ? (soloLevers.get(base.id) ?? Infinity) <= year
-          : isUnlocked(r, base.id, year, periods))
+          : isUnlocked(r, base.id, year, periods)))
         /*
          * And not the ones that are only decisions about colleagues. A founder
          * holding every desk has no budget to split between themselves and no
@@ -425,7 +476,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         .filter((base) => !solo || !LEVERS_FOR_A_TABLE.has(base.id))
         // Which desk it came from, kept so the unlock year below is asked of
         // the right one — solo puts five desks' levers in a single list.
-        .map((base) => ({ base, desk: r }))))
+        /* A founder's arrows move in thousands, not fifty-thousands — see `stepFor`. */
+        .map((base) => ({ base: stepFor(base, solo), desk: r }))))
         .map(({ base, desk }) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
@@ -433,212 +485,12 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const unlocksIn = solo
           ? Math.ceil((soloLevers.get(base.id) ?? 1) / periods)
           : unlockYear(desk, base.id);
-        const field = { ...speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
-        if (field.id === "tiers") {
-          return {
-            ...field,
-            options: niche.segments.map((s) => ({ value: s.id, label: s.name, help: `Pays around ${s.referencePrice} and ${s.priceSensitivity >= 0.6 ? "watches every penny" : s.priceSensitivity <= 0.3 ? "barely looks at the price" : "notices price"}.` })),
-          };
-        }
-        /*
-         * The year's offers, for the chief executive to answer and everybody
-         * else to vote on. The same list for both, so a seat voting can read
-         * exactly what it is voting on.
-         */
-        if (field.id === "deals" || field.id === "dealVotes") {
-          return {
-            ...field,
-            options: offers.map((o) => ({ value: o.id, label: o.title, help: o.terms })),
-          };
-        }
-        // What to say about last year's shock — and who to blame, if it comes to that.
-        if (field.id === "shockAnswer") {
-          if (!company.shock) return { ...field, options: [] };
-          return {
-            ...field,
-            label: `Answer: ${company.shock.headline}`,
-            options: [
-              { value: "statement", label: "Make a statement", help: `Costs ${statementCost(niche).toLocaleString()} to do well, and wins back about half of the ${Math.round(company.shock.reputation)} points of reputation it cost.` },
-              { value: "silence", label: "Say nothing", help: "Cheap, and it reads as evasive: a little more reputation goes." },
-              /*
-               * Blaming a colleague, where there is one. A founder holding
-               * every desk blaming "the chief technology officer" in public is
-               * blaming themselves, which is not a strategy the game should
-               * offer with a straight face.
-               */
-              ...(solo ? [] : overrulable(company.seats)).map((r) => ({
-                value: `blame_${r}`,
-                label: `Blame the ${ROLE_TITLES[r].toLowerCase()}`,
-                help: `Wins back about 70% of it, and costs that seat 25 points of loyalty. They are at ${Math.round(personOf(company, r).loyalty)}.`,
-              })),
-            ],
-          };
-        }
-        /*
-         * The kinds of customer this company could go looking inside. Its own
-         * niche is left off — one a season — and so is a segment somebody has
-         * already carved this company's corner out of.
-         */
-        if (field.id === "openNiche") {
-          const opened = ((season.world as World | null)?.openedNiches ?? []);
-          if (opened.some((o) => o.openedBy === company.id)) return { ...field, options: [] };
-          return {
-            ...field,
-            options: [
-              { value: "", label: "Not this year", help: "Keep the year's research money." },
-              ...niche.segments
-                .filter((seg) => !opened.some((o) => o.id === seg.id))
-                .map((seg) => ({
-                  value: seg.id,
-                  label: `Look inside ${seg.name.toLowerCase()}`,
-                  help: `${seg.description} Costs ${researchCost(niche).toLocaleString()}, and what you find depends on what you are already better at than everyone else.`,
-                })),
-            ],
-          };
-        }
-        // The improvement programmes not already running, and what one costs.
-        if (field.id === "programme") {
-          const running = new Set((company.programmes ?? []).map((p) => p.id));
-          return {
-            ...field,
-            options: [
-              { value: "", label: "None this year", help: "Keep the money." },
-              ...Object.entries(PROGRAMMES).filter(([id]) => !running.has(id as ProgrammeId)).map(([id, p]) => ({
-                value: id, label: p.name, help: `${p.blurb} ${programmeCost(niche).toLocaleString()} to start.`,
-              })),
-            ],
-          };
-        }
-        /*
-         * The region announced for next year, if the company has not
-         * committed to one already — put up by operations, voted on by the
-         * other four. The same region and the same price on both levers, so
-         * a seat voting is reading exactly what it is voting on.
-         */
-        if (field.id === "expand" || field.id === "expandVote") {
-          // No operations seat, no proposal, so nothing for anyone to vote on.
-          const announced = company.expanding || !company.seats.includes("coo")
-            ? null
-            : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
-          const price = announced ? Math.round(announced.entryCost * EXPANSION_DISCOUNT).toLocaleString() : "";
-          if (!announced) return { ...field, options: [] };
-          if (field.id === "expandVote") {
-            return {
-              ...field,
-              options: [{
-                value: announced.id,
-                label: `Open ${announced.name}`,
-                help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Operations has to put it up for your vote to count.`,
-              }],
-            };
-          }
-          return {
-            ...field,
-            options: [
-              { value: "", label: "Not this year", help: "The announcement stands; somebody else may take it." },
-              { value: announced.id, label: `Open ${announced.name}`, help: `${announced.note} ${price} now, opening next year — and in its first year you reach only as far as the brand does. Putting it up counts as your vote for it.` },
-            ],
-          };
-        }
-        /*
-         * This year's feature menu: three ideas, the same for every team in
-         * the season, each saying who it is for, whether a rival already has
-         * it (so it can be copied), and what it costs.
-         */
-        if (field.id === "featureBet") {
-          const owned = new Set((company.features ?? []).map((f) => f.id));
-          const menu = featureMenu(niche, season.id, year).filter((m) => !owned.has(m.id));
-          const segName = (id: string) => niche.segments.find((s) => s.id === id)?.name ?? id;
-          const build = featureCost(niche, "build");
-          const copy = featureCost(niche, "copy");
-          return {
-            ...field,
-            options: [
-              { value: "", label: "No bet this year", help: "Keep the money." },
-              ...menu.map((m) => ({
-                value: m.id,
-                label: m.name,
-                help: `For ${segName(m.segment).toLowerCase()}. ${m.blurb} Build £${build.toLocaleString()}${m.rivalHas ? ` · a rival already has it: copy £${copy.toLocaleString()}` : ""}.`,
-              })),
-            ],
-          };
-        }
-        /*
-         * Where the marketing goes: the regions this company actually sells
-         * in, each saying how big it is and who over-indexes there, because
-         * that is the whole basis of the decision.
-         */
-        if (field.id === "regionFocus") {
-          const open = new Set(company.cities ?? niche.cities.map((c) => c.id));
-          const segName = (id: string) => niche.segments.find((s) => s.id === id)?.name ?? id;
-          return {
-            ...field,
-            options: niche.cities.filter((c) => open.has(c.id)).map((c) => {
-              const leans = Object.entries(c.mix ?? {}).sort((a, b) => b[1] - a[1])[0];
-              const character = leans && leans[1] > 1.02 ? ` Leans ${segName(leans[0]).toLowerCase()}.`
-                : leans && leans[1] < 0.98 ? "" : "";
-              return { value: c.id, label: c.name, help: `${Math.round(c.weight * 100)}% of the market.${character} ${c.note}` };
-            }),
-          };
-        }
-        // And who it is for: the segments, with what each is worth.
-        if (field.id === "segmentFocus") {
-          const market = niche.segments.reduce((sum, s) => sum + s.size, 0) || 1;
-          return {
-            ...field,
-            options: niche.segments.map((s) => ({
-              value: s.id,
-              label: s.name,
-              help: `${Math.round((s.size / market) * 100)}% of the market, paying around ${s.referencePrice}. ${describeWeights(s)}`,
-            })),
-          };
-        }
-        // A second shift can only run the plant you have: half as much again, at most.
-        if (field.id === "shiftCapacity") {
-          return { ...field, max: Math.round(company.capacity * SHIFT_MAX) };
-        }
-        // The other four chairs, for the chief executive's people levers.
-        if (field.id === "targets" || field.id === "overrule" || field.id === "replaceSeat") {
-          const others = overrulable(company.seats).map((r) => {
-            const person = personOf(company, r);
-            const record = person.record ?? [];
-            const right = record.filter((x) => x.right === "seat").length;
-            return {
-              value: r,
-              label: ROLE_TITLES[r],
-              help: `Loyalty ${Math.round(person.loyalty)}${person.loyalty < WARN_AT ? " — thinking about leaving" : ""} · rated ${person.skill}${record.length ? ` · overruled ${record.length}×, right ${right} of those` : ""}`,
-            };
-          });
-          return {
-            ...field,
-            options: field.id === "targets" ? others : [{ value: "", label: "Nobody", help: field.id === "overrule" ? "Every seat's own decision stands." : "Keep everybody." }, ...others],
-          };
-        }
-        if (field.id === "budget") {
-          return {
-            ...field,
-            options: SPENDING_SEATS.filter((r) => company.seats.includes(r))
-              .map((r) => ({ value: r, label: ROLE_TITLES[r], help: "" })),
-          };
-        }
-        if (field.id === "rehire") {
-          return {
-            ...field,
-            options: (["cmo", "cfo", "cto", "coo"] as Role[])
-              .filter((r) => !company.seats.includes(r))
-              .map((r) => ({ value: r, label: ROLE_TITLES[r], help: `Costs the salary that was saved, and gives the seat back its decisions.` })),
-          };
-        }
-        if (field.id === "positioning") {
-          return {
-            ...field,
-            options: [
-              { value: "", label: "Everybody", help: "No particular allegiance, and no particular advantage anywhere." },
-              ...niche.segments.map((s) => ({ value: s.id, label: s.name, help: s.description })),
-            ],
-          };
-        }
-        return field;
+        const field = { ...offerActions(speak(base, niche.voice, { ...PERIOD_NAME[(season.cadence ?? "yearly") as Cadence], perYear: periods }), niche, periods, buildable), ...(unlocksIn > 1 ? { unlocksIn } : {}) };
+        return withOptions(field, {
+          company, niche, seasonId: season.id, year, solo,
+          offers: offers.map((o) => ({ id: o.id, title: o.title, terms: o.terms })),
+          openedNiches: (season.world as World | null)?.openedNiches,
+        });
       }) : [],
       /** What one of each thing costs in this market, for the committed-spend meter. */
       prices: {
@@ -967,7 +819,23 @@ export function registerSimulationDeskRoutes(app: Express): void {
       /** Every filed decision, so nobody has to guess what the others committed. */
       filed: decisions,
       preview,
+      /** Sealed bids this table has standing, so the commitment meter can count them. */
+      bidsOutstanding,
       lastYear: lastReport?.report ?? null,
+      /*
+       * A channel's journey: the milestones ahead, the thresholds that switch
+       * the money on, and the sponsors in this market — so the desk can show a
+       * creator where they stand and what they are growing towards. Null for
+       * a market that sells.
+       */
+      audience: isAudience(niche) ? (() => {
+        const m = audienceModelFor(niche);
+        return {
+          partnerAt: m.partnerAt, sponsorsFrom: m.sponsorsFrom, milestones: m.milestones, words: wordsOf(niche),
+          sponsors: m.sponsors.map((sp) => ({ name: sp.name, sells: sp.sells, segment: niche.segments.find((x) => x.id === sp.segment)?.name ?? sp.segment })),
+          subscribers: Object.values(company.customers ?? {}).reduce((a, n) => a + Math.max(0, Number(n) || 0), 0),
+        };
+      })() : null,
       lastFiled: lastFiled ? { decisions: lastFiled.decisions, filedBy: lastFiled.filedBy } : null,
       rivals,
       standing,
@@ -1031,6 +899,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const year = season.year;
     const periods = periodsPerYear(season.cadence as Cadence);
     const world = { ...(season.world as World), niche, year };
+    const mine = world.companies.find((c) => c.id === venture.id);
     /** One chair: the form on this desk carries all five desks' levers. */
     const soloSeason = (season.seatCount ?? 5) <= 1;
 
@@ -1051,7 +920,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
         const opts = {
           year: season.year, periods: periodsPerYear(season.cadence as Cadence),
           segmentIds: niche.segments.map((s) => s.id),
+          actionIds: [...foundersActions(niche).map((a) => a.id), ...buildableNow(season.id, niche, season.year, periodsPerYear(season.cadence as Cadence), mine).map((a) => a.id)],
           ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+          audience: isAudience(niche),
         };
         const cityIds = niche.cities.map((c) => c.id);
         /*
@@ -1084,7 +955,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
     });
     if (!pair) return res.status(404).json({ message: "No such company." });
 
-    res.json({ year, yourRole: seat.role, ...pair });
+    /* Whether the impact rows are desks one founder holds, or people at a table. */
+    res.json({ year, yourRole: seat.role, solo: soloSeason, ...pair });
   });
 
   /**
@@ -1159,8 +1031,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const cleanFor = (desk: Role) => cleanDecision(desk, payload, niche.cities.map((c) => c.id), {
       year: season.year, periods: periodsPerYear(season.cadence as Cadence),
       segmentIds: niche.segments.map((s) => s.id),
+      actionIds: [...foundersActions(niche).map((a) => a.id), ...buildableNow(season.id, niche, season.year, periodsPerYear(season.cadence as Cadence), company).map((a) => a.id)],
       // Solo reads its own schedule, so a filing cannot carry a lever the desk has not opened.
       ...(soloSeason ? { soloTotal: totalPeriods(season.totalYears, (season.cadence ?? "yearly") as Cadence) } : {}),
+      audience: isAudience(niche),
     });
     const clean = cleanFor(role);
 

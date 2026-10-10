@@ -16,6 +16,7 @@ import { emailVerificationTokens, users } from "@shared/schema";
 import { devOutbox } from "../../server/email";
 import { sendVerificationEmail, confirmVerification } from "../../server/email-verification";
 import { sweepFinishedRecords } from "../../server/retention";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -28,6 +29,14 @@ async function signUp(app: any, first: string) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.100.${60 + (n % 150)}`)
     .send({ email, password, firstName: first });
   expect(res.status).toBe(201);
+  /*
+   * A finished profile, but deliberately not a confirmed address. This suite is
+   * about what an unconfirmed account cannot do, and the onboarding rule sits on
+   * the same routes — so without this the refusals here would be about a profile
+   * rather than an address, and the "and can as soon as it is confirmed" half
+   * could never pass.
+   */
+  await finishOnboarding(res.body.id, { displayName: `${first} Verify` });
   return { agent, email, id: res.body.id as string };
 }
 /** The token from the link that was sent, as the person would get it from their inbox. */

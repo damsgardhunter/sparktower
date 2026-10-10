@@ -11,6 +11,7 @@ import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { passMfa } from "./mfa-helper";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -48,7 +49,7 @@ test("security headers are set, the app can't be framed, and the pages load noth
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.170" }, data: { email: `e2e-csp-${stamp()}@example.test`, password: "Testpass123!", firstName: "Cee", lastName: "Esspee" } })).json();
   // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Cee Esspee", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Cee Esspee", headline: "x", bio: "y" });
   const project = await (await api.post("/api/projects", { data: { title: `CSP ${stamp()}`, description: "A project to load every kind of page.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
   const tasks = await (await api.get(`/api/projects/${project.id}/kanban`)).json();
   const step = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.1"));

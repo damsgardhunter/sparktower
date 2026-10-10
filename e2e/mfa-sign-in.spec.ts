@@ -14,6 +14,7 @@ import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 import { timeStep, totpAt } from "../server/totp";
+import { finishOnboarding } from "./onboarding";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -27,7 +28,7 @@ test("a reviewer sets up 2FA, then signs in with a code", async ({ browser }) =>
   const me = await (await api.post("/api/auth/register", { data: { email, password, firstName: "Remy", lastName: "Reviewer" } })).json();
   // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
   await verifyEmail(api);
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Remy Reviewer", headline: "Keeping it clean", bio: "Reviews reports." } })).ok()).toBeTruthy();
+  await finishOnboarding(api, { displayName: "Remy Reviewer", headline: "Keeping it clean", bio: "Reviews reports." });
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'reviewer' WHERE id = $1", [me.id]); } finally { await db.end(); }

@@ -13,7 +13,9 @@ import {
   type ActionPrice, type NovaActionId, type PaymentRequiredBody, type PricedOutcomeId, type Wallet,
 } from "@shared/plans";
 import { cn } from "@/lib/utils";
-import { Check, Clock, Loader2, Wallet as WalletIcon } from "lucide-react";
+import { stripePromise } from "@/lib/stripe";
+import { AddCardForm, cardLabel, useSavedCards } from "@/components/saved-cards";
+import { Check, Clock, CreditCard, Loader2, Wallet as WalletIcon } from "lucide-react";
 
 /**
  * The one dialog that asks for money.
@@ -148,6 +150,8 @@ export function PaymentDialog() {
   /** Set when they have come back from Stripe with money and an unfinished action. */
   const [returned, setReturned] = useState<PendingPurchase | null>(null);
   const [amountCents, setAmountCents] = useState<number | null>(null);
+  const [addingCard, setAddingCard] = useState(false);
+  const { data: saved } = useSavedCards();
   const { toast } = useToast();
 
   useEffect(() => {
@@ -221,6 +225,64 @@ export function PaymentDialog() {
     onError: (e) => toast({ title: "Couldn't start checkout", description: errorText(e), variant: "destructive" }),
   });
 
+  /**
+   * The same top-up, on a card already saved.
+   *
+   * Stays in this dialog: no redirect, so the request that was refused is still
+   * in hand and can be replayed the moment the balance moves. That is the whole
+   * reason this is better than the hosted page — the trip to Stripe is what
+   * made "pay and then be handed the job of remembering what you were doing"
+   * possible in the first place.
+   *
+   * The balance is credited by Stripe's webhook, not by this response, so the
+   * wallet is re-read rather than guessed at.
+   */
+  const payWithSaved = useMutation({
+    mutationFn: async ({ cents, paymentMethodId }: { cents: number; paymentMethodId?: string }) => {
+      const res = await apiRequest("POST", "/api/wallet/topup/saved-card", { amountCents: cents, paymentMethodId });
+      return res.json() as Promise<{ paid?: boolean }>;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/nova/wallet"] });
+      toast({ title: "Added to your balance" });
+      if (detail?.request) replay.mutate(detail.request);
+      else close();
+    },
+    onError: async (e) => {
+      /*
+       * Read off the error rather than cast to it: `apiRequest` throws an
+       * ApiError carrying the parsed body, and naming that shape here is enough
+       * — the alternative was a cast TypeScript rightly refused.
+       */
+      const body = (e as { body?: Record<string, unknown> } | null)?.body as
+        | { code?: string; clientSecret?: string }
+        | undefined;
+      /*
+       * The bank wants to see them. Not a decline — the card is fine and they
+       * are right here — so the challenge is finished in this page and the
+       * money lands through the webhook as usual. `handleNextAction` is the
+       * element-free way to do it, which is what this needs: there is no card
+       * form open, only a saved card and a 3-D Secure step.
+       */
+      if (body?.code === "authentication_required" && body?.clientSecret) {
+        const stripe = await stripePromise();
+        if (stripe) {
+          const { error } = await stripe.handleNextAction({ clientSecret: body.clientSecret });
+          if (!error) {
+            await queryClient.invalidateQueries({ queryKey: ["/api/nova/wallet"] });
+            toast({ title: "Added to your balance" });
+            if (detail?.request) replay.mutate(detail.request);
+            else close();
+            return;
+          }
+          toast({ title: "That didn't go through", description: error.message, variant: "destructive" });
+          return;
+        }
+      }
+      toast({ title: "That card didn't go through", description: errorText(e), variant: "destructive" });
+    },
+  });
+
   // The way back from Stripe, dispatched by TopUpReturn below.
   useEffect(() => {
     const on = (e: Event) => setReturned((e as CustomEvent<PendingPurchase | null>).detail);
@@ -228,7 +290,7 @@ export function PaymentDialog() {
     return () => window.removeEventListener(TOPUP_RETURN_EVENT, on);
   }, []);
 
-  const busy = buyMore.isPending || topUp.isPending || replay.isPending;
+  const busy = buyMore.isPending || topUp.isPending || replay.isPending || payWithSaved.isPending;
 
   if (returned) {
     /*
@@ -262,6 +324,15 @@ export function PaymentDialog() {
   if (!detail) return null;
   const { body } = detail;
   const options = body.topUp?.optionsCents ?? [];
+  /*
+   * The card to offer: the default if it is good, else the first that has not
+   * expired. An expired card is left out of this rather than hidden from the
+   * list — offering a one-tap payment on a card that cannot work is worse than
+   * asking for a new one.
+   */
+  const usableCard = (saved?.cards ?? []).find((c) => c.isDefault && !c.expired)
+    ?? (saved?.cards ?? []).find((c) => !c.expired)
+    ?? null;
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o && !busy) close(); }}>
@@ -301,6 +372,39 @@ export function PaymentDialog() {
             <p className="text-xs text-muted-foreground">
               Your balance never expires, and it works on anything — there's no plan to cancel.
             </p>
+
+            {/*
+              * A saved card is offered first and the hosted page second.
+              *
+              * Not because the hosted page is bad, but because a redirect is
+              * what makes "pay and then be handed the job of remembering what
+              * you were doing" possible. Paying here keeps the refused request
+              * in hand, so the thing somebody was trying to do happens the
+              * moment the money lands.
+              */}
+            {addingCard ? (
+              <div className="rounded-md border p-3">
+                <AddCardForm onSaved={() => setAddingCard(false)} onCancel={() => setAddingCard(false)} />
+              </div>
+            ) : usableCard ? (
+              <p className="text-xs text-muted-foreground">
+                Paying with {cardLabel(usableCard)}. <button
+                  type="button"
+                  className="underline hover:no-underline"
+                  onClick={() => setAddingCard(true)}
+                  data-testid="button-use-another-card"
+                >Use another card</button>
+              </p>
+            ) : saved?.stripeConfigured ? (
+              <button
+                type="button"
+                className="text-xs text-primary underline hover:no-underline"
+                onClick={() => setAddingCard(true)}
+                data-testid="button-save-a-card"
+              >
+                Save a card to make this one tap next time
+              </button>
+            ) : null}
           </div>
         )}
 
@@ -325,7 +429,34 @@ export function PaymentDialog() {
             </Button>
           )}
 
-          {body.remedy === "top_up" && (
+          {body.remedy === "top_up" && usableCard && (
+            <>
+              {/*
+                * The hosted page stays reachable, quietly. Somebody whose saved
+                * card is failing needs a way through that is not the card that
+                * is failing.
+                */}
+              <Button
+                variant="ghost"
+                onClick={() => amountCents && topUp.mutate(amountCents)}
+                disabled={busy || !amountCents}
+                data-testid="button-topup-checkout"
+              >
+                Pay another way
+              </Button>
+              <Button
+                onClick={() => amountCents && payWithSaved.mutate({ cents: amountCents, paymentMethodId: usableCard.id })}
+                disabled={busy || !amountCents}
+                data-testid="button-topup-saved-card"
+              >
+                {busy
+                  ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</>
+                  : <><CreditCard className="mr-2 h-4 w-4" /> {`Add ${amountCents ? formatMoney(amountCents) : ""} and continue`}</>}
+              </Button>
+            </>
+          )}
+
+          {body.remedy === "top_up" && !usableCard && (
             <Button
               onClick={() => amountCents && topUp.mutate(amountCents)}
               disabled={busy || !amountCents}

@@ -28,7 +28,7 @@ import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
 import { migrationState, pendingMigrationWarning } from "./migration-state";
-import { isPoolTimeout } from "./db";
+import { isPoolTimeout, isSchemaBehind } from "./db";
 
 /**
  * Where an error happened, as a shape rather than as a URL.
@@ -481,6 +481,28 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
         message: "The site is busy right now. Try that again in a moment.",
         code: "database_busy",
       });
+    }
+
+    /*
+     * The database is behind this build.
+     *
+     * One line naming the cause and the command, before the stack trace rather
+     * than instead of it. `warnIfMigrationsPending` already said this once at
+     * boot; by the time anybody reads the failure that line is forty lines up,
+     * and every subsequent request re-buries it — the auth lookup runs on all
+     * of them, so a missing column on `users` means a full Drizzle error, with
+     * its forty-column SELECT, per request.
+     *
+     * `server/migration-state.ts` describes the same burial happening to the
+     * simulation loop, which was fixed by holding the loop. Requests cannot be
+     * held, so this makes the error legible instead.
+     */
+    const behind = isSchemaBehind(err);
+    if (behind) {
+      console.error(
+        `[schema] ${req.method} ${routePattern(req)} failed because this database is behind the build` +
+        `${behind.column ? ` — no "${behind.column}"` : ""}. Run: npm run db:migrate`,
+      );
     }
 
     const status = err.status || err.statusCode || 500;

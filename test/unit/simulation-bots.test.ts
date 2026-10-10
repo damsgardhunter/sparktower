@@ -20,6 +20,9 @@ import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@sh
 import { nextPhase } from "@shared/simulation/lobby";
 import { ROLES } from "@shared/simulation/types";
 import { NICHES, nicheById } from "@shared/simulation/niches";
+import {
+  POSITIONING_BREAK_EVEN, POSITIONING_FOR_OTHERS, POSITIONING_FOR_THEM,
+} from "@shared/simulation/market";
 import type { Company } from "@shared/simulation/types";
 
 /** A company mid-season, plain enough that any lever can be filed against it. */
@@ -568,5 +571,112 @@ describe("what a bot bids for", () => {
     const args = { year: 2, company: rich, listings };
     expect(botBids({ ventureId: "v1", ...args })).toEqual(botBids({ ventureId: "v1", ...args }));
     expect(botBids({ ventureId: "v1", ...args })).not.toEqual(botBids({ ventureId: "v2", ...args }));
+  });
+});
+
+/*
+ * Who a bot says its company is for.
+ *
+ * No bot had ever said. `positioning` is the only lever of kind `segment`, the
+ * draft loop has a branch for `choice` and none for that, and the field's default
+ * is a string — so it fell through the `typeof value === "number"` catch at the
+ * bottom and nothing was written, for the whole history of the game. Every bot
+ * company played undeclared, taking a flat 1 from `positioningFor` where a player
+ * who chooses gets 1.18 on their own people and 0.92 on everybody else.
+ *
+ * The reason it is tested rather than just fixed is that the obvious fix is
+ * wrong. Positioning is a trade, and taking `bestSegment`'s answer
+ * unconditionally made bots *worse* wherever the best-fitting segment is small.
+ */
+describe("who a bot says its company is for", () => {
+  const ask = (nicheId: string, skill: "filler" | "survivor", over: Partial<Company> = {}, year = 3) => {
+    const niche = nicheById(nicheId)!;
+    const d = botDecision({
+      ventureId: "v1", year, role: "ceo", skill, niche,
+      company: company({ id: "us", name: "Us", kind: "player", customers: {}, ...over } as any),
+    }) as any;
+    return d?.positioning ?? "";
+  };
+
+  it("has the break-even fall out of the two multipliers, not out of a dial", () => {
+    /*
+     * If someone retunes `positioningFor`, the threshold has to move with it or
+     * every bot in the game starts making this decision against the old numbers.
+     * Asserted as the arithmetic rather than as 0.308 for exactly that reason.
+     */
+    expect(POSITIONING_BREAK_EVEN).toBeCloseTo(
+      (1 - POSITIONING_FOR_OTHERS) / (POSITIONING_FOR_THEM - POSITIONING_FOR_OTHERS), 12);
+    /* And it is a real threshold, not a rounding of zero or one. */
+    expect(POSITIONING_BREAK_EVEN).toBeGreaterThan(0.2);
+    expect(POSITIONING_BREAK_EVEN).toBeLessThan(0.45);
+  });
+
+  it("declares for the big segment when nearly all the business is there", () => {
+    /*
+     * Construction's homeowners are 86% of the market, so declaring for them is
+     * the easy case and the one that has to work: a company that cannot say it
+     * does domestic work cannot get the pace that makes domestic work playable.
+     */
+    expect(ask("construction", "survivor")).toBe("homeowners");
+  });
+
+  it("declares for nobody rather than for a segment too small to pay for it", () => {
+    /*
+     * The case that matters. A company whose customers are almost all in
+     * construction's `public` segment — 2% of the market, so `bestSegment` is
+     * drawn elsewhere — must not be handed a declaration that costs it 8% of
+     * everything it sells to buy 18% of a sliver.
+     */
+    const narrow = ask("construction", "survivor", { customers: { developers: 40, public: 10 } });
+    if (narrow) {
+      const seg = nicheById("construction")!.segments.find((s) => s.id === narrow)!;
+      const held = 50;
+      const share = (({ developers: 40, public: 10 } as Record<string, number>)[seg.id] ?? 0) / held;
+      expect(share, `declared for ${narrow}, which is only ${(share * 100).toFixed(0)}% of its customers`)
+        .toBeGreaterThan(POSITIONING_BREAK_EVEN);
+    }
+  });
+
+  it("never declares for a segment holding none of the company's customers", () => {
+    /*
+     * Swept across every market, because this is the failure that does not look
+     * like one: a declaration is silent, it costs 8% of the rest of the market,
+     * and nothing on any screen says it was a mistake.
+     */
+    for (const niche of NICHES) {
+      const only = niche.segments[niche.segments.length - 1];
+      const chosen = ask(niche.id, "survivor", { customers: { [only.id]: 500 } });
+      expect([only.id, ""], `${niche.id}: declared for ${chosen} while every customer is in ${only.id}`)
+        .toContain(chosen);
+    }
+  });
+
+  it("leaves a filler undeclared, because a warm body does not do segment analysis", () => {
+    /*
+     * And because it is one of the few things separating the two skills. Giving
+     * the filler the considered answer put it *ahead* of the survivor in
+     * restaurant chain, which is how the trade above came to be measured at all.
+     */
+    for (const niche of NICHES) {
+      expect(ask(niche.id, "filler"), `${niche.id}: a filler declared a position`).toBe("");
+    }
+  });
+
+  it("keeps a declaration rather than re-choosing it every year", () => {
+    /*
+     * A company that picks different customers every twelve months has not
+     * picked any, and none of the levers that reward consistency could pay for
+     * it. Filed with last year's answer in hand, the bot should mostly keep it.
+     */
+    const niche = nicheById("construction")!;
+    const kept = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11].filter((year) => {
+      const d = botDecision({
+        ventureId: "v1", year, role: "ceo", skill: "survivor", niche,
+        company: company({ id: "us", kind: "player", positioning: "homeowners", customers: { homeowners: 900 } } as any),
+        previous: { focus: "growth", positioning: "homeowners", rehire: "" },
+      }) as any;
+      return d?.positioning === "homeowners";
+    });
+    expect(kept.length, "a bot re-rolled its market position most years").toBeGreaterThanOrEqual(7);
   });
 });

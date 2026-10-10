@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   bidsOutstanding, canBid, canSell, effectLines, lifePill, lifeRead, marketNotesRead,
   saleRead, validateBid, validateReserve, type MarketListing,
+  lastsFor,
 } from "./market";
 import type { ReportMarketNote } from "./desk";
 
@@ -199,5 +200,123 @@ describe("saying what the year's bids came to", () => {
     // The card isn't rendered in this case; the empty string is what says so.
     expect(marketNotesRead([])).toBe("");
     expect(marketNotesRead(undefined)).toBe("");
+  });
+});
+
+/*
+ * How long a thing lasts, when a decision is not a year.
+ *
+ * `expiresIn` is decremented once a *tick*, so a three-year licence in a
+ * quarterly season arrives as twelve. This screen printed that number with the
+ * word "years" after it — "12 years, then it lapses" for a three-year asset, on
+ * the one screen where somebody is deciding what to bid for it. A four-fold
+ * overstatement of the thing being bought.
+ *
+ * The server has sent `period` and `periods` since the auction stopped being
+ * annual, with a comment saying this is what they are for. Nothing on the phone
+ * read either.
+ */
+describe("how long a thing lasts, when a decision is not a year", () => {
+  const quarterly = { one: "quarter", many: "quarters", of: "this quarter" };
+
+  it("says three years for twelve quarters, which is what was bought", () => {
+    expect(lastsFor(12, quarterly, 4)).toBe("3 years");
+    expect(lifeRead(12, quarterly, 4)).toBe("3 years, then it lapses");
+  });
+
+  it("says periods where the years do not divide, rather than rounding", () => {
+    /*
+     * "2.5 years" is not a sentence and rounding it to two or three would be the
+     * same bug in a smaller coat — so a remainder is said in the unit the table
+     * actually decides in.
+     */
+    expect(lastsFor(10, quarterly, 4)).toBe("10 quarters");
+    expect(lifeRead(10, quarterly, 4)).toBe("10 quarters, then it lapses");
+  });
+
+  it("keeps saying years when a decision is a year", () => {
+    /* The default, and every season before cadence existed. */
+    expect(lastsFor(3)).toBe("3 years");
+    expect(lastsFor(3, undefined, 1)).toBe("3 years");
+    expect(lifeRead(4)).toBe("4 years, then it lapses");
+  });
+
+  it("spells a leading one in a sentence and not in a label", () => {
+    expect(lifeRead(1)).toBe("One year, then it lapses");
+    expect(lifeRead(4, quarterly, 4)).toBe("One year, then it lapses");
+    /* The pill is a label, so it stays numeric and short. */
+    expect(lifePill(8, quarterly, 4)).toBe("2 years");
+  });
+
+  it("names the last period in the table's own word", () => {
+    expect(lifeRead(0, quarterly, 4)).toBe("Gone at the end of this quarter");
+    expect(lifePill(1, quarterly, 4)).toBe("Last quarter");
+    expect(lifePill(1)).toBe("Last year");
+  });
+
+  it("does not pretend a permanent thing expires", () => {
+    for (const periods of [1, 4, 12]) {
+      expect(lifeRead(null, quarterly, periods)).toBe("Doesn't expire — yours permanently");
+      expect(lifePill(null, quarterly, periods)).toBe("Permanent");
+    }
+  });
+});
+
+/*
+ * What a lot would make *this* company.
+ *
+ * The server sends `you` for exactly this, with a comment saying a listing said
+ * "+6 quality" and left a founder to do the arithmetic against numbers held on a
+ * different screen — which is the whole decision. The phone did not read it.
+ */
+describe("what a lot would make this company", () => {
+  const you = { quality: 54, brand: 62, service: 48, capacity: 21_500, unitCost: 4.1 };
+
+  it("reads as a before and after when it knows where the company stands", () => {
+    const lines = effectLines({ quality: 6, brand: 14 }, you);
+    expect(lines).toContain("quality 54 → 60");
+    expect(lines).toContain("brand 62 → 76");
+  });
+
+  it("falls back to the bare delta when it does not", () => {
+    /* A payload from a server that predates the field still has to read sensibly. */
+    expect(effectLines({ quality: 6 })).toContain("+6 quality");
+    expect(effectLines({ quality: 6 }, null)).toContain("+6 quality");
+    expect(effectLines({ quality: 6 }, undefined)).toContain("+6 quality");
+  });
+
+  it("restates room against what the company already has", () => {
+    /*
+     * The figure that most needed it: "+4,038 capacity" against a company holding
+     * 21,500 is a different decision from the same number against one holding 900.
+     */
+    /*
+     * "22k → 26k", not "21,500 → 25,538": `money()` is the phone's shared
+     * formatter and rounds thousands above ten, which is the house style and
+     * keeps this figure the same shape as the same figure on the desk. The
+     * precision lost is smaller than the decision being made.
+     */
+    expect(effectLines({ capacity: 4_038 }, you).join(" ")).toMatch(/room 22k → 26k/);
+    expect(effectLines({ capacity: 4_038 }).join(" ")).toContain("capacity");
+  });
+
+  it("restates unit cost, which is a multiplier nobody reads as one", () => {
+    const lines = effectLines({ unitCost: 0.93 }, you);
+    /* `trim` drops a trailing ".0", so it is "−7%" and not "−7.0%". */
+    expect(lines[0]).toContain("−7% unit cost");
+    expect(lines[0]).toContain("4.1 → 3.81");
+  });
+
+  it("leaves out what an asset does not do", () => {
+    expect(effectLines({ quality: 0, brand: 0, unitCost: 1 }, you)).toEqual([]);
+    expect(effectLines(null, you)).toEqual([]);
+  });
+
+  it("survives a standing it cannot read", () => {
+    /* A half-built payload must not turn "+6 quality" into "quality NaN → NaN". */
+    const broken = { quality: Number.NaN, brand: 62, service: 48, capacity: Number.NaN, unitCost: 0 } as any;
+    const lines = effectLines({ quality: 6, capacity: 100, unitCost: 0.9 }, broken);
+    expect(lines.join(" ")).not.toMatch(/NaN/);
+    expect(lines).toContain("+6 quality");
   });
 });

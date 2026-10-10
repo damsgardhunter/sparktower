@@ -23,6 +23,9 @@
  */
 
 import type { ReportMarketNote } from "./desk";
+/* For abbreviating a room count; the same formatter the desk uses, so the two screens agree. */
+import { money } from "./desk";
+import { lastsFor as lastsForImpl, type PeriodWords } from "./period";
 
 /** Mirrors CompanyAsset["kind"] in shared/simulation/types.ts. */
 export type AssetKind = "celebrity" | "distribution" | "patent" | "facility" | "brand_licence";
@@ -87,6 +90,41 @@ export interface MarketView {
   year: number;
   /** The seat this person holds — selling is the chief executive's or the finance seat's. */
   yourRole: string | null;
+  /**
+   * What one decision is called here, and how many of them make a year.
+   *
+   * Sent since the auction stopped being annual and never read on the phone, so
+   * this screen called every decision a "year" whatever the table had chosen —
+   * and, worse, printed an asset's life in the wrong unit entirely. See
+   * `lastsFor`.
+   */
+  period?: { one: string; many: string; of: string };
+  periods?: number;
+  /**
+   * What this company counts money in.
+   *
+   * Read for completeness rather than for a symbol: this phone's `money()`
+   * deliberately carries none, so that a figure on a card reads the same as the
+   * same figure inside a sentence the server wrote. Here so a screen that wants
+   * to name the currency can, without fetching the desk.
+   */
+  currency?: string | null;
+  /**
+   * Where this company stands on each axis a lot can move.
+   *
+   * The reason the listings can say what winning something would make *this*
+   * company rather than what it would add to somebody. Sent with a comment
+   * saying exactly that, and unread here until now: the phone printed "+6
+   * quality" and left a founder to do the arithmetic against numbers held on a
+   * different screen — which is the whole decision.
+   */
+  you?: {
+    quality: number;
+    brand: number;
+    service: number;
+    capacity: number;
+    unitCost: number;
+  } | null;
   /** When the year settles every bid on this screen, or null once the season ends. */
   resolvesAt: string | null;
   /** Cash plus what is still borrowable — what a bid can actually be backed by. */
@@ -141,41 +179,97 @@ function count(n: number): string {
  * multiplier, and 0.93 means nothing on a phone — "−7% unit cost" is the same
  * fact in the form the player would have said it in.
  */
-export function effectLines(effect: AssetEffect | null | undefined): string[] {
+export function effectLines(
+  effect: AssetEffect | null | undefined,
+  /**
+   * Where this company stands, so each line can say what winning the lot would
+   * *make* it rather than what it would add to somebody.
+   *
+   * "+6 quality" is a fact and "quality 54 → 60" is the decision, and the
+   * difference between them is arithmetic nobody can do while holding a phone
+   * against numbers that live on another screen. Optional, so a payload from a
+   * server that predates the field still reads as it did.
+   */
+  you?: MarketView["you"],
+): string[] {
   const e = effect ?? {};
   const lines: string[] = [];
-  const score = (value: number | undefined, label: string) => {
+  /* `label 54 → 60` where this company's standing is known, `+6 label` where it is not. */
+  const score = (value: number | undefined, label: string, from: number | undefined) => {
     if (value === undefined || !Number.isFinite(value) || value === 0) return;
-    lines.push(`${value > 0 ? "+" : "−"}${Math.abs(Math.round(value))} ${label}`);
+    if (from === undefined || !Number.isFinite(from)) {
+      lines.push(`${value > 0 ? "+" : "−"}${Math.abs(Math.round(value))} ${label}`);
+      return;
+    }
+    lines.push(`${label} ${Math.round(from)} → ${Math.round(from + value)}`);
   };
 
-  score(e.brand, "brand");
-  score(e.quality, "quality");
-  score(e.service, "service");
+  score(e.brand, "brand", you?.brand);
+  score(e.quality, "quality", you?.quality);
+  score(e.service, "service", you?.service);
 
   if (e.capacity !== undefined && Number.isFinite(e.capacity) && e.capacity !== 0) {
-    lines.push(`${count(e.capacity)} capacity`);
+    /*
+     * Room reads as a count rather than a score, and the shortening matters more
+     * here than on the three above: "+4,038 capacity" against a company holding
+     * 21,500 is a different decision from the same number against one holding
+     * 900, and both fit on a phone only abbreviated.
+     */
+    lines.push(
+      you?.capacity !== undefined && Number.isFinite(you.capacity)
+        ? `room ${money(you.capacity)} → ${money(you.capacity + e.capacity)}`
+        : `${count(e.capacity)} capacity`,
+    );
   }
 
   if (e.unitCost !== undefined && Number.isFinite(e.unitCost) && e.unitCost !== 1) {
     const pct = Math.round(Math.abs(1 - e.unitCost) * 1000) / 10;
-    lines.push(`${e.unitCost < 1 ? "−" : "+"}${trim(pct.toFixed(1))}% unit cost`);
+    const off = `${e.unitCost < 1 ? "−" : "+"}${trim(pct.toFixed(1))}% unit cost`;
+    lines.push(
+      you?.unitCost !== undefined && Number.isFinite(you.unitCost) && you.unitCost > 0
+        ? `${off} — ${you.unitCost} → ${Math.round(you.unitCost * e.unitCost * 100) / 100}`
+        : off,
+    );
   }
 
   return lines;
 }
 
+/*
+ * `lastsFor` lives in `./period` now, with the rest of the period vocabulary, and
+ * is re-exported so this stays the one module the market screen imports from. It
+ * moved because four other screens had the same bug and were each going to need
+ * their own copy of it otherwise.
+ */
+export { lastsFor } from "./period";
+
 /** "Four years, then it lapses" / "Yours permanently". */
-export function lifeRead(expiresIn: number | null | undefined): string {
+export function lifeRead(
+  expiresIn: number | null | undefined,
+  period?: { one: string; many: string; of: string },
+  periods?: number,
+): string {
   if (expiresIn == null) return "Doesn't expire — yours permanently";
-  if (expiresIn <= 0) return "Gone at the end of this year";
-  if (expiresIn === 1) return "One year, then it lapses";
-  return `${expiresIn} years, then it lapses`;
+  if (expiresIn <= 0) return `Gone at the end of ${period?.of ?? "this year"}`;
+  /*
+   * "One year, then it lapses", not "1 year" — a sentence spells a leading one,
+   * and this is a sentence rather than a label (`lifePill` is the label). The
+   * spelling is only ever applied to a leading "1 ", so "12 quarters" and
+   * "21 periods" are untouched.
+   */
+  const lasts = lastsForImpl(expiresIn, period, periods);
+  return `${lasts.startsWith("1 ") ? `One ${lasts.slice(2)}` : lasts}, then it lapses`;
 }
 
 /** The short version, for a pill beside the name. */
-export const lifePill = (expiresIn: number | null | undefined): string =>
-  expiresIn == null ? "Permanent" : expiresIn <= 1 ? "Last year" : `${expiresIn} yrs`;
+export const lifePill = (
+  expiresIn: number | null | undefined,
+  period?: { one: string; many: string },
+  periods?: number,
+): string =>
+  expiresIn == null ? "Permanent"
+    : expiresIn <= 1 ? `Last ${period?.one ?? "year"}`
+    : lastsForImpl(expiresIn, period, periods);
 
 export interface BidCheck {
   ok: boolean;

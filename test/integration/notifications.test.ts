@@ -12,6 +12,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
 import { passMfa } from "../helpers/mfa";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -23,6 +24,8 @@ async function person(app: any, first: string) {
     .send({ email: `notif-${first}-${Date.now()}-${n}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
   await verifyEmail(app, res.body.email, `198.51.104.${40 + (n % 150)}`);
+  /* A finished profile: posting, commenting and connecting need one. See shared/onboarding.ts. */
+  await finishOnboarding(res.body.id);
   return { agent, id: res.body.id as string };
 }
 const bell = async (who: { agent: any }) => (await who.agent.get("/api/notifications")).body.items as any[];

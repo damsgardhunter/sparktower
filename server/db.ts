@@ -67,8 +67,42 @@ const CONNECT_WAIT_MS = Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 10_000);
  */
 const POOL_MAX = Number(process.env.DB_POOL_MAX ?? 20);
 
+/**
+ * Whether this connection needs TLS, and whether to check the certificate.
+ *
+ * A managed Postgres reached from outside its own network refuses a plaintext
+ * connection, and the refusal is `FATAL 28000` with no message — the same code
+ * a wrong password gives. Every script in `script/` goes through this pool, so
+ * running any of them against a hosted database failed identically and looked
+ * like bad credentials. That cost an evening once; it should not cost another.
+ *
+ * `sslmode` in the URL wins, because it is where the convention already lives
+ * and node-postgres reads it. Failing that, a hostname that is plainly remote
+ * gets TLS turned on rather than being left to fail. Nothing local is touched:
+ * a loopback or a container host connects exactly as before.
+ *
+ * `rejectUnauthorized` stays on. Managed providers serve real certificates, so
+ * turning verification off would buy nothing except the ability to not notice
+ * being somewhere unexpected — and `sslmode=no-verify` is still there for the
+ * one that genuinely needs it.
+ */
+function sslFor(url: string | undefined): false | { rejectUnauthorized: boolean } {
+  if (!url) return false;
+  const mode = /[?&]sslmode=([^&]+)/.exec(url)?.[1];
+  if (mode === "disable") return false;
+  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode) return { rejectUnauthorized: true };
+
+  let host = "";
+  try { host = new URL(url).hostname; } catch { return false; }
+  const local = host === "localhost" || host === "127.0.0.1" || host === "::1"
+    || host === "postgres" || host === "db" || host.endsWith(".local");
+  return local ? false : { rejectUnauthorized: true };
+}
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: sslFor(process.env.DATABASE_URL),
   max: POOL_MAX,
   connectionTimeoutMillis: CONNECT_WAIT_MS,
 });
@@ -93,6 +127,34 @@ export function isPoolTimeout(err: unknown): boolean {
   }
   return false;
 }
+/**
+ * A query that failed because the database is behind this build.
+ *
+ * Postgres answers `42703` for an unknown column and `42P01` for an unknown
+ * table, and both mean the same thing here: the code was built against a
+ * schema this database has not been migrated to.
+ *
+ * Worth telling apart from every other query failure because the fix is one
+ * command and the symptom is the opposite of obvious. Drizzle wraps the cause
+ * in a `Failed query: select …` carrying the whole column list, so what
+ * somebody actually sees is a screen of SQL with `column "x" does not exist`
+ * somewhere in the middle — and the boot log already said so, forty lines
+ * earlier, in one line that has since scrolled away.
+ *
+ * Walked down the `cause` chain for the reason `isPoolTimeout` above gives:
+ * nothing hands these over bare.
+ */
+export function isSchemaBehind(err: unknown): { column: string | null } | null {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (code === "42703" || code === "42P01") {
+      const named = /(?:column|relation) "([^"]+)" does not exist/i.exec(e.message);
+      return { column: named?.[1] ?? null };
+    }
+  }
+  return null;
+}
+
 pool.on("connect", (client) => {
   client.query("SET TIME ZONE 'UTC'").catch((err) => console.error("[db] couldn't set the session to UTC:", err));
 });

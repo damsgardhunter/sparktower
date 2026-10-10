@@ -233,7 +233,21 @@ export interface SpendOption {
    * the loose one and the deck is the authority.
    */
   group: string;
-  /** Sensible granularity for the slider, in dollars. */
+  /**
+   * Sensible granularity for the slider and for the number field's own stepper,
+   * in dollars.
+   *
+   * A thousand on everything that used to be ten, because ten thousand a click
+   * is the wrong resolution for the decision being made: the interesting part of
+   * this screen is the last stretch — finding the amount where an option stops
+   * being underfunded, or shaving a hire to free up a pilot — and a stepper that
+   * jumps in ten-thousands cannot land on it. Typing still works for the big
+   * moves, and the slider is simply smoother.
+   *
+   * Not uniform, deliberately. The finer decks keep their 2,500 and 1,000, and
+   * "Premises and equipment" keeps 25,000: its `minimumUseful` is 100,000 and
+   * there is no such thing as a quarter of a building.
+   */
   step: number;
   /** Below this it doesn't buy anything real — a quarter-hire is not a hire. */
   minimumUseful: number;
@@ -252,44 +266,44 @@ export const SPEND_OPTIONS: SpendOption[] = [
     id: "first-engineer", label: "A senior engineer", group: "Hiring",
     detail: "One person who can build the whole thing and has done it before.",
     consequence: "The fastest way to a product that exists. Also the single most expensive line on this page.",
-    step: 10_000, minimumUseful: 120_000,
+    step: 1_000, minimumUseful: 120_000,
   },
   {
     id: "junior-team", label: "Two juniors", group: "Hiring",
     detail: "Cheaper, keen, and needing somebody to tell them what to do.",
     consequence: "More hands for the money. Costs you the senior person's time, which is the resource you have least of.",
-    step: 10_000, minimumUseful: 90_000,
+    step: 1_000, minimumUseful: 90_000,
   },
   {
     id: "designer", label: "A designer", group: "Hiring",
     detail: "Someone who decides what it looks like and how it works before it is built.",
     consequence: "Cuts the amount you build twice. Hard to justify on day one and obvious in hindsight.",
-    step: 10_000, minimumUseful: 70_000,
+    step: 1_000, minimumUseful: 70_000,
   },
   {
     id: "salesperson", label: "A salesperson", group: "Hiring",
     detail: "Someone whose entire job is talking to people who might pay you.",
     consequence: "The only line here that brings money back in year one. Useless if the product isn't ready for them to sell.",
-    step: 10_000, minimumUseful: 80_000,
+    step: 1_000, minimumUseful: 80_000,
   },
   {
     id: "ops-hire", label: "An operations hire", group: "Hiring",
     detail: "The person who makes the delivering, supporting and invoicing actually happen.",
     consequence: "Buys back the founders' week. Invisible on a pitch deck and the reason companies stop falling over.",
-    step: 10_000, minimumUseful: 60_000,
+    step: 1_000, minimumUseful: 60_000,
   },
 
   {
     id: "build-product", label: "Building the product", group: "Product",
     detail: "Contractors, tools, infrastructure — the cost of the thing existing.",
     consequence: "Nothing else on this page matters if there is nothing to sell. Overspend and you have a beautiful product nobody has heard of.",
-    step: 10_000, minimumUseful: 50_000,
+    step: 1_000, minimumUseful: 50_000,
   },
   {
     id: "rnd", label: "Research into the hard part", group: "Product",
     detail: "The bit nobody has solved, that your whole advantage rests on.",
     consequence: "If it works, it is the reason you are worth anything in ten years. It may simply not work.",
-    step: 10_000, minimumUseful: 60_000,
+    step: 1_000, minimumUseful: 60_000,
   },
   {
     id: "assets", label: "Premises and equipment", group: "Product",
@@ -302,7 +316,7 @@ export const SPEND_OPTIONS: SpendOption[] = [
     id: "marketing", label: "Marketing", group: "Getting customers",
     detail: "Advertising, content, whatever it takes to be findable.",
     consequence: "The fastest way to find out whether anybody wants this. Also the fastest way to spend a million dollars on nothing.",
-    step: 10_000, minimumUseful: 40_000,
+    step: 1_000, minimumUseful: 40_000,
   },
   {
     id: "community", label: "Building a community", group: "Getting customers",
@@ -314,7 +328,7 @@ export const SPEND_OPTIONS: SpendOption[] = [
     id: "pilots", label: "Paid pilots", group: "Getting customers",
     detail: "Subsidising the first handful of customers to use it properly.",
     consequence: "Turns strangers into references, which is how you sell to everyone after them. You are paying people to be your customer.",
-    step: 10_000, minimumUseful: 30_000,
+    step: 1_000, minimumUseful: 30_000,
   },
 
   {
@@ -333,7 +347,7 @@ export const SPEND_OPTIONS: SpendOption[] = [
     id: "runway", label: "Keep it in the bank", group: "Keeping it standing",
     detail: "Unspent. Months of survival if the first plan is wrong.",
     consequence: "The least exciting square on this board and the reason some companies get a second attempt.",
-    step: 10_000, minimumUseful: 0,
+    step: 1_000, minimumUseful: 0,
   },
 ];
 

@@ -1,0 +1,1 @@
+ALTER TABLE "simulation_listings" ADD COLUMN "from_season_id" varchar;

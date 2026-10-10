@@ -110,6 +110,14 @@ export interface SimSeat {
 }
 
 export interface VentureView {
+  /**
+   * How often this table decides.
+   *
+   * The room route sends this rather than the derived `period`/`totalPeriods` the
+   * other routes send, so the phone needs it to say "quarter" where a season
+   * decides quarterly. See `./period`.
+   */
+  cadence?: "yearly" | "quarterly" | "monthly" | null;
   id: string;
   phase: SimPhase;
   /** Seconds left in this phase, as the server counted them at the moment it answered. */
@@ -361,6 +369,143 @@ export interface LiveVenture {
  */
 export const ventureRoute = (venture: Pick<LiveVenture, "id" | "phase">): string =>
   venture.phase === "running" ? `/sim/desk/${venture.id}` : `/sim/${venture.id}`;
+
+/**
+ * How often the list of your companies is worth re-reading.
+ *
+ * The list is polled because `ventureRoute` above reads a row's phase, so a
+ * phase that has moved on means a row that opens the wrong screen. That risk is
+ * real and it has a shape: the only route-changing flip is *into* `running`, and
+ * it can only happen to a row that is not running yet. While one of those is on
+ * the list, keep asking quickly. Once every row is already running there is
+ * nothing left to be wrong about, and the list can be left alone.
+ *
+ * Which matters because this list is polled from the Sprints *tab*, not just
+ * from inside a season — so the fast rate was running for people who were not
+ * looking at a simulation at all. Measured with `scripts/sim-load.ts --client
+ * mobile`: at two hundred players it was 6,905 requests in ninety seconds, 45%
+ * of everything the phone asked for, and more on its own than the entire
+ * browser profile.
+ *
+ * An empty list takes the slow rate. Joining a market navigates straight into
+ * the room it returns (`app/sim/index.tsx`), so nothing is waiting on this
+ * query to notice.
+ */
+/**
+ * How often the room screen asks about itself, by phase.
+ *
+ * Quick while the room is gathering — people arriving, seats going, a clock
+ * running down — and then slowly rather than not at all.
+ *
+ * "Not at all" is what it used to be: `running` and `retired` both stopped the
+ * poll, on the reasonable-looking grounds that a trading company has nothing
+ * left to announce. It has one thing left. A season ends, the room goes
+ * `retired`, and this screen never finds out — so it goes on saying "your
+ * company is trading… it's yours for the season" about a season that is over,
+ * with the branch that would say otherwise two hundred lines further down and
+ * unreachable. The browser polls every thirty seconds here for exactly this
+ * reason, and thirty seconds is the right order for an event that happens once.
+ *
+ * `retired` still stops, because that one is genuinely final.
+ */
+export const VENTURE_POLL_GATHERING_MS = 2_500;
+export const VENTURE_POLL_RUNNING_MS = 30_000;
+
+export const venturePollMs = (phase: SimPhase | string | undefined): number | false => {
+  if (phase === "retired") return false;
+  return phase === "running" ? VENTURE_POLL_RUNNING_MS : VENTURE_POLL_GATHERING_MS;
+};
+
+/**
+ * How often the desk asks, which depends on how close the year is to closing.
+ *
+ * The desk was on `ROOM_POLL_MS` — 2,500ms, flat, for every period of every
+ * season — and the reason given was a good one: "the year resolving underneath
+ * the screen is precisely what a player wants to be told about." That is true of
+ * the minute before a year resolves and not of the twenty-three hours before it,
+ * and the desk payload already carries `resolvesAt`, so it does not have to
+ * guess which it is in.
+ *
+ * Quick when the year is about to close, and the browser's own eight seconds the
+ * rest of the time — which is still live enough to watch a teammate's filing
+ * arrive, that being the other thing this screen is for. Measured at two hundred
+ * players before the change: 3,442 requests in ninety seconds, a third of
+ * everything the phone asked for.
+ *
+ * Note which direction this moves: *faster* than today near the resolution,
+ * because `CLOSING_MS` is a window in which the old flat rate and this one agree,
+ * and much slower outside it. Nothing about the moment that matters gets worse.
+ */
+export const DESK_POLL_CLOSING_MS = 2_500;
+export const DESK_POLL_IDLE_MS = 8_000;
+/** How near "about to close" is. A minute is long enough to catch the tick landing. */
+export const DESK_CLOSING_WINDOW_MS = 60_000;
+
+/**
+ * Is the period close enough to resolving to be worth watching?
+ *
+ * False when the server said nothing about a deadline, which is the honest
+ * answer: an unknown deadline is not an imminent one, and guessing would make
+ * every screen poll hard forever on any response that happened to omit it.
+ *
+ * Past the deadline counts as closing. The period is resolving right now, or the
+ * tick is running a little behind it, and that is exactly the moment these
+ * screens exist for.
+ */
+export function periodClosing(resolvesAt: string | null | undefined, now = Date.now()): boolean {
+  const at = resolvesAt ? Date.parse(resolvesAt) : NaN;
+  return Number.isFinite(at) && at - now <= DESK_CLOSING_WINDOW_MS;
+}
+
+export function deskPollMs(
+  view: { phase?: string | null; resolvesAt?: string | null } | undefined,
+  now = Date.now(),
+): number | false {
+  const phase = view?.phase;
+  // A season that has ended is a final answer; nothing will move again.
+  if (phase === "finished" || phase === "over") return false;
+  return periodClosing(view?.resolvesAt, now) ? DESK_POLL_CLOSING_MS : DESK_POLL_IDLE_MS;
+}
+
+/**
+ * How often the standings table asks.
+ *
+ * It was on the same 2,500ms as everything else, and the comment on
+ * `useStandings` makes the trade openly — "one number to change is worth more
+ * than the handful of requests a slower one would save". The handful turned out
+ * to be 3,483 requests in ninety seconds at two hundred players, against 151
+ * from the browser on the same screen: twenty-three times the rate, for a table
+ * whose contents change once a period.
+ *
+ * Adaptive, like the desk, which this could not be until the standings response
+ * started carrying `resolvesAt` (`simulation-market-routes.ts`). That is strictly
+ * better than any flat rate: 2,500ms around the tick — so the screen somebody is
+ * most likely to be staring at when a year lands is *quicker* than the old flat
+ * rate was — and 30,000ms for the rest of a period, during which the table
+ * cannot change at all.
+ *
+ * A response with no deadline falls back to the resting rate rather than the
+ * fast one: an unknown deadline is not an imminent one.
+ */
+export const STANDINGS_POLL_CLOSING_MS = 2_500;
+export const STANDINGS_POLL_IDLE_MS = 30_000;
+
+export function standingsPollMs(
+  view: { status?: string | null; resolvesAt?: string | null } | undefined,
+  now = Date.now(),
+): number | false {
+  // A finished season is a final table.
+  if (seasonOver(view?.status)) return false;
+  return periodClosing(view?.resolvesAt, now) ? STANDINGS_POLL_CLOSING_MS : STANDINGS_POLL_IDLE_MS;
+}
+
+export const VENTURES_POLL_FAST_MS = 2_500;
+export const VENTURES_POLL_IDLE_MS = 30_000;
+
+export const venturesPollMs = (ventures: Pick<LiveVenture, "phase">[] | undefined): number =>
+  (ventures ?? []).some((v) => v.phase !== "running" && v.phase !== "retired")
+    ? VENTURES_POLL_FAST_MS
+    : VENTURES_POLL_IDLE_MS;
 
 /**
  * The ventures worth offering a way back into.

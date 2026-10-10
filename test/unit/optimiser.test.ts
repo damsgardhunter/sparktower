@@ -78,18 +78,76 @@ describe("the optimiser", () => {
     /*
      * The trap this avoids: a search allowed to raise the price by half a
      * year, run fourteen years running, reaches two hundred and ninety times
-     * where it started one locally-optimal step at a time. Anchoring to the
-     * segment's own reference price makes that impossible to express.
+     * where it started one locally-optimal step at a time. Every anchor the
+     * ladder is built from is static market data, so nothing it can express
+     * compounds.
+     *
+     * ## Why the bound is the dearest segment and not the cheapest
+     *
+     * It used to be twice the *cheapest* reference, which was the right
+     * reading of a ladder anchored only on that segment. It is the wrong
+     * reading of a market: dating apps has segments expecting £40, £70 and
+     * £160, and £112 — the figure this caught — is a company pricing at the
+     * long-haulers, who weigh quality at 0.75 and price at 0.25. That is a
+     * strategy the game is supposed to contain, and in a market whose segments
+     * are further apart still, refusing it left the price lever dead for a
+     * whole season (see `priceTries` in optimiser.ts).
+     *
+     * So the bound is the thing actually worth guarding: the price stays
+     * inside the range the market itself describes, however many years it
+     * runs. Fourteen rather than six, because a spiral needs room to show —
+     * compounding at half a year clears twice the dearest segment by year
+     * four and this would have caught it at any length.
      */
-    const cheapest = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
+    const dearest = Math.max(...niche.segments.map((s) => s.referencePrice));
     let world = worldFor();
-    for (let year = 1; year <= 6; year++) {
+    const prices: number[] = [];
+    for (let year = 1; year <= 14; year++) {
       const plan = planFor(world, year);
       if (!plan) break;
-      expect(plan.decisions.cmo!.price).toBeLessThanOrEqual(cheapest.referencePrice * 2);
+      prices.push(plan.decisions.cmo!.price);
+      expect(plan.decisions.cmo!.price, `year ${year} priced outside the market's own range`)
+        .toBeLessThanOrEqual(dearest * 2);
       world = resolveYear({ ...world, year }, [plan.decisions as never]).world;
     }
-  });
+    /*
+     * A spread across the season is not evidence either way, and asserting one
+     * was a mistake worth recording. It caught 2.48x and 2.48x is a company
+     * that opened at the cheap segment and moved to the dear one as its
+     * quality earned the right — which is a strategy this market is built to
+     * contain, not a ratchet. Loosening that number until it passed would have
+     * been re-setting a guard to make a red suite green.
+     *
+     * The invariant is tested directly below instead.
+     */
+    expect(prices.length, "no plan survived the season").toBeGreaterThan(1);
+  }, 120_000);
+
+  it("ignores the company's own price when deciding what to charge", () => {
+    /*
+     * The structural half of the test above, and the one that cannot be argued
+     * with: the same company, in the same market, with its own price moved —
+     * and the ladder is built from the market, so the answer should not follow
+     * the company.
+     *
+     * This is what stops the 290x spiral. A search that anchors on what it
+     * charged last year raises the price a little, finds that was locally
+     * better, and anchors on *that* next year. A search anchored on the
+     * segments cannot express the second step, however many years it runs.
+     */
+    const market = worldFor("anchor");
+    const dear: World = {
+      ...market,
+      companies: market.companies.map((c) => (c.id === "us" ? { ...c, price: (c.price ?? 1) * 10 } : c)),
+    };
+    const normal = planFor(market, 1)!;
+    const inflated = planFor(dear, 1)!;
+    expect(normal).not.toBeNull();
+    expect(inflated).not.toBeNull();
+    const dearest = Math.max(...niche.segments.map((s) => s.referencePrice));
+    expect(inflated.decisions.cmo!.price, "a tenfold opening price dragged the plan's price up with it")
+      .toBeLessThanOrEqual(dearest * 2);
+  }, 120_000);
 
   it("keeps a year of running costs back rather than spending to the line", () => {
     /*
@@ -123,15 +181,48 @@ describe("the optimiser", () => {
      * company with nothing has better things to buy first. What the lookahead
      * has to make possible is buying it at all.
      */
+    /*
+     * ## What this actually proves, which is less than its name
+     *
+     * It sums `featureSpend` and `reliabilitySpend` and asks for either. They
+     * are not the same purchase: reliability is bought on the technology desk
+     * and lands as service, while *shipping* is `featureSpend`, which becomes
+     * `pipeline` and lands as quality a year later. The comment above is about
+     * shipping. The assertion is satisfied by reliability alone — and
+     * reliability is what gets bought, so this has been passing for a reason
+     * that has nothing to do with the lookahead it was written to defend.
+     *
+     * Split, so each half says what is true. The feature half is pinned below.
+     */
     let world = worldFor("product");
-    let bought = 0;
+    let features = 0;
+    let reliability = 0;
     for (let year = 1; year <= 6; year++) {
       const plan = optimise({ world, companyId: "us", year, economy: economyFor("product", year, 1) });
       if (!plan) break;
-      bought += (plan.decisions.cto!.featureSpend ?? 0) + (plan.decisions.cto!.reliabilitySpend ?? 0);
+      features += plan.decisions.cto!.featureSpend ?? 0;
+      reliability += plan.decisions.cto!.reliabilitySpend ?? 0;
       world = resolveYear({ ...world, year }, [plan.decisions as never]).world;
     }
-    expect(bought).toBeGreaterThan(0);
+    expect(features + reliability, "nothing at all went into the technology desk").toBeGreaterThan(0);
+    expect(reliability, "reliability is bought").toBeGreaterThan(0);
+    /*
+     * ## And shipping, by name
+     *
+     * This asked only for the pair for a long time, which meant it passed on
+     * reliability alone while `featureSpend` sat at zero — the comment above is
+     * about *shipping*, and shipping is this field. A companion test pinned the
+     * zero so that fixing it would be noticed; it was, and it is deleted.
+     *
+     * What fixed it: `ascend` took the argmax of the levers and gave it the
+     * whole slice. Features score above doing nothing and rank fourth of six
+     * every round, and the ascent hands out two or three slices before no
+     * single slice pays — so the fourth-best lever was never reached, in any
+     * market. Funding every lever that pays on its own took it from 1 funded
+     * year in 126 to five of seven markets, and quality with it: a coffee
+     * roastery finished on 26 rather than 15.
+     */
+    expect(features, "the pipeline is still never funded — see `ascend` in optimiser.ts").toBeGreaterThan(0);
   }, 60_000);
 
   it("beats filing nothing at all", () => {

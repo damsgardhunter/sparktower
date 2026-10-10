@@ -25,6 +25,23 @@ export interface Variant {
   description: string;
   /** Overrides the estimate for this type. */
   estimateMinutes?: number;
+  /**
+   * Overrides who acts, for this project type.
+   *
+   * Added because the same milestone can be Nova's work for one kind of
+   * project and nobody's but the builder's for another. "Scaffold" is
+   * `nova-builds` for a web app and a flat lie for a hot sauce: Nova cannot
+   * make a physical thing, and `ACTOR_SHORT` would put "Nova builds it" on the
+   * card for making a first prototype.
+   *
+   * Who acts is called the most important rule in the system at the top of
+   * this file, and `shared/nova-build.ts` explains what each actor commits to
+   * — `nova-builds` means the step is done, written and closed by Nova. A
+   * variant that changes the work without changing the actor would promise
+   * that for work Nova cannot do, so the override belongs here rather than in
+   * carefully worded prose.
+   */
+  actor?: Actor;
 }
 
 /**
@@ -75,6 +92,21 @@ export interface BackboneMilestone {
   variants?: Record<string, Variant>;
   /** Project types this milestone is skipped for entirely. */
   skipFor?: string[];
+  /**
+   * Only for somebody who would borrow.
+   *
+   * A milestone can be right for a route and wrong for the person on it. The
+   * self-funded roadmap carries one about using retirement savings — a ROBS
+   * rollover, a 401(k) loan, an early withdrawal — which is useful to a
+   * self-funder who is open to it and is a debt plan handed to somebody who
+   * answered "no debt" two weeks earlier. Route is not the only thing a step
+   * can depend on.
+   *
+   * Unanswered leaves it in: a person who has not drawn the line has not
+   * refused, and hiding options from somebody who never said no is its own
+   * kind of wrong.
+   */
+  needsDebtAppetite?: boolean;
   /** A shared milestone id (SH-0x), so work carries across paths. */
   sharedId?: string;
   /**

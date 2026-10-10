@@ -130,11 +130,39 @@ interface AssetTemplate {
   life?: number;
   /** One line a player can decide from. */
   blurb: string;
+  /**
+   * Whether the founders could make this themselves instead of buying it, and
+   * what it would take.
+   *
+   * Some things on a marketplace are work and some are somebody else's
+   * property. An edit bay, a second kitchen line, a booking integration, a
+   * piece of tooling — those are hours. A three-year ambassador, a carrier
+   * bundle, a patent somebody else holds, a licence to a brand you do not own
+   * — no number of hours makes those yours, and a game that pretended
+   * otherwise would be teaching that everything is a grind.
+   *
+   * `hoursAWeek` is what it takes for a month of the founders' week. More than
+   * that and it lands sooner and better; less and it lands later and simpler
+   * — see `buildProgress`.
+   *
+   * Absent means it cannot be built, which is the safe default: a market whose
+   * generated shelf says nothing about this offers nothing to build.
+   */
+  byHand?: { hoursAWeek: number };
 }
 
 /**
  * The nine slots every market's marketplace is built from: what each thing
  * costs, how long it lasts, and what it does.
+ *
+ * Four of the nine carry `byHand`, and which four is the whole of the rule:
+ * the two facilities and the two patents are *work* — a second line, a
+ * fulfilment rig, a process you invent, a piece of tooling you build — so the
+ * founders can make them instead of buying them. The distribution deals, the
+ * ambassador and the two brand licences are somebody else's property or
+ * somebody else's name, and no number of hours makes those yours. A game where
+ * everything could be ground out by hand would be teaching that nothing has to
+ * be bought, which is not true of any business.
  *
  * The names and blurbs here are only the fallback for a market with no
  * catalogue of its own. Each market's actual wording comes from
@@ -159,22 +187,22 @@ const SLOTS: AssetTemplate[] = [
     blurb: "A face people already trust. Works immediately and leaves with them when it ends.",
   },
   {
-    kind: "patent", name: "Core process patent", weight: 2.4,
+    kind: "patent", name: "Core process patent", weight: 2.4, byHand: { hoursAWeek: 40 },
     effect: () => ({ quality: 9, unitCost: 0.93 }),
     blurb: "Yours permanently, and not theirs. The rare thing here that does not expire.",
   },
   {
-    kind: "patent", name: "Interface patent portfolio", weight: 1.4,
+    kind: "patent", name: "Interface patent portfolio", weight: 1.4, byHand: { hoursAWeek: 20 },
     effect: () => ({ quality: 6 }),
     blurb: "A fence around the part customers actually touch.",
   },
   {
-    kind: "facility", name: "Second operations centre", weight: 2.0, life: 6,
+    kind: "facility", name: "Second operations centre", weight: 2.0, life: 6, byHand: { hoursAWeek: 25 },
     effect: (n) => ({ capacity: Math.round(marketSize(n) * 0.05), service: 6, unitCost: 0.96 }),
     blurb: "Room to serve more people and somewhere to answer the phone from.",
   },
   {
-    kind: "facility", name: "Automated fulfilment line", weight: 1.7, life: 5,
+    kind: "facility", name: "Automated fulfilment line", weight: 1.7, life: 5, byHand: { hoursAWeek: 35 },
     effect: (n) => ({ capacity: Math.round(marketSize(n) * 0.03), unitCost: 0.88 }),
     blurb: "Cuts what every unit costs, permanently, for as long as you keep it running.",
   },
@@ -188,12 +216,37 @@ const SLOTS: AssetTemplate[] = [
     effect: () => ({ brand: 7 }),
     blurb: "A quieter name than a celebrity, and it does not have opinions in public.",
   },
+  /*
+   * A collaboration, which is a different purchase from an ambassador.
+   *
+   * The celebrity slot above hires a face: three years, expensive, and the
+   * company borrows standing it has not earned. A collaboration is a peer —
+   * another channel, another studio, somebody doing the same thing to the same
+   * people — and it works the other way round: cheap, short, and it brings
+   * *their* audience rather than their reputation. One video together, one
+   * co-branded run, one guest season.
+   *
+   * So the effect is reach and a little standing rather than a lot of standing:
+   * `capacity` because their audience arrives whether or not you were ready for
+   * it, which is the trap in it — a collaboration that doubles the people
+   * knocking at a company with no room to serve them buys turned-away
+   * customers and the reputation hit that comes with them.
+   *
+   * Short-lived on purpose. It is the one asset a company with almost no money
+   * can reach, which matters because every other way of growing here needs a
+   * budget first.
+   */
+  {
+    kind: "celebrity", name: "A collaboration", weight: 0.7, life: 2,
+    effect: (n) => ({ brand: 5, capacity: Math.round(marketSize(n) * 0.01) }),
+    blurb: "Somebody else's audience, lent to you for a season. Cheap, quick, and gone again — and they arrive whether or not you have room.",
+  },
 ];
 
 const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 /**
- * The nine slots said in this market's own words, without asking a model.
+ * The slots said in this market's own words, without asking a model.
  *
  * The generic names above are retail's — shelves, carriers, fulfilment lines —
  * and they were shown to every market that had no catalogue entry, which is
@@ -291,6 +344,15 @@ export interface Listing {
   reserve: number;
   /** Null for the open market; a venture id when a team is selling its own. */
   sellerId: string | null;
+  /**
+   * What it would take to make this instead of buying it, if it can be made at
+   * all — see `AssetTemplate.byHand` for which four of the nine are work.
+   *
+   * Absent on a lot another company is selling: somebody else's second
+   * kitchen line is their property, and the hours that would build your own do
+   * not buy theirs.
+   */
+  byHand?: { hoursAWeek: number };
 }
 
 /**
@@ -379,6 +441,17 @@ export function marketListings(input: {
       blurb: template.blurb,
       reserve: price,
       sellerId: null,
+      /*
+       * Whether the founders could make this one instead of buying it.
+       *
+       * On the listing and not on the asset, because it is a fact about the
+       * *offer* — once you own the thing, how it came to be yours changes
+       * nothing about what it does. It lives here because the template knows
+       * and `CompanyAsset` has no business carrying it: the first version put
+       * it on the asset, the conversion dropped it silently, and the whole
+       * feature came back "nothing on the shelf can be made by hand".
+       */
+      byHand: template.byHand,
       asset: {
         id: `ast_${hash(`${seed}:${template.name}:asset`).toString(36)}`,
         kind: template.kind,
@@ -572,6 +645,145 @@ export function resolveBids(listings: Listing[], bids: Bid[], funds: Record<stri
 }
 
 /** What a venture can actually commit to bids, given everything else it has promised. */
+/**
+ * What to bid on, and how much, for a company Nova is filing for.
+ *
+ * Here rather than in the route because the route was the only place it
+ * existed, which meant the one way to find out what Nova would buy was to run
+ * a season through the database. A harness measuring whether a startup can
+ * grow by borrowing and buying had to either reimplement this or not test it,
+ * and reimplementing the thing under test is not testing it.
+ *
+ * ## The purse, and the bug it had
+ *
+ * It was `min(cash * 0.6, biddableFunds * 0.33)` — gated on cash. Measured on
+ * a real generated market: a company opening at nothing has a credit line of
+ * **$102,237** and the cheapest lot on the shelf costs $24,500, and the purse
+ * came out at **$0** at nought, $3,000 at £5,000 and $15,000 at £25,000. So
+ * the marketplace was unreachable at every opening a founder actually starts
+ * from, while a six-figure credit line sat unused beside it.
+ *
+ * Which was the whole mechanic missing its own point. Settlement already
+ * handles a bid beyond the bank — it takes what cash there is and books the
+ * rest as debt — so "borrow against the line, buy the thing that grows you,
+ * pay it down out of what it earns" was built and simply could not be reached.
+ * The purse is a share of what the company can actually lay hands on.
+ *
+ * A third of it, so the line is not emptied on one lot and there is something
+ * left for the plan and for next period's shelf.
+ */
+/**
+ * Making one of them yourself instead of buying it.
+ *
+ * The founders put hours a week into a lot on the shelf; when a month's worth
+ * of the asked-for hours has gone in, they have it, free. What `byHand` asks
+ * for is the *comfortable* week — put in more and it lands sooner and better,
+ * put in less and it lands later and simpler.
+ *
+ * ## Better and simpler, and why it is the same number
+ *
+ * It would be easy to make "better" a separate choice, and it should not be:
+ * the only thing a founder actually controls is how much of the week goes in,
+ * and everything else follows from that. So the grade is the ratio of what
+ * went in to what was asked for, bounded — half the hours gets a half-strength
+ * version of the thing, double gets a half again on top, and nothing gets
+ * nothing. A bought one is always exactly what it says on the shelf; a made
+ * one is as good as the time in it.
+ *
+ * `MOST` is not 2 or 3 because the point of buying is that money is faster
+ * than hands. A founder who pours the whole week in for a month should get
+ * something noticeably better than the shelf's version and not something that
+ * makes the marketplace pointless.
+ */
+export const BUILD_LEAST = 0.4;
+export const BUILD_MOST = 1.5;
+
+export function buildGrade(hoursPut: number, asked: number): number {
+  if (!(asked > 0)) return 0;
+  return Math.max(BUILD_LEAST, Math.min(BUILD_MOST, hoursPut / asked));
+}
+
+/**
+ * Where a build has got to after a period of putting hours in.
+ *
+ * Progress is counted in weeks-of-the-asked-for-hours, so a founder giving
+ * half the hours takes twice as many months, which is the honest arithmetic
+ * and also the thing that makes "spend fewer hours for a simpler version" a
+ * real choice rather than a free one: fewer hours is both slower *and* worse.
+ */
+export function buildProgress(
+  put: number,
+  asked: number,
+  /** Weeks in the period — four and a third in a month, thirteen in a quarter. */
+  weeks: number,
+): { done: boolean; weeksIn: number } {
+  if (!(asked > 0) || put <= 0) return { done: false, weeksIn: 0 };
+  const weeksIn = (put / asked) * weeks;
+  return { done: weeksIn >= weeks, weeksIn };
+}
+
+/** What a made one does, against what a bought one would have done. */
+export function madeByHand(asset: CompanyAsset, grade: number): CompanyAsset {
+  const e = asset.effect ?? {};
+  return {
+    ...asset,
+    id: `${asset.id}_byhand`,
+    name: grade >= 1 ? asset.name : `${asset.name} (simplified)`,
+    effect: {
+      ...(e.quality !== undefined ? { quality: Math.round(e.quality * grade) } : {}),
+      ...(e.brand !== undefined ? { brand: Math.round(e.brand * grade) } : {}),
+      ...(e.service !== undefined ? { service: Math.round(e.service * grade) } : {}),
+      ...(e.capacity !== undefined ? { capacity: Math.round(e.capacity * grade) } : {}),
+      /* A cost cut is a share, so it scales toward 1 rather than toward 0. */
+      ...(e.unitCost !== undefined ? { unitCost: 1 - (1 - e.unitCost) * grade } : {}),
+    },
+  };
+}
+
+export const BID_SHARE = 0.33;
+
+export function chooseBid(
+  company: Company,
+  shelf: Listing[],
+): { listingId: string; amount: number; name: string; reserve: number } | null {
+  const purse = Math.max(0, biddableFunds(company) * BID_SHARE);
+  if (purse <= 0 || !shelf.length) return null;
+
+  /*
+   * What each one is worth here, in the company's own terms: a point of
+   * quality is worth more in a market that weighs quality, and a unit-cost cut
+   * is worth what it saves on the sales this company actually makes.
+   */
+  const weigh = (l: Listing) => {
+    const e = l.asset.effect ?? {};
+    const sold = Object.values(company.customers ?? {}).reduce((a, b) => a + Number(b), 0);
+    const perUnit = Math.max(0, (company.price ?? 0) - (company.unitCost ?? 0));
+    return (e.quality ?? 0) * 3 + (e.brand ?? 0) * 2 + (e.service ?? 0) * 2
+      + (e.capacity ?? 0) * perUnit * 0.0002
+      + (1 - (e.unitCost ?? 1)) * Math.max(sold, 1) * (company.unitCost ?? 0) * 0.002
+      /* Permanence is the whole point: an expiring deal is worth less than a patent. */
+      + (l.asset.expiresIn === undefined ? 12 : 0);
+  };
+
+  /*
+   * The best one it can actually afford, rather than the best one on the
+   * shelf. Sorting by worth and then checking the purse means a company whose
+   * favourite lot is out of reach bids on nothing at all, when the second lot
+   * was affordable and worth having — which is how a startup ends a season
+   * owning nothing with a credit line it never touched.
+   */
+  const affordable = shelf
+    .filter((l) => l.reserve > 0 && l.reserve <= purse)
+    .sort((a, b) => weigh(b) - weigh(a));
+  const best = affordable[0];
+  if (!best) return null;
+
+  /* Just over the reserve: enough to win it uncontested, not a blank cheque. */
+  const amount = Math.round(Math.min(purse, best.reserve * 1.15));
+  if (amount < best.reserve) return null;
+  return { listingId: best.id, amount, name: best.asset.name, reserve: best.reserve };
+}
+
 export const biddableFunds = (company: Company): number =>
   Math.max(0, company.cash + Math.max(0, company.creditLimit - company.debt));
 

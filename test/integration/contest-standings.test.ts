@@ -23,6 +23,7 @@ import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { contestParticipants, contests, startupGameVerdicts, startupGames, users } from "@shared/schema";
 import { standingsFor } from "../../server/contest-standings";
+import { finishOnboarding } from "../helpers/onboarding";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -290,9 +291,11 @@ describe("the two kinds of contest", () => {
     const app = await getTestApp();
     const agent = request.agent(app);
     const email = `scored-${Date.now()}@example.test`;
-    await agent.post("/api/auth/register").set("x-forwarded-for", ip())
+    const made = await agent.post("/api/auth/register").set("x-forwarded-for", ip())
       .send({ email, password: "Testpass123!", firstName: "Filer" }).expect(201);
     await verifyEmail(app, email, ip());
+    /* Entering a contest needs a finished profile. See shared/onboarding.ts. */
+    await finishOnboarding(made.body.id, { displayName: "Filer" });
     const c = await contest();
     await agent.post(`/api/contests/${c.id}/join`).set("x-forwarded-for", ip()).send({}).expect(200);
 

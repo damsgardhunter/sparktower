@@ -32,8 +32,10 @@
  * to your teammates — which is the pressure that actually gets someone back
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
+import type { CurrencyCode } from "../currency";
 import { defaultDraft } from "./levers";
 import { REFERENCE_YEAR_OF_COSTS, officerCost, officersOf, yearOfCostsFor } from "./decisions";
+import { PRICE_DRIFT_PER_YEAR } from "./market";
 import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedFragmentedTail, seedIncumbents, TRULY_OPEN_SHARE } from "./incumbents";
@@ -151,9 +153,18 @@ export function economyFor(seasonId: string, period: number, periods = 1): {
     demand: Number((1 + wave * 0.12).toFixed(4)),
     // Rates lag the cycle: money gets dear after the boom, not during it.
     interestRate: Number((0.07 + Math.max(0, wave) * 0.05).toFixed(4)),
-    // Costs drift up over a season and never come back down, which is what
-    // stops year one's price holding for fourteen years.
-    costIndex: Number((1 + year * 0.012 + Math.max(0, wave) * 0.02).toFixed(4)),
+    /*
+     * Costs drift up over a season and never come back down.
+     *
+     * This used to claim it was "what stops year one's price holding for
+     * fourteen years", and for a long time it was not: nothing moved what a
+     * buyer thinks the ordinary thing costs, so the right play was to hold the
+     * price and absorb the drift, and the optimiser duly held one price for
+     * thirteen years. `PRICE_DRIFT_PER_YEAR` is the other half — the same rate
+     * applied to `referencePrice` — and the two are the same constant so they
+     * cannot come apart again.
+     */
+    costIndex: Number((1 + year * PRICE_DRIFT_PER_YEAR + Math.max(0, wave) * 0.02).toFixed(4)),
     outlook: nextWave - wave > 0.04 ? "expansion" : nextWave - wave < -0.04 ? "tightening" : "steady",
   };
 }
@@ -534,6 +545,32 @@ export const COMPANIES_A_MARKET_IS_WRITTEN_FOR = 4;
  * because the plant was full either way. `breakEven` below is still the floor
  * it was always written to be, and `PLANT_SHARE_OF_POOL` is the ceiling coming
  * down to meet it.
+ *
+ * ## And not smaller than this for a second reason: idle room *is* the cost of
+ * ## doing nothing
+ *
+ * Lowering it was tried, with good evidence behind the attempt. Idle capacity
+ * is the heaviest line in these accounts — measured on construction, £37,663 a
+ * quarter against £86,400 of revenue, 44% of the takings on room the company
+ * had no way to fill — and that is survivable for a way of playing funded from
+ * a large opening balance and fatal for the one growing out of its own
+ * trading. It is why `every-way-of-playing`'s "nobody is locked out" had
+ * construction pinned at 22–24% of the best way to play it.
+ *
+ * The sweep worked on its own terms: 0.45 took construction to 24.2%, 0.33 to
+ * 24.7% and also fixed `balance`'s "a survivor is paid better than a filler";
+ * 0.28 overshot and broke drone delivery instead.
+ *
+ * And then the *full* suite — rather than the handful of files the sweep was
+ * run against — said no. At a third, `a-season-not-a-period`'s "makes deciding
+ * nothing cost something" and "still pays for running a business properly"
+ * both failed. That is the point: the standing cost of a plant you have not
+ * grown into is precisely what makes passivity expensive in this engine. Take
+ * it away and doing nothing becomes cheap, which is a worse problem than a
+ * fragile market.
+ *
+ * So construction's thin self-funded route has to be fixed somewhere that is
+ * not here, and this constant stays where it was measured.
  */
 export const PLANT_SHARE_OF_POOL = 0.6;
 
@@ -571,7 +608,21 @@ export function marketFor(niche: Niche, companies: number): Niche {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean; standing?: Standing }[];
+  teams: {
+    id: string; name: string; seats: Role[]; officers?: number; botRun?: boolean; standing?: Standing;
+    /**
+     * The money in the bank on day one, exactly — when the founder said how
+     * much they have rather than letting an opening work it out. Applied last,
+     * so the opening still decides credit, customers and plant.
+     */
+    cash?: number;
+    /**
+     * Whether the founders draw a salary at all. A founder running the thing
+     * on their own pays themselves nothing — the only salaries are the staff
+     * they choose to hire — so a solo season opens with this false.
+     */
+    foundersPaid?: boolean;
+  }[];
   /**
    * Funded and level, or where each project actually is. Absent means the
    * contest every season has been until now. See `opening.ts`.
@@ -579,8 +630,15 @@ export function buildWorld(input: {
   opening?: Opening;
   /** How often this table decides. Written onto the world, because the engine reads it from there. */
   cadence?: Cadence | null;
+  /**
+   * The money this business counts in, for the sentences the engine writes.
+   *
+   * Absent is GBP, which is what every one of them said before this existed.
+   * See `World.currency`.
+   */
+  currency?: CurrencyCode;
 }): World {
-  const { seasonId, teams, cadence } = input;
+  const { seasonId, teams, cadence, currency } = input;
   const periods = periodsPerYear(cadence);
   /*
    * Grown to the size of the field before anything is seeded from it, so the
@@ -616,6 +674,7 @@ export function buildWorld(input: {
     seasonId,
     niche,
     year: 1,
+    currency,
     companies: [
       ...seedIncumbents(niche, seasonId, seatedAgainst),
       /*
@@ -634,7 +693,9 @@ export function buildWorld(input: {
        */
       ...teams.map((t) => {
         const funded = startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, officers: t.officers, botRun: t.botRun, seasonId, companies: teams.length });
-        return input.opening === "actual" && t.standing ? atStanding(funded, t.standing, niche) : funded;
+        const placed = input.opening === "actual" && t.standing ? atStanding(funded, t.standing, niche) : funded;
+        const unpaid = t.foundersPaid === false ? { ...placed, officerPay: 0 } : placed;
+        return typeof t.cash === "number" && Number.isFinite(t.cash) ? { ...unpaid, cash: Math.max(0, Math.round(t.cash)) } : unpaid;
       }),
     ],
     economy: opening,

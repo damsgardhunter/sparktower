@@ -1565,6 +1565,31 @@ export const NOTIFICATION_KINDS = [
   // Money: somebody backed your project, a reviewer decided, a pledge was released or refunded.
   "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
   /*
+   * Seats in a simulation marketplace listing have been refunded, because the
+   * person who sold them closed their account.
+   *
+   * The buyer did not ask for this and gets the money back either way, so
+   * without a notice it is a refund appearing with no explanation — which the
+   * backing side already treats as a failure in its own words: that is how a
+   * person decides a product took their money.
+   */
+  "seats_refunded",
+  /*
+   * The simulation marketplace, for the two people a sale is between.
+   *
+   * It shipped with no notices at all, so a seller found out they had sold
+   * something by going and looking, found out they had been paid by watching a
+   * balance, and found out a reviewer had removed their listing by trying to
+   * use it. The backing side has had the equivalent five since it was written,
+   * and its own comment says why: these are the events somebody has no other
+   * way to learn.
+   *
+   * `listing_published` is the one that reaches outwards rather than inwards:
+   * the people who follow a builder hear when that builder puts a new market up
+   * for sale, which is the same promise `followed_post` makes about their posts.
+   */
+  "listing_published", "listing_sold", "listing_earnings_released", "listing_taken_down",
+  /*
    * A reward the creator owed has been delivered — the personal video recorded,
    * the early access opened up. The backer paid for it and has no other way to
    * find out: nothing else in the product changes visibly when a creator does
@@ -3187,6 +3212,520 @@ export const startupGameSubmissions = pgTable("startup_game_submissions", {
   once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
 }));
 
+// ─── Advertisements ──────────────────────────────────────────────────────────
+
+/**
+ * How a business looks and sounds, saved once and applied to every advert.
+ *
+ * The reason this is a table rather than fields on `projects`: an advert needs
+ * a dozen details that nothing else in the product cares about, and a business
+ * fills them in once. Keeping them apart means the brand kit can be absent
+ * without every project row carrying twelve nulls, and "has this business set
+ * up its branding" is one existence check.
+ *
+ * Everything here is applied **in code** at render time — the colours, the
+ * logo, the words. None of it is described to the video model, because a model
+ * asked to put a logo in a frame draws something that looks like a logo. See
+ * the rule at the top of shared/ads.ts.
+ */
+export const projectBrandKits = pgTable("project_brand_kits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** One kit per project. The unique constraint below is what makes it one. */
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+
+  /* ── How it looks ── */
+  /** `#RRGGBB`. Used for text, bars and the progress sweep. */
+  primaryColor: text("primary_color"),
+  /** The colour text sits on, and what a caption box is filled with. */
+  backgroundColor: text("background_color"),
+  /** Accent for one thing per frame — a price, an arrow, an underline. */
+  accentColor: text("accent_color"),
+  /**
+   * An object-storage path to the logo, ideally with transparency.
+   *
+   * Composited at render time at a known size and position. A logo the model
+   * generated is not a logo; this is the only logo that ever appears.
+   */
+  logoPath: text("logo_path"),
+  /** One of the bundled families, or null for the default. */
+  fontFamily: text("font_family"),
+
+  /* ── How it sounds ── */
+  /** What the business is called, as it should be written on screen. */
+  displayName: text("display_name"),
+  /** The one line that can go under the name. */
+  tagline: text("tagline"),
+  /** "warm", "plain", "bold" — picked from a list, not typed. */
+  voice: text("voice"),
+  /** Words and claims this business will not make. Read into the script prompt. */
+  avoidWords: text("avoid_words").array(),
+
+  /* ── What every ad must end with ── */
+  /** "Order at example.com", "Link in bio". Rendered, never spoken by a model. */
+  callToAction: text("call_to_action"),
+  /** Where the call to action points, for the caption and the description. */
+  websiteUrl: text("website_url"),
+
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* One kit per project: a second kit is an edit, not another brand. */
+  onePerProject: unique("project_brand_kit_once").on(table.projectId),
+}));
+
+/**
+ * One advert being made, from the moment it is paid for to the file at the end.
+ *
+ * A render is minutes of work across a provider we do not control, so it
+ * cannot be a request that returns a video. It is a row that moves through
+ * `AD_RENDER_STATUSES` and is polled, and everything needed to carry on after
+ * a restart is on it — the plan, the script, the provider's job ids, what each
+ * plate came back as.
+ *
+ * ## Why the charge is recorded twice
+ *
+ * `chargedCents` is what the person paid, from the price list. `providerCents`
+ * is what the generation actually cost us, totted up from the plates as they
+ * come back. They are both here because the margin on this feature was a
+ * guess — `AD_COST.attemptsPerFinished` says as much in its own comment — and
+ * a guess that nobody can check against real rows stays a guess. With both on
+ * the row, the real margin is a query.
+ *
+ * ## Why a failed render keeps its row
+ *
+ * The refund is a ledger entry pointing at something, and "the render that
+ * failed" has to still exist to be pointed at. It also carries `failure`,
+ * which is the only place the reason a person's advert did not arrive is
+ * written down in words they could be shown.
+ */
+export const adRenders = pgTable("ad_renders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** Who asked for it and whose wallet paid. Kept if they leave the project. */
+  requestedBy: varchar("requested_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+
+  /* ── What was asked for ── */
+  /** 6, 15 or 30. The length sold, not the length generated. */
+  durationSeconds: integer("duration_seconds").notNull(),
+  /** One of AD_FORMATS: vertical, square, wide. */
+  format: text("format").notNull(),
+  /** One of the ids in shared/ad-styles.ts. */
+  style: text("style").notNull(),
+  /** The business's own words, as typed. The subject of the whole thing. */
+  brief: text("brief").notNull(),
+
+  /* ── What was decided ── */
+  /** The AdScript as written and accepted. Null until the writer has run. */
+  script: jsonb("script"),
+  /** The plates, their shots, and the prompt each one was given. */
+  plan: jsonb("plan"),
+  /** The brand kit as resolved at the moment of the render, so a later edit cannot change what was drawn. */
+  brand: jsonb("brand"),
+
+  /* ── Where it got to ── */
+  status: text("status").notNull().default("queued"),
+  /** Per-plate provider job ids and the file each returned. */
+  plates: jsonb("plates"),
+  /** The finished cut, as an object-storage path. */
+  outputPath: text("output_path"),
+  /** Why it failed, in words a person could be shown. */
+  failure: text("failure"),
+
+  /* ── Money ── */
+  /** Taken up front, from OUTCOME_PRICE_CENTS. */
+  chargedCents: integer("charged_cents").notNull(),
+  /** Put back in full when a render does not finish. Zero otherwise. */
+  refundedCents: integer("refunded_cents").default(0).notNull(),
+  /** What the generation really cost us, summed as plates come back. */
+  providerCents: integer("provider_cents").default(0).notNull(),
+
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The project's adverts, newest first, which is every list this feature has. */
+  byProject: index("ad_renders_project_idx").on(table.projectId, table.createdAt),
+  /* The poller's query: everything not yet finished. */
+  byStatus: index("ad_renders_status_idx").on(table.status),
+}));
+
+/**
+ * A simulation somebody wrote, offered to everybody else.
+ *
+ * The market itself is the product — `customMarket` holds exactly what
+ * `buildCustomMarket` validates and `sim_seasons` already plays — and the
+ * settings beside it are what make it a particular contest rather than a
+ * particular world.
+ *
+ * ## Why the market is copied onto the listing
+ *
+ * A listing is a promise about a thing somebody paid for. If it pointed at a
+ * market the author could keep editing, a table could buy a simulation on
+ * Monday and get a different one on Friday, and every season already running
+ * would drift under them. The author edits a draft and publishes it; what is
+ * published does not move.
+ */
+export const simulationListings = pgTable("simulation_listings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /* No cascade: purchases hang off this row, and they are kept. See simulationPurchases. */
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  /** The project this grew out of, when it grew out of one. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  /**
+   * The season whose market this was copied from.
+   *
+   * Kept so the same market cannot be listed twice by accident, and so a
+   * listing can be traced back to the thing that produced it. Not a foreign
+   * key with a cascade: deleting an old season must not take a published
+   * listing — and everything it was sold on — down with it.
+   */
+  fromSeasonId: varchar("from_season_id"),
+
+  title: text("title").notNull(),
+  /** The sentence or two on the card. Written by Nova when Nova built the market. */
+  summary: text("summary"),
+  /** The long description on the listing's own page. */
+  description: text("description"),
+  /** For search and the filter chips, from shared/simulation-market.ts. */
+  tags: text("tags").array(),
+
+  /* ── What is actually played ── */
+  /** The validated market, as `buildCustomMarket` returns it. */
+  customMarket: jsonb("custom_market"),
+  /** A catalogue market id, when the listing is settings over a hand-made world. */
+  nicheId: varchar("niche_id"),
+  cadence: text("cadence", { enum: ["yearly", "quarterly", "monthly"] }).default("yearly").notNull(),
+  botSkill: text("bot_skill", { enum: ["filler", "survivor"] }).default("survivor").notNull(),
+  totalYears: integer("total_years").default(14).notNull(),
+
+  /* ── What it costs ── */
+  pricing: text("pricing", { enum: ["free", "perSeat"] }).default("free").notNull(),
+  /** Zero when free. Bounded by SEAT_PRICE_MIN/MAX_CENTS at publish. */
+  seatPriceCents: integer("seat_price_cents").default(0).notNull(),
+
+  status: text("status", { enum: ["draft", "listed", "unlisted"] }).default("draft").notNull(),
+  publishedAt: timestamp("published_at"),
+
+  /*
+   * Counters, kept on the row rather than summed on every card.
+   *
+   * A marketplace page shows thirty cards and each one wants "how many people
+   * played this"; thirty aggregate queries to render a grid is the sort of
+   * thing that is fine until the day it is not. They are written in the same
+   * transaction as the thing they count, so they cannot drift from it.
+   */
+  seatsSold: integer("seats_sold").default(0).notNull(),
+  seasonsStarted: integer("seasons_started").default(0).notNull(),
+  /**
+   * How many different people have played it, which is the number a stranger
+   * is actually trying to read.
+   *
+   * `seasonsStarted` counts events, and one buyer with fifty seats starting
+   * fifty seasons reads as fifty — so it answered "how much has this been
+   * played" when the question on the card is "have other people chosen this".
+   * The `popular` sort ran on it too, which made the ranking a volume count.
+   *
+   * Maintained from `simulation_listing_players`: the insert there either
+   * happens or conflicts, and this is incremented only when it happened. So the
+   * counter cannot drift from the set, and two people arriving at once cannot
+   * both be counted as the first.
+   */
+  players: integer("players").default(0).notNull(),
+  grossCents: integer("gross_cents").default(0).notNull(),
+
+  /*
+   * Taken down by a reviewer, with the reason.
+   *
+   * Separate from `status`, which is the author's own switch. A listing the
+   * author unlisted and one a reviewer removed are different facts, and
+   * collapsing them would let an author quietly re-list something that was
+   * taken down.
+   */
+  takenDownAt: timestamp("taken_down_at"),
+  takenDownReason: text("taken_down_reason"),
+  takenDownBy: varchar("taken_down_by").references(() => users.id, { onDelete: "set null" }),
+
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byAuthor: index("sim_listings_author_idx").on(table.authorId, table.createdAt),
+  /* The marketplace's own query: what is listed, newest first. */
+  byStatus: index("sim_listings_status_idx").on(table.status, table.publishedAt),
+}));
+
+/**
+ * One purchase of seats on one listing.
+ *
+ * Both sides of the money are recorded, not just the total: what the buyer
+ * paid, what the platform kept and what the author earned. Derivable from the
+ * split at the time, which is exactly why it is stored — the platform's share
+ * is a number somebody will change, and a sale from before the change has to
+ * keep adding up afterwards.
+ */
+export const simulationPurchases = pgTable("simulation_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /*
+   * No cascade on any of the three, which is what makes "kept" a promise the
+   * database keeps rather than one that happens to hold.
+   *
+   * These rows are in KEPT in `server/account-data.ts`, and that is safe today
+   * only because closing an account writes a tombstone instead of deleting the
+   * `users` row. Nothing enforces that. A hard delete added later — a cleanup
+   * script, an admin tool, a test fixture — would silently take both sides'
+   * record of a sale, and the money it was still holding, with it. With no
+   * cascade the attempt fails instead, which is the right failure for a
+   * financial record. `project_backings.backer_id` is the precedent.
+   */
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id),
+  buyerId: varchar("buyer_id").notNull().references(() => users.id),
+  /** Kept so a seller's history survives their listing being taken down. */
+  sellerId: varchar("seller_id").notNull().references(() => users.id),
+
+  seats: integer("seats").notNull(),
+  paidCents: integer("paid_cents").notNull(),
+  platformCents: integer("platform_cents").default(0).notNull(),
+  sellerCents: integer("seller_cents").default(0).notNull(),
+  /** Seats not yet spent on a season. What a resale would draw from. */
+  seatsLeft: integer("seats_left").notNull(),
+  /**
+   * Which version of the buyer terms was in force, and therefore accepted, when
+   * this was bought (`BUYER_TERMS_VERSION`).
+   *
+   * Nullable because rows written before this column existed cannot have one,
+   * and a default would invent a consent record for them. Null reads as "bought
+   * before this was recorded", which is the truth.
+   */
+  buyerTermsVersion: integer("buyer_terms_version"),
+  /**
+   * The client's key for one buying attempt, so a retry cannot buy twice.
+   *
+   * Buying spends money and then writes a row, and nothing stopped the same
+   * attempt arriving twice — a double-tapped button, a flaky connection
+   * retried by the browser, an impatient reload. Both arrivals were a complete
+   * purchase and both were charged, and the only thing between a customer and
+   * being billed twice was the button being disabled quickly enough.
+   *
+   * Nullable, because a caller that does not send one is not retrying. Postgres
+   * treats NULLs as distinct in a unique index, so those rows do not collide
+   * with each other.
+   */
+  idempotencyKey: varchar("idempotency_key"),
+
+  refundedCents: integer("refunded_cents").default(0).notNull(),
+  refundedAt: timestamp("refunded_at"),
+  /**
+   * Seller earnings that were released and could not be paid, because by the
+   * time the hold elapsed the seller had closed their account.
+   *
+   * The money has to go somewhere, and "somewhere" was a tombstone's balance:
+   * the release credited an account nobody can sign into, so the ledger said
+   * paid and the money was unreachable. That is the one outcome that is both
+   * wrong and invisible — the books claim a payout that never happened, and
+   * nothing anywhere says the platform is holding it.
+   *
+   * Recorded rather than decided. Whether it is eventually the platform's,
+   * refunded, or reclaimable is a policy question with legal shape, and this
+   * column is what makes it answerable: the revenue report shows the running
+   * total as its own line rather than folding it into what the platform earned.
+   */
+  unclaimedCents: integer("unclaimed_cents").default(0).notNull(),
+
+  /*
+   * The seller's money, held before it is theirs.
+   *
+   * It used to be credited at the moment of sale, which is money already gone
+   * when the refund arrives — the platform would then be taking it back out of
+   * a balance that may be empty, or absorbing it. Held for the same fourteen
+   * days a buyer has to change their mind, a refund is always paid out of
+   * money nobody has spent yet. The seats work immediately; the wait is on the
+   * money, not the product.
+   */
+  releasableAt: timestamp("releasable_at"),
+  releasedAt: timestamp("released_at"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byBuyer: index("sim_purchases_buyer_idx").on(table.buyerId, table.createdAt),
+  /* The release sweep's query: what is due and not yet paid. */
+  byRelease: index("sim_purchases_release_idx").on(table.releasedAt, table.releasableAt),
+  /*
+   * One purchase per attempt. Keyed with the buyer so two people cannot collide
+   * on a key either of them happened to generate, and so the index is the thing
+   * that settles a race rather than a read-then-write that cannot.
+   */
+  oneAttempt: unique("sim_purchases_attempt_once").on(table.buyerId, table.idempotencyKey),
+  bySeller: index("sim_purchases_seller_idx").on(table.sellerId, table.createdAt),
+  byListing: index("sim_purchases_listing_idx").on(table.listingId),
+}));
+
+/**
+ * What a seller agreed to, and which version of it.
+ *
+ * "They accepted the terms" is worth nothing without "which terms". Terms
+ * change, and somebody who joined under the old ones did not agree to the new.
+ * The version is stored with the acceptance so the question "what did this
+ * person actually agree to" has an answer years later — which is the only form
+ * of that question anybody ever asks.
+ *
+ * One row per acceptance rather than a column on the user: the history is the
+ * point, and a column would overwrite the thing being evidenced.
+ */
+export const sellerAgreements = pgTable("seller_agreements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /* No cascade: a consent record a dispute will ask for. See simulationPurchases. */
+  userId: varchar("user_id").notNull().references(() => users.id),
+  /** SELLER_TERMS_VERSION at the moment of acceptance. */
+  version: integer("version").notNull(),
+  /** The address it was accepted from, which is what a dispute asks for. */
+  acceptedIp: varchar("accepted_ip"),
+  acceptedAt: timestamp("accepted_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("seller_agreements_user_idx").on(table.userId, table.version),
+}));
+
+/**
+ * A season somebody started from a listing, so a bought simulation can be
+ * found again.
+ *
+ * Without this row the marketplace sold something nobody could get back to.
+ * Pressing play spent a seat, created a season and returned its join link
+ * once; close the tab before following it and the season was unreachable —
+ * not in `/api/sim/ventures`, because starting a season does not seat you in
+ * it, and not on the listing, which counted `seasonsStarted` without recording
+ * which ones. Somebody paid, lost a seat, and had nothing to show for it.
+ *
+ * Kept here rather than as a column on `sim_seasons` because it is a fact about
+ * a purchase, not about a season: a season plays the same whether it was bought
+ * or not, and this table is also what a resale or a dispute would have to read.
+ */
+export const simulationSeasonStarts = pgTable("simulation_season_starts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id, { onDelete: "cascade" }),
+  /**
+   * The purchase whose seat was spent, or null when the author played their
+   * own listing — they are not charged, so there is no purchase to point at.
+   */
+  purchaseId: varchar("purchase_id").references(() => simulationPurchases.id, { onDelete: "set null" }),
+  seasonId: varchar("season_id").notNull(),
+  startedBy: varchar("started_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Copied at the start so the join link survives without a second read. */
+  inviteCode: text("invite_code"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byStarter: index("sim_season_starts_starter_idx").on(table.startedBy, table.createdAt),
+  byListing: index("sim_season_starts_listing_idx").on(table.listingId),
+  /* One row per season: a retry must not file the same start twice. */
+  oneSeason: unique("sim_season_starts_season_once").on(table.seasonId),
+}));
+
+/**
+ * Sending a simulation to somebody, without putting it on sale.
+ *
+ * The marketplace had two visibilities and no middle: a listing was either
+ * `listed` — in the public index, searchable, with a `/try/:id` page open to
+ * strangers — or it was the author's own secret. That is the wrong shape for
+ * the thing the marketplace was built to carry. A market written around one
+ * real business names its segments, its regions and the competitors already
+ * holding share, so publishing it to reach one person hands a study of a named
+ * company to everybody including the people it competes with.
+ *
+ * So: a link the author mints and sends, which reaches one listing without
+ * listing it.
+ *
+ * ## Why a row and not a signed token
+ *
+ * A signed token needs no table and cannot be taken back, and being able to
+ * take it back is most of the point — a link sent to the wrong address, or to
+ * somebody a deal fell through with, has to stop working. Revoking is a column
+ * here; with a signed token it would mean a deny-list table, which is the same
+ * table with the logic inverted and the default the wrong way round.
+ *
+ * ## Uses, not seats
+ *
+ * `uses` is how many seasons this link may start, counted up as they are. It is
+ * drawn down with a conditional UPDATE, the same way a bought seat is, so a
+ * link forwarded to a group cannot be used more times than it was meant to be
+ * however many people hold it at once.
+ *
+ * `claimedBy` on a use rather than a column here: the author wants to know who
+ * opened it, and one link may legitimately be meant for several people.
+ */
+/**
+ * Who has played a listing, one row per person.
+ *
+ * Exists to make "how many different people" a question the database can answer
+ * cheaply and exactly once per person. The unique key is the whole mechanism:
+ * `onConflictDoNothing().returning()` says whether this was somebody's first
+ * time, atomically, which is what decides whether the listing's `players`
+ * counter moves. Counting distinct ids out of `simulation_season_starts` would
+ * give the same answer and would have to be recomputed on every marketplace
+ * page load, for a sort.
+ *
+ * The author is not in here. They did not choose this listing.
+ */
+export const simulationListingPlayers = pgTable("simulation_listing_players", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  firstAt: timestamp("first_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The mechanism, not an optimisation: see the note above. */
+  oncePerPerson: unique("sim_listing_players_once").on(table.listingId, table.userId),
+}));
+
+export const simulationShareLinks = pgTable("simulation_share_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => simulationListings.id, { onDelete: "cascade" }),
+  /** The author who minted it. Only they may see, revoke or re-mint. */
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /**
+   * The secret in the URL. Long and random rather than guessable: this is the
+   * whole of the access control, so it is sized like a password and not like an
+   * id — see `newShareToken`.
+   */
+  token: text("token").notNull(),
+  /**
+   * Who it is for, in the author's own words — "Fareway Fools", an address, a
+   * name. Shown back to the author only, never to whoever opens the link: it is
+   * a note to self, and a note to self is written as one.
+   */
+  note: text("note"),
+  /** How many seasons this link may start, and how many it has. */
+  uses: integer("uses").default(1).notNull(),
+  usesSpent: integer("uses_spent").default(0).notNull(),
+  /** Null means it does not expire. */
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The lookup every request on a link does, and the reason it must be unique. */
+  byToken: unique("sim_share_links_token").on(table.token),
+  byListing: index("sim_share_links_listing_idx").on(table.listingId, table.createdAt),
+}));
+
+/**
+ * One season started from a share link.
+ *
+ * Separate from `simulation_season_starts`, which is a fact about a *purchase*:
+ * a share spends no money, has no refund window and no payout, and writing it
+ * as a zero-priced purchase is how an earnings report comes to include sales
+ * that never happened. The two are read together where a listing's whole
+ * history is wanted.
+ */
+export const simulationShareUses = pgTable("simulation_share_uses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  linkId: varchar("link_id").notNull().references(() => simulationShareLinks.id, { onDelete: "cascade" }),
+  /** Who opened it. They had to sign in to play, so there is always somebody. */
+  claimedBy: varchar("claimed_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  seasonId: varchar("season_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byLink: index("sim_share_uses_link_idx").on(table.linkId, table.createdAt),
+  /* One row per season, so a retry cannot file the same use twice. */
+  oneSeason: unique("sim_share_uses_season_once").on(table.seasonId),
+}));
+
 // ─── Companies ───────────────────────────────────────────────────────────────
 
 /**
@@ -3901,7 +4440,8 @@ export const simSeatPurchases = pgTable("sim_seat_purchases", {
  */
 export const gamePlayPurchases = pgTable("game_play_purchases", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /* No cascade: a card payment's receipt, kept. See simulationPurchases. */
+  userId: varchar("user_id").notNull().references(() => users.id),
   plays: integer("plays").notNull(),
   /** In cents, as Stripe counts it. */
   amount: integer("amount").notNull(),

@@ -50,8 +50,17 @@ export interface StandingRow {
   /** 0-1, the half of that number a team can lose without losing a customer. */
   founderShare: number;
   customers: number;
-  /** A 0–1 fraction of every customer in the market. */
+  /** A 0–1 fraction of every customer in the market, worldwide. */
   share: number;
+  /**
+   * A 0–1 fraction of the customers in the regions this company actually sells
+   * in — `shareWhereYouSell` on the standings payload.
+   *
+   * Optional because a payload from a server that predates it has no such
+   * field, and the honest fallback is `share`: before this existed the world
+   * reading was the only reading. See `shareReading`.
+   */
+  shareWhereYouSell?: number | null;
   revenue: number;
   reputation: number;
   price: number;
@@ -66,6 +75,8 @@ export interface HistoryPoint {
   year: number;
   /** A 0–1 fraction, as `marketShare` on the report. */
   share: number;
+  /** As `shareWhereYouSell` on the report. Null on years written before it existed. */
+  shareWhereYouSell?: number | null;
   customers: number;
   profit: number;
   rank: number;
@@ -80,10 +91,22 @@ export interface HistoryPoint {
 }
 
 export interface StandingsView {
+  /** The period counter. Every sim payload's `year` counts periods, not years. */
   year: number;
   totalYears: number;
+  /**
+   * How many decisions the season is, which is what `year` counts.
+   *
+   * Sent since the screens were found dividing one by the other — "Year 7 of 4"
+   * in a quarterly season — and unread here until now. See `seasonSpan`.
+   */
+  totalPeriods?: number | null;
+  /** What one decision is called here. */
+  period?: { one: string; many: string; of: string } | null;
   /** The season's own status. A finished one is a final table. */
   status: SeasonStatus | string;
+  /** When this period resolves, so the screen can poll around the tick rather than through it. */
+  resolvesAt?: string | null;
   rows: StandingRow[];
   /** Your company, year by year. Empty before the first year resolves. */
   history: HistoryPoint[];
@@ -360,4 +383,40 @@ export function reputationRead(reputation: number): string {
   if (reputation >= 40) return "Mixed";
   if (reputation >= 25) return "Shaky";
   return "Poor";
+}
+
+/**
+ * The two readings of a company's share, and which one leads.
+ *
+ * A market is global and a young company is in one corner of it, so the share
+ * everybody looked at first was the one least worth looking at: a team trading
+ * well in Leeds and nowhere else holds about two tenths of one per cent of the
+ * market, the table said "0.2%", and a team winning its own continent read as a
+ * rounding error.
+ *
+ * So the headline is the share of where the company actually sells, and the
+ * world reading goes beside it — the first says how well the business is being
+ * run, the second says how much of the world is left. Both are true; only one
+ * of them is an answer to "are we doing well".
+ *
+ * `world` is null when the two readings are the same number, which is every
+ * company that has finished expanding and every company in a season with one
+ * region. Showing "23% · 23% worldwide" would be noise, and worse, it would
+ * teach a player that the two mean the same thing everywhere.
+ */
+export function shareReading(row: Pick<StandingRow, "share" | "shareWhereYouSell">): {
+  headline: string;
+  world: string | null;
+} {
+  const where = Number.isFinite(Number(row.shareWhereYouSell)) && Number(row.shareWhereYouSell) > 0
+    ? Number(row.shareWhereYouSell)
+    : row.share;
+  const headline = shareRead(where);
+  const world = shareRead(row.share);
+  /*
+   * Compared as the strings a player reads, not as the numbers behind them.
+   * 0.2314 and 0.2302 are different numbers and both render "23%", and a row
+   * reading "23% · 23% worldwide" is the thing this is here to prevent.
+   */
+  return { headline, world: world === headline ? null : world };
 }

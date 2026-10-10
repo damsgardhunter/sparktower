@@ -21,7 +21,12 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { formatCountdown, remainingSeconds, seasonOver, type LiveVenture, type NichesResponse, type VentureView } from "./lobby";
+import {
+  deskPollMs, formatCountdown, remainingSeconds, seasonOver, standingsPollMs, venturePollMs, venturesPollMs,
+  type LiveVenture, type NichesResponse, type VentureView,
+} from "./lobby";
+import type { RivalCompanyView, SeatView } from "./profiles";
+import type { ReportPayload } from "./report";
 import type { DeskView } from "./desk";
 import type { MarketView } from "./market";
 import type { OffersView } from "./offers";
@@ -54,7 +59,14 @@ export function useVentures() {
   return useQuery({
     queryKey: ["sim-ventures"],
     queryFn: () => api<{ ventures: LiveVenture[] }>("/api/sim/ventures"),
-    refetchInterval: ROOM_POLL_MS,
+    /*
+     * Quick while a row could still change which screen it opens, and slow once
+     * none can — `venturesPollMs`, which carries the reasoning and the numbers.
+     * This was the room's flat interval, and because this query is mounted by
+     * the Sprints tab it ran at that rate for people who were not looking at a
+     * simulation at all.
+     */
+    refetchInterval: (query) => venturesPollMs(query.state.data?.ventures),
     staleTime: 0,
     retry: false,
   });
@@ -72,10 +84,12 @@ export function useVenture(id: string | undefined) {
     queryKey: ["sim-venture", id],
     queryFn: () => api<VentureView>(`/api/sim/ventures/${id}`),
     enabled: !!id,
-    refetchInterval: (query) => {
-      const phase = query.state.data?.phase;
-      return phase === "running" || phase === "retired" ? false : ROOM_POLL_MS;
-    },
+    /*
+     * `venturePollMs`: quick while gathering, slowly once running — not stopped,
+     * which is what left this screen claiming a finished season was still
+     * trading. See the note on it.
+     */
+    refetchInterval: (query) => venturePollMs(query.state.data?.phase),
     // The point of this query is that it is never stale for long; React
     // Query's default window would swallow a refetch triggered by a claim.
     staleTime: 0,
@@ -140,7 +154,14 @@ export function useDesk(id: string | undefined) {
        * the one screen in the product whose whole content is "this will change
        * shortly" was the one that had stopped asking.
        */
-      return phase === "finished" || phase === "over" ? false : ROOM_POLL_MS;
+      void phase;
+      /*
+       * `deskPollMs` carries the reasoning: quick while the year is closing,
+       * which is what this screen is for, and the browser's eight seconds the
+       * rest of the time. It still stops on the two phases that cannot move
+       * again on their own.
+       */
+      return deskPollMs(query.state.data);
     },
     staleTime: 0,
     retry: false,
@@ -212,8 +233,82 @@ export function useStandings(id: string | undefined) {
     queryKey: ["sim-standings", id],
     queryFn: () => api<StandingsView>(`/api/sim/ventures/${id}/standings`),
     enabled: !!id,
-    refetchInterval: (query) => (seasonOver(query.state.data?.status) ? false : ROOM_POLL_MS),
+    /* Quick around the tick, rare between ticks — see `standingsPollMs`. */
+    refetchInterval: (query) => standingsPollMs(query.state.data),
     staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * One teammate's seat, as the table sees it.
+ *
+ * Web-only until now, and with it the only honest answer to "who is this person
+ * and have they been showing up". Not polled: a profile is something you open,
+ * read and close, and the one number on it that moves — whether they have filed
+ * this period — is already on the desk you came from.
+ */
+export function useSeat(ventureId: string | undefined, userId: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-seat", ventureId, userId],
+    queryFn: () => api<SeatView>(`/api/sim/ventures/${ventureId}/seats/${userId}`),
+    enabled: !!ventureId && !!userId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/**
+ * A rival company, at the depth the standings already publish.
+ *
+ * The valuations and shares here are public to everyone including the company
+ * being read, which is deliberate: a negotiation where only one side can do the
+ * arithmetic is a trick played on whoever is newer to the game.
+ */
+export function useRivalCompany(ventureId: string | undefined, companyId: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-company", ventureId, companyId],
+    queryFn: () => api<RivalCompanyView>(`/api/sim/ventures/${ventureId}/companies/${companyId}`),
+    enabled: !!ventureId && !!companyId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/**
+ * A year's report, and which years there are to read.
+ *
+ * The phone never called this endpoint. It had the one-line summary of the period
+ * just gone, on the desk, and no way to reach the accounts behind it or any year
+ * before it — in a fourteen-period season that is thirteen years of a team's own
+ * history unreachable from the device most of them were playing on.
+ *
+ * Not polled, and a long `staleTime`: a resolved year is the most immutable thing
+ * in the product. Nothing about year three changes while you are reading it.
+ *
+ * `year` is part of the key so moving through the season caches each one rather
+ * than refetching the same accounts on the way back.
+ */
+export function useReport(ventureId: string | undefined, year?: number | null) {
+  return useQuery({
+    queryKey: ["sim-report", ventureId, year ?? "latest"],
+    /*
+     * Two calls rather than one path built with a ternary, and the reason is a
+     * test rather than taste.
+     *
+     * `test/unit/mobile-api-paths.test.ts` reads these literals out of the source
+     * to check the server has a route for each — the phone cannot import the route
+     * table, so a wrong path is a 404 that ships in a binary. Its scanner only
+     * sees a literal that directly follows `api(`. Written as
+     * `api(cond ? \`a\` : \`b\`)` both literals become invisible to it and the
+     * endpoint is silently unchecked, which is worse than the nested template
+     * this replaced: that one was at least seen, if truncated.
+     */
+    queryFn: () => (year != null
+      ? api<ReportPayload>(`/api/sim/ventures/${ventureId}/reports/${year}`)
+      : api<ReportPayload>(`/api/sim/ventures/${ventureId}/reports`)),
+    enabled: !!ventureId,
+    staleTime: 5 * 60_000,
     retry: false,
   });
 }
